@@ -155,6 +155,16 @@ If issues were passed in `=== <path> ===` form:
 - On completion: move the issue file from `prds/<feature>/NNN-*.md` to `prds/<feature>/done/NNN-*.md` (create `done/` if needed). Do not renumber, do not touch the sibling `prd.md`, do not move across feature folders.
 - On partial progress: append a brief note to the bottom of the issue file describing what was done and what's blocking.
 
+# PAIRED SKILL CHANGE
+
+When the issue you are working calls for a Skill prompt change, an unattended Iteration may make that paired change in [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills). The authorization is for this issue only: do not edit a Skill the issue does not call for, and do not treat the Skills repository as a second pool of work.
+
+That repository is what every installation refreshes from. An unproved upstream revision that reaches the pin affects every installation, not just this one. `AGENTS.md` states where the working clone is expected, how to acquire it, and the order the change must land in.
+
+An Iteration that cannot complete the upstream half does not move the pin, and reports why. No sibling clone, a push that does not land, or a proof that fails is that case. Say so on the issue. Do not commit a pin bump that has no published Skill change behind it.
+
+When the pin does move, the git-loopy commit names the upstream revision it moves to and the Skill edit that revision carries. A reviewer must be able to see both halves without inferring which edit the bump is.
+
 # FINAL RULES
 
 - ONLY WORK ON THE SINGLE ISSUE YOU WERE HANDED, per iteration.

@@ -188,6 +188,7 @@ impl BilledTotal {
 ///
 /// A reported null Dynamic effort means no dial. Keep it distinct from an
 /// unreported effort so historical sparse records retain their interpretation.
+/// `effort_configurable` is a recorded observation; absence is not a claim.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResolvedRoute {
     pub(crate) model: Option<String>,
@@ -195,6 +196,7 @@ pub(crate) struct ResolvedRoute {
     pub(crate) context_tier: Option<String>,
     pub(crate) source: Option<String>,
     pub(crate) lifecycle_position: Option<String>,
+    pub(crate) effort_configurable: Option<bool>,
 }
 
 impl ResolvedRoute {
@@ -223,6 +225,7 @@ impl ResolvedRoute {
                 .filter(|context_tier| context_tier != "default"),
             source: pickup.routing_source.clone(),
             lifecycle_position: pickup.lifecycle_position.clone(),
+            effort_configurable: pickup.effort_configurable,
         })
     }
 }

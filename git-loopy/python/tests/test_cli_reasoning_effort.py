@@ -101,6 +101,8 @@ def _install_fake_runner(
     is enough for the assertions below.
     """
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    # Routing authority is separate from model/effort composition.
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "unselected")
 
     async def _fake_run(cfg: RunConfig, **_extra: object) -> int:
         captured.append(cfg)

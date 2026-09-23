@@ -1,7 +1,9 @@
 # Pin the external Skill catalog as the reproducible source of record
 
 **Status:** accepted; the redistribution half is superseded by
-[ADR-0025](0025-installed-skill-catalog.md).
+[ADR-0025](0025-installed-skill-catalog.md). The pin still moves only after
+the published revision is proved, and the Skills repository is a working
+surface an Iteration may change — [ADR-0064](0064-a-paired-skill-change-is-published-proved-then-pinned.md).
 
 > **Superseded in part.** The pin, the acquisition command, and every validation
 > rule below still stand — they are what an install is proved against. What no

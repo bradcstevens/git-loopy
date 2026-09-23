@@ -791,7 +791,7 @@ class FakeGitHubClient:
         self.issue_close_calls: list[tuple[int, str]] = []
         self.issue_comment_calls: list[tuple[int, str]] = []
         self.route_comment_calls: list[tuple[int, str]] = []
-        self.route_label_calls: list[tuple[int, tuple[str, ...], str]] = []
+        self.route_label_calls: list[tuple[int, tuple[str, ...], tuple[str, ...]]] = []
         self.route_labels: set[str] = set()
         self._route_comments: dict[int, list[str]] = {}
         self.pr_list_calls: list[tuple[str, str]] = []
@@ -913,7 +913,7 @@ class FakeGitHubClient:
         self.route_labels.add(label)
 
     def replace_route_label(
-        self, number: int, *, remove: Sequence[str], add: str
+        self, number: int, *, remove: Sequence[str], add: Sequence[str]
     ) -> None:
         error = self._route_label_errors.get(number)
         if error is not None:
@@ -923,9 +923,10 @@ class FakeGitHubClient:
         except KeyError as exc:
             raise RouteDeliveryError(f"issue #{number} not found") from exc
         labels[:] = [label for label in labels if label not in remove]
-        if add not in labels:
-            labels.append(add)
-        self.route_label_calls.append((number, tuple(remove), add))
+        for label in add:
+            if label not in labels:
+                labels.append(label)
+        self.route_label_calls.append((number, tuple(remove), tuple(add)))
 
     def post_issue_comment(self, number: int, body: str) -> None:
         error = self._route_comment_errors.get(number)

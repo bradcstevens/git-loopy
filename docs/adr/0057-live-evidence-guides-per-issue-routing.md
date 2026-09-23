@@ -200,7 +200,17 @@ The map remains open for [#293](https://github.com/bradcstevens/git-loopy/issues
 (intra-session Subagent routing). Excluding them from this delivery does not answer
 their separate questions.
 
-## Partial activation status (#567)
+## Activation status (#567)
+
+**Python-local Dynamic default is activated (contract 2.9).** Fresh setup
+records `dynamic` without Static rows. A local Run with no Config and no named
+policy refuses before a legacy session and writes nothing. Existing saved
+Config is not inferred. Naming `unselected` keeps the legacy path. Non-local
+absence stays staged. Shell and PowerShell routing remain deferred. This does
+not imply Subagent or Integration routing, and remote Dynamic election stays
+unauthorized. `event_schema_version` stays 1.2. The paragraphs below record
+the slices that reached this status; they are not a claim that those slices
+were themselves the activation.
 
 Python's opt-in `update --routing` now collects or reuses an explicit keep-or-migrate
 choice, retains every authored Static row, requires operator-owned Dynamic access
@@ -227,7 +237,8 @@ run-wide model/effort pins, context-only controls, and required access/evidence
 lost after migration. They assert actual sessions, canonical Pickup and Dashboard
 readback, or no work, final publication or Strike on refusal. The Wrapper declares
 the same staged local guard and member deferrals; this is not final activation.
-This remains staged activation: empty Config scopes keep the no-Config path.
+This remains staged activation. A later slice refuses a local no-Config Run
+that names no policy; this paragraph does not claim that refusal.
 Bare setup may save an unselected policy, but the following Run then refuses
 until authority is supplied; `init --routing` authorizes before saving.
 Non-local activation is explicitly deferred: applying this guard to the shipped
@@ -237,18 +248,19 @@ retain their legacy path; selected policies still refuse rather than substitutin
 local eligibility. `--route-policy unselected` can explicitly retain that remote
 legacy path even when local Config records a policy, without rewriting Config.
 This compatibility boundary is not completed migration or remote routing support.
-The shared no-I/O authority verdict now rejects selected non-local placement at
-CLI startup and direct Run entry, before local model listing, Skill migration,
-interactive detachment or remote host construction and green-base dispatch.
-Previously only the later live routing preflight applied this refusal, so a
-known-unverifiable placement still dispatched a remote job first and an unrelated
-host-preparation failure could hide the actionable routing diagnostic. The shared
-`execution_host_refusal` matrix carries recorded, inherited and temporary choices,
-including run-wide pins and context-only controls, through those startup paths
-without Config edits, work, Lease, Strike or Route publication. The explicitly
-unselected remote compatibility path remains usable. This closes the premature
-dispatch defect; it does not supply the executing host's capabilities or settle
-the remaining non-local activation obligations.
+The shared no-I/O authority verdict rejects a selected non-local placement that
+has no executing-host report, at CLI startup and direct Run entry, before local
+model listing, Skill migration, interactive detachment or remote green-base
+dispatch. Previously only the later live routing preflight applied this refusal,
+so a known-unverifiable placement still dispatched a remote job first and an
+unrelated host-preparation failure could hide the actionable routing diagnostic.
+The shared `execution_host_refusal` matrix carries recorded, inherited and
+temporary choices, including run-wide pins and context-only controls, through
+those startup paths without Config edits, work, Lease, Strike or Route
+publication. Static and pin cases may construct the host to observe; Dynamic
+election does not. The explicitly unselected remote compatibility path remains
+usable. A later slice supplies the host report for Static execution only. It
+does not authorize Dynamic election on that host or settle final defaults.
 Wrapper contract 14.3 and the Conformance routing-resolution notes now state this
 Python-local guard and explicitly defer shell/PowerShell enforcement. Existing
 one-route cases and historical streams are unchanged. The fixture's
@@ -298,7 +310,9 @@ labels unwritten; after repair, actual work settings, canonical Pickup,
 Dashboard and final tracker comments agree. The Run preserves Config, Static
 setup requires no leaderboard access or Dynamic limits, and no Static rows are
 seeded. Wrapper 14.3 declares this opt-in first-setup obligation and explicitly
-defers native-member activation; bare init and auto-setup routing defaults remain unchanged.
+defers native-member activation. Fresh `init --yes` and interactive auto-setup
+now record the Dynamic default described below. A later slice refuses a local
+no-Config Run that names no policy.
 This composed walk exposed a setup blocker hidden by prebuilt wizard answers:
 Skill discovery tried to run its async lifecycle on Textual's already-running
 event loop. The synchronous discovery/rebuild callback now uses a dedicated,
@@ -524,14 +538,70 @@ boundary, including serial and Lane-stamped contribution replay. It does not
 prove actual work-session settings or activate Dynamic defaults. It is integrated
 with Python's effort-matching, CLI no-dial readback and mandatory local durability;
 the routing and Dashboard matrices retain their separate behavioral seams.
-Executing-host capability authority and remaining composed activation
-obligations remain outstanding. Shell/PowerShell activation and
-Subagent/Integration routing remain deferred.
+At this Dashboard slice, executing-host capability authority and remaining
+composed activation obligations were still outstanding. Shell/PowerShell
+activation and Subagent/Integration routing remain deferred.
 The Event-schema declarations distinguish Dynamic/proposed null efforts from
 historical backend placeholders and from non-proposed preparation's nulls (no
 proposal). Static, reusable and unavailable preparations keep those null effort
 keys out of the Dashboard projection rather than acquiring a no-dial claim.
-Static no-dial-specific display remains indistinguishable from deliberate Static
-omission in the recorded Pickup; preserving its historical backend placeholder
-is not a claim that the model has a dial. A future display distinction needs a
-recorded capability fact, not a model-name inference.
+A Static Pickup now records `effort_configurable` from the listing preflight
+already fetched, for the model that Pickup named. `false` with a present null
+effort reads as not configurable; `true` with a null effort is deliberate
+omission. The field is omitted when unobserved, so historical streams stay
+identical and a model name is never the observation. Pickup does not fetch the
+listing again. This is readback, not final activation.
+Static execution on GitHub Actions may now proceed when that host reports its
+own listing and both that listing and the local listing accept the route.
+Observation is a separate workflow, not green-base and not a contribution. A
+missing or unreadable report stays absence and is not replaced by the local
+listing; the no-report path still refuses before listing, Skill migration,
+detachment and green-base. Dynamic election does not construct the host and is
+not authorized by a report. Lane Pickup records dial presence from the host
+report; serial Pickup keeps the local listing, because serial sessions still
+run here. The remote listing is not recorded as this machine's roster. The shared
+`execution_host_report` matrix now drives a present report through unattended
+CLI and doctor: the Lane records the host dial, neither listing may overrule
+the other, and doctor prints the same verdict. Config stays unchanged. This
+does not by itself activate bare init, auto-setup, or the no-Config refusal.
+Shell/PowerShell activation, Subagent/Integration routing and ADR-0060
+implementation remain unclaimed.
+
+Fresh Python-local setup now records Dynamic without seeding Static rows.
+Unattended `init --yes` on a scope with no saved table and no inherited policy
+writes `route_policy = dynamic` and no limits, associations, or key. It does
+not prompt or fetch a listing. Doctor and the following Run share the existing
+readiness verdict and refuse before a work session, Lease, Strike, or
+publication. Operator-supplied repair of those bounds then elects; the Run
+does not rewrite Config. Interactive fresh setup, including auto-setup,
+defaults to migrate, still accepts keep, and collects explicit bounds before
+saving. Cancellation writes nothing. Existing nonempty Config is not inferred
+as migrate, and an inherited policy, including explicit `unselected`, is not
+shadowed. The shared
+`new_setup_default` matrix drives both paths through the real CLI into serial
+and Lane sessions, canonical Pickup, and Dashboard readback.
+
+A local Run that finds no Config and no named Route policy now refuses before
+a work session, Lease, Strike, or publication. Doctor prints the same verdict.
+The Run does not prompt, fetch a listing, call a Route selector, or write
+Config. A model or effort override is not the missing choice. Naming
+`unselected` retains the legacy path for that Run and writes nothing. Explicit
+static and dynamic policies use their existing verdicts. Unselected non-local
+Runs retain the legacy path. The shared `no_config_dynamic_refusal` matrix
+drives the refusal through the real CLI into serial and Lane sessions.
+`event_schema_version` stays 1.2. Wrapper contract 2.9 is unchanged; §14.3
+names this obligation. Shell and PowerShell routing remain deferred. This
+does not imply Subagent or Integration routing.
+
+Python publication now spells exact dimensional Route labels (ADR-0060) through
+the existing publisher and real CLI, including verified listing capacity when
+the Pickup already holds it. A legacy combined association on that issue is
+removed. `git-loopy route-labels migrate` reconstructs dimensions and deletes
+an unused legacy definition only after issue and pull-request checks. A later
+work-session window fills or corrects only the assignment that session
+started under, including when a newer assignment reuses the model id,
+without a new routing comment or a roster lookup. `event_schema_version`
+stays 1.2. Wrapper contract 2.9 is unchanged; §14.5 names this obligation.
+Shell and PowerShell routing remain deferred. This does not imply Subagent
+or Integration routing. Python-local Dynamic default activation is declared
+above.

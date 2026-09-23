@@ -759,7 +759,12 @@ operator choice. A recorded Static/Dynamic policy in the chosen scope (including
 inherited global authority) also enters this path on bare init: omitting
 `--routing` cannot bypass readiness or overwrite unattended saved choices.
 The wizard follows scope changes without promoting unvisited defaults to
-authored Static routes. Unselected init does not yet activate Dynamic defaults.
+authored Static routes. A fresh scope, with no saved table and no inherited
+policy, defaults to Dynamic: unattended `init --yes` records the policy
+without limits or Static rows, and interactive setup, including auto-setup,
+collects migrate unless the operator keeps. Existing Config is not inferred.
+A local no-Config Run with no named policy refuses before work; naming
+`unselected` keeps the legacy path for that Run. Non-local absence stays legacy.
 _Avoid_: setup, bootstrap; install (install is the separate act of putting the `git-loopy` command
 on PATH).
 
@@ -905,7 +910,9 @@ before work; flag/environment authority may supply it temporarily, while
 `update --routing` records it in Config. The same no-write verdict is used by
 CLI startup, doctor and Run preflight, including detached startup. A model/effort
 override alone does not answer the migration question. Historical streams and
-staged no-Config/non-local paths retain their legacy semantics. Non-local
+unselected non-local Runs retain their legacy semantics. A local Run with no
+Config and no named policy refuses before work; naming `unselected` keeps the
+legacy path for that Run. Non-local
 activation awaits the executing host's actual capabilities; a local model
 listing cannot authorize its selected routes. *Static* selects the **Static route**;
 *dynamic* selects the **Dynamic route**.
@@ -931,7 +938,8 @@ _Avoid_: pinned model, fixed pair, hardcoded route.
 
 **Dynamic route**:
 A route **elected for one issue from live public benchmark evidence** instead of written down in
-advance, under the *dynamic* **Route policy**. Opt-in and prerequisite-complete or it does not
+advance, under the *dynamic* **Route policy**. It is the Python-local default
+for unpinned new work, and prerequisite-complete or it does not
 start: the operator's own authorized access to the evidence source, a finite assessment deadline, a
 per-**Run** routing-credit allowance, a bounded **Route selector** concurrency, and the verified
 associations between benchmark identities and harness configurations. The key is read from the
@@ -1566,8 +1574,13 @@ _Avoid_: Routing resolution (binding), Lease (authority), assignment.
 
 **Route label**:
 An observational tracker label describing one dimension of an issue's final
-**Routing resolution**: model identity, verified full context capacity for its selected tier,
-or applicable reasoning effort; unavailable dimensions are absent.
+**Routing resolution**. Python publication spells `model_id:`, `model_context:`,
+and `model_effort:` with the exact value. Context is verified full capacity for
+the selected tier, not the tier name. A later harness window may fill or
+correct only that assignment's `model_context`; a superseded assignment's
+window does not overwrite it, even when the model id matches. Unavailable or
+unrepresentable dimensions are absent, never truncated. A legacy
+`git-loopy-route:` association is removed when that issue is republished.
 It may still represent a previous resolution or be absent after failed replacement
 and exhausted delivery retries, so the canonical local resolution and delivery status
 describe the current assignment, never the label as authority to choose, override, or pin a route.

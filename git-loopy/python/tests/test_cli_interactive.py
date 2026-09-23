@@ -71,6 +71,12 @@ def test_should_select_model_flag_wins_over_env(
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _static_authority_is_not_this_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Model selection is not the no-Config routing refusal."""
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "unselected")
+
+
 def _install_fake_loop_run(
     monkeypatch: pytest.MonkeyPatch, captured: list[tuple[RunConfig, Any]]
 ) -> None:

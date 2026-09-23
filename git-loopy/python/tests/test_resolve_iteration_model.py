@@ -580,6 +580,36 @@ def test_a_static_route_carries_the_selected_effort_the_kit_roster_would_drop() 
     assert resolution.gate_warnings == ()
 
 
+def test_a_supplied_dial_fact_is_recorded_and_an_unobserved_resolution_omits_it() -> None:
+    """Dial presence is a caller observation, not something null effort can say.
+
+    ``resolve_iteration_model`` stays free of I/O, so the harness fact arrives
+    the same way an escalated pair does. A Static null effort without that fact
+    stays the historical backend placeholder: absence is not a no-dial claim,
+    and a model name is not one either.
+    """
+    cfg = RunConfig(
+        model="no-dial",
+        reasoning_effort=None,
+        route_policy=RoutePolicy.STATIC,
+    )
+
+    unobserved = resolve_iteration_model(cfg, [])
+    no_dial = resolve_iteration_model(cfg, [], effort_configurable=False)
+    deliberate = resolve_iteration_model(
+        cfg, [], effort_configurable=True
+    )
+
+    assert unobserved.effort_configurable is None
+    assert "effort_configurable" not in unobserved.as_pickup_payload()
+    assert no_dial.effort_configurable is False
+    assert no_dial.as_pickup_payload()["effort_configurable"] is False
+    assert no_dial.reasoning_effort is None
+    assert deliberate.effort_configurable is True
+    assert deliberate.as_pickup_payload()["effort"] is None
+    assert deliberate.as_pickup_payload()["effort_configurable"] is True
+
+
 def test_a_static_route_keeps_a_tier_the_legacy_gate_would_downgrade() -> None:
     cfg = RunConfig(
         model="tier-less",

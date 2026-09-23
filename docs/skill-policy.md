@@ -448,8 +448,9 @@ action that owns its remedy.
 Doctor also uses the Run's `resolve_run_routing_preflight` verdict. A local Run
 with saved Config but no explicit Static/Dynamic choice reports the same
 keep-or-migrate refusal as startup, with `update --routing` and temporary
-`GIT_LOOPY_ROUTE_POLICY` remedies. No policy is invented; empty Config scopes
-and unselected non-local Runs retain their staged legacy path.
+`GIT_LOOPY_ROUTE_POLICY` remedies. No policy is invented. A local Run with no
+Config and no named policy refuses before work; naming `unselected` keeps the
+legacy path for that Run. Unselected non-local Runs retain their staged legacy path.
 For a selected policy, Static settings are checked against a
 fresh authenticated harness listing; unsuppressed Dynamic routing requires
 operator-owned access and explicit valid limits. An explicit run-wide model or

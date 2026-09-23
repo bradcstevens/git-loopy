@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+> **Note ([ADR-0064](0064-a-paired-skill-change-is-published-proved-then-pinned.md)):**
+> Superseding ADR-0034 removed the mirror and retired the term Contract-carrying
+> Skill. It did not authorize authoring a Skill prompt in this repository. The
+> authoring location — upstream, mirrored nowhere — is restated there.
+
 **Supersedes** [ADR-0034](0034-contract-carrying-skills-are-authored-upstream.md), whose
 entire subject — the twelve Skills that carry a `git-loopy continuation` request, mirrored
 into this repository and guarded by an owner-coverage suite — has no referent once the

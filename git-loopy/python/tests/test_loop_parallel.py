@@ -114,6 +114,7 @@ from copilot.generated.session_events import (
     AssistantUsageData,
     SessionEvent,
     SessionEventType,
+    SessionUsageInfoData,
 )
 
 from git_loopy import gh as gh_module
@@ -181,11 +182,13 @@ EXPECTED_RELEASE_VERSION = json.loads(
     ).read_text(encoding="utf-8")
 )["expected_release_version"]
 
-_EXECUTION_HOST_REFUSAL = json.loads(
+_ROUTING_RESOLUTION = json.loads(
     (Path(__file__).parents[2] / "conformance" / "routing-resolution.json").read_text(
         encoding="utf-8"
     )
-)["execution_host_refusal"]
+)
+_EXECUTION_HOST_REFUSAL = _ROUTING_RESOLUTION["execution_host_refusal"]
+_EXECUTION_HOST_REPORT = _ROUTING_RESOLUTION["execution_host_report"]
 
 
 # ---------------------------------------------------------------------------
@@ -1100,6 +1103,162 @@ def test_parallel_single_eligible_issue_starts_lane_immediately(
     events = _logged_events(tmp_path)
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "empty_pool"
+
+
+def test_a_lane_session_window_updates_that_issues_model_context(
+    tmp_path, monkeypatch
+) -> None:
+    """A Lane's harness window fills that issue's label and does not reroute."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    window = SessionEvent(
+        data=SessionUsageInfoData(
+            current_tokens=9_000,
+            messages_length=2,
+            token_limit=256_000,
+        ),
+        id=uuid4(),
+        timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+        type=SessionEventType.SESSION_USAGE_INFO,
+    )
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[window],
+        serial_closes=True,
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(loop_module.run(RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    ))) == 0
+
+    assert any(call["working_directory"] is not None for call in fake_client.create_calls)
+    assert "model_context:256K" in fake_gh.issue_labels(42)
+    assert "model_context:9K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+
+
+def _capacity_window(limit: int, *, used: int) -> SessionEvent:
+    return SessionEvent(
+        data=SessionUsageInfoData(
+            current_tokens=used,
+            messages_length=2,
+            token_limit=limit,
+        ),
+        id=uuid4(),
+        timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+        type=SessionEventType.SESSION_USAGE_INFO,
+    )
+
+
+def test_lane_windows_correct_each_issue_without_crossing(
+    tmp_path, monkeypatch
+) -> None:
+    """Concurrent Lane windows stay on the assignment that session is running."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe", "priority"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    class _PerIssueWindows(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            worktree = str(kwargs.get("working_directory") or "")
+            if worktree.endswith("issue-42"):
+                self._scripted_events = [
+                    _capacity_window(128_000, used=9_000),
+                    _capacity_window(256_000, used=40_000),
+                ]
+            else:
+                self._scripted_events = [_capacity_window(512_000, used=3_000)]
+            return await super().create_session(**kwargs)
+
+    fake_client = _PerIssueWindows(fake_git=fake_git, scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(loop_module.run(RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    ))) == 0
+
+    assert "model_context:256K" in fake_gh.issue_labels(42)
+    assert "model_context:128K" not in fake_gh.issue_labels(42)
+    assert "model_context:9K" not in fake_gh.issue_labels(42)
+    assert "model_context:512K" in fake_gh.issue_labels(43)
+    assert "model_context:3K" not in fake_gh.issue_labels(43)
+    assert "model_context:256K" not in fake_gh.issue_labels(43)
+    assert "priority" in fake_gh.issue_labels(43)
+    assert len(fake_gh.route_comment_calls) == 2
+    for session in fake_client.created:
+        prompt, _timeout = session.send_and_wait_calls[0]
+        assert "model_context:" not in prompt
+        assert "git-loopy-route:v1:" not in prompt
+
+
+def test_a_failed_lane_window_is_retried_without_blocking_the_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """A Lane capacity failure stays local; the next Run delivers it."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    original = fake_gh.replace_route_label
+
+    def fail_capacity(number, *, remove, add):
+        if any(label.startswith("model_context:") for label in add):
+            raise RouteDeliveryError("HTTP 503")
+        return original(number, remove=remove, add=add)
+
+    fake_gh.replace_route_label = fail_capacity
+    window = _capacity_window(256_000, used=9_000)
+    fake_client = _ParallelFakeClient(fake_git=fake_git, scripted_events=[window])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    config = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(config)) == 0
+    assert len(fake_client.created) == 1
+    assert "model_context:256K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+
+    fake_gh.replace_route_label = original
+    fake_client._scripted_events = []
+    assert asyncio.run(loop_module.run(config)) == 0
+    assert "model_context:256K" in fake_gh.issue_labels(42)
+    assert "model_context:9K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
 
 
 def test_parallel_lane_refills_without_waiting_for_sibling(
@@ -7537,9 +7696,9 @@ def test_a_remote_contributions_duration_is_never_rendered_as_near_zero(
     assert [end["summary"]["agent_seconds"] for end in ends] == [6 * 60 * 60.0] * 2
 
 
-@pytest.mark.parametrize("saved_config", [None, "legacy", "selected"])
+@pytest.mark.parametrize("saved_config", [None, "legacy", "selected", "cli-absent"])
 def test_the_run_builds_the_github_actions_host_the_operator_named(
-    tmp_path, monkeypatch, saved_config
+    tmp_path, monkeypatch, capsys, saved_config
 ) -> None:
     """A declared placement is *constructed*, never merely tolerated at preflight."""
     built: list[tuple[str, int]] = []
@@ -7583,6 +7742,16 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
         if saved_config == "selected":
             args += ["--route-policy", "unselected"]
         code = cli.main(args)
+    elif saved_config == "cli-absent":
+        from git_loopy import cli
+
+        monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+        monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+        monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+        code = cli.main(["2", "--execution-host", "github-actions"])
+        assert "No Config is recorded" not in capsys.readouterr().err
     else:
         code = asyncio.run(loop_module.run(cfg))
     assert code == 0
@@ -7686,7 +7855,21 @@ def test_selected_remote_routing_refuses_before_local_listing_or_host_dispatch(
     error = capsys.readouterr().err
     for diagnostic in fixture["expected"]["diagnostics"]:
         assert diagnostic in error
-    assert builds == [] and host.preflight_calls == []
+    from git_loopy.host_capability import remote_static_execution
+
+    tables = settings.load_configs(tmp_path, os.environ)
+    resolved = cli_module.resolve_config(
+        cli_module.build_parser().parse_args(args), os.environ,
+        project=tables.project, global_=tables.global_,
+    ).run
+    # Static and a model/effort pin may construct the host to observe its
+    # listing. That is not green-base. Dynamic election must not construct it.
+    # No case here returns a report, so none may list locally or dispatch work.
+    if remote_static_execution(resolved):
+        assert builds == ["github-actions"]
+    else:
+        assert builds == []
+    assert host.preflight_calls == []
     assert listings == []
     assert fake_client.create_calls == []
     assert fake_gh.issue_close_calls == [] and fake_gh.issue_comment_calls == []
@@ -7695,6 +7878,316 @@ def test_selected_remote_routing_refuses_before_local_listing_or_host_dispatch(
     assert list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl")) == []
     for candidate, content in original.items():
         assert (candidate.read_bytes() if candidate.exists() else None) == content
+
+
+def _dial(configurable: bool):
+    from git_loopy.static_route import HarnessCapabilities, HarnessModel
+
+    model = HarnessModel(
+        model="claude-opus-4.8-max",
+        eligible=True,
+        effort_configurable=configurable,
+        efforts=frozenset({"high"}) if configurable else frozenset(),
+        context_tiers=frozenset({"default"}),
+    )
+    return HarnessCapabilities(models={model.model: model})
+
+
+def test_a_lane_session_uses_the_host_report_not_the_local_listing(
+    tmp_path, monkeypatch
+) -> None:
+    """The contribution request and the Lane Pickup record the host's dial.
+
+    The local listing accepts the same model and reports the opposite dial.
+    That disagreement must not become the Lane's fact, and it must not be
+    what the host is asked to run.
+    """
+    from git_loopy.host_capability import HostCapabilityReport
+
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    cfg = dataclass_replace(
+        cfg, execution_host="github-actions", route_policy=RoutePolicy.STATIC
+    )
+    remote = HostCapabilityReport(
+        placement="github-actions", capabilities=_dial(False)
+    )
+    order: list[str] = []
+    requests: list[ContributionRequest] = []
+
+    class _ReportingHost(_RemoteBranchExecutionHost):
+        async def observe_capabilities(self, *, observation_id: str):
+            del observation_id
+            order.append("observe")
+            return remote
+
+        async def run_preflight(self, *, run_id: str, base_revision: str):
+            order.append("preflight")
+            return await super().run_preflight(
+                run_id=run_id, base_revision=base_revision
+            )
+
+        async def run_contribution(self, request: ContributionRequest):
+            order.append("contribution")
+            requests.append(request)
+            return await super().run_contribution(request)
+
+    host = _ReportingHost(fake_git)
+
+    async def local_listing(**_kwargs):
+        order.append("local")
+        return _dial(True)
+
+    monkeypatch.setattr(loop_module, "_make_execution_host", lambda *_a, **_k: host)
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", local_listing)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+    assert order[0] == "observe"
+    assert "local" in order and order.index("local") < order.index("preflight")
+    assert order.index("preflight") < order.index("contribution")
+    assert requests
+    assert {request.model for request in requests} == {"claude-opus-4.8-max"}
+    assert {request.reasoning_effort for request in requests} == {None}
+    pickups = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.pickup.bound"
+    ]
+    assert pickups
+    assert {event["effort_configurable"] for event in pickups} == {False}
+
+
+def test_a_rejecting_host_report_starts_no_contribution_when_local_would_accept(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Remote rejection is the verdict. The local listing cannot overrule it."""
+    from git_loopy.host_capability import HostCapabilityReport
+    from git_loopy.static_route import HarnessCapabilities
+
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    cfg = dataclass_replace(
+        cfg, execution_host="github-actions", route_policy=RoutePolicy.STATIC
+    )
+    remote = HostCapabilityReport(
+        placement="github-actions",
+        capabilities=HarnessCapabilities(models={}),
+    )
+    calls: list[str] = []
+
+    class _RejectingHost(_RemoteBranchExecutionHost):
+        async def observe_capabilities(self, *, observation_id: str):
+            del observation_id
+            calls.append("observe")
+            return remote
+
+        async def run_preflight(self, *, run_id: str, base_revision: str):
+            calls.append("preflight")
+            return await super().run_preflight(
+                run_id=run_id, base_revision=base_revision
+            )
+
+        async def run_contribution(self, request: ContributionRequest):
+            calls.append("contribution")
+            raise AssertionError(request.issue_ref)
+
+    async def local_listing(**_kwargs):
+        calls.append("local")
+        return _dial(True)
+
+    monkeypatch.setattr(
+        loop_module, "_make_execution_host", lambda *_a, **_k: _RejectingHost(fake_git)
+    )
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", local_listing)
+
+    assert asyncio.run(loop_module.run(cfg)) == loop_module.exit_code_for(
+        "preflight_failed"
+    )
+    error = capsys.readouterr().err
+    assert "executing host's model listing" in error
+    assert "preflight" not in calls and "contribution" not in calls
+    assert fake_client.create_calls == []
+
+
+def _listed_model_info(identifier: str, *, configurable: bool):
+    """A duck-typed listing row. ``configurable=False`` omits the effort dial."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        id=identifier,
+        policy=SimpleNamespace(state="enabled"),
+        supported_reasoning_efforts=["high"] if configurable else None,
+        billing=SimpleNamespace(token_prices=SimpleNamespace(long_context=None)),
+    )
+
+
+@pytest.mark.parametrize(
+    "case", _EXECUTION_HOST_REPORT["cases"], ids=lambda case: case["id"],
+)
+def test_present_host_report_authorizes_static_actions_through_cli_and_doctor(
+    tmp_path, monkeypatch, capsys, case,
+) -> None:
+    """CLI and doctor share the host report. The local listing is not a substitute.
+
+    The Lane contribution and canonical Pickup record the host dial. A
+    rejecting report, from either listing, stops before green-base work.
+    """
+    import os
+
+    from git_loopy import model_listing, settings, skillscmd
+    from git_loopy.host_capability import HostCapabilityReport
+    from git_loopy.static_route import RoutePolicy
+    from tests.test_doctorcmd import _catalog, _run as run_doctor
+
+    fixture = _EXECUTION_HOST_REPORT
+    model = fixture["model"]
+    fake_git, fake_gh, fake_client, _cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    # An absent frontmatter inherits the packaged Required Skills. This proof
+    # is about host authority, so the temporary repo declares none.
+    (tmp_path / "git-loopy" / "prompt.md").write_text(
+        "---\nrequired-skills: []\n---\nYou are the agent.\n",
+        encoding="utf-8",
+    )
+    host_models = [
+        _listed_model_info(
+            model if case["host_lists_model"] else "other-host-model",
+            configurable=case["host_effort_configurable"],
+        )
+    ]
+    local_models = [
+        _listed_model_info(
+            model if case["local_lists_model"] else "other-local-model",
+            configurable=case["local_effort_configurable"],
+        )
+    ]
+    report = HostCapabilityReport.from_listing("github-actions", host_models)
+    requests: list[ContributionRequest] = []
+    preflights: list[str] = []
+
+    class _ReportingHost(_RemoteBranchExecutionHost):
+        async def observe_capabilities(self, *, observation_id: str):
+            del observation_id
+            return report
+
+        async def run_preflight(self, *, run_id: str, base_revision: str):
+            preflights.append("preflight")
+            return await super().run_preflight(
+                run_id=run_id, base_revision=base_revision
+            )
+
+        async def run_contribution(self, request: ContributionRequest):
+            requests.append(request)
+            return await super().run_contribution(request)
+
+    monkeypatch.setattr(
+        loop_module, "_make_execution_host", lambda *_args, **_kwargs: _ReportingHost(fake_git)
+    )
+
+    async def local_listing():
+        return local_models
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", local_listing)
+
+    async def forbidden_assessment(*_args, **_kwargs):
+        pytest.fail("Static host authority must not request Dynamic evidence")
+
+    monkeypatch.setattr(
+        dynamic_route.ArtificialAnalysisSource, "fetch", forbidden_assessment
+    )
+    monkeypatch.setattr(
+        skillscmd,
+        "run_skill_policy_migration",
+        lambda **_kwargs: pytest.fail(
+            "host-report verdict must precede Skill migration"
+        ),
+    )
+
+    async def forbidden_detachment(*_args, **_kwargs):
+        pytest.fail("host-report verdict must precede interactive detachment")
+
+    monkeypatch.setattr(cli_module, "_drive_interactive", forbidden_detachment)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    for name in (
+        "GIT_LOOPY_ROUTE_POLICY",
+        "GIT_LOOPY_MODEL",
+        "GIT_LOOPY_REASONING_EFFORT",
+        "GIT_LOOPY_CONTEXT_TIER",
+        "GIT_LOOPY_ISSUE_SOURCE",
+        "GIT_LOOPY_MODEL_SELECT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in fixture["environment"].items():
+        monkeypatch.setenv(name, value)
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, dict(fixture["saved_config"]))
+    saved = path.read_bytes()
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("unattended host report prompted")
+    )
+    args = ["2"]
+    tables = settings.load_configs(tmp_path, os.environ)
+    resolved = cli_module.resolve_config(
+        cli_module.build_parser().parse_args(args),
+        os.environ,
+        project=tables.project,
+        global_=tables.global_,
+    ).run
+    assert resolved.model == model
+    assert resolved.reasoning_effort == fixture["resolved_effort"]
+    assert resolved.route_policy is RoutePolicy.STATIC
+    assert resolved.execution_host == "github-actions"
+
+    code = cli_module.main(args)
+    error = capsys.readouterr().err
+
+    assert code == case["expect_exit"], error
+    for diagnostic in case.get("expect_diagnostics", []):
+        assert diagnostic in error
+    for diagnostic in case.get("forbid_diagnostics", []):
+        assert diagnostic not in error
+    if case["expect_exit"] != 0:
+        assert requests == [] and preflights == []
+        assert fake_client.create_calls == []
+        assert fake_gh.issue_close_calls == [] and fake_gh.issue_comment_calls == []
+        assert fake_gh.route_comment_calls == [] and fake_gh.route_label_calls == []
+        assert list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl")) == []
+    else:
+        assert requests
+        assert {request.model for request in requests} == {model}
+        assert {request.reasoning_effort for request in requests} == {
+            case["expect_lane_effort"]
+        }
+        assert preflights
+        pickups = [
+            event
+            for event in _logged_events(tmp_path)
+            if event["type"] == "wrapper.pickup.bound"
+        ]
+        assert pickups
+        assert {event["model"] for event in pickups} == {model}
+        assert {event["effort"] for event in pickups} == {case["expect_lane_effort"]}
+        assert {event["effort_configurable"] for event in pickups} == {
+            case["expect_effort_configurable"]
+        }
+        assert not any(
+            event["type"] == "wrapper.strike" for event in _logged_events(tmp_path)
+        )
+
+    doctor_code, doctor_output = run_doctor(
+        tmp_path, config=resolved, catalog=_catalog()
+    )
+    assert doctor_code == case["expect_doctor_exit"]
+    assert any(case["expect_doctor_contains"] in line for line in doctor_output)
+    assert path.read_bytes() == saved
+    assert not settings.global_config_path(os.environ).exists()
 
 
 def test_a_failed_remote_green_base_preflight_starts_no_lane_or_strike(
@@ -8772,7 +9265,12 @@ def test_each_lanes_final_dynamic_route_is_published_to_its_own_issue(
     assert sorted(number for number, _body in fake_gh.route_comment_calls) == [42, 43]
     for number in (42, 43):
         labels = fake_gh.issue_labels(number)
-        assert len([x for x in labels if x.startswith("git-loopy-route:")]) == 1
+        owned = [
+            label for label in labels
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
+        ]
+        assert owned
+        assert not any(label.startswith("git-loopy-route:") for label in labels)
         assert {"ready-for-agent", "parallel-safe"} <= set(labels)
     deliveries = [
         event
@@ -9186,10 +9684,14 @@ def test_saved_dynamic_policy_replays_each_lane_and_recovers_only_pending_public
             and record["routing_credits"] == "0"
             for record in replayed
         )
-        assert len([
+        owned = [
             label for label in tracker.issue_labels(ref)
-            if label.startswith("git-loopy-route:")
-        ]) == 1
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
+        ]
+        assert owned
+        assert not any(
+            label.startswith("git-loopy-route:") for label in tracker.issue_labels(ref)
+        )
         assert {"ready-for-agent", "parallel-safe", "task-type:implementation"} <= set(
             tracker.issue_labels(ref)
         )

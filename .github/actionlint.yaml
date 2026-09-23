@@ -7,7 +7,12 @@ paths:
   # workflow that needs it rather than repository-wide.
   #
   # Suppressed narrowly and by exact message: any *other* unknown scope in
-  # this file --- a typo'd `content: write`, say --- still fails the gate.
+  # these files --- a typo'd `content: write`, say --- still fails the gate.
+  # Capability observation authenticates the same way a contribution does,
+  # and only that workflow gets the same one-message exception.
   .github/workflows/lane-contribution.yml:
+    ignore:
+      - 'unknown permission scope "copilot-requests"'
+  .github/workflows/host-capabilities.yml:
     ignore:
       - 'unknown permission scope "copilot-requests"'

@@ -529,6 +529,154 @@ def test_routing_setup_refusal_preserves_every_asset_despite_temporary_run_overr
     assert "private-aa-key" not in captured.err + captured.out
 
 
+@pytest.mark.parametrize("scope", ["project", "global"])
+def test_unattended_new_setup_records_dynamic_without_seeds_or_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, scope: str
+) -> None:
+    """Fresh ``init --yes`` records Dynamic and invents no spend authority."""
+    listings = _listing(monkeypatch)
+    evidence = _evidence(monkeypatch)
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_make_label_client", lambda: None)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("unattended new setup prompted")
+    )
+
+    assert cli.main(["init", "--yes", f"--{scope}"]) == 0
+
+    path = (
+        settings.project_config_path(tmp_path)
+        if scope == "project" else settings.global_config_path(os.environ)
+    )
+    other = (
+        settings.global_config_path(os.environ)
+        if scope == "project" else settings.project_config_path(tmp_path)
+    )
+    saved = settings.load_config_table(path)
+    assert saved["route_policy"] == "dynamic"
+    assert "routing" not in saved and "escalation" not in saved
+    for key in (
+        "routing_deadline_seconds",
+        "routing_credit_allowance",
+        "selector_concurrency",
+        "route_associations",
+    ):
+        assert key not in saved
+    rendered = path.read_text()
+    assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV not in rendered
+    assert "private" not in rendered
+    assert not other.exists()
+    assert listings == [] and evidence == []
+    text = capsys.readouterr().out
+    assert "route_policy = dynamic" in text
+    assert "git-loopy init --routing migrate" in text
+
+
+def test_unattended_reinit_does_not_infer_dynamic_from_existing_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A saved scope without a policy is not a new installation."""
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, {
+        "model": "gpt-5.6-terra", "reasoning_effort": "high",
+    })
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_make_label_client", lambda: None)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("reinit prompted")
+    )
+
+    assert cli.main(["init", "--yes", "--project"]) == 0
+
+    assert "route_policy" not in settings.load_config_table(path)
+
+
+def _policy_init(tmp_path: Path, policy_choice: str) -> int:
+    return init.run_init(
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=dict(os.environ),
+        fetch_choices=lambda: [_choice("gpt-5.6-terra", efforts=("high",))],
+        wizard_runner=lambda **_options: init.InitAnswers(
+            scope="project",
+            model="gpt-5.6-terra",
+            effort="high",
+            routing=None,
+            scaffold=True,
+            enabled_skills=(),
+            policy_choice=policy_choice,
+        ),
+        **_packaged(tmp_path),
+    )
+
+
+def test_interactive_fresh_setup_defaults_to_migrate_and_collects_bounds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listings = _listing(monkeypatch)
+    evidence = _evidence(monkeypatch)
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "private-aa-key")
+    answers = iter(["30", "2.5", "2", '{"aa-terra" = "gpt-5.6-terra@high"}'])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    assert _policy_init(tmp_path, "migrate") == 0
+
+    saved = settings.load_config_table(settings.project_config_path(tmp_path))
+    assert saved["route_policy"] == "dynamic"
+    assert "routing" not in saved
+    assert saved["routing_deadline_seconds"] == 30
+    assert "private-aa-key" not in settings.project_config_path(tmp_path).read_text()
+    assert listings == ["listing"] and evidence == ["evidence"]
+
+
+def test_interactive_fresh_setup_keep_needs_no_dynamic_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listings = _listing(monkeypatch)
+    evidence = _evidence(monkeypatch)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("keep asked for Dynamic limits")
+    )
+
+    assert _policy_init(tmp_path, "keep") == 0
+
+    saved = settings.load_config_table(settings.project_config_path(tmp_path))
+    assert saved["route_policy"] == "static"
+    assert "routing" not in saved and "routing_credit_allowance" not in saved
+    assert listings == ["listing"] and evidence == []
+
+
+def test_cancelling_the_fresh_migrate_default_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _cancel(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", _cancel)
+
+    assert _policy_init(tmp_path, "migrate") == 1
+
+    assert not settings.project_config_path(tmp_path).exists()
+
+
+def test_unattended_new_project_does_not_shadow_inherited_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    global_path = settings.global_config_path(os.environ)
+    settings.write_config_atomic(global_path, {"route_policy": "unselected"})
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_make_label_client", lambda: None)
+
+    assert cli.main(["init", "--yes", "--project"]) == 0
+
+    saved = settings.load_config_table(settings.project_config_path(tmp_path))
+    assert "route_policy" not in saved
+    assert settings.load_config_table(global_path)["route_policy"] == "unselected"
+
+
 @pytest.mark.parametrize("choice", ["ask", "migrate"])
 def test_unattended_first_setup_neither_invents_consent_nor_prompts_for_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, choice

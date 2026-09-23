@@ -748,8 +748,13 @@ no routing emits the binding exactly as before and stays conforming; `null` is a
 an absence. A null model leaves model choice to the backend. A Static or legacy null effort
 does not encode whether the model has a dial, so readers retain the historical backend
 placeholder without inferring capability. An explicitly null Dynamic effort means
-**not configurable** (§14.3). `event_schema_version` does not move: the seven are additive
-payload fields, which every schema-1 consumer already ignores when unknown.
+**not configurable** (§14.3). An additive optional `effort_configurable` records whether
+the harness listing reported an effort dial for the named model. It is omitted when
+unobserved. `false` with a present null effort means not configurable for any Routing
+source; `true` with a null effort is deliberate omission. Absence of the field is not a
+capability observation, so a historical Static null effort keeps its backend placeholder.
+`event_schema_version` does not move: these are additive payload fields, which every
+schema-1 consumer already ignores when unknown.
 
 Contract-1.24 addition within compatibility schema 1, and an extension of an existing record for
 the same reason: `wrapper.run.start` carries the **Run readback** (§14) as `model`, `effort`,
@@ -1409,12 +1414,16 @@ run-wide default:
   **optional-when-present**: a port that resolves nothing (see the Python-only note below) says
   nothing and stays conforming, and a consumer MUST treat their absence as "this Runner does not
   route" rather than as a route it failed to report. A `null` `model` or `effort` is *present*
-  rather than absent. A null model leaves model choice to the backend. Static/legacy null
-  effort does not distinguish a model with no dial from deliberately leaving its dial
-  unspecified; the historical backend placeholder is not a capability observation. For legacy
-  `effort`, the accompanying gate warning separates omission from an effort the gate dropped.
-  An explicitly null effort with Routing source `dynamic` instead means **not configurable**,
-  not the value `none`; a missing historical field supplies no such claim.
+  rather than absent. A null model leaves model choice to the backend. An unobserved
+  Static/legacy null effort does not distinguish a model with no dial from deliberately
+  leaving its dial unspecified; that historical backend placeholder is not a capability
+  observation. When the Pickup records `effort_configurable`, `false` with a present null
+  effort means not configurable for any Routing source, and `true` with a null effort is
+  deliberate omission. The field is omitted when no listing was observed, and a model name
+  is never that observation. For legacy `effort`, the accompanying gate warning separates
+  omission from an effort the gate dropped. An explicitly null effort with Routing source
+  `dynamic` means **not configurable**, not the value `none`; a missing historical field
+  supplies no such claim.
 - **Read back what it parsed (contract 1.24).** An Orchestrator that routes MUST print, at **Run
   start** and **unconditionally**, a labelled readback of the model settings it parsed: the
   run-wide **Default pair**'s model, effort and context tier; the **Escalation rung**; whether an
@@ -1632,16 +1641,23 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   its work sessions on a machine that authenticates as *itself*, the orchestrator's own listing
   describes a different installation under a different identity, and reporting it as that
   placement's verdict is exactly the substitution the rule above forbids. An Orchestrator MUST
-  refuse the combination before work rather than verify the wrong harness. Only a placement whose
-  sessions run under the Run's own authenticated harness is verifiable today.
-  Python's no-I/O placement refusal precedes local model listing, Skill migration, interactive
-  detachment and remote host preparation, including the green-base preflight dispatch. It shares
-  the routing authority verdict used by setup, doctor and Run preflight; a run-wide model/effort
-  override does not waive it. The `execution_host_refusal` cases in `routing-resolution.json`
-  exercise recorded and temporary authority through CLI, interactive startup and direct Run,
-  preserving Config and starting no work, Lease, Strike or Route publication. An explicitly
-  unselected remote Run retains its staged legacy path, not strict routing support. This
-  refusal does not complete non-local activation or change shell/PowerShell's routing deferral.
+  NOT substitute the local listing for that host's. Selected Static execution, including a
+  run-wide model or effort pin that suppresses Dynamic election, MAY proceed only when that
+  host reports its own listing and both that listing and the local listing accept every
+  configured Static route. Serial sessions still run on the local harness, so their dial
+  presence comes from the local listing. Lane sessions run on the host, so their dial presence
+  comes from the host report. A missing, failed, or unreadable report is absence, not an empty
+  listing, and MUST refuse before local model listing, Skill migration, interactive detachment,
+  and remote green-base dispatch. Observation MAY construct the host; it is not green-base and
+  not a contribution, and an unselected remote Run MUST NOT require it. Dynamic election on a
+  remote host MUST still be refused, report or not: a preflight snapshot is not a fresh
+  proposal or Pickup read. Python shares that verdict across CLI startup, doctor and Run
+  preflight. The `execution_host_refusal` cases cover the no-report path. The
+  `execution_host_report` cases cover a present report through CLI and doctor: the Lane
+  records the host dial, a rejecting host listing is not overruled by the local listing,
+  and a rejecting local listing still refuses after the host has accepted. This does not
+  authorize Dynamic election on a remote host, or change shell/PowerShell, Subagent, or
+  Integration routing deferrals. Python-local Dynamic default activation is declared below.
 - **Refuse, never rescue.** §14's *gate and fall back* rule does not apply to a Static route and
   MUST NOT be reached for: an effort the model does not accept, a tier it does not offer, a model
   this account may not use, a model the harness never listed, and a listing that could not be read
@@ -1676,12 +1692,13 @@ model listing, so they have no route to verify. They declare it unsupported in
 The Dashboard renders the verified triple off `wrapper.pickup.bound`; it does
 not elect or validate a route. An explicitly null effort with Routing source
 `dynamic` means **not configurable**, not a backend default or the value `none`.
-Rust preserves that distinction in Queue and contribution Route cells. Static
-nulls and historical missing effort fields retain their existing backend wording.
-That Static placeholder does not prove the model has a dial: these Pickups lack
-the capability fact needed to distinguish no dial from deliberate omission.
-Static no-dial-specific display therefore remains a readback gap, not an
-inference the Dashboard may make from a model name.
+The same wording applies to any source when the Pickup records
+`effort_configurable` false beside a present null effort. `true` beside a null
+effort is deliberate omission and keeps the backend placeholder. Rust preserves
+those distinctions in Queue, Activity and contribution Route cells. An unobserved
+Static null and a historical missing effort field retain their existing backend
+wording: absence of `effort_configurable` is not a capability observation, and
+the Dashboard MUST NOT infer one from the model name.
 For `wrapper.routing.prepared` in state `proposed`, explicit null work/selector efforts likewise mean
 not configurable and remain explicit nulls in the semantic projection; missing
 or historically empty fields retain their previous readback. In all other states,
@@ -1690,8 +1707,8 @@ not a claim about an effort dial. Preparation remains
 nonbinding, including when its Route cell is clipped; the issue Log retains its
 full work and selector wording. The shared `dashboard-insights.json`
 `effort_readback` matrix pins this Rust Event-replay/display boundary, not actual
-work-session creation or native-member routing. No Event fields or wire version
-are added.
+work-session creation or native-member routing. The additive optional
+`effort_configurable` field does not move `event_schema_version`.
 Python's CLI Pickup and preparation readback use the same no-dial distinction;
 the `routing-resolution.json` `effort_semantics` matrix observes that CLI beside
 actual serial/Lane work sessions. The Rust display matrix observes Event replay
@@ -1705,12 +1722,15 @@ without prompting or rewriting Config. A model/effort override alone is not this
 CLI startup checks before Skill migration, listing or detachment, rechecks after a Config reload,
 and carries saved-Config presence through detached startup. Doctor and Run preflight use the
 same authority verdict; live readiness and Pickup validation still apply after authority exists.
-Historical records retain their interpretation. Empty Config scopes and unselected non-local
+Historical records retain their interpretation. A Python-local Run with no Config and no named
+policy is the sibling refusal below, not this legacy path. Explicit `unselected` retains the
+legacy path for one Run. Unselected non-local
 Runs retain the legacy path during staged activation; a selected policy still MUST NOT validate
-a remote placement using local eligibility. Shell and PowerShell migration enforcement is
+a remote placement using local eligibility. A host capability report is that host's listing,
+not a substitute for the local one, and does not authorize Dynamic election. Shell and PowerShell migration enforcement is
 explicitly deferred and their unchanged behavior remains conforming. This paragraph is the
-member deferral, not final Dynamic-default activation, remote capability support, or Subagent/
-Integration routing support.
+member deferral. Python-local Dynamic default activation is declared below. It is not
+remote capability support, and it does not imply Subagent or Integration routing.
 
 `routing-resolution.json`'s `migration_recovery` exercises this guard through the real
 CLI-to-Run-to-work-session seam, in serial and Lane modes. Its cases MUST first refuse
@@ -1735,26 +1755,76 @@ input and retrying setup MUST allow a later, independently validated Run to use 
 recorded policy without temporary overrides. Keep MUST need neither leaderboard
 access nor Dynamic limits. The actual session, canonical Pickup, Dashboard and
 final tracker comment MUST agree, and the Run MUST preserve both Config scopes.
-This is an executable obligation for Python's explicit opt-in setup, not a change
-to bare init or auto-setup. Shell/PowerShell first-setup activation is deferred;
+This is an executable obligation for Python's explicit opt-in setup.
+Shell/PowerShell first-setup activation is deferred;
 historical streams and the non-local, Subagent and Integration boundaries above
 are unchanged.
+
+**Fresh Python-local Dynamic default (contract 2.9, #567).** A fresh scope —
+no saved table, and no inherited Route policy — records `dynamic` without
+seeding Static rows. Unattended `init --yes` writes that policy and no limits,
+associations, or leaderboard key, and does not prompt or fetch a listing.
+Doctor and the following Run then refuse before a work session, Lease, Strike,
+or publication; operator-supplied repair of those bounds elects into the actual
+session. Interactive fresh setup, including auto-setup, defaults to migrate,
+still accepts keep, and collects explicit bounds before saving. Cancellation
+writes nothing. Existing nonempty Config is not inferred, and an inherited
+policy, including explicit `unselected`, is not shadowed. `routing-resolution.json`'s
+`new_setup_default` matrix is this obligation. It does not activate
+shell/PowerShell, Subagent, or Integration routing.
+
+**Python-local no-Config refusal (contract 2.9, #567).** A local Python Run
+that finds no project or global Config, and no named Route policy, MUST refuse
+before a work session, Lease, Strike, or publication. Doctor prints the same
+verdict. The Run does not prompt, fetch a listing, call a Route selector, or
+write Config. A model or effort override is not the missing choice. Naming
+`--route-policy unselected` (or `GIT_LOOPY_ROUTE_POLICY=unselected`) retains
+the legacy path for that Run and writes nothing. Explicit `static` and
+`dynamic` use their existing verdicts. Unselected non-local Runs retain the
+legacy path. `routing-resolution.json`'s `no_config_dynamic_refusal` matrix is
+this obligation. Shell and PowerShell routing remain deferred. This does
+not imply Subagent or Integration routing.
+
+**Activated Python-local Dynamic default (contract 2.9, #567).** Dynamic
+routing is the default for unpinned Python-local work. Fresh setup records
+`dynamic` and seeds no Static rows. A local Run with no Config and no named
+policy refuses before a work session, Lease, Strike, or publication, and
+writes nothing; doctor prints that verdict. Saved Config without an explicit
+`static` or `dynamic` choice still requires keep-or-migrate and is not
+inferred. Explicit `unselected` retains the legacy path for one Run.
+Unselected non-local Runs retain the legacy path. A host capability report
+does not authorize Dynamic election. Shell and PowerShell routing remain
+deferred. This does not imply Subagent or Integration routing.
+`event_schema_version` stays 1.2. An absent or `unselected` policy on a
+historical record is not reread as Dynamic. `routing-resolution.json`'s
+`dynamic_default_activation` declares this status. The composed proof is the
+`new_setup_default`, `no_config_dynamic_refusal`, `migration_recovery`,
+`first_setup`, `publication_recovery`, `retry_lifecycle`,
+`pool_revalidation`, `pool_priority`, `in_flight_consumption`,
+`local_durability`, `effort_semantics`, and `preflight_deadline` matrices,
+each driven through the real CLI into actual serial or Lane sessions where
+the case admits work.
 
 ### 14.4 The Dynamic route (contract 2.8)
 
 Under `dynamic` the route for one issue is **elected from live public benchmark evidence** rather
-than written down in advance (ADR-0057). It is opt-in, and the rules below are what make the
-election an answer an operator can audit rather than a plausible-looking guess.
+than written down in advance (ADR-0057). On Python-local unpinned work it is
+the activated default (§14.3); it still does not start unless the prerequisites
+below are present. The rules below are what make the election an answer an
+operator can audit rather than a plausible-looking guess.
 
 Contract 2.9 includes §14.3's staged migration guard and opt-in first setup,
 the affected-work refusal and shared preflight-deadline obligations below,
 Route publication (§14.5) and Routing preparation (§14.6). The affected
 `routing-resolution.json`, `event-schema.json` and `dashboard-insights.json`
 fixtures declare that provenance at 2.9; Event wire compatibility remains 1.2.
-This declaration correction adds no Event fields, activates no Dynamic defaults,
-and leaves fixture cases and historical streams' interpretation unchanged.
+This declaration correction adds no Event fields and leaves historical streams'
+interpretation unchanged. §14.3's fresh-setup default and the Python-local
+no-Config refusal are the Dynamic-default obligations this contract activates;
+naming `unselected` still retains the legacy path for one Run. Non-local
+absence, and shell/PowerShell, stay on the deferred legacy path.
 
-- **Opt-in, with its own prerequisites, or no dynamic work at all.** The policy requires the
+- **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
   routing-credit allowance, a bounded selector concurrency, and the verified associations between
   benchmark identities and harness configurations. Incomplete Dynamic prerequisites MUST refuse
@@ -1951,10 +2021,10 @@ the rendered Rust wording.
 Orchestrators implement no per-issue routing and read no harness listing, so they have no route to
 elect. They declare it unsupported in
 [`fixture-claims.json`](../git-loopy/conformance/fixture-claims.json) rather than by implication.
-The Dashboard reads the elected triple and Routing source from
-`wrapper.pickup.bound`, without electing or validating a route. It uses the
-source-aware null-effort readback defined in §14.3 rather than treating every
-null effort as a backend default.
+The Dashboard reads the elected triple, Routing source and any recorded
+`effort_configurable` fact from `wrapper.pickup.bound`, without electing or
+validating a route. It uses the source-aware null-effort readback defined in
+§14.3 rather than treating every null effort as a backend default.
 
 The **Run readback** MUST distinguish an absent Static table from retained Static
 routes. Under unsuppressed `dynamic`, `unconfigured_task_type_keys` names work awaiting
@@ -1996,12 +2066,21 @@ resolution.
   provenance references. A proposal and unchanged revalidation get no comment.
   The projection MUST omit credentials, raw prompts, private repository
   excerpts, and hidden reasoning.
-- **Own one association, not a repository label.** A projection MAY attach one
-  deterministic compact Route label that encodes the selected triple and is
-  collision-resistant within tracker limits. Exact values remain in the local
-  record and comment. Rerouting MUST replace only that issue's owned Route-label
-  association, preserving Task-type and unrelated labels; it MUST NOT rename a
-  shared repository label.
+- **Own dimensional associations, not a repository label.** A projection
+  attaches the exact representable dimensions `model_id:`, `model_context:`,
+  and `model_effort:` (ADR-0060). Model and effort keep their exact spelling,
+  including dots. Context is verified full capacity in exact decimal K/M units,
+  not the tier name, usage, or a rounded window. An inapplicable effort is
+  omitted and is not an error; the supported value `none` is `model_effort:none`.
+  A null model omits `model_id`. A value that cannot be verified, or that is
+  unsafe or longer than GitHub's 50-character label limit, is omitted and named,
+  never truncated, hashed, or rewritten. The issue's dimensional set is one
+  association: rerouting removes every owned Route label on that issue, including
+  a legacy `git-loopy-route:` association, then adds the current dimensions, and
+  preserves Task-type and unrelated labels. It MUST NOT rename a shared
+  repository label. The comment identity marker stays `git-loopy-route:v1:` so
+  historical comments remain recognizable. No identity suffix appears in a new
+  label name.
 - **Do not read your own output back.** A Runner that renders an issue for an
   **Agent** or for a **Route selector** MUST exclude its own Route projection
   from that rendering — both the owned Route label and the projection comment,
@@ -2034,9 +2113,56 @@ rate-limit and transient failures, idempotent partial recovery, exhausted delive
 across Pickups (including a previous or missing owned association), and a changed assignment
 after capability withdrawal. Actual work
 settings, canonical Pickup and Dashboard route readback must agree while Config
-and unrelated labels remain unchanged. This is a Python activation obligation;
+and unrelated labels remain unchanged. Published dimensions agree with
+`wrapper.routing.delivery`: `label` is the space-joined set actually written,
+and additive `labels` names that set. This is a Python activation obligation;
 shell/PowerShell implementation remains deferred, and historical streams,
 Subagent and Integration settings are unchanged.
+
+**Python exact-dimension publication (contract 2.9, #567, ADR-0060).** Python
+serial and Lane publication write those dimensions through the existing
+publisher and the real CLI. Verified listing capacity is recorded when the
+Pickup already holds it. A missing capacity is an incomplete projection, not
+zero. A Dynamic session uses the listing that just authorized that issue. A
+Static Lane reads the executing host's report when that placement is not local;
+a serial Static session reads this machine's listing. A pending delivery
+recorded under the combined `git-loopy-route:` spelling is converted to those
+dimensions on retry. Conversion does not reset an exhausted attempt budget,
+does not duplicate a decision comment the tracker already accepted, and does
+not replay the combined name. Historical
+delivery events that omit `labels` and `incomplete` stay valid, and
+`event_schema_version` stays 1.2. `git-loopy route-labels migrate` is the
+explicit, repeatable Python migration for one repository the operator is in.
+It does not run as part of a Run, and it does not scan other repositories.
+It pages every open and closed issue, not the Pool's capped issue list. A
+pull request in that listing is not relabeled. It reconstructs dimensions
+only from a trustworthy local Route record or a matching historical
+projection comment, never from truncated `git-loopy-route:` label text, a
+current model listing, or a new selection. It removes the legacy association
+even when a dimension stays unknown, does not rewrite historical comments,
+and deletes a legacy label definition only after a complete issue listing
+and a complete pull-request listing both show it unused. A permission or
+pagination failure on that usage check keeps the definition and names it
+unverified; it is not treated as unused. Operators must stop or upgrade
+every publishing Runner for that repository before `--apply`. A pending
+local delivery, an incomplete issue listing, or an unreadable local store
+refuses before any tracker write. Reporting is the default and writes
+nothing; `--apply` is the write and does not prompt. The command cannot
+certify that other machines have stopped publishing legacy labels. A later
+capacity-only refresh is the authenticated work session's `token_limit`,
+not a roster lookup and not a second routing comment. It fills or corrects
+`model_context` on the
+assignment that session started under — that issue, selected model, Context
+tier, and assignment identity — in serial and Lane operation. A late
+observation or delivery from a superseded assignment writes nothing, including
+when the model id matches and the assignment or tier differs. Usage, remaining
+tokens, and the compaction ceiling are not capacity, and another model or
+tier's maximum is not inferred. An unrepresentable window is omitted and
+named. A failed capacity write is retried finitely without renewing the
+routing comment's bound or an exhausted capacity delivery's own budget.
+Shell and PowerShell routing remain deferred. This does
+not imply Subagent or Integration routing. Python-local Dynamic default
+activation is §14.3; this section does not extend it.
 
 The `local_durability` matrix composes the mandatory local-write boundary with
 recorded init/update authority in both Python-local modes. A refused provenance
@@ -2133,8 +2259,8 @@ Running Agents finish on their frozen settings, while a refused Dynamic candidat
 leaves retained Static work usable without a Strike for unstarted work.
 Rolling may filter newly ineligible candidates on its fresh Pool read before
 reservation, rather than inventing a Pickup skip. This is Python-local composed
-Conformance, not final Dynamic-default activation. Shell/PowerShell activation is
-deferred; no non-local, Subagent or Integration routing is claimed.
+Conformance under the activated default in §14.3. Shell and PowerShell routing
+remain deferred. This does not imply Subagent or Integration routing.
 
 The companion `pool_priority` matrix carries recorded migration through four
 eligible pending candidates. It preserves oldest-first order and explicit

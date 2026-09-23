@@ -19,6 +19,11 @@ from git_loopy.config import RunConfig
 
 
 @pytest.fixture(autouse=True)
+def _static_authority_is_not_the_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pin is not the no-Config routing refusal."""
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "unselected")
+
+
 def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "GIT_LOOPY_MODEL",

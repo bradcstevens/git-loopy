@@ -1,6 +1,15 @@
 {
   "schema_version": 1,
   "contract_version": "2.9",
+  "dynamic_default_activation": {
+    "status": "python_local_activated",
+    "shell": "deferred",
+    "powershell": "deferred",
+    "subagent": "not_supported",
+    "integration": "not_supported",
+    "remote_dynamic_election": "not_authorized",
+    "event_schema_version": "1.2"
+  },
   "local_durability": {
     "note": "Recorded init/update authorization crosses the real CLI, actual serial/Lane sessions and the canonical Event-log write boundary. Uses migration_recovery's saved_config, harness, evidence and selector_choice. Refuse the named Event write before it reaches disk, both for a new election and after an earlier Run supplied a reusable route. A failed Run starts no work, publishes nothing new, charges no Strike, releases its Lease and preserves Config and existing tracker projections. A repaired Run still checks current capabilities and evidence; only successfully persisted provenance can supply reuse. Selector bills remain Run-only Consumption, including a refused binding; no billing observation remains unknown, not a fabricated zero. The fault is scoped to the declared mandatory write, not a claim that arbitrary storage failure leaves all other records writable.",
     "modes": ["serial", "lane"],
@@ -43,7 +52,7 @@
     ]
   },
   "effort_semantics": {
-    "note": "Recorded update --routing migrate through real CLI serial/local Lane work. A bare Dynamic association asserts that effort is not configurable; it is not permission to let a configurable model choose an unscored backend effort. The literal string none remains an advertised effort value. Each case first authorizes against initial_efforts, then uses each run's fresh harness listing. Expected settings, selector calls, Consumption and refusal are independent literals. Reopening the same issue preserves its observational publication so unchanged-input reuse must keep the original decision without another assessment. A newly incompatible dial refuses fresh work even when canonical history and a Route label name the old assignment. Current combined labels remain the shipped representation; ADR-0060 implementation is not claimed.",
+    "note": "Recorded update --routing migrate through real CLI serial/local Lane work. A bare Dynamic association asserts that effort is not configurable; it is not permission to let a configurable model choose an unscored backend effort. The literal string none remains an advertised effort value. Each case first authorizes against initial_efforts, then uses each run's fresh harness listing. Expected settings, selector calls, Consumption and refusal are independent literals. Reopening the same issue preserves its observational publication so unchanged-input reuse must keep the original decision without another assessment. A newly incompatible dial refuses fresh work even when canonical history and a Route label name the old assignment. Python publication writes exact dimensional labels; the migration command is not claimed.",
     "modes": ["serial", "lane"],
     "saved_config": {
       "routing_deadline_seconds": 30,
@@ -649,7 +658,7 @@
   "static_route_refusals": ["unverifiable", "unnamed_model", "unlisted_model", "ineligible_model", "effort_not_configurable", "unsupported_effort", "unsupported_context_tier"],
   "static_route_notes": {
     "policy": "Contract 2.9 includes staged Python-local migration, opt-in first setup, affected-work refusal and shared preflight-deadline obligations, alongside Route publication and Routing preparation (sections 14.5/14.6). This fixture, event-schema.json and dashboard-insights.json declare that provenance at 2.9, including the previously added Event vocabulary and preparation projection. This declaration correction adds no Event fields or fixture cases; wire compatibility stays 1.2. The measured-tier cases introduced at 2.5 and Static route cases introduced at 2.8 retain their interpretation; no historical Event stream changes. The Route policy is SELECTED, never inferred. `unselected` is the absence of a decision and retains legacy routing interpretation -- the hardcoded roster gates, the built-in escalation rung, the historical event stream -- subject to the staged Python-local startup refusal described by migration_activation. Only `static` activates the cases below; `dynamic` selects the Dynamic route (contract 14.4), whose election is scored from live evidence rather than pinned here, and whose own record is pinned by event-schema.json's `wrapper.routing.resolved`. A Runner MUST NOT reinterpret an existing Config as though the policy had always been in force, and MUST NOT read the absence of a policy as a choice of one.",
-    "migration_activation": "Python local Runs with nonempty project or global Config MUST supply or inherit an explicit static/dynamic policy before Agent work. Missing authority refuses without prompting or Config writes, naming update --routing keep/migrate and temporary --route-policy/GIT_LOOPY_ROUTE_POLICY remedies. Model/effort overrides alone are not consent. CLI startup, detached startup and Run/doctor preflight share this authority verdict; selected policies still require live readiness and fresh Pickup validation. Historical records, empty Config scopes and unselected non-local Runs retain their legacy path during staged activation. Shell and PowerShell enforcement is deferred and unchanged members remain conforming. This is not final Dynamic-default activation or remote, Subagent or Integration routing support. The one-route cases below do not model startup; migration_recovery drives the composed CLI/serial/Lane recovery seam.",
+    "migration_activation": "Python local Runs with nonempty project or global Config MUST supply or inherit an explicit static/dynamic policy before Agent work. Missing authority refuses without prompting or Config writes, naming update --routing keep/migrate and temporary --route-policy/GIT_LOOPY_ROUTE_POLICY remedies. Model/effort overrides alone are not consent. CLI startup, detached startup and Run/doctor preflight share this authority verdict; selected policies still require live readiness and fresh Pickup validation. Historical records and unselected non-local Runs retain their legacy path during staged activation. A Python-local Run with no Config and no named policy is the sibling no_config_dynamic_refusal matrix. Explicit unselected retains the legacy path for one Run. Shell and PowerShell enforcement is deferred and unchanged members remain conforming. Python-local Dynamic default activation is declared by dynamic_default_activation. This is not remote, Subagent or Integration routing support. The one-route cases below do not model startup; migration_recovery drives the composed CLI/serial/Lane recovery seam.",
     "verifiable_placement": "The harness whose answer counts is the one the WORK SESSION runs under. Where an Execution host opens its sessions on a machine that authenticates as itself, the orchestrator's own listing describes a different installation under a different identity, and a Runner MUST refuse that combination before work rather than report a local read as that placement's verdict. Only a placement whose sessions run under the Run's own authenticated harness is verifiable.",
   "authority": "Under `static` the authority is the AUTHENTICATED HARNESS THIS RUN SPAWNS -- its own model listing, read fresh. A Runner MUST NOT validate a Static route against a hardcoded roster, a published plan or licence catalogue, or another CLI installation, and MUST NOT satisfy the read from a cache held across the Run: a stale answer is the failure this rule exists to prevent, not a cheaper version of it. Reading eligibility MUST NOT rewrite billing provenance already recorded for the Run.",
     "refuse_never_rescue": "Every verdict other than `accepted` ends the Run BEFORE any work, naming the selected settings. A Runner MUST NOT drop an unsupported effort, downgrade an unoffered context tier, or substitute a backend default and call the result a route: a Static route is honoured exactly or not at all.",
@@ -660,7 +669,7 @@
     "scope": "These cases validate ONE route. A Run validates every route its Config holds -- the run-wide default, each [routing] entry, and an explicitly configured escalation rung -- before it picks up any issue, so a route that is never exercised is still refused at the start rather than mid-Run."
   },
   "execution_host_refusal": {
-    "note": "Python selected Static/Dynamic policies cannot authorize the independently authenticated GitHub Actions host from a local capability listing. Refuse before local model listing, Skill migration, interactive detachment, host construction or remote green-base dispatch. A run-wide model/effort pin suppresses selection, not this placement rule. Config remains unchanged and no work, Lease, Strike or Route publication occurs. The same no-I/O verdict is used by CLI startup, direct Run and live routing preflight. This does not provide remote routing support or activate final defaults; an explicitly unselected remote Run retains its legacy path. Shell/PowerShell routing remains deferred.",
+    "note": "A selected Static route, including a model or effort pin that suppresses Dynamic election, may run on GitHub Actions only when that host reports its own listing and both that listing and the local listing accept the route. Without that report, refuse before local model listing, Skill migration, interactive detachment, or remote green-base dispatch. Observation may construct the host; it is not green-base and not a contribution. A missing or unreadable report is absence, not an empty listing, and the local listing is never substituted. Dynamic election does not construct the host and is not authorized by a report. Config remains unchanged and no work, Lease, Strike or Route publication occurs. The same verdict is used by CLI startup, direct Run and live routing preflight. This does not activate final Dynamic defaults; an explicitly unselected remote Run retains its legacy path. Shell/PowerShell routing remains deferred.",
     "entrypoints": ["cli", "interactive", "run"],
     "saved_config": {"model": "synthetic-work", "reasoning_effort": "high"},
     "environment": {"GIT_LOOPY_EXECUTION_HOST": "github-actions"},
@@ -681,6 +690,62 @@
       {"id": "dynamic-effort-pin-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "environment": {"GIT_LOOPY_REASONING_EFFORT": "high"}},
       {"id": "dynamic-context-only-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "args": ["--context-tier", "long_context"]},
       {"id": "static-flag-overrides-inherited-dynamic", "global": {"route_policy": "dynamic"}, "args": ["--route-policy", "static", "--execution-host", "github-actions"]}
+    ]
+  },
+  "execution_host_report": {
+    "note": "A present executing-host report is authority for selected Static execution on GitHub Actions, not a substitute for the local listing and not a licence for Dynamic election. The host reports its own listing. Both that listing and the local listing must accept the route. Lane Pickup and the contribution request record the host dial; the local listing's opposite dial is not substituted. A rejecting host listing refuses before green-base, work, Lease, Strike or publication even when the local listing would accept. A rejecting local listing refuses after the host has accepted. Doctor prints the same verdict. Config is unchanged. This does not activate bare init, auto-setup or no-Config Dynamic defaults. Shell/PowerShell, Subagent and Integration routing remain deferred.",
+    "model": "synthetic-work",
+    "resolved_effort": null,
+    "saved_config": {
+      "route_policy": "static",
+      "model": "synthetic-work"
+    },
+    "environment": {
+      "GIT_LOOPY_EXECUTION_HOST": "github-actions"
+    },
+    "cases": [
+      {
+        "id": "host-dial-authorizes-lane-and-doctor",
+        "host_lists_model": true,
+        "local_lists_model": true,
+        "host_effort_configurable": false,
+        "local_effort_configurable": true,
+        "expect_exit": 0,
+        "expect_doctor_exit": 0,
+        "expect_lane_effort": null,
+        "expect_effort_configurable": false,
+        "expect_doctor_contains": "Routing readiness | passed | configured Static routes verified; Pickup checks them again.",
+        "forbid_diagnostics": [
+          "this machine's model listing is not the listing",
+          "executing host's model listing"
+        ]
+      },
+      {
+        "id": "rejecting-host-refuses-before-substitution",
+        "host_lists_model": false,
+        "local_lists_model": true,
+        "host_effort_configurable": false,
+        "local_effort_configurable": true,
+        "expect_exit": 1,
+        "expect_doctor_exit": 1,
+        "expect_diagnostics": [
+          "the selected Static route was refused by the executing host's model listing"
+        ],
+        "expect_doctor_contains": "Routing | failed | the selected Static route was refused by the executing host's model listing"
+      },
+      {
+        "id": "rejecting-local-listing-refuses-after-host-acceptance",
+        "host_lists_model": true,
+        "local_lists_model": false,
+        "host_effort_configurable": false,
+        "local_effort_configurable": true,
+        "expect_exit": 1,
+        "expect_doctor_exit": 1,
+        "expect_diagnostics": [
+          "the selected Static route was refused by this machine's model listing"
+        ],
+        "expect_doctor_contains": "Routing | failed | the selected Static route was refused by this machine's model listing"
+      }
     ]
   },
   "migration_recovery": {
@@ -1244,7 +1309,7 @@
     ]
   },
   "first_setup": {
-    "note": "Python-local first setup starts with no project or global Config. The guided init --routing flow collects an operator choice, finite limits and verified associations, checks readiness before saving, and never starts work. A refused setup saves no Config, prompt or Skill policy and writes no tracker labels. Repair the declared input and retry setup, then invoke the real CLI Run without routing overrides. Compare actual serial/Lane session settings, canonical Pickup, Dashboard readback and tracker publication, with unchanged Config and the key outside saved assets. These cases exercise explicit opt-in setup, not bare init, auto-setup or final Dynamic defaults. Shell/PowerShell, non-local, Subagent and Integration activation remain deferred.",
+    "note": "Python-local first setup starts with no project or global Config. The guided init --routing flow collects an operator choice, finite limits and verified associations, checks readiness before saving, and never starts work. A refused setup saves no Config, prompt or Skill policy and writes no tracker labels. Repair the declared input and retry setup, then invoke the real CLI Run without routing overrides. Compare actual serial/Lane session settings, canonical Pickup, Dashboard readback and tracker publication, with unchanged Config and the key outside saved assets. These cases exercise explicit opt-in setup. Fresh init --yes and interactive auto-setup defaults are the sibling new_setup_default matrix. No-Config Runs, shell/PowerShell, non-local, Subagent and Integration activation remain deferred.",
     "inputs": "Use migration_recovery's synthetic saved_config as collected answers, not pre-existing Config, and its harness, evidence and selector_choice as external inputs. Accept the wizard's default Static-route choice rather than supplying a prebuilt answer. Keep collects only model/effort and no Dynamic access or limits. Case initial inputs apply only to the first setup attempt: answers overlays collected Dynamic limits/associations, access controls the outside-Config key, evidence_available controls the evidence transport, and harness_available controls the fresh authenticated readiness listing, not the earlier picker display. Access defaults to true for Migrate and false for Keep; both transports default to available. Repair restores the shared inputs before repeating setup. expected_refusal declares either a Config input error (config_key) or an existing Dynamic routing_reason; prerequisite_missing also names the setting the diagnostic must identify. Its absence means setup succeeds immediately. Both Config scopes start absent; scope selects the only one init may write. The final expected settings are independent literals, not derived from the supplied answers or routing algorithm.",
     "routing_refusals": ["prerequisite_missing", "quota_exhausted", "no_runnable_candidate", "source_unavailable", "capabilities_unavailable"],
     "modes": ["serial", "lane"],
@@ -1309,6 +1374,35 @@
         "expected_refusal": {"routing_reason": "capabilities_unavailable"},
         "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1}
       }
+    ]
+  },
+  "new_setup_default": {
+    "note": "Python-local fresh setup records Dynamic without seeding Static rows. Unattended init --yes writes route_policy = dynamic and no limits, associations or key; doctor and the following Run refuse before a work session, Lease, Strike or publication. Operator-supplied repair of those bounds, still outside any invented allowance, then elects. Interactive fresh setup defaults to migrate, still accepts keep, and collects explicit bounds before saving. Existing nonempty Config is not inferred, and an inherited policy is not shadowed. A local Run with no Config and no named policy is the sibling no_config_dynamic_refusal matrix, not this legacy path. Shell/PowerShell, Subagent and Integration activation remain deferred. Inputs reuse migration_recovery's harness, evidence and selector_choice. expected is an independent session literal.",
+    "modes": ["serial", "lane"],
+    "scopes": ["project", "global"],
+    "paths": ["unattended", "interactive"],
+    "expected": {
+      "model": "synthetic-fancy-9",
+      "effort": "high",
+      "context_tier": "default",
+      "routing_source": "dynamic",
+      "selector_calls": 1
+    }
+  },
+  "no_config_dynamic_refusal": {
+    "note": "A Python-local Run that finds no project or global Config, and no selected Route policy, refuses before a work session, Lease, Strike or publication. Doctor prints that same verdict. The Run does not prompt, fetch a listing, call a Route selector, or write Config. A model or effort override is not the missing choice. Explicit static, dynamic, and unselected policies, and unselected non-local Runs, are outside this refusal. Naming unselected retains the legacy path for that Run and writes nothing. Shell/PowerShell, Subagent and Integration activation remain deferred.",
+    "modes": ["serial", "lane"],
+    "overrides": [
+      {"id": "bare", "args": []},
+      {"id": "model-override-is-not-consent", "args": ["--model", "gpt-5.4"]}
+    ],
+    "expect_diagnostics": [
+      "No Config",
+      "git-loopy init",
+      "--route-policy static",
+      "--route-policy dynamic",
+      "GIT_LOOPY_ROUTE_POLICY",
+      "Config unchanged"
     ]
   },
   "preflight_deadline": {

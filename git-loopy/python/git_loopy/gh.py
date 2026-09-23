@@ -85,6 +85,7 @@ from typing import (
     Sequence,
     runtime_checkable,
 )
+from urllib.parse import quote
 
 from git_loopy.readiness import BlockedByRead, BlockerNode
 from git_loopy.route_publication import RouteDeliveryError
@@ -115,6 +116,11 @@ _STDERR_TAIL_LIMIT: Final[int] = 400
 #: Page size for the label listing. ``gh api --paginate`` merges every page's
 #: JSON array into one, so this bounds each request, not the result.
 _LABEL_PAGE_SIZE: Final[int] = 100
+
+#: Page size for a historical Route-label migration's issue read. Same
+#: exhaustive ``gh api --paginate`` posture as the label catalog: the Pool's
+#: ``--limit`` ceiling is not a proof that every open and closed issue was seen.
+_ISSUE_PAGE_SIZE: Final[int] = 100
 
 # Shallow issue-list pagination bounds (#219 §2.8, Wrapper contract §2.1). The
 # first read asks for :data:`LIST_PAGE_LIMIT`; each ambiguous full page doubles
@@ -908,9 +914,9 @@ class GitHubClient(Protocol):
         ...
 
     def replace_route_label(
-        self, number: int, *, remove: Sequence[str], add: str
+        self, number: int, *, remove: Sequence[str], add: Sequence[str]
     ) -> None:
-        """Change only this issue's Route-label association."""
+        """Change only this issue's Route-label associations."""
         ...
 
     def pr_list(self, label: str, state: str = "open") -> list[PullRequest]:
@@ -1232,13 +1238,14 @@ class SubprocessGitHubClient:
             raise RouteDeliveryError(str(create_error)) from create_error
 
     def replace_route_label(
-        self, number: int, *, remove: Sequence[str], add: str
+        self, number: int, *, remove: Sequence[str], add: Sequence[str]
     ) -> None:
         """Replace only the owned Route label associations on one issue."""
         try:
             for label in remove:
                 self._checked(["issue", "edit", str(number), "--remove-label", label])
-            self._checked(["issue", "edit", str(number), "--add-label", add])
+            for label in add:
+                self._checked(["issue", "edit", str(number), "--add-label", label])
         except GhError as exc:
             raise RouteDeliveryError(str(exc)) from exc
 
@@ -1509,6 +1516,186 @@ class SubprocessLabelClient:
                 permission. The caller decides whether that is fatal.
         """
         _run(["issue", "edit", str(number), "--remove-label", label])
+
+
+def _labeled_issues_query(label: str) -> str:
+    """Issues-API query for one label, with the name encoded as one parameter."""
+    encoded = quote(label, safe="")
+    return (
+        f"repos/{{owner}}/{{repo}}/issues?state=all"
+        f"&per_page={_ISSUE_PAGE_SIZE}&labels={encoded}"
+    )
+
+
+def _paginated_issue_items(query: str) -> list[dict]:
+    """Return every object from one exhaustive issues-API read.
+
+    ``gh api --paginate`` follows Link headers until the server stops, so a
+    successful read is complete. A non-array or a malformed row is a failed
+    read, not an empty repository: a dropped issue must not look unused.
+    """
+    cmd = ["api", query, "--paginate"]
+    raw = _run(cmd)
+    parsed = _parse_json(raw, [_GH_BIN, *cmd])
+    if not isinstance(parsed, list):
+        raise GhError(
+            [_GH_BIN, *cmd],
+            0,
+            "expected JSON array from gh api --paginate, got "
+            f"{type(parsed).__name__}",
+        )
+    items: list[dict] = []
+    for entry in parsed:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("number"), int)
+            or "state" not in entry
+        ):
+            raise GhError(
+                [_GH_BIN, *cmd],
+                0,
+                f"gh issue listing entry malformed: {entry!r}",
+            )
+        items.append(entry)
+    return items
+
+
+def _issues_excluding_pull_requests(items: list[dict], cmd: Sequence[str]):
+    """Issues from one REST page, without pull requests the issues API mixes in."""
+    from git_loopy.route_label_migration import MigrationIssue
+
+    return tuple(
+        MigrationIssue(
+            number=entry["number"],
+            state=str(entry["state"]).upper(),
+            labels=_rest_label_names(entry, cmd),
+        )
+        for entry in items
+        if "pull_request" not in entry
+    )
+
+
+def _rest_label_names(entry: dict, cmd: Sequence[str]) -> tuple[str, ...]:
+    raw = entry.get("labels") or []
+    if not isinstance(raw, list):
+        raise GhError(list(cmd), 0, f"gh issue labels malformed: {entry!r}")
+    names: list[str] = []
+    for lab in raw:
+        if isinstance(lab, dict) and isinstance(lab.get("name"), str):
+            names.append(lab["name"])
+        elif isinstance(lab, str):
+            names.append(lab)
+        else:
+            raise GhError(list(cmd), 0, f"gh issue label entry malformed: {lab!r}")
+    return tuple(names)
+
+
+class SubprocessRouteLabelMigrationTracker:
+    """Tracker mechanics for ``git-loopy route-labels migrate``.
+
+    Issue and pull-request listings are exhaustive ``gh api --paginate`` reads.
+    The Pool's capped ``issue list`` is not a proof that history was seen, and
+    a label definition is shared with pull requests.
+    """
+
+    def repository(self) -> str:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            return SubprocessGitHubClient().repo_view().nwo
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def list_issues(self):
+        from git_loopy.route_label_migration import (
+            MigrationPage,
+            RouteLabelMigrationError,
+        )
+
+        query = (
+            f"repos/{{owner}}/{{repo}}/issues?state=all&per_page={_ISSUE_PAGE_SIZE}"
+        )
+        cmd = ["gh", "api", query, "--paginate"]
+        try:
+            items = _paginated_issue_items(query)
+            issues = _issues_excluding_pull_requests(items, cmd)
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+        return MigrationPage(items=issues, complete=True)
+
+    def issue_comments(self, number: int) -> tuple[str, ...]:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            return tuple(SubprocessGitHubClient().issue_comments(number))
+        except (GhError, RouteDeliveryError) as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def ensure_label(self, label: str) -> None:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            SubprocessGitHubClient().ensure_label(label)
+        except (GhError, RouteDeliveryError) as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def replace_route_label(
+        self, number: int, *, remove: Sequence[str], add: Sequence[str]
+    ) -> None:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            SubprocessGitHubClient().replace_route_label(
+                number, remove=remove, add=add
+            )
+        except (GhError, RouteDeliveryError) as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def label_definitions(self) -> tuple[str, ...]:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            return tuple(SubprocessLabelClient().label_list())
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def issues_with_label(self, label: str):
+        from git_loopy.route_label_migration import (
+            MigrationPage,
+            RouteLabelMigrationError,
+        )
+
+        query = _labeled_issues_query(label)
+        cmd = ["gh", "api", query, "--paginate"]
+        try:
+            items = _paginated_issue_items(query)
+            issues = _issues_excluding_pull_requests(items, cmd)
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+        return MigrationPage(items=issues, complete=True)
+
+    def pull_requests_with_label(self, label: str):
+        from git_loopy.route_label_migration import (
+            PullUsagePage,
+            RouteLabelMigrationError,
+        )
+
+        try:
+            items = _paginated_issue_items(_labeled_issues_query(label))
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+        numbers = tuple(
+            entry["number"] for entry in items if "pull_request" in entry
+        )
+        return PullUsagePage(numbers=numbers, complete=True)
+
+    def delete_label_definition(self, label: str) -> None:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            _run(["label", "delete", label, "--yes"])
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
 
 
 class SubprocessTaskTypeLabelClient:

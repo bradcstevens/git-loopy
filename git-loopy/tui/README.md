@@ -88,10 +88,11 @@ and states the identical facts.
 
 Route cells read the recorded Pickup rather than choosing settings. An explicit
 null Dynamic effort displays **not configurable**; the advertised effort `none`
-stays `none`. Static omission and historical records without an effort retain
-their backend wording.
-Static's backend placeholder does not attest dial support; the recorded Pickup
-cannot distinguish a Static no-dial model from deliberately omitting its effort.
+stays `none`. An observed Static no-dial (`effort_configurable` false beside a
+present null effort) uses the same wording. An observed deliberate omission
+(`true` beside a null effort), an unobserved Static null, and historical records
+without an effort retain their backend wording. Absence of the field is not a
+dial observation, and the model name is never one.
 The prepared Route remains marked **not binding**, with
 the full work and selector effort wording in the issue Log when the Queue cell
 needs clipping. Explicit null efforts in a proposal survive in the raw projection;

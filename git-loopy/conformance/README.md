@@ -56,7 +56,8 @@ temporary overrides and post-migration access/evidence loss. This is deliberatel
 not another pure routing resolver: setup readiness cannot authorize a future
 Pickup. Shell/PowerShell activation is explicitly deferred; the Rust Dashboard
 does not execute migration or create work sessions. Historical fixtures and
-streams retain their interpretation, and Dynamic defaults remain off.
+streams retain their interpretation. Python-local Dynamic is the activated
+default for unpinned new work; shell and PowerShell routing remain deferred.
 
 The sibling `first_setup` matrix starts without either Config scope and crosses
 the real `init --routing` CLI and headless Textual keyboard walk, with terminal
@@ -73,19 +74,29 @@ The refusal vocabulary reuses the Dynamic reasons, distinguishing Config input
 coercion from live readiness; a closure assertion pins its declared reasons.
 The Python adapter is
 `test_first_setup_readiness_recovers_into_the_actual_routed_session` in that
-same suite. This does not cover bare init/auto-setup activation or grant other
-Runner members setup support.
+same suite. Fresh `init --yes` and interactive auto-setup defaults are the
+sibling `new_setup_default` matrix, not these `--routing` cases. Its Python
+adapter is `test_fresh_setup_records_dynamic_and_the_run_uses_that_session`.
+It does not grant other Runner members setup support.
 
 The `execution_host_refusal` matrix covers selected policies on the independently
-authenticated GitHub Actions host. Eight cases run through CLI, interactive
-startup and direct Run entry in `python/tests/test_loop_parallel.py`, proving
-refusal before local model listing, Skill migration, detachment, host construction
-or remote green-base dispatch. Saved and temporary authority, model/effort pins
-and context-only controls cannot authorize that placement. Config stays unchanged
-and no work, Lease, Strike or Route publication starts. The existing unselected
-remote execution cases protect the staged compatibility path; this matrix does
-not implement remote capabilities, activate Dynamic defaults or remove native
-member deferrals.
+authenticated GitHub Actions host when that host has not reported its listing.
+Eight cases run through CLI, interactive startup and direct Run entry in
+`python/tests/test_loop_parallel.py`. Without a report, they refuse before local
+model listing, Skill migration, detachment and remote green-base dispatch.
+Static routes and model/effort pins may construct the host to observe; that
+observation is not green-base. Dynamic election does not construct the host.
+Config stays unchanged and no work, Lease, Strike or Route publication starts.
+A present report is a separate authority. The `execution_host_report` matrix
+drives that report through unattended CLI and doctor in
+`python/tests/test_loop_parallel.py`. Three cases share one verdict: a Lane
+contribution and canonical Pickup record the host dial when the local listing
+reports the opposite; a rejecting host listing refuses before green-base even
+though the local listing would accept; a rejecting local listing refuses after
+the host has accepted. Config stays unchanged. Doctor prints the same pass or
+refusal. This is not another `loop.run` helper. It does not activate Dynamic
+defaults or remove native member deferrals. The existing unselected remote
+execution cases protect the staged compatibility path.
 
 The `publication_recovery` matrix carries an explicit migrate choice through
 init/update over authored unselected Config, then repeats real CLI Runs in serial
@@ -148,7 +159,7 @@ and explicit unavailable preparation records. The adapter compares actual
 sessions, canonical Pickup, CLI/Dashboard readback and tracker publication,
 while pending candidates remain open, unleased and unpublished with unchanged
 labels. Saved Config and the existing ordering/Lease rules remain unchanged.
-This extends section 14.6 Conformance, not final-default activation.
+This extends section 14.6 Conformance. It is not itself the activation declaration.
 
 The `in_flight_consumption` matrix is adapted by
 `python/tests/test_saved_routing_consumption.py`. Eight classifier/selector
@@ -669,21 +680,23 @@ producible rather than that today's native Run loop reaches every input the seam
 accepts.
 
 The route projection's required inventory is `model`, `effort`, and `source`.
-`context_tier` and `lifecycle_position` are additive fields declared in
-`optional_projection_fields.route`: Queue and Iteration-breakdown rows preserve
-them when the Pickup recorded them, and omit them for older records rather than
-inventing a tier or a first-attempt claim. A reassessed Dynamic retry may keep
+`context_tier`, `lifecycle_position` and `effort_configurable` are additive
+fields declared in `optional_projection_fields.route`: Queue and
+Iteration-breakdown rows preserve them when the Pickup recorded them, and omit
+them for older records rather than inventing a tier, a first-attempt claim or a
+dial observation. A reassessed Dynamic retry may keep
 the same configuration; its lifecycle position must still distinguish it from
 the earlier contribution.
 
 The additive `effort_readback` matrix is a **Rust display-adapter** obligation:
-six Pickup cases run through both serial and Lane-stamped contribution replay
+eight Pickup cases run through both serial and Lane-stamped contribution replay
 and nine preparation cases run through projection and actual rendered Queue and
 drill-in screens. Explicit Dynamic null effort reads as **not configurable**;
-the advertised value `none`, deliberate Static omission and historical sparse
-records keep their respective readbacks. The Static backend placeholder does
-not distinguish a Static no-dial model from deliberate omission: the Pickup has
-no dial-presence fact to support that inference. Preparation retains explicit nulls without inventing
+the advertised value `none`, an observed deliberate Static omission and historical
+sparse records keep their respective readbacks. An observed Static no-dial
+(`effort_configurable` false beside a present null effort) reads as not
+configurable; an unobserved Static null keeps the backend placeholder because
+absence of the field is not a capability observation. Preparation retains explicit nulls without inventing
 missing fields or becoming a final Route, and its full work/selector wording
 survives in the issue Log. Nulls in Static, reusable and unavailable preparation
 mean no proposal, not no dial, and retain their historical omitted projection.
@@ -807,14 +820,21 @@ including Static recovery without leaderboard access. The sibling `first_setup`
 cases drive explicit guided setup from absent project/global Config through
 readiness refusal and recovery into the same actual-session/readback seam.
 Their input answers are collected, not seeded Config; readiness must pass
-before any operator choice or tracker label is saved. Its `preflight_deadline`
+before any operator choice or tracker label is saved. The sibling
+`new_setup_default` cases drive fresh `init --yes` and interactive auto-setup
+through the same actual-session/readback seam. The sibling
+`no_config_dynamic_refusal` cases refuse a local Run that finds no Config and
+no named policy before a session; naming `unselected` is outside that refusal.
+`routing-resolution.json`'s `preflight_deadline`
 cases use the same synthetic inputs to consume the routing deadline during
 retained Static validation. No classifier or selector starts afterwards, while
 already-classified Static work still runs on its retained settings; Config and
-Strike accounting remain unchanged. This is the staged Python-local guard,
-not final Dynamic-default activation. Shell/PowerShell migration enforcement
-remains explicitly deferred; historical cases and Event streams keep their
-original interpretation.
+Strike accounting remain unchanged. Fresh setup records Dynamic. A local
+no-Config Run that names no policy refuses before work; naming `unselected`
+keeps the legacy path for that Run. Python-local Dynamic default activation
+is declared by `dynamic_default_activation`. Shell and PowerShell routing
+remain deferred. This does not imply Subagent or Integration routing.
+Historical cases and Event streams keep their original interpretation.
 `attempt-lifecycle.json` joins them, driven through the production
 `AttemptLedger` and `EscalationLedger` together: one row of its table asks both
 ledgers about one ending, so the dial that decides whether the pair changes and

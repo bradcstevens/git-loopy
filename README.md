@@ -179,7 +179,7 @@ Retained Static work needs no leaderboard access even when Dynamic prerequisites
 are missing; uncovered Dynamic work is refused, not run on a fallback.
 Non-local activation remains deferred,
 so unselected GitHub Actions Runs retain their legacy path. This migration guard
-is not final Dynamic-default activation; see [routing migration](git-loopy/python/README.md#explicit-routing-migration).
+is the activated Python-local Dynamic default; shell and PowerShell routing remain deferred, and this does not imply Subagent or Integration routing. See [routing migration](git-loopy/python/README.md#explicit-routing-migration).
 
 `git-loopy uninstall` takes the same installation back off the machine through
 the same proven channel, together with the global config-home, the installed

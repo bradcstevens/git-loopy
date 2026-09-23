@@ -22,12 +22,14 @@ Three ideas, one per section below.
 decision rather than a guess that a saved recommended value is disposable, so
 :class:`RoutePolicy` has an ``UNSELECTED`` member and it is the default. Every
 behaviour in this module is conditional on ``STATIC``. Shared preflight refuses
-local saved Config without a selected policy; historical unselected records and the
-staged no-Config path retain their legacy interpretation.
+local saved Config without a selected policy. Historical unselected records
+retain their legacy interpretation. Local no-Config Runs refuse rather than
+taking that path; non-local absence remains staged.
 
 **The authenticated harness is the authority.** :class:`HarnessCapabilities`
 reads the model listing of the very CLI the Run spawns — its eligibility
-(``policy.state``), its effort dial, and its context tiers — because ADR-0057
+(``policy.state``), its effort dial, its context tiers, and verified prompt
+capacity — because ADR-0057
 excludes a public plan comparison, another CLI installation, and a hardcoded
 roster as sources for that judgement. The kit's own
 :data:`git_loopy.config.MODEL_REASONING_EFFORTS` table is exactly such a
@@ -49,7 +51,7 @@ every verdict in it stays unit-testable — without a live backend.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Mapping, Sequence
 
@@ -84,11 +86,12 @@ class RoutePolicy(Enum):
     decision, and it is load-bearing: ADR-0057 forbids reinterpreting an
     existing Config as though the new policy had always been in force, so a
     local saved Config without a choice is refused by shared preflight. Historical
-    unselected records keep their legacy interpretation; no-Config and non-local
-    paths remain staged until their activation.
+    unselected records keep their legacy interpretation. Local no-Config Runs
+    refuse rather than taking that path; non-local absence remains staged.
 
-    ``DYNAMIC`` is the opt-in policy :mod:`git_loopy.dynamic_route` implements
-    (#561). It lives here beside ``STATIC`` because the two are one closed
+    ``DYNAMIC`` is the Python-local default for unpinned new work, implemented
+    by :mod:`git_loopy.dynamic_route` (#561, #567). It lives here beside
+    ``STATIC`` because the two are one closed
     vocabulary an operator picks from, not because this module runs it — and
     naming it is not the same as being able to run it: a Run that selects it
     without the Artificial Analysis access, deadline, routing-credit allowance
@@ -116,7 +119,8 @@ class RoutePolicy(Enum):
                 return policy
         raise RoutePolicyError(
             f"route_policy must be 'static' or 'dynamic' (got {raw!r}); leave "
-            "it unset only for staged no-Config or non-local legacy behavior."
+            "it unset only for a historical unselected record or non-local "
+            "legacy behavior. A local Run with no Config refuses that absence."
         )
 
 
@@ -150,6 +154,10 @@ class HarnessModel:
             reported or when an advertised dial supplies no supported values.
             The latter remains configurable, but offers no Dynamic configuration.
         context_tiers: The root-session tiers the model offers.
+        tier_capacities: Verified full prompt capacity by tier, from the same
+            listing. Absent means unverified, never zero. Omitted from a
+            hand-built model, so a historical report that did not carry it
+            stays equal to one that explicitly has none.
     """
 
     model: str
@@ -157,6 +165,7 @@ class HarnessModel:
     effort_configurable: bool
     efforts: frozenset[str]
     context_tiers: frozenset[str]
+    tier_capacities: Mapping[str, int] = field(default_factory=dict)
 
     @classmethod
     def from_model_info(cls, info: Any) -> "HarnessModel":
@@ -177,14 +186,22 @@ class HarnessModel:
             else None
         )
         tiers = {BASE_CONTEXT_TIER}
+        capacities: dict[str, int] = {}
+        base_capacity = _prompt_capacity(token_prices)
+        if base_capacity is not None:
+            capacities[BASE_CONTEXT_TIER] = base_capacity
         if long_context is not None:
             tiers.add(LONG_CONTEXT_TIER)
+            long_capacity = _prompt_capacity(long_context)
+            if long_capacity is not None:
+                capacities[LONG_CONTEXT_TIER] = long_capacity
         return cls(
             model=str(getattr(info, "id")),
             eligible=policy_state != _POLICY_DISABLED,
             effort_configurable=raw_efforts is not None,
             efforts=frozenset(raw_efforts or ()),
             context_tiers=frozenset(tiers),
+            tier_capacities=capacities,
         )
 
 
@@ -333,6 +350,16 @@ def validate_static_route(
             f"{route.model!r} does not offer the {route.context_tier!r} context "
             f"tier. It offers: {_sorted(capability.context_tiers)}.",
         )
+
+
+def _prompt_capacity(block: Any) -> int | None:
+    """The listing's own full prompt capacity, or ``None`` when it did not say."""
+    if block is None:
+        return None
+    value = getattr(block, "max_prompt_tokens", None)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _sorted(values: frozenset[str]) -> str:

@@ -13,6 +13,7 @@ desynchronise it from what ``init`` writes (ADR-0019).
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -1304,3 +1305,136 @@ def test_reconcile_reports_exactly_what_landed_when_a_write_fails_mid_pass(
     assert resumed.unavailable is None
     assert len(resumed.matched) == 2
     assert len(resumed.applied) == len(vocabulary) - 2
+
+
+#: The Skill's own wording for the two places it fixes a ``wayfinder:`` label:
+#: the map issue's label, and the closed set of ticket types.
+#:
+#: Anchoring on the wording rather than a line number means an edit that moves
+#: either sentence still parses, while a rewrite that *loses* it fails loudly
+#: rather than silently reporting an empty taxonomy and calling that a match.
+_SKILL_MAP_LABEL_PATTERN = re.compile(r"labelled `wayfinder:(?P<key>[\w-]+)`")
+_SKILL_TICKET_TYPE_PATTERN = re.compile(
+    r"`wayfinder:<type>` label[^\n]*?one of (?P<keys>[^\n]*?)\(see"
+)
+_SKILL_BACKTICKED_KEY_PATTERN = re.compile(r"`([\w-]+)`")
+
+#: Copies of those two sentences as the pinned Skill writes them today, so a
+#: drift case can be built without an acquired catalog.
+_SKILL_MAP_SENTENCE = (
+    "The map is a single issue on this repo's issue tracker, labelled "
+    "`wayfinder:map` — the canonical artifact."
+)
+_SKILL_TICKET_TYPE_SENTENCE = (
+    "Each ticket carries a `wayfinder:<type>` label — one of `research`, "
+    "`prototype`, `grilling`, `task` (see [Ticket Types](#ticket-types))."
+)
+
+
+def _synthetic_skill(ticket_type_sentence: str) -> str:
+    """A minimal Skill body carrying the two sentences the parse anchors on."""
+    return f"{_SKILL_MAP_SENTENCE}\n\n{ticket_type_sentence}\n"
+
+
+def _wayfinder_labels_the_skill_writes(skill_text: str) -> tuple[str, ...]:
+    """The ``wayfinder:`` labels ``/wayfinder`` itself fixes, read from its text."""
+    map_match = _SKILL_MAP_LABEL_PATTERN.search(skill_text)
+    types_match = _SKILL_TICKET_TYPE_PATTERN.search(skill_text)
+    if map_match is None or types_match is None:
+        raise AssertionError(
+            "the `wayfinder:` taxonomy cannot be read out of the Skill that "
+            "writes it: the wording this parse anchors on is gone. The Skill "
+            "is the authority, so it is the side that moved — re-anchor this "
+            "parse on its new wording, then reconcile `WAYFINDER_LABELS`."
+        )
+    keys = (
+        map_match.group("key"),
+        *_SKILL_BACKTICKED_KEY_PATTERN.findall(types_match.group("keys")),
+    )
+    return tuple(f"{labels_module.WAYFINDER_LABEL_PREFIX}{key}" for key in keys)
+
+
+def _assert_wayfinder_labels_match_skill(skill_text: str) -> None:
+    """Pin the declared taxonomy to the Skill, naming which side moved."""
+    written = _wayfinder_labels_the_skill_writes(skill_text)
+    declared = tuple(spec.name for spec in labels_module.WAYFINDER_LABELS)
+    unprovisioned = sorted(set(written) - set(declared))
+    unwritten = sorted(set(declared) - set(written))
+    assert not unprovisioned and not unwritten, (
+        "the `wayfinder:` taxonomy `WAYFINDER_LABELS` declares has drifted "
+        "from the `/wayfinder` Skill that writes it. The Skill is the "
+        "authority — it is authored upstream in bradcstevens/git-loopy-skills "
+        "(ADR-0034) and git-loopy only provisions what it writes, so the "
+        "declaration follows the Skill and never the other way round.\n"
+        f"  written by the Skill, never created by `init`: "
+        f"{unprovisioned or 'none'}\n"
+        f"  declared here, no longer written by the Skill: {unwritten or 'none'}"
+    )
+
+
+def test_the_declared_wayfinder_taxonomy_matches_the_skill_that_writes_it() -> None:
+    """``WAYFINDER_LABELS`` is declared, so only this test keeps it honest.
+
+    Every other closed taxonomy here is pinned to its authority by construction
+    (``TASK_TYPE_KEYS``, ``BUMP_CLASS_KEYS``). This one cannot be: nothing in
+    git-loopy *reads* a ``wayfinder:`` label — the Skill does, upstream — so
+    deriving it would mean inventing a reader, which is the mirror ADR-0019
+    forbids. Without this test an upstream rename drifts in silence: `init`
+    keeps provisioning the old five, sessions apply a label it never created,
+    and `git-loopy labels` still reports `matched` because it compares the
+    tracker against the stale declaration rather than against the Skill.
+    """
+    skill = _pinned_skill_file("wayfinder", "SKILL.md")
+
+    _assert_wayfinder_labels_match_skill(skill.read_text(encoding="utf-8"))
+
+
+def test_a_renamed_skill_ticket_type_fails_and_names_the_authority() -> None:
+    """Drift is caught in the direction that matters: the Skill moved, we didn't.
+
+    This feeds the comparison a *synthetic* Skill body, so the proof that drift
+    fails does not itself wait on an acquired catalog.
+    """
+    drifted = _SKILL_TICKET_TYPE_SENTENCE.replace("`grilling`", "`interrogation`")
+
+    with pytest.raises(AssertionError) as caught:
+        _assert_wayfinder_labels_match_skill(_synthetic_skill(drifted))
+
+    message = str(caught.value)
+    assert "wayfinder:interrogation" in message
+    assert "wayfinder:grilling" in message
+    assert "the Skill" in message and "authority" in message
+
+
+def test_a_sixth_skill_ticket_type_fails_as_a_label_init_never_creates() -> None:
+    """A gained type is the fresh-clone failure #618 closed, arriving by drift."""
+    gained = _SKILL_TICKET_TYPE_SENTENCE.replace("`task` (see", "`task`, `survey` (see")
+
+    with pytest.raises(AssertionError) as caught:
+        _assert_wayfinder_labels_match_skill(_synthetic_skill(gained))
+
+    message = str(caught.value)
+    assert (
+        "written by the Skill, never created by `init`: ['wayfinder:survey']" in message
+    )
+    assert "no longer written by the Skill: none" in message
+
+
+def test_a_dropped_skill_ticket_type_fails_as_a_label_nothing_writes() -> None:
+    """A lost type leaves `init` provisioning a label no session can earn."""
+    dropped = _SKILL_TICKET_TYPE_SENTENCE.replace("`prototype`, ", "")
+
+    with pytest.raises(AssertionError) as caught:
+        _assert_wayfinder_labels_match_skill(_synthetic_skill(dropped))
+
+    message = str(caught.value)
+    assert "never created by `init`: none" in message
+    assert "no longer written by the Skill: ['wayfinder:prototype']" in message
+
+
+def test_a_skill_rewrite_that_loses_the_wording_fails_rather_than_matching() -> None:
+    """An empty parse must never read as agreement — that is drift in silence."""
+    with pytest.raises(AssertionError) as caught:
+        _assert_wayfinder_labels_match_skill("Each ticket carries a label.\n")
+
+    assert "the wording this parse anchors on is gone" in str(caught.value)

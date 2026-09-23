@@ -71,7 +71,13 @@ def test_root_help_groups_every_shipped_command_once(
         "Getting started": ("init",),
         "Configuration": ("config", "skills"),
         "Run control": ("runs",),
-        "Repository maintenance": ("labels", "doctor", "sweep", "calibrate"),
+        "Repository maintenance": (
+            "labels",
+            "route-labels",
+            "doctor",
+            "sweep",
+            "calibrate",
+        ),
         "Installation": ("info", "update", "upgrade", "uninstall"),
         "Discovery": ("commands",),
     }
@@ -119,6 +125,7 @@ def test_command_help_keeps_a_category_together_when_inventory_order_changes(
         "lanes",
         "runs",
         "labels",
+        "route-labels",
         "doctor",
         "sweep",
         "calibrate",
@@ -163,6 +170,7 @@ def test_commands_json_emits_the_documented_complete_command_inventory(
         ("skills", "Configuration"),
         ("runs", "Run control"),
         ("labels", "Repository maintenance"),
+        ("route-labels", "Repository maintenance"),
         ("doctor", "Repository maintenance"),
         ("sweep", "Repository maintenance"),
         ("calibrate", "Repository maintenance"),
@@ -550,6 +558,7 @@ def test_main_bare_positional_runs_loop(
 ) -> None:
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "unselected")
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
 

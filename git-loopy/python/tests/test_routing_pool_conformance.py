@@ -321,7 +321,8 @@ def test_saved_authority_revalidates_prepared_work_at_pickup(
         assert tracker.issue_view(ref).state == "OPEN"
         assert set(base_labels) <= set(tracker.issue_labels(ref))
         assert not any(
-            label.startswith("git-loopy-route:") for label in tracker.issue_labels(ref)
+            label.startswith(("git-loopy-route:", "model_id:", "model_context:", "model_effort:"))
+            for label in tracker.issue_labels(ref)
         )
         assert not any(call[0] == ref for call in tracker.route_label_calls)
         assert not any(call[0] == ref for call in tracker.route_comment_calls)
@@ -378,15 +379,20 @@ def test_saved_authority_revalidates_prepared_work_at_pickup(
         assert f'`{json.dumps(call["model"])}`' in comment
         assert '`"high"`' in comment and '`"default"`' in comment
         owned = [
-            label for label in tracker.issue_labels(ref) if label.startswith("git-loopy-route:")
+            label for label in tracker.issue_labels(ref)
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
         ]
-        assert len(owned) == 1
+        assert owned
+        assert not any(
+            label.startswith("git-loopy-route:") for label in tracker.issue_labels(ref)
+        )
         assert set(base_labels) <= set(tracker.issue_labels(ref))
         (delivery,) = [
             event for event in events
             if event["type"] == "wrapper.routing.delivery" and event["issue"] == ref
         ]
-        assert delivery["status"] == "published" and delivery["label"] == owned[0]
+        assert delivery["status"] == "published" and delivery["labels"] == owned
+        assert delivery["label"] == " ".join(owned)
         assert f'<!-- git-loopy-route:v1:{delivery["identity"]} -->' in comment
     assert "fixture-owned-key" not in json.dumps(events) + repr(tracker.route_comment_calls)
 
@@ -652,14 +658,20 @@ def test_saved_authority_prepares_the_next_pickup_before_other_candidates(
         assert f'`{json.dumps(started[ref]["model"])}`' in comment
         assert '`"high"`' in comment and '`"default"`' in comment
         owned = [
-            label for label in tracker.issue_labels(ref) if label.startswith("git-loopy-route:")
+            label for label in tracker.issue_labels(ref)
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
         ]
-        assert len(owned) == 1 and original_labels[ref] <= set(tracker.issue_labels(ref))
+        assert owned
+        assert not any(
+            label.startswith("git-loopy-route:") for label in tracker.issue_labels(ref)
+        )
+        assert original_labels[ref] <= set(tracker.issue_labels(ref))
         (delivery,) = [
             event for event in events
             if event["type"] == "wrapper.routing.delivery" and event["issue"] == ref
         ]
-        assert delivery["status"] == "published" and delivery["label"] == owned[0]
+        assert delivery["status"] == "published" and delivery["labels"] == owned
+        assert delivery["label"] == " ".join(owned)
         assert f'<!-- git-loopy-route:v1:{delivery["identity"]} -->' in comment
         swaps = [call for call in git.push_ref_calls if call[1] == lease_ref(ref)]
         assert swaps[0][2] is not None and swaps[0][3] is None

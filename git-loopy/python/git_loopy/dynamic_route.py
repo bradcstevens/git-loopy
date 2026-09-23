@@ -1776,6 +1776,7 @@ class DynamicRouter:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._proposal_ttl = float(proposal_ttl_seconds)
         self._proposals: dict[str, RoutingProposal] = {}
+        self._verified_listings: dict[int | str, HarnessCapabilities] = {}
 
     @property
     def usage(self) -> RoutingUsage:
@@ -1832,6 +1833,7 @@ class DynamicRouter:
             superseded_proposal_id=superseded,
         )
         self._proposals.pop(active.proposal_id, None)
+        self._remember_verified_listing(resolution.issue_ref, capabilities)
         return await self._recorded(resolution)
 
     async def rebind(
@@ -1891,6 +1893,7 @@ class DynamicRouter:
             if verified is None:
                 continue
             selector, work_evidence = verified
+            self._remember_verified_listing(request.issue_ref, capabilities)
             return await self._recorded(
                 DynamicRouteDecision(
                     proposal_id=uuid.uuid4().hex,
@@ -1919,17 +1922,17 @@ class DynamicRouter:
         if isinstance(replacement, RoutingUnavailable):
             return replacement
         self._proposals.pop(replacement.proposal_id, None)
-        return await self._recorded(
-            self._decision_for(
-                replacement,
-                evidence,
-                capabilities,
-                reassessed=bool(reusable),
-                superseded_proposal_id=(
-                    reusable[0].proposal_id if reusable else None
-                ),
-            )
+        decided = self._decision_for(
+            replacement,
+            evidence,
+            capabilities,
+            reassessed=bool(reusable),
+            superseded_proposal_id=(
+                reusable[0].proposal_id if reusable else None
+            ),
         )
+        self._remember_verified_listing(decided.issue_ref, capabilities)
+        return await self._recorded(decided)
 
     def _decision_for(
         self,
@@ -1960,6 +1963,34 @@ class DynamicRouter:
             prior_attempts_omitted=active.prior_attempts_omitted,
             repeat_justification=active.repeat_justification,
         )
+
+    def verified_context_capacity(
+        self, issue_ref: int | str, model: str, tier: str
+    ) -> int | None:
+        """Full prompt capacity from the listing that just authorized this issue.
+
+        The number belongs to that fresh read, not to a later or earlier
+        listing. Absence is unverified, not zero.
+        """
+        listing = self._verified_listings.get(issue_ref)
+        if listing is None:
+            return None
+        capability = listing.get(model)
+        if capability is None:
+            return None
+        capacity = capability.tier_capacities.get(tier)
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0:
+            return None
+        return capacity
+
+    def _remember_verified_listing(
+        self,
+        issue_ref: int | str | None,
+        capabilities: FreshHarnessCapabilities,
+    ) -> None:
+        if issue_ref is None:
+            return
+        self._verified_listings[issue_ref] = capabilities.capabilities
 
     async def _recorded(
         self, decision: DynamicRouteDecision

@@ -223,7 +223,13 @@ def test_saved_dynamic_authority_preserves_exact_effort_semantics(
         (delivery,) = [event for event in events if event["type"] == "wrapper.routing.delivery"]
         assert delivery["status"] == "published"
         assert set(labels) <= set(tracker.issue_labels(42))
-        assert [
-            label for label in tracker.issue_labels(42) if label.startswith("git-loopy-route:")
-        ] == [delivery["label"]]
+        owned = [
+            label for label in tracker.issue_labels(42)
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
+        ]
+        assert owned == list(delivery["labels"])
+        assert delivery["label"] == " ".join(owned)
+        assert not any(
+            label.startswith("git-loopy-route:") for label in tracker.issue_labels(42)
+        )
         assert len(tracker.route_label_calls) == 1

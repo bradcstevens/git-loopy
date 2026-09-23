@@ -1,0 +1,51 @@
+name: Executing-host capabilities
+
+# One capability observation, on the machine that will open work sessions.
+# This is not a Lane contribution and not the green-base gate: it lists models
+# and uploads that listing. No Agent session starts. No secret is transported.
+on:
+  workflow_dispatch:
+    inputs:
+      capability_token:
+        description: The correlation token the orchestrator supplied.
+        required: true
+        type: string
+      observation_id:
+        description: The observation id the artifact name is derived from.
+        required: true
+        type: string
+
+run-name: ${{ inputs.capability_token }}
+
+permissions:
+  contents: read
+  copilot-requests: write
+
+jobs:
+  capabilities:
+    name: Observe harness capabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COPILOT_GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the workflow revision
+        uses: actions/checkout@v4
+
+      - name: Set up the contribution toolchain
+        uses: ./.github/actions/setup-lane-contribution
+
+      - name: Observe harness capabilities
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.host_capability_worker
+
+      - name: Upload the capability report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-loopy-${{ inputs.observation_id }}-capabilities
+          path: ${{ runner.temp }}/capabilities.json
+          if-no-files-found: error

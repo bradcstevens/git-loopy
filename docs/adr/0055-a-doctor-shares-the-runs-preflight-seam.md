@@ -112,6 +112,6 @@ cases observe actual session settings and fresh refusals after setup.
 The shared live read also checks that a context-only environment override has
 verified work candidates supporting the requested tier. This does not constrain
 the strongest selector's own tier, buy an assessment, or promise issue fit.
-Automatic upgrade/Run migration enforcement and the remaining composed
-activation matrix are still outstanding. Existing unselected-policy behavior
-is unchanged.
+Python-local Dynamic is the activated default for unpinned new work.
+Shell and PowerShell routing remain deferred. This does not imply Subagent
+or Integration routing. Existing explicit unselected behavior is unchanged.

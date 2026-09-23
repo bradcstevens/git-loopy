@@ -7,9 +7,11 @@
 Read this when you are refreshing the catalog, auditing what an installation
 obtains, or answering "which Skills did that Run actually use?". The decisions
 behind it are [ADR-0023](adr/0023-pinned-external-skill-catalog.md) (the pin and
-its validation) and [ADR-0025](adr/0025-installed-skill-catalog.md) (installing
-instead of shipping). Which Skills a Run may *load* is a separate question,
-answered by [`docs/skill-policy.md`](skill-policy.md).
+its validation), [ADR-0025](adr/0025-installed-skill-catalog.md) (installing
+instead of shipping), and
+[ADR-0064](adr/0064-a-paired-skill-change-is-published-proved-then-pinned.md)
+(a paired change is published, proved, then pinned). Which Skills a Run may
+*load* is a separate question, answered by [`docs/skill-policy.md`](skill-policy.md).
 
 ---
 
@@ -189,25 +191,35 @@ revision, and allowed to be dirty.
 
 ## Refreshing the catalog
 
-1. **Change the Skills upstream**, in
-   [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills).
-   That repository is the source of record; there is no catalog here to edit.
-2. **Judge the candidate without moving the pin**: `uv run --project
-   git-loopy/python python -m git_loopy.skill_candidate <clone>`. That reads
-   the clone as it stands, including uncommitted edits, and is not a promise
-   about the pin. Acquiring with `python -m git_loopy.skill_source --into` is
-   the separate proof that a revision *is* the pin; do that only when you are
-   ready to stand behind that revision.
-3. **Reconcile the pin's consumers.** Update the offline revision and Skill-name
-   snapshot in `tests/test_prompt.py`, the README's catalog table, and both
-   `PROMPT.md` copies when a Skill is added, renamed, or retired. Decide explicitly
-   whether new Skills belong in an autonomous Iteration; user-invoked operations
-   must not become implicit follow-up work. Keep the Required Skills unchanged
-   unless the Run contract itself is changing.
-4. **Prove and commit the upgrade together.** Acquire the new revision locally so
-   the live-catalog guards run rather than skip, then run the Python feedback
-   loop from `AGENTS.md`. Commit the pin, snapshots, prompt changes, and related
-   documentation as one change.
+The order is a requirement ([ADR-0064](adr/0064-a-paired-skill-change-is-published-proved-then-pinned.md)).
+A Skill prompt is authored in
+[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
+and mirrored nowhere. A working clone is expected as a sibling of this
+checkout, `../git-loopy-skills`. The pin moves last. A pin that moves before
+the proof is the failure this sequence exists to prevent.
+
+1. **Publish** the Skill change upstream. Commit it in the sibling clone and
+   push it, so the change is a full 40-character SHA. An uncommitted tree is
+   not a published revision. There is no catalog in this checkout to edit.
+2. **Preview, if you want, without moving the pin.** `uv run --project
+   git-loopy/python python -m git_loopy.skill_candidate <clone>` reads the
+   clone as it stands, including uncommitted edits, and is not a promise
+   about the pin. That preview does not authorize the pin move.
+3. **Prove the published revision.** Run the same command against a checkout
+   of the SHA you published, clean of later edits. A pass still does not move
+   the pin. `python -m git_loopy.skill_source` cannot stand in for this step:
+   it fetches the pin, so it cannot judge a revision the pin does not yet name.
+4. **Pin last.** Only after that proof passes, edit `skill_source.json` to
+   that SHA. The git-loopy commit names the upstream revision and the Skill
+   edit it carries. In that same change, reconcile the pin's consumers: the
+   offline revision and Skill-name snapshot in `tests/test_prompt.py`, the
+   README's catalog table, and both `PROMPT.md` copies when a Skill is added,
+   renamed, or retired. Decide explicitly whether new Skills belong in an
+   autonomous Iteration; user-invoked operations must not become implicit
+   follow-up work. Keep the Required Skills unchanged unless the Run contract
+   itself is changing. Then run the Python feedback loop from `AGENTS.md`.
+   Acquiring the new pin so the live-catalog guards run rather than skip is
+   confirmation after the pin move, not a substitute for the proof above.
 
 Every operator picks the new catalog up on their next Run. There is no vendored
 catalog to regenerate: the claim in

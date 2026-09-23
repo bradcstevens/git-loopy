@@ -112,6 +112,8 @@ _ROUTING_CONFORMANCE = json.loads(
 )
 _MIGRATION_RECOVERY = _ROUTING_CONFORMANCE["migration_recovery"]
 _FIRST_SETUP = _ROUTING_CONFORMANCE["first_setup"]
+_NEW_SETUP_DEFAULT = _ROUTING_CONFORMANCE["new_setup_default"]
+_NO_CONFIG_DYNAMIC_REFUSAL = _ROUTING_CONFORMANCE["no_config_dynamic_refusal"]
 _PREFLIGHT_DEADLINE = _ROUTING_CONFORMANCE["preflight_deadline"]
 _PUBLICATION_RECOVERY = _ROUTING_CONFORMANCE["publication_recovery"]
 
@@ -4914,6 +4916,9 @@ def test_a_static_route_reaches_the_serial_work_sessions_own_arguments(
     assert call["model"] == "gpt-5.6-terra"
     assert call["reasoning_effort"] == "high"
     assert call["context_tier"] == "long_context"
+    (pickup,) = _bound_pickups(tmp_path)
+    assert pickup["effort_configurable"] is True
+    assert pickup["effort"] == "high"
 
 
 def test_an_effort_not_configurable_model_is_sent_no_effort_argument(
@@ -4938,6 +4943,10 @@ def test_an_effort_not_configurable_model_is_sent_no_effort_argument(
 
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
     assert fake_client.create_calls[0]["reasoning_effort"] is None
+    (pickup,) = _bound_pickups(tmp_path)
+    assert pickup["effort"] is None
+    assert pickup["effort_configurable"] is False
+    assert pickup["model"] == "no-dial"
 
 
 def test_the_effort_value_none_is_sent_as_a_value(tmp_path, monkeypatch) -> None:
@@ -7497,10 +7506,20 @@ def test_first_setup_readiness_recovers_into_the_actual_routed_session(
         assert f'`{json.dumps(expected[key])}`' in comment
     (label_issue, removed, added), = tracker.route_label_calls
     assert label_issue == 42 and removed == ()
-    assert added.startswith("git-loopy-route:")
-    assert added in tracker.issue_labels(42)
+    assert added
+    assert "model_context:400K" in added
+    assert all(
+        label.startswith(("model_id:", "model_context:", "model_effort:"))
+        for label in added
+    )
+    assert all(label in tracker.issue_labels(42) for label in added)
+    assert not any(
+        label.startswith("git-loopy-route:") for label in tracker.issue_labels(42)
+    )
     (delivery,) = _delivery_events(tmp_path)
-    assert delivery["label"] == added and delivery["status"] == "published"
+    assert delivery["status"] == "published"
+    assert set(delivery["labels"]) == set(added)
+    assert delivery["label"] == " ".join(delivery["labels"])
     assert f'<!-- git-loopy-route:v1:{delivery["identity"]} -->' in comment
     if policy == "static":
         assert spied["evidence"] == 0
@@ -7508,6 +7527,373 @@ def test_first_setup_readiness_recovers_into_the_actual_routed_session(
     assert secret not in (
         json.dumps(events) + repr(tracker.route_comment_calls) + captured.err + captured.out
     )
+
+
+@pytest.mark.parametrize("mode", _NEW_SETUP_DEFAULT["modes"])
+@pytest.mark.parametrize("scope", _NEW_SETUP_DEFAULT["scopes"])
+@pytest.mark.parametrize("path", _NEW_SETUP_DEFAULT["paths"])
+def test_fresh_setup_records_dynamic_and_the_run_uses_that_session(
+    tmp_path, monkeypatch, capsys, mode, scope, path
+) -> None:
+    """Fresh setup records Dynamic; the session is the proof, not the file."""
+    from textual.widgets import DataTable
+
+    from git_loopy import model_listing, skillscmd
+    from git_loopy.interactive import init_wizard_app, picker
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+    from tests.fakes import FakeGateRunner
+    from tests.test_init import _FakeCopilotClient, _FakeLabelClient
+    from tests.test_loop_parallel import _ParallelFakeClient
+
+    client, git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=[
+            "ready-for-agent", "task-type:implementation", "semver:none",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ],
+    )
+    (tmp_path / "git-loopy" / "prompt.md").unlink()
+    tracker = loop_module._make_github_client()
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.setattr(cli, "_make_label_client", lambda: _FakeLabelClient())
+    for name in (
+        "ROUTE_POLICY", "MODEL", "REASONING_EFFORT", "CONTEXT_TIER", "EXECUTION_HOST",
+        "ROUTING_DEADLINE_SECONDS", "ROUTING_CREDIT_ALLOWANCE", "SELECTOR_CONCURRENCY",
+    ):
+        monkeypatch.delenv(f"GIT_LOOPY_{name}", raising=False)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    values = _MIGRATION_RECOVERY["saved_config"]
+    models = tuple(
+        _listed_model(row["model"], row["efforts"])
+        for row in _MIGRATION_RECOVERY["harness"]
+    )
+    listing_calls: list[str] = []
+
+    def listing():
+        listing_calls.append("listing")
+        return models
+
+    async def fetch_listing():
+        listing_calls.append("listing")
+        return list(models)
+
+    async def static_capabilities(**_kwargs):
+        return static_route.HarnessCapabilities.from_listing(listing())
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    monkeypatch.setattr(picker, "fetch_live_models", fetch_listing)
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", static_capabilities)
+    spied = _wire_dynamic_ports(
+        monkeypatch,
+        rows=lambda: tuple(
+            _aa_row(row["id"], row["intelligence_index"], row["output_tokens_per_second"])
+            for row in _MIGRATION_RECOVERY["evidence"]
+        ),
+        answer=_elects(_MIGRATION_RECOVERY["selector_choice"]),
+        listing=listing,
+    )
+
+    async def discover(_request):
+        return SimpleNamespace(skills=[], errors=[])
+
+    class CatalogClient(_FakeCopilotClient):
+        rpc = SimpleNamespace(skills=SimpleNamespace(discover=discover))
+
+    monkeypatch.setattr(
+        skillscmd, "make_copilot_client", lambda **_kwargs: CatalogClient()
+    )
+    monkeypatch.setattr(
+        "git_loopy.doctorcmd.make_copilot_client", lambda **_kwargs: CatalogClient()
+    )
+    secret = "fixture-private-aa-key"
+    project_path = settings.project_config_path(tmp_path)
+    global_path = settings.global_config_path(os.environ)
+    config_path = project_path if scope == "project" else global_path
+
+    def walk(app):
+        async def collect():
+            async with app.run_test() as pilot:
+                table = app.screen.query_one("#picker-models", DataTable)
+                table.move_cursor(row=table.get_row_index(values["model"]))
+                await pilot.press("enter", "enter")
+                await pilot.press("enter")
+                await pilot.press("enter", "enter", "enter")
+
+        asyncio.run(collect())
+
+    if path == "interactive":
+        monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", walk)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+        monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, secret)
+        answers = iter([
+            str(values["routing_deadline_seconds"]),
+            str(values["routing_credit_allowance"]),
+            str(values["selector_concurrency"]),
+            "{" + ", ".join(
+                f"{json.dumps(key)} = {json.dumps(value)}"
+                for key, value in values["route_associations"].items()
+            ) + "}",
+        ])
+        monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+        assert cli.main(["init", f"--{scope}"]) == 0
+        saved = settings.load_config_table(config_path)
+        assert saved["route_policy"] == "dynamic"
+        assert "routing" not in saved and "escalation" not in saved
+        assert saved["route_associations"] == values["route_associations"]
+        assert secret not in config_path.read_text()
+    else:
+        assert cli.main(["init", "--yes", f"--{scope}"]) == 0
+        assert listing_calls == [] and spied["evidence"] == 0
+        saved = settings.load_config_table(config_path)
+        assert saved["route_policy"] == "dynamic"
+        assert "routing" not in saved and "escalation" not in saved
+        for key in (
+            "routing_deadline_seconds",
+            "routing_credit_allowance",
+            "selector_concurrency",
+            "route_associations",
+        ):
+            assert key not in saved
+        assert secret not in config_path.read_text()
+        before = config_path.read_bytes()
+        assert cli.main(["doctor"]) == 1
+        assert config_path.read_bytes() == before
+        refusal = capsys.readouterr()
+        assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV in refusal.out + refusal.err
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+        monkeypatch.setattr(
+            "builtins.input", lambda _prompt: pytest.fail("a refused Run prompted")
+        )
+        assert cli.main(["1"]) == 1
+        assert client.create_calls == []
+        assert _bound_pickups(tmp_path) == []
+        assert tracker.route_comment_calls == []
+        assert config_path.read_bytes() == before
+        for log in (tmp_path / ".git-loopy" / "logs").glob("*.jsonl"):
+            log.unlink()
+        repaired = dict(saved)
+        for key in (
+            "routing_deadline_seconds",
+            "routing_credit_allowance",
+            "selector_concurrency",
+            "route_associations",
+        ):
+            repaired[key] = values[key]
+        settings.write_config_atomic(config_path, repaired)
+        monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, secret)
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("a saved-choice Run prompted")
+    )
+    preserved = config_path.read_bytes()
+    evidence_before_run = spied["evidence"]
+    assert cli.main(["1"]) == 0
+    assert config_path.read_bytes() == preserved
+    expected = _NEW_SETUP_DEFAULT["expected"]
+    (call,) = client.create_calls
+    (pickup,) = _bound_pickups(tmp_path)
+    assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+        expected["model"], expected["effort"], expected["context_tier"],
+    )
+    assert {key: pickup[key] for key in (
+        "model", "effort", "context_tier", "routing_source",
+    )} == {key: expected[key] for key in (
+        "model", "effort", "context_tier", "routing_source",
+    )}
+    logs = sorted((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    events = [
+        json.loads(line)
+        for line in logs[-1].read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    dashboard = LiveRunState()
+    for event in events:
+        dashboard.render(event)
+    view = project_run_view(dashboard, RunSummary(), issue=42)
+    (row,) = view["dashboard"]["queue"]["rows"]
+    assert (row["route"]["model"], row["route"]["effort"], row["route"]["source"]) == (
+        expected["model"], expected["effort"], expected["routing_source"],
+    )
+    assert len(spied["assessments"]) == expected["selector_calls"]
+    assert spied["evidence"] > evidence_before_run
+    (issue, comment), = tracker.route_comment_calls
+    assert issue == 42 and f'`{json.dumps(expected["model"])}`' in comment
+    captured = capsys.readouterr()
+    assert secret not in captured.err + captured.out + config_path.read_text()
+
+
+@pytest.mark.parametrize("mode", _NO_CONFIG_DYNAMIC_REFUSAL["modes"])
+@pytest.mark.parametrize(
+    "override",
+    _NO_CONFIG_DYNAMIC_REFUSAL["overrides"],
+    ids=lambda item: item["id"],
+)
+def test_no_config_local_run_refuses_before_a_legacy_session(
+    tmp_path, monkeypatch, capsys, mode, override
+) -> None:
+    """No Config is not the legacy path. Doctor and the Run share the refusal."""
+    from git_loopy import model_listing, skillscmd
+    from tests.fakes import FakeGateRunner
+    from tests.test_init import _FakeCopilotClient
+    from tests.test_loop_parallel import _ParallelFakeClient
+
+    client, _git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=[
+            "ready-for-agent", "task-type:implementation", "semver:none",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ],
+    )
+    tracker = loop_module._make_github_client()
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=_git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    for name in (
+        "ROUTE_POLICY", "MODEL", "REASONING_EFFORT", "CONTEXT_TIER", "EXECUTION_HOST",
+        "ROUTING_DEADLINE_SECONDS", "ROUTING_CREDIT_ALLOWANCE", "SELECTOR_CONCURRENCY",
+    ):
+        monkeypatch.delenv(f"GIT_LOOPY_{name}", raising=False)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("a no-Config Run prompted")
+    )
+    listing_calls: list[str] = []
+
+    async def fetch_listing():
+        listing_calls.append("listing")
+        pytest.fail("no-Config refusal must not fetch a listing")
+
+    async def forbidden_evidence(*_args, **_kwargs):
+        pytest.fail("no-Config refusal must not call a Route selector")
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    monkeypatch.setattr(
+        dynamic_route.ArtificialAnalysisSource, "fetch", forbidden_evidence
+    )
+
+    async def discover(_request):
+        return SimpleNamespace(skills=[], errors=[])
+
+    class CatalogClient(_FakeCopilotClient):
+        rpc = SimpleNamespace(skills=SimpleNamespace(discover=discover))
+
+    monkeypatch.setattr(
+        skillscmd, "make_copilot_client", lambda **_kwargs: CatalogClient()
+    )
+    monkeypatch.setattr(
+        "git_loopy.doctorcmd.make_copilot_client", lambda **_kwargs: CatalogClient()
+    )
+    project_path = settings.project_config_path(tmp_path)
+    global_path = settings.global_config_path(os.environ)
+    phrases = _NO_CONFIG_DYNAMIC_REFUSAL["expect_diagnostics"]
+
+    assert cli.main(["doctor"]) == 1
+    doctor = capsys.readouterr()
+    doctor_text = doctor.out + doctor.err
+    for phrase in phrases:
+        assert phrase in doctor_text
+    assert not project_path.exists() and not global_path.exists()
+
+    assert cli.main(["1", *override["args"]]) == 1
+    refusal = capsys.readouterr()
+    refusal_text = refusal.out + refusal.err
+    for phrase in phrases:
+        assert phrase in refusal_text
+    assert client.create_calls == []
+    assert tracker.route_comment_calls == []
+    assert listing_calls == []
+    assert not project_path.exists() and not global_path.exists()
+    logs = list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    assert logs == []
+
+
+@pytest.mark.parametrize("mode", ["serial", "lane"])
+def test_explicit_static_on_no_config_needs_no_leaderboard(
+    tmp_path, monkeypatch, capsys, mode
+) -> None:
+    """A selected Static path still runs, and needs no leaderboard credential."""
+    from git_loopy import run_routing_preflight
+    from tests.fakes import FakeGateRunner
+    from tests.test_loop_parallel import _ParallelFakeClient
+
+    client, git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=[
+            "ready-for-agent", "task-type:implementation", "semver:none",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ],
+    )
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["high"], False))
+
+    async def capabilities(**_kwargs):
+        return static_route.HarnessCapabilities.from_listing((
+            _listed_model("gpt-5.6-terra", ["high"]),
+        ))
+
+    monkeypatch.setattr(
+        run_routing_preflight, "refresh_harness_capabilities", capabilities
+    )
+
+    async def forbidden_evidence(*_args, **_kwargs):
+        pytest.fail("Static execution must not call a Route selector")
+
+    monkeypatch.setattr(
+        dynamic_route.ArtificialAnalysisSource, "fetch", forbidden_evidence
+    )
+    project_path = settings.project_config_path(tmp_path)
+
+    assert cli.main([
+        "1", "--route-policy", "static",
+        "--model", "gpt-5.6-terra", "--reasoning-effort", "high",
+    ]) == 0
+    captured = capsys.readouterr()
+    assert "No Config is recorded" not in captured.out + captured.err
+    (call,) = client.create_calls
+    assert (call["model"], call["reasoning_effort"]) == ("gpt-5.6-terra", "high")
+    assert not project_path.exists()
+
+
+def test_explicit_dynamic_on_no_config_uses_the_readiness_verdict(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Selecting Dynamic is the readiness verdict, not the no-Config refusal."""
+    client, _git = _wire_single_issue_github(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+
+    assert cli.main(["1", "--route-policy", "dynamic"]) == 1
+    captured = capsys.readouterr()
+    text = captured.err + captured.out
+    assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV in text
+    assert "No Config is recorded" not in text
+    assert client.create_calls == []
+    assert not settings.project_config_path(tmp_path).exists()
 
 
 def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(
@@ -7527,6 +7913,7 @@ def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(
     assert bound["model"] == "claude-opus-5"
     assert bound["effort"] == "high"
     assert bound["routing_source"] == "dynamic"
+    assert "effort_configurable" not in bound
 
 
 def test_the_decisions_provenance_is_persisted_before_the_work_starts(
@@ -8266,11 +8653,12 @@ def _delivery_events(tmp_path: Path) -> list[dict[str, Any]]:
 def test_a_pickup_projects_its_final_route_onto_the_issue(
     tmp_path, monkeypatch
 ) -> None:
-    """The Pickup's own resolution reaches the tracker as one comment and label.
+    """The Pickup's own resolution reaches the tracker as a comment and dimensions.
 
     The projection is an *output adapter* of a record that already exists: the
-    comment names the exact triple, and the single owned Route label sits
-    beside the issue's own labels rather than replacing any of them.
+    comment names the exact triple. Representable dimensions sit beside the
+    issue's own labels. A historical unselected route with nothing exact to
+    spell writes no truncated stand-in.
     """
     _wire_single_issue_github(tmp_path, monkeypatch)
     fake_gh = loop_module._make_github_client()
@@ -8286,11 +8674,155 @@ def test_a_pickup_projects_its_final_route_onto_the_issue(
     route_labels = [
         label
         for label in fake_gh.issue_labels(42)
-        if label.startswith("git-loopy-route:")
+        if label.startswith(("model_id:", "model_context:", "model_effort:"))
     ]
-    assert len(route_labels) == 1
+    (delivery,) = _delivery_events(tmp_path)
+    assert set(route_labels) == set(delivery.get("labels", ()))
+    assert not any(label.startswith("git-loopy-route:") for label in fake_gh.issue_labels(42))
     assert "ready-for-agent" in fake_gh.issue_labels(42)
     assert [event["status"] for event in _delivery_events(tmp_path)] == ["published"]
+
+
+def test_the_work_session_window_updates_model_context_without_rerouting(
+    tmp_path, monkeypatch
+) -> None:
+    """The authenticated session's token limit fills the current label.
+
+    Pickup may not know the window. The harness reports it later. That
+    observation updates model_context and does not post another routing
+    comment, and usage or the compaction ceiling is not the capacity.
+    """
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=12_000,
+                messages_length=4,
+                token_limit=128_000,
+            ),
+        ),
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=20_000,
+                messages_length=5,
+                token_limit=None,  # type: ignore[arg-type]
+            ),
+        ),
+    ]
+    fake_gh = loop_module._make_github_client()
+
+    assert asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    ) == 0
+
+    assert len(fake_client.created) == 1
+    assert "model_context:128K" in fake_gh.issue_labels(42)
+    assert "model_context:12K" not in fake_gh.issue_labels(42)
+    assert "model_context:96K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+    _number, body = fake_gh.route_comment_calls[0]
+    assert "Context capacity" not in body
+    refreshed = [
+        event for event in _delivery_events(tmp_path)
+        if "model_context:128K" in event.get("labels", [])
+    ]
+    assert refreshed
+    assert refreshed[-1]["status"] == "published"
+    prompt, _timeout = fake_client.created[0].send_and_wait_calls[0]
+    assert "model_context:" not in prompt
+    assert "git-loopy-route:v1:" not in prompt
+
+
+def test_a_later_session_window_corrects_model_context_without_rerouting(
+    tmp_path, monkeypatch
+) -> None:
+    """A second verified window corrects the label and does not reroute."""
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=12_000,
+                messages_length=4,
+                token_limit=128_000,
+            ),
+        ),
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=40_000,
+                messages_length=8,
+                token_limit=256_000,
+            ),
+        ),
+    ]
+    fake_gh = loop_module._make_github_client()
+
+    assert asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    ) == 0
+
+    assert "model_context:256K" in fake_gh.issue_labels(42)
+    assert "model_context:128K" not in fake_gh.issue_labels(42)
+    assert "model_context:12K" not in fake_gh.issue_labels(42)
+    assert "model_context:40K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+    prompt, _timeout = fake_client.created[0].send_and_wait_calls[0]
+    assert "model_context:" not in prompt
+
+
+def test_a_failed_session_window_is_retried_by_the_next_run_without_rerouting(
+    tmp_path, monkeypatch
+) -> None:
+    """A capacity write failure does not block the Agent or renew the comment."""
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=12_000,
+                messages_length=4,
+                token_limit=128_000,
+            ),
+        ),
+    ]
+    fake_gh = loop_module._make_github_client()
+    original = fake_gh.replace_route_label
+    calls = {"n": 0}
+
+    def fail_the_capacity_replace(number, *, remove, add):
+        calls["n"] += 1
+        if any(label.startswith("model_context:") for label in add):
+            raise RouteDeliveryError("HTTP 503")
+        return original(number, remove=remove, add=add)
+
+    fake_gh.replace_route_label = fail_the_capacity_replace
+
+    assert asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    ) == 0
+    assert len(fake_client.created) == 1
+    assert "model_context:128K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+    assert any(
+        event["status"] in {"partial", "failed", "pending"}
+        for event in _delivery_events(tmp_path)
+    )
+
+    fake_gh.replace_route_label = original
+    fake_client._scripted_events = []
+    assert asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    ) == 0
+
+    assert "model_context:128K" in fake_gh.issue_labels(42)
+    assert "model_context:12K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+    prompt, _timeout = fake_client.created[-1].send_and_wait_calls[0]
+    assert "model_context:" not in prompt
+    assert "git-loopy-route:v1:" not in prompt
 
 
 def test_an_unchanged_route_is_not_published_a_second_time(
@@ -8497,9 +9029,12 @@ def test_saved_dynamic_policy_replays_while_pending_publication_recovers(
     assert len(tracker.route_comment_calls) == 1
     _, comment = tracker.route_comment_calls[0]
     assert all(value in comment for value in ("claude-opus-5", "high", "default"))
-    assert len([
-        label for label in tracker.issue_labels(42) if label.startswith("git-loopy-route:")
-    ]) == 1
+    assert any(
+        label.startswith("model_id:") for label in tracker.issue_labels(42)
+    )
+    assert not any(
+        label.startswith("git-loopy-route:") for label in tracker.issue_labels(42)
+    )
     assert {"ready-for-agent", "task-type:implementation"} <= set(tracker.issue_labels(42))
     recovered = _delivery_events(tmp_path)[1:]
     assert recovered and all(event["status"] == "published" for event in recovered)
@@ -8596,7 +9131,7 @@ def test_recorded_routing_reuse_preserves_publication_recovery_bounds(
     saved = path.read_bytes()
     assert not client.create_calls and not tracker.route_comment_calls
     original_decision = None
-    last_published_label = None
+    last_published_labels: tuple[str, ...] | None = None
     for step in case["runs"]:
         fault = case["fault"] if step["tracker_unavailable"] else None
         tracker.seed_issue(dataclass_replace(tracker.issue_view(42), state="OPEN"))
@@ -8652,18 +9187,24 @@ def test_recorded_routing_reuse_preserves_publication_recovery_bounds(
         assert attempts == step["attempts"]
         assert len(tracker.route_comment_calls) == step["comments"]
         assert len({body for _, body in tracker.route_comment_calls}) == step["comments"]
-        owned = [label for label in tracker.issue_labels(42) if label.startswith("git-loopy-route:")]
+        owned = [
+            label
+            for label in tracker.issue_labels(42)
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
+        ]
         if step["delivery"][-1] == "published":
-            assert owned == [deliveries[-1]["label"]]
-            last_published_label = deliveries[-1]["label"]
+            assert set(owned) == set(deliveries[-1]["labels"])
+            assert "model_context:400K" in owned
+            assert deliveries[-1]["label"] == " ".join(deliveries[-1]["labels"])
+            last_published_labels = tuple(sorted(owned))
             _, comment = tracker.route_comment_calls[-1]
             assert f'<!-- git-loopy-route:v1:{deliveries[-1]["identity"]} -->' in comment
             for key in ("model", "effort", "context_tier"):
                 assert f'`{json.dumps(expected[key])}`' in comment
         elif step.get("owned_label", "absent") == "previous":
-            assert last_published_label is not None
-            assert owned == [last_published_label]
-            assert owned != [deliveries[-1]["label"]]
+            assert last_published_labels is not None
+            assert tuple(sorted(owned)) == last_published_labels
+            assert set(owned) != set(deliveries[-1].get("labels", ()))
         else:
             assert step.get("owned_label", "absent") == "absent"
             assert owned == []
@@ -8680,7 +9221,11 @@ def test_recorded_routing_reuse_preserves_publication_recovery_bounds(
         assert ("wrapper.contribution.start" in types) == (mode == "lane")
         assert ("wrapper.iteration.start" in types) == (mode == "serial")
         assert set(labels) <= set(tracker.issue_labels(42))
-        assert all(added in tracker.route_labels for _, _, added in tracker.route_label_calls)
+        assert all(
+            label in tracker.route_labels
+            for _, _, added in tracker.route_label_calls
+            for label in added
+        )
         assert path.read_bytes() == saved
         captured = capsys.readouterr()
         if step["delivery"][-1] == "failed":

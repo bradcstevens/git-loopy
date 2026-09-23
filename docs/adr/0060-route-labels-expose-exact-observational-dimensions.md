@@ -1,6 +1,6 @@
 # Route labels expose exact observational dimensions
 
-**Status:** accepted design; runtime delivery and historical migration are not yet complete.
+**Status:** accepted. Python serial and Lane publication write exact `model_id:`, `model_context:`, and `model_effort:` labels and remove a legacy combined association on the issue they touch. `git-loopy route-labels migrate` reconstructs those dimensions from a trustworthy local record or a matching historical projection, removes leftover legacy associations, and deletes an unused legacy definition only after issue and pull-request checks. A later harness window updates only the current assignment's `model_context` label. Shell and PowerShell routing remain deferred under ADR-0057. Python-local Dynamic default activation is declared there; this decision does not extend it to other members.
 
 A human-led `/grill-with-docs` session chose separate, readable Route labels instead
 of the truncated combined label and identity suffix. This supersedes only the
@@ -32,8 +32,10 @@ Publication failures alone do not block otherwise valid work.
 
 Capacity verified later by the authenticated work harness updates the current
 assignment's label without rerouting or repeating the routing-decision comment.
-An observation belonging to an older assignment must not overwrite newer labels.
-Capacity belongs to that exact model/tier assignment, not a guessed model roster.
+An observation or delayed delivery belonging to an older assignment must not
+overwrite newer labels, including when the model id matches and the assignment
+or tier differs. Capacity belongs to that exact model/tier assignment, not a
+guessed model roster.
 
 ## Preserve the output boundary
 

@@ -3019,7 +3019,13 @@ class TestRouteProjectionIsNotIssueInput:
         operator = self._operator_comments()
         issue = _make_issue(
             42,
-            labels=["ready-for-agent", "git-loopy-route:gpt-5-6-terra-high-d-0d3d445"],
+            labels=[
+                "ready-for-agent",
+                "git-loopy-route:gpt-5-6-terra-high-d-0d3d445",
+                "model_id:gpt-5.6-terra",
+                "model_context:200K",
+                "model_effort:high",
+            ],
             comments=(
                 *operator,
                 gh_module.Comment(
@@ -3034,4 +3040,7 @@ class TestRouteProjectionIsNotIssueInput:
         block = list(impl.collect_pool().items)[0].rendered_block
 
         assert "git-loopy-route:" not in block
+        assert "model_id:" not in block
+        assert "model_context:" not in block
+        assert "model_effort:" not in block
         assert all(f"operator note {day}" in block for day in range(1, 6))

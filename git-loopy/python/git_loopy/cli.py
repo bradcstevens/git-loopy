@@ -214,6 +214,11 @@ _COMMAND_SPECS = (
         "Report or reconcile the tracker Label vocabulary.",
     ),
     _CommandSpec(
+        "route-labels",
+        "Repository maintenance",
+        "Migrate legacy Route labels to exact dimensions.",
+    ),
+    _CommandSpec(
         "doctor",
         "Repository maintenance",
         "Report Run-preflight blockers without starting a Run.",
@@ -527,7 +532,10 @@ def build_parser() -> argparse.ArgumentParser:
             "GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY plus the three bounds below. "
             "Local Runs with saved Config require an explicit static/dynamic choice, here, "
             "in GIT_LOOPY_ROUTE_POLICY, or recorded with update --routing "
-            "keep/migrate. Both choices preserve authored Static rows and "
+            "keep/migrate. A local Run with no Config refuses until `git-loopy "
+            "init` records that choice, or this flag selects static, dynamic, "
+            "or unselected for one Run. Naming unselected keeps the legacy "
+            "path and writes nothing. Both selected choices preserve authored Static rows and "
             "require explicit [escalation] for Static retries."
         ),
     )
@@ -798,10 +806,14 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "scope unless --global is given, the built-in default model / "
             "effort, and scaffolds the prompt + skills. Persists the Minimal "
             "Skill policy (only the Required Skills) without contacting the "
-            "machine's Copilot Skill inventory. With --routing or a recorded "
+            "machine's Copilot Skill inventory. A fresh scope with no recorded "
+            "or inherited Route policy records route_policy = dynamic and "
+            "seeds no Static rows, limits, associations, or leaderboard key. "
+            "Existing Config is not inferred. With --routing or a recorded "
             "Static/Dynamic policy in the chosen scope, preserves "
             "saved/inherited model, effort, prompt and Skill policy, and requires routing "
-            "authorization; live readiness is still checked."
+            "authorization; live readiness is still checked. --yes is not "
+            "spend consent."
         ),
     )
     init.add_argument(
@@ -813,10 +825,12 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help=(
             "Opt in to explicit routing setup before saving: keep selects "
             "strict Static policy; migrate makes uncovered work Dynamic. "
-            "Ask reuses a recorded choice or asks interactively. Dynamic "
-            "requires operator-owned access and explicit finite limits; "
-            "--yes supplies no routing consent or allowance. A recorded "
-            "Static/Dynamic choice is checked even without --routing."
+            "Ask reuses a recorded choice or asks interactively. A fresh "
+            "interactive setup with no recorded policy defaults to migrate "
+            "and still accepts keep. Dynamic requires operator-owned access "
+            "and explicit finite limits; --yes supplies no routing consent "
+            "or allowance. A recorded Static/Dynamic choice is checked even "
+            "without --routing. Existing Config is not inferred."
         ),
     )
 
@@ -905,6 +919,48 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "correct the colour / description of the ones that drifted, and "
             "remove the ready-for-agent role from open planning documents. "
             "Never renames, never closes an issue, and never deletes a label."
+        ),
+    )
+
+    route_labels = _add_command(
+        sub,
+        "route-labels",
+        description=(
+            "Migrate this repository's legacy combined Route labels to exact "
+            "model_id, model_context, and model_effort dimensions. Stop or "
+            "upgrade every publishing Runner for this repository before "
+            "--apply. Reporting is the default and writes nothing. The "
+            "migration does not prompt, scan other repositories, fetch a "
+            "model listing, call a Route selector, rewrite historical "
+            "comments, or write Config. Shell and PowerShell do not implement "
+            "it. A later capacity-only refresh is the work session's verified "
+            "window for that assignment, not this command."
+        ),
+    )
+    route_labels_sub = route_labels.add_subparsers(
+        dest="route_labels_command", required=True
+    )
+    route_labels_migrate = route_labels_sub.add_parser(
+        "migrate",
+        help="Report or apply the legacy Route-label migration.",
+        description=(
+            "Page every open and closed issue in this repository. Reconstruct "
+            "exact dimensions from a trustworthy local Route record or a "
+            "matching historical projection comment, never from truncated "
+            "git-loopy-route label text. --apply removes those associations "
+            "and deletes a legacy definition only when a complete issue "
+            "listing and a complete pull-request listing both show it unused. "
+            "A failed usage check keeps the definition. Pull requests are not "
+            "relabeled. This command cannot certify that other machines have "
+            "stopped publishing the old label."
+        ),
+    )
+    route_labels_migrate.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Write the migration. Without this flag the command only reports "
+            "the plan. It does not prompt."
         ),
     )
 
@@ -1308,6 +1364,35 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             f"undeclared parsers {sorted(registered - declared)!r}"
         )
     return parser
+
+
+def _make_route_label_migration_tracker():
+    """Build the real ``gh`` adapter for ``route-labels migrate``.
+
+    Named so tests can replace it. The handler never constructs a live backend.
+    """
+    from git_loopy.gh import SubprocessRouteLabelMigrationTracker
+
+    return SubprocessRouteLabelMigrationTracker()
+
+
+def _run_route_labels(args: argparse.Namespace) -> int:
+    """Dispatch ``git-loopy route-labels migrate``."""
+    from git_loopy import route_label_migrationcmd
+
+    if args.route_labels_command != "migrate":
+        raise AssertionError(
+            f"undispatched route-labels command {args.route_labels_command!r}"
+        )
+    try:
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        repo_root = None
+    return route_label_migrationcmd.run_route_labels(
+        repo_root=repo_root,
+        tracker=_make_route_label_migration_tracker(),
+        apply=bool(args.apply),
+    )
 
 
 def _make_label_client() -> LabelBootstrapClient:
@@ -2569,6 +2654,26 @@ def _resolve_route_policy(
     return RoutePolicy.UNSELECTED
 
 
+def _route_policy_was_named(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> bool:
+    """Whether any tier named a policy, including explicit ``unselected``.
+
+    A blank or missing name is absence. ``unselected`` is a name: it keeps
+    the legacy path for one Run and is not the no-Config refusal.
+    """
+    sources = (
+        getattr(args, "route_policy", None),
+        env.get("GIT_LOOPY_ROUTE_POLICY"),
+        settings.table_str(project, "route_policy", scope="project"),
+        settings.table_str(global_, "route_policy", scope="global"),
+    )
+    return any(raw is not None and str(raw).strip() for raw in sources)
+
+
 def _resolve_dynamic_bound(
     args: argparse.Namespace,
     env: Mapping[str, str],
@@ -2809,6 +2914,7 @@ def resolve_config(
     if effort_flag is not None:
         effort_raw = effort_flag
     route_policy = _resolve_route_policy(args, env, project, global_)
+    route_policy_supplied = _route_policy_was_named(args, env, project, global_)
     model, reasoning_effort = _resolve_model_and_effort(
         model_raw, effort_raw, warn=warn, route_policy=route_policy
     )
@@ -2867,6 +2973,8 @@ def resolve_config(
         ),
         route_policy=route_policy,
         saved_config_present=bool(project or global_),
+        config_absent=not bool(project or global_),
+        route_policy_supplied=route_policy_supplied,
         routing_deadline_seconds=_resolve_dynamic_bound(
             args,
             env,
@@ -3098,6 +3206,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_skills(sub_args)
         if sub_args.command == "labels":
             return _run_labels(sub_args)
+        if sub_args.command == "route-labels":
+            return _run_route_labels(sub_args)
         if sub_args.command == "calibrate":
             return _run_calibrate(sub_args)
         if sub_args.command == "info":
@@ -3184,8 +3294,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # First-run setup (#55, ADR-0006/0007): with NO Config resolving in either
     # scope, a TTY auto-runs the `init` wizard first, then continues into the
-    # loop on the just-written Config. A non-TTY (CI) keeps the built-in defaults
-    # and never prompts, so automated runs never hang on the wizard.
+    # loop on the just-written Config. A non-TTY never prompts. A local
+    # non-TTY with no selected policy then refuses rather than keeping the
+    # legacy path (#567); a non-local absence still uses that path.
     # Cancelling the wizard aborts the whole command — it writes nothing, runs
     # nothing, and exits non-zero (an aborted setup never starts an unconfirmed
     # loop). The wizard module is imported lazily so a configured bare run (the
@@ -3219,10 +3330,23 @@ def main(argv: list[str] | None = None) -> int:
 
     config = resolved.run
 
-    from git_loopy.run_routing_preflight import routing_choice_refusal
+    from git_loopy.host_capability import remote_static_execution
+    from git_loopy.run_routing_preflight import (
+        RunRoutingPreflight,
+        routing_choice_refusal,
+    )
 
-    if (refusal := routing_choice_refusal(config)) is not None:
+    host_report = None
+    startup_routing: RunRoutingPreflight | None = None
+    if remote_static_execution(config):
+        host_report, startup_routing = asyncio.run(
+            _observe_remote_static_startup(config)
+        )
+    if (refusal := routing_choice_refusal(config, host_capabilities=host_report)) is not None:
         print(f"git-loopy: {refusal}", file=sys.stderr)
+        return 1
+    if startup_routing is not None and startup_routing.refusal is not None:
+        print(f"git-loopy: {startup_routing.refusal}", file=sys.stderr)
         return 1
 
     # One-time Skill-policy migration (#230, ADR-0015): Config that predates
@@ -3265,7 +3389,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"git-loopy: error: {exc}", file=sys.stderr)
             return 1
         config = resolved.run
-        if (refusal := routing_choice_refusal(config)) is not None:
+        if (
+            refusal := routing_choice_refusal(config, host_capabilities=host_report)
+        ) is not None:
             print(f"git-loopy: {refusal}", file=sys.stderr)
             return 1
     elif startup_state is SkillPolicyStartupState.LEGACY:
@@ -3287,7 +3413,13 @@ def main(argv: list[str] | None = None) -> int:
     # and fall back to the configured model (issue #31).
     if select_model:
         _warn(_model_select_unavailable_message(config))
-    return asyncio.run(_drive_line_printer(config))
+    return asyncio.run(
+        _drive_line_printer(
+            config,
+            host_capabilities=host_report,
+            routing_preflight=startup_routing,
+        )
+    )
 
 
 def _make_model_listing() -> LiveModelListing:
@@ -3344,6 +3476,31 @@ async def _notify_roster_drift(
         )
 
 
+async def _observe_remote_static_startup(
+    config: RunConfig,
+) -> tuple[object | None, object | None]:
+    """Ask the executing host, then judge the report before Skill migration.
+
+    Absence is not an empty listing. A rejecting report is a refusal, so it
+    returns before migration, detachment, writers and green-base. The child
+    of an interactive detach does not receive the report: ``DetachedRunSpec``
+    does not carry one, and that child observes again.
+    """
+    from git_loopy.host_capability import observe_executing_host_capabilities
+    from git_loopy.loop import _make_execution_host
+    from git_loopy.run_routing_preflight import resolve_run_routing_preflight
+
+    report = await observe_executing_host_capabilities(
+        config, host_factory=_make_execution_host
+    )
+    if report is None:
+        return None, None
+    preflight = await resolve_run_routing_preflight(
+        config, os.environ, host_capabilities=report
+    )
+    return report, preflight
+
+
 async def _drive_line_printer(
     config: RunConfig,
     *,
@@ -3352,6 +3509,8 @@ async def _drive_line_printer(
     run_id: str | None = None,
     started_at: datetime | None = None,
     mirror_diagnostics_to_stderr: bool = True,
+    host_capabilities: object | None = None,
+    routing_preflight: object | None = None,
 ) -> int:
     """Resolve the **Rate card**, then drive the line-printer loop (#331).
 
@@ -3379,6 +3538,8 @@ async def _drive_line_printer(
         run_id=run_id,
         started_at=started_at,
         mirror_diagnostics_to_stderr=mirror_diagnostics_to_stderr,
+        host_capabilities=host_capabilities,
+        routing_preflight=routing_preflight,
     )
 
 

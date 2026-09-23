@@ -2,7 +2,8 @@
 
 This verdict authorizes no Pickup. Dynamic evidence and capabilities are read
 here and freshly again for every proposal and binding. Static routes are
-verified again at Pickup. Saved Config needs explicit migration authority.
+verified here; Pickup records dial presence from that listing and does not
+fetch it again. Saved Config needs explicit migration authority.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from .dynamic_route import (
     resolve_prerequisites,
 )
 from .execution_host import LOCAL_EXECUTION_HOST_PLACEMENT
+from .host_capability import HostCapabilityReport, remote_static_execution
 from .static_route import (
     HarnessCapabilities,
     RoutePolicy,
@@ -36,8 +38,36 @@ from .static_route import (
 CapabilitiesFetch = Callable[[], Awaitable[HarnessCapabilities | None]]
 
 
-def routing_choice_refusal(config: RunConfig) -> str | None:
-    """Refuse missing authority or an unverifiable placement without I/O."""
+def routing_choice_refusal(
+    config: RunConfig,
+    *,
+    host_capabilities: HostCapabilityReport | None = None,
+) -> str | None:
+    """Refuse missing authority or an unverifiable placement without I/O.
+
+    A matching executing-host report authorizes Static execution on that
+    placement. It does not authorize Dynamic election, and a local listing
+    is never that report.
+    """
+    if (
+        config.config_absent
+        and config.route_policy is RoutePolicy.UNSELECTED
+        and not config.route_policy_supplied
+        and config.execution_host == LOCAL_EXECUTION_HOST_PLACEMENT
+    ):
+        return (
+            "No Config is recorded in either scope. Unpinned local work "
+            "defaults to Dynamic routing and cannot start until that policy "
+            "is recorded with operator-owned access and explicit finite "
+            "limits. Run `git-loopy init` to record the choice; this "
+            "unattended Run does not prompt and writes nothing. For this Run "
+            "only, supply --route-policy static, --route-policy dynamic, or "
+            "--route-policy unselected (GIT_LOOPY_ROUTE_POLICY for doctor or "
+            "unattended use). A static path needs no leaderboard credential "
+            "or Route selector call. Naming unselected retains the legacy "
+            "path for this Run and writes nothing. A model or effort override "
+            "does not supply the choice. Config unchanged."
+        )
     if (
         config.saved_config_present
         and config.route_policy is RoutePolicy.UNSELECTED
@@ -58,6 +88,11 @@ def routing_choice_refusal(config: RunConfig) -> str | None:
     if (
         config.route_policy is not RoutePolicy.UNSELECTED
         and config.execution_host != LOCAL_EXECUTION_HOST_PLACEMENT
+        and not (
+            remote_static_execution(config)
+            and host_capabilities is not None
+            and host_capabilities.placement == config.execution_host
+        )
     ):
         return (
             f"the {config.execution_host!r} Execution host opens its work "
@@ -92,6 +127,16 @@ class RunRoutingPreflight:
     refusal: str | None = None
     dynamic_refusal: str | None = None
     admission_ledger: RoutingAdmissionLedger | None = field(default=None, repr=False)
+    #: The listing this preflight already verified Static routes against, or
+    #: ``None`` when it read none. Pickup records dial presence from it; it
+    #: does not fetch again and does not invent a fact the listing lacks.
+    #: On a remote Static Run this is the *local* listing, because serial
+    #: sessions still run here. Lane dial presence uses
+    #: :attr:`host_capabilities`.
+    capabilities: HarnessCapabilities | None = None
+    #: The executing host's listing, when a report authorized this placement.
+    #: Never a copy of :attr:`capabilities`.
+    host_capabilities: HarnessCapabilities | None = None
 
     @property
     def passed(self) -> bool:
@@ -107,6 +152,7 @@ async def resolve_run_routing_preflight(
         [], Awaitable[FreshHarnessCapabilities | None]
     ] | None = None,
     warn: Callable[[str], None] | None = None,
+    host_capabilities: HostCapabilityReport | None = None,
 ) -> RunRoutingPreflight:
     """Resolve authorization, Static settings and live Dynamic readiness.
 
@@ -115,8 +161,16 @@ async def resolve_run_routing_preflight(
     intersection, not whether a particular issue will fit or whether these
     inputs will still be current at Pickup.
     """
-    if (refusal := routing_choice_refusal(config)) is not None:
+    if (
+        refusal := routing_choice_refusal(config, host_capabilities=host_capabilities)
+    ) is not None:
         return RunRoutingPreflight(refusal=refusal)
+    remote_capabilities = (
+        host_capabilities.capabilities
+        if host_capabilities is not None
+        and host_capabilities.placement == config.execution_host
+        else None
+    )
     if config.route_policy is RoutePolicy.UNSELECTED:
         return RunRoutingPreflight()
 
@@ -155,6 +209,23 @@ async def resolve_run_routing_preflight(
 
     routes = _configured_static_routes(config)
     static_listing: FreshHarnessCapabilities | None = None
+    capabilities: HarnessCapabilities | None = None
+    recorded_host = (
+        remote_capabilities
+        if config.execution_host != LOCAL_EXECUTION_HOST_PLACEMENT
+        else None
+    )
+    if routes and recorded_host is not None:
+        for name, route in routes:
+            try:
+                validate_static_route(route, recorded_host)
+            except StaticRouteError as exc:
+                return RunRoutingPreflight(
+                    refusal=(
+                        "the selected Static route was refused by the "
+                        f"executing host's model listing: {name}: {exc}"
+                    )
+                )
     if routes:
         if prerequisites is not None:
             static_listing = await live_capabilities()
@@ -171,12 +242,22 @@ async def resolve_run_routing_preflight(
             try:
                 validate_static_route(route, capabilities)
             except StaticRouteError as exc:
+                local = (
+                    " by this machine's model listing"
+                    if recorded_host is not None
+                    else ""
+                )
                 return RunRoutingPreflight(
-                    refusal=f"the selected Static route was refused: {name}: {exc}"
+                    refusal=(
+                        f"the selected Static route was refused{local}: {name}: {exc}"
+                    )
                 )
     if prerequisites is None:
         return RunRoutingPreflight(
-            dynamic_refusal=dynamic_refusal, admission_ledger=ledger,
+            dynamic_refusal=dynamic_refusal,
+            admission_ledger=ledger,
+            capabilities=capabilities,
+            host_capabilities=recorded_host,
         )
     assert ledger is not None
     source = ArtificialAnalysisSource(
@@ -203,6 +284,8 @@ async def resolve_run_routing_preflight(
             if isinstance(inputs, RoutingUnavailable)
             else None
         ),
+        capabilities=capabilities,
+        host_capabilities=recorded_host,
     )
 
 

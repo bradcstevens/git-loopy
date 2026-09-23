@@ -385,6 +385,7 @@ class ResolvedRoute:
     source: str | None
     context_tier: str | None = None
     lifecycle_position: str | None = None
+    effort_configurable: bool | None = None
 
 
 @dataclass
@@ -2403,10 +2404,12 @@ def _pickup_route(event: Mapping[str, Any]) -> ResolvedRoute | None:
     context_tier = event.get("context_tier")
     lifecycle_position = event.get("lifecycle_position")
     source = event.get("routing_source")
+    observed = event.get("effort_configurable")
     return ResolvedRoute(
         model=model if isinstance(model, str) else None,
         effort=effort if isinstance(effort, str) else None,
         source=source if isinstance(source, str) else None,
+        effort_configurable=observed if isinstance(observed, bool) else None,
         # The default tier was historically implicit in Dashboard projections.
         # An explicit non-default tier is the operator-facing constraint.
         context_tier=(

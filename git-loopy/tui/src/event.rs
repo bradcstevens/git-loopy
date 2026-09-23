@@ -481,6 +481,11 @@ pub struct Pickup {
     /// means the record did not report an effort.
     #[serde(default, deserialize_with = "reported")]
     pub effort: Option<Option<String>>,
+    /// Whether the harness listing reported an effort dial. Absent or null is
+    /// no observation. `Some(false)` with a present null effort means no dial,
+    /// for any Routing source. Never inferred from the model name.
+    #[serde(default)]
+    pub effort_configurable: Option<bool>,
     /// The root-session context tier completing the **Routing resolution**.
     #[serde(default)]
     pub context_tier: Option<String>,

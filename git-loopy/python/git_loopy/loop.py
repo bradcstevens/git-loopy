@@ -154,6 +154,7 @@ from git_loopy.attempt_evidence import AttemptEvidenceLedger
 from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
 from git_loopy.config import (
     RoutingResolution,
+    RoutingSource,
     RunConfig,
     TaskTypeError,
     resolve_iteration_model,
@@ -190,11 +191,18 @@ from git_loopy.measured_routing import (
     measured_routing_path,
 )
 from git_loopy.routing_input import build_routing_request
+from git_loopy.host_capability import (
+    HostCapabilityReport,
+    observe_executing_host_capabilities,
+    remote_static_execution,
+)
 from git_loopy.run_routing_preflight import (
+    RunRoutingPreflight,
     resolve_run_routing_preflight,
     routing_choice_refusal,
 )
 from git_loopy.route_publication import (
+    RouteDeliveryResult,
     RouteDeliveryStatus,
     RoutePublicationStore,
     RoutePublisher,
@@ -903,6 +911,73 @@ class _ChainedObserver:
             observer.observe(event)
 
 
+class _HarnessCapacityObserver:
+    """Apply one work session's verified window to that assignment's label.
+
+    The number is the harness ``token_limit`` for the assignment this session
+    started under. Usage, remaining tokens, the compaction ceiling, and a
+    later roster are not capacity. A superseded assignment is not updated,
+    even when the model id matches. A tracker failure must not escape into
+    session dispatch.
+    """
+
+    def __init__(
+        self,
+        publisher: RoutePublisher,
+        *,
+        issue: int,
+        model: str | None,
+        effort: str | None,
+        context_tier: str,
+        assignment_identity: str,
+        on_result: Callable[[RouteDeliveryResult], None],
+        warn: Callable[[str], None],
+    ) -> None:
+        self._publisher = publisher
+        self._issue = issue
+        self._model = model
+        self._effort = effort
+        self._context_tier = context_tier
+        self._assignment_identity = assignment_identity
+        self._on_result = on_result
+        self._warn = warn
+        self._applied: int | None = None
+
+    def observe(self, event: Mapping[str, Any]) -> None:
+        if event.get("type") != events_module.USAGE_CONTEXT_WINDOW:
+            return
+        limit = event.get("token_limit")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            return
+        if limit == self._applied:
+            return
+        try:
+            result = self._publisher.refresh_context_capacity(
+                issue=self._issue,
+                model=self._model,
+                effort=self._effort,
+                context_tier=self._context_tier,
+                context_capacity=limit,
+                assignment_identity=self._assignment_identity,
+            )
+        except Exception as exc:
+            self._warn(
+                f"route capacity refresh for issue #{self._issue} failed: {exc}"
+            )
+            return
+        if result.status is RouteDeliveryStatus.STALE:
+            return
+        if result.published:
+            self._applied = limit
+        try:
+            self._on_result(result)
+        except Exception as exc:
+            self._warn(
+                f"route capacity refresh for issue #{self._issue} "
+                f"could not be recorded: {exc}"
+            )
+
+
 #: ``wrapper.run.end`` outcome for a Run that left through a
 #: :class:`BaseException` — an operator's ``Ctrl+C``, the ``SIGHUP`` of a closed
 #: terminal, or an :class:`asyncio.CancelledError` from the Dashboard driver.
@@ -974,6 +1049,21 @@ _SERIAL_TERMINAL_OUTCOMES = _SERIAL_DEFEATED_OUTCOMES | {"preflight_failed"}
 _ITERATION_RUN_REASONS: dict[str, str] = {
     _ITERATION_POOL_UNRESOLVED: "preflight_failed",
 }
+
+
+def _routing_delivery_payload(delivery: RouteDeliveryResult) -> dict[str, Any]:
+    """The delivery event. ``labels`` is additive; historical events omit it."""
+    payload: dict[str, Any] = {
+        "issue": delivery.issue,
+        "identity": delivery.identity,
+        "label": delivery.label,
+        "status": delivery.status.value,
+    }
+    if delivery.labels:
+        payload["labels"] = list(delivery.labels)
+    if delivery.incomplete:
+        payload["incomplete"] = list(delivery.incomplete)
+    return payload
 
 
 def _run_reason_for(iteration_outcome: str) -> str:
@@ -1221,6 +1311,8 @@ class _Loop:
         route_tracker: gh_module.GitHubClient | None = None,
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
         lease: LeaseLifecycle | None = None,
+        static_capabilities: HarnessCapabilities | None = None,
+        host_capabilities: HarnessCapabilities | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1243,6 +1335,15 @@ class _Loop:
         #: resolvable GitHub repository cannot address a Lease ref. ``None``
         #: restores exactly the pre-ADR-0033 behaviour: one Run, unguarded.
         self._lease = lease
+        #: The listing preflight verified selected Static routes against.
+        #: ``None`` on the unselected path, which never reads a harness.
+        #: Serial sessions run on this machine, so this is the local listing
+        #: even when a remote host authorized the Lane half.
+        self._static_capabilities = static_capabilities
+        #: The executing host's listing, when a report authorized that
+        #: placement. Lane dial presence is read from it. Never a copy of
+        #: the local listing.
+        self._host_capabilities = host_capabilities
         self._include_prs = include_prs
         self._rollup = IterationRollupAccumulator(denomination=denomination)
         # An extra, Run-scoped Consumption observer (#309). The rollup owns one
@@ -1585,6 +1686,59 @@ class _Loop:
             **payload,
         )
 
+    def _harness_capacity_observer(
+        self,
+        *,
+        issue: int | str,
+        model: str | None,
+        effort: str | None,
+        context_tier: str | None,
+        iter_num: int | None,
+    ) -> _HarnessCapacityObserver | None:
+        """Watch the session that is running this assignment, or nothing.
+
+        Absence is not a roster lookup. A non-issue ref has no tracker label.
+        """
+        if (
+            self._route_publisher is None
+            or not isinstance(issue, int)
+            or context_tier is None
+        ):
+            return None
+        assignment_identity = self._route_publisher.bound_assignment_identity(
+            issue,
+            model=model,
+            effort=effort,
+            context_tier=context_tier,
+        )
+        if assignment_identity is None:
+            return None
+
+        def on_result(result: RouteDeliveryResult) -> None:
+            self._emit(
+                events_module.WRAPPER_ROUTING_DELIVERY,
+                iter_num=iter_num,
+                **_routing_delivery_payload(result),
+            )
+            if result.status is not RouteDeliveryStatus.PUBLISHED:
+                self._diag.warning(
+                    "route capacity refresh for issue #%s is %s: %s",
+                    issue,
+                    result.status.value,
+                    result.detail or "delivery remains pending",
+                )
+
+        return _HarnessCapacityObserver(
+            self._route_publisher,
+            issue=issue,
+            model=model,
+            effort=effort,
+            context_tier=context_tier,
+            assignment_identity=assignment_identity,
+            on_result=on_result,
+            warn=lambda message: self._diag.warning("%s", message),
+        )
+
     def _retry_route_delivery(self) -> None:
         """Retry only durable pending Route projections; never re-decide a Route."""
         route_publisher = getattr(self, "_route_publisher", None)
@@ -1594,10 +1748,7 @@ class _Loop:
             self._emit(
                 events_module.WRAPPER_ROUTING_DELIVERY,
                 iter_num=None,
-                issue=delivery.issue,
-                identity=delivery.identity,
-                label=delivery.label,
-                status=delivery.status.value,
+                **_routing_delivery_payload(delivery),
             )
             if delivery.status is not RouteDeliveryStatus.PUBLISHED:
                 self._diag.warning(
@@ -1637,6 +1788,7 @@ class _Loop:
         position: int,
         considered: int,
         resolution: RoutingResolution | None = None,
+        on_execution_host: bool = False,
     ) -> None:
         """Record which issue a **Pickup** bound, why, and out of what (#397).
 
@@ -1676,16 +1828,25 @@ class _Loop:
             and resolution is not None
         ):
             delivery = self._route_publisher.publish(
-                issue=issue, resolution=resolution
+                issue=issue,
+                resolution=resolution,
+                context_capacity=self._verified_context_capacity(
+                    resolution,
+                    issue=issue,
+                    on_execution_host=on_execution_host,
+                ),
             )
             self._emit(
                 events_module.WRAPPER_ROUTING_DELIVERY,
                 iter_num=iter_num,
-                issue=issue,
-                identity=delivery.identity,
-                label=delivery.label,
-                status=delivery.status.value,
+                **_routing_delivery_payload(delivery),
             )
+            if delivery.incomplete:
+                self._diag.warning(
+                    "route publication for issue #%s omitted %s",
+                    issue,
+                    ", ".join(delivery.incomplete),
+                )
             if delivery.status is not RouteDeliveryStatus.PUBLISHED:
                 self._diag.warning(
                     "route publication for issue #%s is %s: %s",
@@ -1988,7 +2149,21 @@ class _Loop:
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
                         event_observer=_ChainedObserver(
-                            observers=(self._session_observer, session_watch)
+                            observers=tuple(
+                                observer
+                                for observer in (
+                                    self._session_observer,
+                                    session_watch,
+                                    self._harness_capacity_observer(
+                                        issue=active.ref,
+                                        model=model,
+                                        effort=reasoning_effort,
+                                        context_tier=context_tier,
+                                        iter_num=iter_num,
+                                    ),
+                                )
+                                if observer is not None
+                            )
                         ),
                     ) as sdk_session:
                         try:
@@ -2341,13 +2516,19 @@ class _Loop:
                     routed = self._resolve_route(item, warn=self._diag.warning)
                 except TaskTypeError as exc:
                     raise DynamicRouteUnavailable(f"current Task type refused: {exc}") from exc
-            return await self._classify_pickup(item, routed=routed)
+            return await self._classify_pickup(
+                item, routed=routed, on_execution_host=parallel_required
+            )
         finally:
             if self._preparation is not None:
                 await self._preparation.finish_pickup(item.ref)
 
     async def _classify_pickup(
-        self, item: AfkReadyItem, *, routed: RoutingResolution
+        self,
+        item: AfkReadyItem,
+        *,
+        routed: RoutingResolution,
+        on_execution_host: bool = False,
     ) -> tuple[AfkReadyItem, RoutingResolution]:
         """Read ``item``'s **Task type** off its own content, then re-route on it.
 
@@ -2427,7 +2608,9 @@ class _Loop:
                 )
         self._require_route_selector(resolution)
         labelled = await self._bump_classifier.labelled(task_type_labelled)
-        return labelled, await self._bound_route(labelled, resolution)
+        return labelled, await self._bound_route(
+            labelled, resolution, on_execution_host=on_execution_host
+        )
 
     def _require_route_selector(self, resolution: RoutingResolution) -> None:
         """Uncovered Dynamic work needs a selector, never a placeholder default."""
@@ -2442,7 +2625,11 @@ class _Loop:
             )
 
     async def _bound_route(
-        self, item: AfkReadyItem, resolution: RoutingResolution
+        self,
+        item: AfkReadyItem,
+        resolution: RoutingResolution,
+        *,
+        on_execution_host: bool = False,
     ) -> RoutingResolution:
         """Settle this **Pickup**'s route and remember it as the attempt's own.
 
@@ -2458,8 +2645,94 @@ class _Loop:
         attempt to have evidence about (AC4).
         """
         resolved = await self._routed_dynamically(item, resolution)
+        resolved = self._record_static_dial(
+            resolved, on_execution_host=on_execution_host
+        )
         self._attempt_evidence.bound(item.ref, resolved)
         return resolved
+
+    def _record_static_dial(
+        self, resolution: RoutingResolution, *, on_execution_host: bool = False
+    ) -> RoutingResolution:
+        """Record the dial fact the harness that will execute already observed.
+
+        The resolver stays pure: this caller did the I/O, at preflight, and
+        only attaches the fact for the model the Pickup actually named. An
+        unselected policy has no listing. A Dynamic election already encodes
+        no dial as a null effort under its own source, so it is left alone.
+        A default pair is still a Static route: ``static_route_applies``
+        answers a different question (whether Dynamic may spend a selector),
+        and excluding it would leave the common unlabelled Pickup unobserved.
+        A model the listing does not name gets no fact — absence is not a
+        no-dial claim, and a model name is not one either.
+
+        A Lane session runs on the executing host, so its fact comes from
+        that host's report. A serial session still runs here, so it keeps
+        the local listing even when the two disagree.
+        """
+        if self._config.route_policy is RoutePolicy.UNSELECTED:
+            return resolution
+        if resolution.source is RoutingSource.DYNAMIC:
+            return resolution
+        capabilities = self._static_capabilities
+        if (
+            on_execution_host
+            and self._host_capabilities is not None
+            and self._config.execution_host
+            != execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
+        ):
+            capabilities = self._host_capabilities
+        if capabilities is None or resolution.model is None:
+            return resolution
+        capability = capabilities.get(resolution.model)
+        if capability is None:
+            return resolution
+        if resolution.effort_configurable is capability.effort_configurable:
+            return resolution
+        return dataclass_replace(
+            resolution, effort_configurable=capability.effort_configurable
+        )
+
+    def _verified_context_capacity(
+        self,
+        resolution: RoutingResolution,
+        *,
+        issue: int | str,
+        on_execution_host: bool,
+    ) -> int | None:
+        """Full prompt capacity for this model and tier, or unverified absence.
+
+        A Dynamic session uses the listing that just authorized that issue.
+        A Static Lane reads the executing host's report; a serial Static
+        session still runs here. A tier name is not a capacity, and a missing
+        listing is not zero.
+        """
+        if resolution.model is None:
+            return None
+        if resolution.source is RoutingSource.DYNAMIC:
+            router = self._dynamic_router
+            if router is None:
+                return None
+            return router.verified_context_capacity(
+                issue, resolution.model, resolution.context_tier
+            )
+        capabilities = self._static_capabilities
+        if (
+            on_execution_host
+            and self._host_capabilities is not None
+            and self._config.execution_host
+            != execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
+        ):
+            capabilities = self._host_capabilities
+        if capabilities is None:
+            return None
+        capability = capabilities.get(resolution.model)
+        if capability is None:
+            return None
+        capacity = capability.tier_capacities.get(resolution.context_tier)
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0:
+            return None
+        return capacity
 
     async def _propose_task_type(
         self, pair: ClassifierPair, item: AfkReadyItem
@@ -3905,6 +4178,8 @@ class _ParallelLoop:
         execution_host: execution_host_module.ExecutionHost | None = None,
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
         lease: LeaseLifecycle | None = None,
+        static_capabilities: HarnessCapabilities | None = None,
+        host_capabilities: HarnessCapabilities | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -4109,6 +4384,8 @@ class _ParallelLoop:
             route_tracker=route_tracker,
             dynamic_routing=dynamic_routing,
             lease=lease,
+            static_capabilities=static_capabilities,
+            host_capabilities=host_capabilities,
         )
 
     def request_stop_drain(self) -> None:
@@ -5361,6 +5638,7 @@ class _ParallelLoop:
             position=reservation.position,
             considered=reservation.considered,
             resolution=resolution,
+            on_execution_host=True,
         )
         lane_binding.bind(ref, source="lane_pickup", at=datetime.now(timezone.utc))
 
@@ -5954,7 +6232,21 @@ class _ParallelLoop:
                 issue_ref=lane_work.item.ref,
                 skill_exposure=self._skill_exposure,
                 event_observer=_ChainedObserver(
-                    observers=(self._serial._session_observer, watch)
+                    observers=tuple(
+                        observer
+                        for observer in (
+                            self._serial._session_observer,
+                            watch,
+                            self._serial._harness_capacity_observer(
+                                issue=lane_work.item.ref,
+                                model=contribution.model,
+                                effort=contribution.reasoning_effort,
+                                context_tier=contribution.context_tier,
+                                iter_num=scope.iter_num if scope is not None else 0,
+                            ),
+                        )
+                        if observer is not None
+                    )
                 ),
             ) as sdk_session:
                 try:
@@ -6866,6 +7158,7 @@ class _ParallelLoop:
             contribution, lane_work, attempt, conflicted=conflicted
         )
         send_timeout = self._config.send_timeout_seconds
+        scope = self._contribution_iter.get(contribution.contribution_id)
         try:
             async with IterationSession(
                 self._client,
@@ -6880,6 +7173,13 @@ class _ParallelLoop:
                 working_directory=str(stage.git.root),
                 issue_ref=contribution.ref,
                 skill_exposure=self._skill_exposure,
+                event_observer=self._serial._harness_capacity_observer(
+                    issue=contribution.ref,
+                    model=contribution.model,
+                    effort=contribution.reasoning_effort,
+                    context_tier=contribution.context_tier,
+                    iter_num=None if scope is None else scope.iter_num,
+                ),
             ) as sdk_session:
                 try:
                     await self._await_agent(
@@ -7041,6 +7341,8 @@ async def run(
     run_id: str | None = None,
     started_at: datetime | None = None,
     mirror_diagnostics_to_stderr: bool = True,
+    host_capabilities: HostCapabilityReport | None = None,
+    routing_preflight: RunRoutingPreflight | None = None,
 ) -> int:
     """Drive one ``git-loopy`` invocation to completion.
 
@@ -7097,9 +7399,59 @@ async def run(
         print(f"git-loopy: Release version error: {exc}", file=sys.stderr)
         return 1
 
-    if (refusal := routing_choice_refusal(config)) is not None:
+    # A selected Static route on a remote host is unverifiable until that
+    # host reports its own listing. Observation is not green-base and not a
+    # contribution. Dynamic election is not asked: a snapshot is not a fresh
+    # proposal or Pickup read, and this machine's listing is never substituted.
+    observed_host = None
+    report = host_capabilities
+    if report is None and remote_static_execution(config):
+        try:
+            observed_host = _make_execution_host(
+                config.execution_host,
+                send_timeout_seconds=config.send_timeout_seconds,
+            )
+        except (ValueError, actions_host_module.ActionsError) as exc:
+            print(
+                f"git-loopy: Execution host {config.execution_host!r} could not "
+                f"be prepared: {exc}",
+                file=sys.stderr,
+            )
+            return exit_code_for("preflight_failed")
+        report = await observe_executing_host_capabilities(
+            config, host_factory=_make_execution_host, host=observed_host
+        )
+    if (refusal := routing_choice_refusal(config, host_capabilities=report)) is not None:
         print(f"git-loopy: {refusal}", file=sys.stderr)
         return exit_code_for("preflight_failed")
+    # A present report is judged before writers and before green-base, so a
+    # rejecting host listing does not dispatch the gate. The result is reused
+    # below: the local listing is not fetched twice, and the remote listing
+    # is not recorded as this machine's roster.
+    if (
+        routing_preflight is None
+        and report is not None
+        and remote_static_execution(config)
+    ):
+        routing_preflight = await resolve_run_routing_preflight(
+            config,
+            os.environ,
+            capabilities_fetch=lambda: _refresh_harness_capabilities(
+                warn=lambda message: print(
+                    f"git-loopy: harness capability read failed: {message}",
+                    file=sys.stderr,
+                )
+            ),
+            harness_evidence_fetch=lambda: _fetch_harness_evidence(
+                warn=lambda message: print(
+                    f"git-loopy: {message}", file=sys.stderr
+                )
+            ),
+            host_capabilities=report,
+        )
+        if routing_preflight.refusal is not None:
+            print(f"git-loopy: {routing_preflight.refusal}", file=sys.stderr)
+            return exit_code_for("preflight_failed")
 
     # 1) Git seam (root-bound) + prompt file. The client resolves and binds the
     #    repository root once; ``.root`` feeds the writers / prompt / source setup.
@@ -7179,9 +7531,13 @@ async def run(
     # would strand Lanes that are already open and dress an environment failure
     # up as a contribution's.
     try:
-        selected_execution_host = _make_execution_host(
-            config.execution_host,
-            send_timeout_seconds=config.send_timeout_seconds,
+        selected_execution_host = (
+            observed_host
+            if observed_host is not None
+            else _make_execution_host(
+                config.execution_host,
+                send_timeout_seconds=config.send_timeout_seconds,
+            )
         )
     except (ValueError, actions_host_module.ActionsError) as exc:
         print(
@@ -7253,16 +7609,18 @@ async def run(
     # opened, so an unsupported or unverifiable selection costs no work at all
     # (#560, #561, ADR-0057). A Run that selected no policy never reaches the
     # network for it.
-    routing_preflight = await resolve_run_routing_preflight(
-        config,
-        os.environ,
-        capabilities_fetch=lambda: _refresh_harness_capabilities(
-            warn=lambda message: diag.warning(
-                "harness capability read failed: %s", message
-            )
-        ),
-        harness_evidence_fetch=lambda: _fetch_harness_evidence(warn=diag.warning),
-    )
+    if routing_preflight is None:
+        routing_preflight = await resolve_run_routing_preflight(
+            config,
+            os.environ,
+            capabilities_fetch=lambda: _refresh_harness_capabilities(
+                warn=lambda message: diag.warning(
+                    "harness capability read failed: %s", message
+                )
+            ),
+            harness_evidence_fetch=lambda: _fetch_harness_evidence(warn=diag.warning),
+            host_capabilities=report,
+        )
     if routing_preflight.refusal is not None:
         print(f"git-loopy: {routing_preflight.refusal}", file=sys.stderr)
         try:
@@ -7538,6 +7896,8 @@ async def run(
             execution_host=selected_execution_host,
             dynamic_routing=dynamic_routing,
             lease=lease,
+            static_capabilities=routing_preflight.capabilities,
+            host_capabilities=routing_preflight.host_capabilities,
         )
     except git_module.GitError as exc:
         # Rolling dispatch resolves where its **Lane workspaces** live up front
