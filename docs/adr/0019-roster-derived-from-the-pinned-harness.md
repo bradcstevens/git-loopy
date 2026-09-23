@@ -56,7 +56,10 @@ The SDK 1.0.14 record above remains historical evidence, not the current pin.
 
 ## Corporate-compatible upgrade record: SDK 1.0.14rc1
 
-The current pin is SDK 1.0.14rc1, whose CLI is 1.0.84-5. It is the newest
+**Historical:** superseded by the SDK 1.0.14 final record below. The present
+tense in this record describes 2026-09-21.
+
+The pin recorded here was SDK 1.0.14rc1, whose CLI is 1.0.84-5. It is the newest
 `github-copilot-sdk` the Microsoft corporate feed offers: 1.0.14 final is
 published upstream but has not been ingested there. The pin is therefore a
 prerelease by necessity, not preference. It is still a published wheel carrying
@@ -86,6 +89,41 @@ warning-and-pass-through terms. The SDK 1.0.13 and 1.0.14 records above remain
 historical evidence, not the current pin. `python -m git_loopy.sdk_feed`
 reports when the corporate feed later carries a newer release (#639). It does
 not change this pin, and it is not an Integration feedback loop.
+
+## Corporate-compatible upgrade record: SDK 1.0.14 final
+
+[#638](https://github.com/bradcstevens/git-loopy/issues/638) moves the pin from
+1.0.14rc1 to SDK 1.0.14 final once the Microsoft corporate feed carried it; on
+2026-09-23 `python -m git_loopy.sdk_feed` reported it as a stable release newer
+than the pin. The installed wheel injects `CLI_VERSION = "1.0.85"`, the CLI
+[#594](https://github.com/bradcstevens/git-loopy/issues/594) established for this
+release, and `spawned_harness_version()` reports the same value, so the stamp
+moves to 1.0.85. Upstream had already tagged 1.0.15 prereleases
+(`v1.0.15-preview.0` and `v1.0.15-preview.1`, which PEP 440 normalizes to
+`1.0.15rc0` and `1.0.15rc1`), but the corporate Python feed carried no 1.0.15
+release that day. They were not sourced from anywhere else, so 1.0.14 is the
+newest pin the feed allowed.
+
+The live listing captured through CLI 1.0.85 on 2026-09-23 returned **23**
+models. All 20 previously observed rows and their effort sets are unchanged, so
+the SDK bump itself alters no roster content. Three rows are added to the
+observed set: `claude-opus-5.5` (`low` through `max`), and `gpt-6-luna` and
+`gpt-6-sol` (both `none` through `max`).
+
+**Provenance of the three additions:** they are backend catalogue additions, not
+an effect of the CLI bump. The listing re-run through the previously pinned CLI
+1.0.84-5 on the same date returned the same 23 models with identical effort
+arrays. That CLI had returned 20 models on 2026-09-21, so the roster was already
+three rows stale independently of this upgrade. As with `grok-4.7`, each
+addition is a capture against two harnesses rather than an assumption.
+
+The seven account-unlisted compatibility entries remain unchanged and are still
+not offered by the upgrade account. `gemini-3.8-flash` remains off-roster on the
+same warning-and-pass-through terms. Neither the kit's defaults nor the
+recommended routes change. The tracked project Config moves to the new rows in
+the same change, but that is an operator's edit, not a migration of saved
+choices. The SDK 1.0.14rc1 record above is now historical evidence, not the
+current pin.
 
 ## Amendment: the roster follows the harness you are running
 
@@ -318,8 +356,8 @@ is indistinguishable from the defective one, which is how the last correction we
 - **At decision time, the pending SDK bump was a known roster change.** The pin was two
   releases behind, and the proposed CLI sat between a version where `gemini-3.6-flash`
   was absent and one where it was present. That motivated verifying the new harness
-  before every change; the corporate-compatible SDK 1.0.14rc1 record above documents
-  the current refresh.
+  before every change; the corporate-compatible SDK 1.0.14 final record above
+  documents the current refresh.
 - The prose stating that the fixture's keys *are* the supported-model set becomes false for
   the Python Orchestrator, which reads the live set. The contract must say which
   Orchestrators are held to the fixture and which are not.

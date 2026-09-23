@@ -167,7 +167,7 @@ release = [
 
 [package.metadata]
 requires-dist = [
-    { name = "github-copilot-sdk", specifier = "==1.0.14rc1" },
+    { name = "github-copilot-sdk", specifier = "==1.0.14" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.24.0" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.20,<2" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'otel'", specifier = ">=1.20,<2" },
@@ -186,7 +186,7 @@ provides-extras = ["otel", "release", "dev"]
 
 [[package]]
 name = "github-copilot-sdk"
-version = "1.0.14rc1"
+version = "1.0.14"
 source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
 dependencies = [
     { name = "httpx" },
@@ -194,7 +194,7 @@ dependencies = [
     { name = "python-dateutil" },
 ]
 wheels = [
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/github-copilot-sdk/1.0.14rc1/github_copilot_sdk-1.0.14rc1-py3-none-any.whl", hash = "sha256:616c327e519dc9851a8ac40c1e2a714233879f8dfa1f6f78391348aa13e55140" },
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/github-copilot-sdk/1.0.14/github_copilot_sdk-1.0.14-py3-none-any.whl", hash = "sha256:9f4538cec7295f24507c650d794307396458a51f280a0fbbcd840da177109050" },
 ]
 
 [[package]]

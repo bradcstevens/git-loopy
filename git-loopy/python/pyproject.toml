@@ -13,11 +13,11 @@ keywords = ["github-copilot", "git-loopy", "autonomous", "agent", "afk"]
 # breaking ways" (see PRD #1, "Further Notes"), so future slices should bump
 # this pin deliberately rather than tracking `main`.
 #
-# SDK 1.0.14rc1 pins CLI 1.0.84-5 and is the newest release the corporate feed
-# offers. 1.0.14 final is published upstream but has not been ingested there, so
-# the exact pin is a prerelease by necessity rather than preference; it is still
-# a published wheel with an injected CLI pin, unlike a source install whose
-# sentinel `CLI_VERSION = None` would disable the pinned harness entirely.
+# SDK 1.0.14 pins CLI 1.0.85. On 2026-09-23 it was the newest release the
+# corporate feed offered: upstream's 1.0.15 prereleases had not been ingested
+# there, and they are not sourced from anywhere else. Install it only as a
+# published wheel, which carries an injected CLI pin; a source install ships the
+# sentinel `CLI_VERSION = None`, which would disable the pinned harness entirely.
 # Change the SDK, lockfile, and model-roster CLI
 # stamp together (ADR-0019). Offline tests cover the real client constructor,
 # session signatures, permission/event types, and Skill discovery surface.
@@ -27,7 +27,7 @@ keywords = ["github-copilot", "git-loopy", "autonomous", "agent", "afk"]
 # Rich is the renderer for the Python variant's terminal experience
 # (streaming prints + frozen iteration Panels + a frozen run-end Table).
 dependencies = [
-    "github-copilot-sdk==1.0.14rc1",
+    "github-copilot-sdk==1.0.14",
     "rich>=13.7.0,<14",
     # Textual 7.0.0 raises its floor to rich>=14.2.0, while the Run renderer
     # pins Rich 13. Textual 6 and below require only rich>=13.3.3.

@@ -2,38 +2,39 @@
 # Precedence: CLI flag > env > project > global > built-in default.
 # Edit freely, or manage with `git-loopy init` / `git-loopy config`.
 
-model = "gpt-6-astra"
+model = "claude-opus-5.5"
 reasoning_effort = "medium"
 
 # Project-specific routes override the built-in recommendations (ADR-0048)
-# without changing them. Unlabelled issues use the Astra/medium pair above.
-# The review route sits one step below the default escalation rung, Opus 5/max,
-# so a stalled review retries at a strictly higher effort than it started on.
+# without changing them. Unlabelled issues use the Opus 5.5/medium pair above.
+# Planning and review already run at max, the effort of the default escalation
+# rung (Opus 5/max), so a stalled planning or review issue retries at the same
+# effort on a different model rather than at a higher one.
 
 [routing.planning]
-model = "gpt-6-astra"
-effort = "xhigh"
+model = "claude-opus-5.5"
+effort = "max"
 
 [routing.review]
-model = "claude-opus-5"
-effort = "xhigh"
+model = "gpt-6-astra"
+effort = "max"
 
 [routing.implementation]
 model = "grok-4.7"
 effort = "high"
 
 [routing.test]
-model = "claude-opus-5"
+model = "claude-opus-5.5"
 effort = "high"
 
 [routing.docs]
-model = "gpt-5.6-luna"
-effort = "medium"
+model = "gpt-6-sol"
+effort = "low"
 
 [routing.chore]
-model = "gpt-5.6-luna"
-effort = "medium"
+model = "gpt-6-sol"
+effort = "low"
 
 [routing.bugfix]
-model = "claude-opus-5"
-effort = "xhigh"
+model = "claude-opus-5.5"
+effort = "high"

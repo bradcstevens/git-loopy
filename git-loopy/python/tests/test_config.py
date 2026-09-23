@@ -166,7 +166,7 @@ def test_run_config_routing_copies_input_not_aliased() -> None:
 
 
 def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -> None:
-    """Pin CLI 1.0.84-5's observed capabilities without dropping compatibility IDs."""
+    """Pin CLI 1.0.85's observed capabilities without dropping compatibility IDs."""
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         REASONING_EFFORTS,
@@ -179,11 +179,18 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
         "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
         "claude-sonnet-4.5": frozenset(),
         "claude-haiku-4.5": frozenset(),
+        "claude-opus-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
         "gpt-6-astra": frozenset({"low", "medium", "high", "xhigh", "max"}),
+        "gpt-6-luna": frozenset(
+            {"none", "low", "medium", "high", "xhigh", "max"}
+        ),
+        "gpt-6-sol": frozenset(
+            {"none", "low", "medium", "high", "xhigh", "max"}
+        ),
         "gpt-5.5": frozenset({"none", "low", "medium", "high", "xhigh"}),
         "gpt-5.4": frozenset({"none", "low", "medium", "high", "xhigh"}),
         "gpt-5.3-codex": frozenset({"low", "medium", "high", "xhigh"}),
@@ -380,7 +387,7 @@ def test_the_tracked_project_config_preserves_its_default_override(
         warn=warnings.append,
     ).run
 
-    assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "medium")
+    assert (run.model, run.reasoning_effort) == ("claude-opus-5.5", "medium")
     assert warnings == []
 
 
@@ -410,12 +417,12 @@ def test_the_tracked_project_config_preserves_all_task_type_routes(
     ).run
 
     assert dict(run.routing) == {
-        "planning": ("gpt-6-astra", "xhigh"),
-        "review": ("claude-opus-5", "xhigh"),
+        "planning": ("claude-opus-5.5", "max"),
+        "review": ("gpt-6-astra", "max"),
         "implementation": ("grok-4.7", "high"),
-        "test": ("claude-opus-5", "high"),
-        "docs": ("gpt-5.6-luna", "medium"),
-        "chore": ("gpt-5.6-luna", "medium"),
-        "bugfix": ("claude-opus-5", "xhigh"),
+        "test": ("claude-opus-5.5", "high"),
+        "docs": ("gpt-6-sol", "low"),
+        "chore": ("gpt-6-sol", "low"),
+        "bugfix": ("claude-opus-5.5", "high"),
     }
     assert warnings == []
