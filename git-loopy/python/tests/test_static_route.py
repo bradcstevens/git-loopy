@@ -5,8 +5,8 @@ routing under explicit operator authority. This module's subject is the
 **static** half of it — the first tracer — and every test here holds one of the
 three properties that make a Static route *static*:
 
-* it is **selected**, never inherited: an operator who said nothing keeps
-  today's behaviour exactly;
+* it is **selected**, never inherited: saying nothing never selects it, and no
+  saved Config is read as though it had chosen it;
 * it is **verified against the authenticated harness the Run actually spawns**,
   not against a hardcoded roster, a licence catalogue, or another install; and
 * it is **honoured or refused**, never quietly rescued — an effort the model

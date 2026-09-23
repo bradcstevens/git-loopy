@@ -175,11 +175,19 @@ A local Python Run with saved Config also refuses before work until a routing ch
 is supplied or recorded. Use `git-loopy update --routing keep` or
 `git-loopy update --routing migrate` with `--project`/`--global`, or select
 `--route-policy static`/`dynamic` for one Run. Config is not rewritten by a Run;
-Retained Static work needs no leaderboard access even when Dynamic prerequisites
+retained Static work needs no leaderboard access even when Dynamic prerequisites
 are missing; uncovered Dynamic work is refused, not run on a fallback.
 Non-local activation remains deferred,
-so unselected GitHub Actions Runs retain their legacy path. This migration guard
-is the activated Python-local Dynamic default; shell and PowerShell routing remain deferred, and this does not imply Subagent or Integration routing. See [routing migration](git-loopy/python/README.md#explicit-routing-migration).
+so unselected GitHub Actions Runs retain their legacy path.
+
+Separately, Dynamic routing is the default for unpinned Python-local work. A
+fresh `git-loopy init --yes` records `route_policy = "dynamic"` without Static
+rows, and the Run that follows refuses until `git-loopy init --routing migrate`
+collects the Dynamic limits. A local Run with no Config and no named policy
+refuses before work instead of taking the legacy path; naming
+`--route-policy unselected` keeps that path for one Run. Shell and PowerShell
+routing remain deferred, and this does not imply Subagent or Integration routing.
+See [routing migration](git-loopy/python/README.md#explicit-routing-migration).
 
 `git-loopy uninstall` takes the same installation back off the machine through
 the same proven channel, together with the global config-home, the installed

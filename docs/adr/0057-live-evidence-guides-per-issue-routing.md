@@ -462,8 +462,8 @@ additional shared coverage of existing behavior, not a routing implementation
 or final-default change.
 
 Non-local activation, the remaining composed acceptance and Wrapper/Conformance activation
-obligations still precede final default
-activation. Dynamic routing remains opt-in; shell/PowerShell activation is
+obligations then still preceded final default
+activation, and Dynamic routing remained opt-in; shell/PowerShell activation is
 deferred, and no Subagent or Integration routing support is implied.
 
 The shared `publication_recovery` matrix now carries recorded init/update

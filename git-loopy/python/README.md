@@ -1077,7 +1077,7 @@ lower-cased):
 model = "gpt-5.6-sol"
 reasoning_effort = "max"
 context_tier = "long_context"
-route_policy = "static"    # opt in to the Static route; omit to keep today's behaviour
+route_policy = "static"    # Static route; a local Run with saved Config must name static or dynamic
 classifier_model = "gpt-5.4-mini"
 classifier_effort = "low"
 issue_source = "github"
@@ -1714,7 +1714,9 @@ failures, partial delivery without duplicate comments, exhausted retries, and
 previous or missing owned associations after replacement failure. Capability withdrawal
 requires a new final assignment. Session settings,
 canonical Pickup, Dashboard route readback and tracker effects agree; Config is
-unchanged. This does not enable the final Dynamic default or remote-host routing.
+unchanged. These cases are part of the composed proof behind the activated
+Python-local default (§14.3 of the Wrapper contract); Dynamic election on a remote
+host stays refused.
 
 Dynamic provenance and Pickup are both mandatory local writes. If either fails,
 the affected work starts no Agent or tracker publication, including when the route
