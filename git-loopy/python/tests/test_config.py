@@ -418,7 +418,7 @@ def test_the_tracked_project_config_preserves_all_task_type_routes(
 
     assert dict(run.routing) == {
         "planning": ("claude-opus-5.5", "max"),
-        "review": ("gpt-6-astra", "max"),
+        "review": ("claude-opus-5.5", "max"),
         "implementation": ("grok-4.7", "high"),
         "test": ("claude-opus-5.5", "high"),
         "docs": ("gpt-6-sol", "low"),

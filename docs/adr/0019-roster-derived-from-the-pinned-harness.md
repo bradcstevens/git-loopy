@@ -25,6 +25,12 @@ corrects the diagnosis recorded in [#282](https://github.com/bradcstevens/git-lo
 
 ## Upgrade record: SDK 1.0.14
 
+**Historical:** superseded by the corporate-compatible records below. The
+corporate feed did not yet offer 1.0.14, so the pin went to 1.0.13 and then
+1.0.14rc1 before returning to 1.0.14. The SDK 1.0.14 final record below
+describes the current pin and roster; the present tense in this record
+describes #594's refresh.
+
 [#594](https://github.com/bradcstevens/git-loopy/issues/594) advances the SDK pin to
 1.0.14 and its CLI to 1.0.85. The refreshed fallback includes all 19 models returned
 by that pinned harness on the upgrade account, with their reported effort sets.
@@ -41,6 +47,10 @@ It remains off-roster, preserving configured selections and efforts through the
 warning-and-pass-through path rather than introducing an unverified capability gate.
 
 ## Corporate-compatible release record: SDK 1.0.13
+
+**Historical:** superseded by the SDK 1.0.14rc1 and 1.0.14 final records below.
+The present tense in this record describes 2026-09-20, and "the SDK 1.0.14
+record above" in its last sentence is #594's record, not the current pin.
 
 For [#610](https://github.com/bradcstevens/git-loopy/issues/610), the operator
 explicitly selected SDK 1.0.13 because the corporate feed did not offer 1.0.14.
