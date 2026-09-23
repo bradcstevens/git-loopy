@@ -365,12 +365,14 @@ merely because the Route selector is unavailable.
 Wrapper contract 2.9 and Python's declared compatibility identity now version
 these staged obligations and opt-in first setup together with Route publication
 and Routing preparation. The affected `routing-resolution.json`,
-`event-schema.json` and `dashboard-insights.json` provenance stamps now declare
-2.9, including the previously added delivery/preparation Events and Dashboard
-preparation projection. This declaration correction adds no Event fields or
-fixture cases: wire compatibility stays 1.2 and historical streams retain their
-interpretation. Calibration remains at its unchanged 2.5 decision. It does not
-enable final defaults or remove any member or placement deferral.
+`event-schema.json` and `dashboard-insights.json` provenance stamps then
+declared 2.9, including the previously added delivery/preparation Events and
+Dashboard preparation projection. That declaration correction added no Event
+fields or fixture cases: wire compatibility stays 1.2 and historical streams
+retain their interpretation. Calibration remains at its unchanged 2.5 decision.
+It did not enable final defaults or remove any member or placement deferral.
+The Python-local Dynamic default that later advanced those three stamps to 2.10
+is recorded under Activation status (#567) above.
 
 The saved first-setup and migration choices are composed through actual serial
 and Lane sessions and canonical Pickup records, including fresh source outages
