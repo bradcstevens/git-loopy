@@ -15,7 +15,6 @@ from git_loopy import issue_pin
 from git_loopy.issue_pin import (
     PIN_REFUSAL_CLOSED,
     PIN_REFUSAL_NOT_AFK_READY,
-    PIN_REFUSAL_NOT_PARALLEL_SAFE,
     PIN_REFUSAL_NOT_READY_FOR_AGENT,
     PIN_REFUSAL_UNREADABLE,
     PIN_REFUSALS,
@@ -123,34 +122,22 @@ class TestEligibilityIsNotBypassed:
 
 
 class TestParallelSafety:
-    """Parallel mode adds one rule, and the pin does not skip that one either."""
+    """``parallel-safe`` decides how a Pin is worked, never whether (#430).
 
-    def test_a_serial_invocation_does_not_ask_for_parallel_safe(self) -> None:
+    A serial-required Pin takes the Run's serial path ahead of every Lane, so
+    refusing it would punish an operator for a Parallel mode nobody chose.
+    """
+
+    def test_a_pin_without_parallel_safe_is_accepted(self) -> None:
         assert refuse_pin(_pinned(), afk_exclusion=None) is None
 
-    def test_a_parallel_invocation_refuses_a_pin_that_is_not_parallel_safe(
-        self,
-    ) -> None:
-        """Otherwise the pin would be accepted and then never selected.
-
-        A **Lane** Pool is `ready-for-agent` *and* `parallel-safe`, so a pinned
-        issue lacking the second never enters it — and a promotion that cannot
-        find its issue is a no-op. The Run would work the head of the order
-        instead, which is the silent substitution ADR-0032 refuses.
-        """
-        refusal = refuse_pin(
-            _pinned(), afk_exclusion=None, require_parallel_safe=True
-        )
-
-        assert refusal is not None
-        assert refusal.reason == PIN_REFUSAL_NOT_PARALLEL_SAFE
-
-    def test_a_parallel_safe_pin_is_accepted_in_parallel_mode(self) -> None:
+    def test_a_parallel_safe_pin_is_accepted(self) -> None:
         issue = _pinned(labels=(LABEL_READY_FOR_AGENT, LABEL_PARALLEL_SAFE))
 
-        assert (
-            refuse_pin(issue, afk_exclusion=None, require_parallel_safe=True) is None
-        )
+        assert refuse_pin(issue, afk_exclusion=None) is None
+
+    def test_no_refusal_reason_is_about_parallel_safety(self) -> None:
+        assert all("parallel" not in reason for reason in PIN_REFUSALS)
 
 
 class TestPrecedence:
@@ -193,7 +180,6 @@ class TestVocabulary:
             PIN_REFUSAL_CLOSED,
             PIN_REFUSAL_NOT_READY_FOR_AGENT,
             PIN_REFUSAL_NOT_AFK_READY,
-            PIN_REFUSAL_NOT_PARALLEL_SAFE,
         )
 
     def test_the_reasons_are_distinct(self) -> None:
@@ -228,7 +214,7 @@ class TestPurity:
 
 
 class TestTheDuplicatedLiteralsAreHeldToOneDeclaration:
-    """``issue_pin`` restates four strings ``sources`` owns. Pin them here.
+    """``issue_pin`` restates three strings ``sources`` owns. Pin them here.
 
     It restates rather than imports so that the pin decision stays callable
     without :mod:`git_loopy.sources` — which imports the ordering seam the pin
@@ -241,9 +227,6 @@ class TestTheDuplicatedLiteralsAreHeldToOneDeclaration:
 
     def test_the_required_label_is_the_one_the_pool_filters_on(self) -> None:
         assert issue_pin._LABEL_READY_FOR_AGENT == LABEL_READY_FOR_AGENT
-
-    def test_the_parallel_label_is_the_one_a_lane_filters_on(self) -> None:
-        assert issue_pin._LABEL_PARALLEL_SAFE == LABEL_PARALLEL_SAFE
 
     def test_every_discriminator_reason_has_a_specific_diagnostic(self) -> None:
         """A new exclusion reason must not silently degrade to "check both"."""

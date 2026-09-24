@@ -845,7 +845,6 @@ class GitHubIssueSource:
         gh: gh_module.GitHubClient,
         include_prs: bool = False,
         pin: int | None = None,
-        pin_requires_parallel_safe: bool = False,
     ) -> None:
         """Construct a backend that logs diagnostics via ``diag``.
 
@@ -867,18 +866,13 @@ class GitHubIssueSource:
                 :meth:`preflight` refuses the whole invocation when the pinned
                 issue is not eligible, and every read that decides sequence
                 promotes it to the head. The second is only ever reached once
-                the first has passed.
-            pin_requires_parallel_safe: ``True`` when the resolved run is
-                **Parallel mode**, where a **Lane** Pool additionally requires
-                ``parallel-safe``. The source is told rather than asked because
-                it holds no Config, and it is the same object that serves both
-                modes.
+                the first has passed. Neither asks for ``parallel-safe``: a
+                serial-required Pin is worked on the serial path (#430).
         """
         self._diag = diag
         self._gh = gh
         self._include_prs = include_prs
         self._pin = pin
-        self._pin_requires_parallel_safe = pin_requires_parallel_safe
         self._repository: gh_module.Repo | None = None
         # Which (ref, defect) pairs §3.2's undated diagnostic has already named.
         # A membership refresh repeats on a backoff and a broken `created_at`
@@ -1004,7 +998,6 @@ class GitHubIssueSource:
                 )
             ),
             number=self._pin,
-            require_parallel_safe=self._pin_requires_parallel_safe,
         )
         if refusal is None:
             self._diag.info("pinned issue #%s accepted for this invocation", self._pin)

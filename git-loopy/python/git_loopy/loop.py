@@ -635,9 +635,6 @@ def _make_issue_source(
             gh=github_client if github_client is not None else _make_github_client(),
             include_prs=include_prs,
             pin=config.issue_pin,
-            # A Pin keeps its serial-driver eligibility. Rolling dispatch then
-            # decides whether the selected issue can occupy a Lane.
-            pin_requires_parallel_safe=False,
         )
     if config.issue_source == "prds":
         return PrdsIssueSource(repo_root, diag)
@@ -4782,11 +4779,16 @@ class _ParallelLoop:
         only, which is why the ``empty_pool`` claim also requires
         :meth:`_service_serial_required_work` to have seen the whole other half
         this turn (#219 §2.13, criteria #5/#6).
+
+        The reserve-first rule has exactly one exception, the **Pin**'s own
+        turn: a serial-required Pin latches serial ownership before the first
+        reservation (:meth:`_latch_serial_required_pin`, #430).
         """
         assert self._scheduler is not None  # guarded by `self._rolling_capable`
         scheduler = self._scheduler
         scheduler.start()
         self._crash = None
+        self._latch_serial_required_pin()
 
         try:
             while True:
@@ -5136,6 +5138,56 @@ class _ParallelLoop:
             worked=fallback.worked,
             reason=fallback.reason,
             lane_cap=self._host_capacity,
+        )
+
+    def _latch_serial_required_pin(self) -> None:
+        """Give a **serial-required** Pin serial ownership before any Lane (#430).
+
+        The one exception to the reserve-first rule (#219 §1.4) in
+        :meth:`_drive_rolling`: the Pin is worked ahead of every other issue in
+        the Run (ADR-0032), and reserving Lanes first would let them spend an
+        explicit ``max_iterations`` cap before the Pin's serial turn is ever
+        granted. Latching here, after the startup membership refresh and before
+        the first :meth:`~git_loopy.rolling_scheduler.RollingScheduler.reserve`,
+        makes the first turn reserve nothing and grant the Pin's serial
+        Iteration at once; the refill turn after it restores normal order.
+
+        A ``parallel-safe`` Pin needs nothing here: membership already heads its
+        order with the Pin (:func:`~git_loopy.issue_order.promote_pinned`), so
+        it takes the first Lane reservation. It runs once per Run, because the
+        Pin lasts one invocation, not one turn.
+        """
+        assert self._scheduler is not None
+        pin = self._config.issue_pin
+        if pin is None or pin in self._scheduler.pool.candidate_refs:
+            return
+        collection = self._collect_pool_safely()
+        pinned = next((item for item in collection.items if item.ref == pin), None)
+        if pinned is not None and LABEL_PARALLEL_SAFE in pinned.labels:
+            return
+        if pinned is None and collection.complete:
+            # A complete read without the Pin: it is not in the Pool, so like
+            # `promote_pinned` this is a no-op rather than a reason to stall
+            # the Lanes behind a serial turn that cannot work it.
+            return
+        # An unread Pin is held to the serial path: a Pin worked late is the
+        # failure this exists to prevent, and a lost Lane turn is not.
+        serial_required = (
+            None
+            if pinned is None
+            else sum(
+                1
+                for item in collection.items
+                if not (isinstance(item.ref, int) and LABEL_PARALLEL_SAFE in item.labels)
+            )
+        )
+        self._scheduler.request_serial(
+            ref=pin, reason=rolling_scheduler.SERIAL_LATCH_NOT_PARALLEL_SAFE
+        )
+        self._report_serial_latch(
+            ref=pin,
+            reason=rolling_scheduler.SERIAL_LATCH_NOT_PARALLEL_SAFE,
+            serial_required=serial_required,
         )
 
     def _service_serial_required_work(self) -> bool:

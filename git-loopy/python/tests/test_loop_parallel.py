@@ -5929,6 +5929,205 @@ def test_parallel_latched_serial_demand_is_visible_even_when_stranded(
 
 
 # ---------------------------------------------------------------------------
+# The Pin goes first under Rolling dispatch (#430)
+# ---------------------------------------------------------------------------
+
+
+def _wire_pinned_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    issues: list[gh_module.Issue],
+) -> FakeGitHubClient:
+    """Wire a Rolling Run over ``issues`` whose serial agent closes what it holds."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=issues,
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    return fake_gh
+
+
+def _pinned_config(pin: int, *, max_iterations: int) -> RunConfig:
+    return RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=max_iterations,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+        issue_pin=pin,
+    )
+
+
+def _first_work(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """The first unit of work the Run started: a serial Iteration or a Lane."""
+    return next(
+        event
+        for event in events
+        if event["type"]
+        in {"wrapper.iteration.start", "wrapper.contribution.start"}
+    )
+
+
+def test_the_run_built_source_accepts_a_pin_without_parallel_safe(
+    tmp_path, monkeypatch
+) -> None:
+    """The source the Run builds never refuses a plain-issue Pin (#430).
+
+    #396 once refused such a Pin in Parallel mode, and after #458 every Run is
+    one — so the option that asked for that refusal is gone entirely rather
+    than passed ``False`` by the Run.
+    """
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(44, labels=["ready-for-agent"])],
+    )
+    source = loop_module._make_issue_source(
+        _pinned_config(44, max_iterations=0),
+        tmp_path,
+        logging.getLogger("test.pin"),
+        github_client=fake_gh,
+    )
+
+    assert source.preflight() is None
+    with pytest.raises(TypeError):
+        loop_module.GitHubIssueSource(  # type: ignore[call-arg]
+            logging.getLogger("test.pin"),
+            gh=fake_gh,
+            pin=44,
+            pin_requires_parallel_safe=True,
+        )
+
+
+def test_a_serial_required_pin_is_worked_before_any_lane_is_reserved(
+    tmp_path, monkeypatch
+) -> None:
+    """A plain-issue Pin takes serial ownership at Run start (#430).
+
+    Rolling dispatch reserves every refillable Lane first and latches serial
+    demand second, so without the Pin's exception the ``parallel-safe`` issue
+    would open a Lane ahead of the issue the operator named.
+    """
+    fake_gh = _wire_pinned_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+
+    assert asyncio.run(loop_module.run(_pinned_config(44, max_iterations=0))) == 0
+
+    events = _logged_events(tmp_path)
+    assert _first_work(events)["type"] == "wrapper.iteration.start"
+    first_bound = next(e for e in events if e["type"] == "wrapper.pickup.bound")
+    assert (first_bound["issue"], first_bound["reason"]) == (44, "pin")
+    # No Lane is reserved until the Pin's serial Iteration ends.
+    types = [e["type"] for e in events]
+    assert types.index("wrapper.contribution.start") > types.index(
+        "wrapper.iteration.end"
+    )
+    # The latch that held Lanes back is the existing one, naming the Pin.
+    latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+    assert (latch["issue"], latch["reason"]) == (44, "not_parallel_safe")
+    assert types.index("wrapper.serial.requested") < types.index(
+        "wrapper.iteration.start"
+    )
+    # Closing the Pin does not end a healthy Run: the Lane still works #42.
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [44, 42]
+
+
+def test_a_serial_required_pin_with_a_cap_of_one_works_only_the_pin(
+    tmp_path, monkeypatch
+) -> None:
+    """``--issue N 1`` spends its only unit on the Pin (#430).
+
+    On the reserve-first order a Lane took the ``parallel-safe`` issue and spent
+    the unit, the serial turn was never granted, and the Pin was never worked —
+    the silent "worked the head of the order instead" #396 guards against.
+    """
+    fake_gh = _wire_pinned_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
+
+    events = _logged_events(tmp_path)
+    bound = [e["issue"] for e in events if e["type"] == "wrapper.pickup.bound"]
+    assert bound == [44]
+    assert [e for e in events if e["type"] == "wrapper.contribution.start"] == []
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [44]
+
+
+def test_a_parallel_safe_pin_takes_the_first_lane_reservation(
+    tmp_path, monkeypatch
+) -> None:
+    """A ``parallel-safe`` Pin that is not the oldest still takes Lane one (#430)."""
+    _wire_pinned_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+
+    assert asyncio.run(loop_module.run(_pinned_config(43, max_iterations=0))) == 0
+
+    events = _logged_events(tmp_path)
+    first = _first_work(events)
+    assert first["type"] == "wrapper.contribution.start"
+    assert first["issue"] == 43
+    first_bound = next(e for e in events if e["type"] == "wrapper.pickup.bound")
+    assert (first_bound["issue"], first_bound["reason"]) == (43, "pin")
+    # Only the Pin is promoted: the others keep the oldest-first order.
+    bound = [e["issue"] for e in events if e["type"] == "wrapper.pickup.bound"]
+    assert bound == [43, 41, 42]
+
+
+def test_a_parallel_safe_pin_with_a_cap_of_one_works_only_the_pin(
+    tmp_path, monkeypatch
+) -> None:
+    """With one unit, the Pin's Lane is the whole Run (#430)."""
+    fake_gh = _wire_pinned_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    events = _logged_events(tmp_path)
+    bound = [e["issue"] for e in events if e["type"] == "wrapper.pickup.bound"]
+    assert bound == [43]
+    assert [e for e in events if e["type"] == "wrapper.iteration.start"] == []
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [43]
+
+
+# ---------------------------------------------------------------------------
 # Truthful termination (#308)
 # ---------------------------------------------------------------------------
 

@@ -42,7 +42,6 @@ __all__ = [
     "PIN_REFUSAL_CLOSED",
     "PIN_REFUSAL_NOT_READY_FOR_AGENT",
     "PIN_REFUSAL_NOT_AFK_READY",
-    "PIN_REFUSAL_NOT_PARALLEL_SAFE",
     "PIN_REFUSALS",
     "PinnedIssue",
     "PinRefusal",
@@ -66,13 +65,6 @@ PIN_REFUSAL_NOT_READY_FOR_AGENT: Final[str] = "not_ready_for_agent"
 #: :data:`git_loopy.sources.EXCLUSION_REASONS`.
 PIN_REFUSAL_NOT_AFK_READY: Final[str] = "not_afk_ready"
 
-#: A **Parallel mode** invocation pinned an issue that is not ``parallel-safe``.
-#: Refused rather than ignored: a **Lane** Pool is ``ready-for-agent`` *and*
-#: ``parallel-safe``, so such an issue never enters it, the promotion finds
-#: nothing to promote, and the Run works the head of the order instead — the
-#: silent substitution this module exists to prevent.
-PIN_REFUSAL_NOT_PARALLEL_SAFE: Final[str] = "not_parallel_safe"
-
 #: Every reason a pin may be refused, coarsest gate first — which is also the
 #: order :func:`refuse_pin` asks them in. Closed, like
 #: :data:`git_loopy.sources.EXCLUSION_REASONS` and
@@ -83,14 +75,10 @@ PIN_REFUSALS: Final[tuple[str, ...]] = (
     PIN_REFUSAL_CLOSED,
     PIN_REFUSAL_NOT_READY_FOR_AGENT,
     PIN_REFUSAL_NOT_AFK_READY,
-    PIN_REFUSAL_NOT_PARALLEL_SAFE,
 )
 
 #: The label a pinned issue must carry to be worked at all.
 _LABEL_READY_FOR_AGENT: Final[str] = "ready-for-agent"
-
-#: The label a pinned issue must additionally carry to enter a **Lane**.
-_LABEL_PARALLEL_SAFE: Final[str] = "parallel-safe"
 
 #: The state ``gh`` reports for an issue that can still be worked.
 _STATE_OPEN: Final[str] = "OPEN"
@@ -168,12 +156,6 @@ class PinRefusal:
                 f"--issue {self.issue}: {ref} does not carry the "
                 f"`{_LABEL_READY_FOR_AGENT}` label"
             )
-        if self.reason == PIN_REFUSAL_NOT_PARALLEL_SAFE:
-            return (
-                f"--issue {self.issue}: {ref} does not carry the "
-                f"`{_LABEL_PARALLEL_SAFE}` label, which a Parallel-mode Lane "
-                "requires"
-            )
         if self.detail == "planning_document":
             return (
                 f"--issue {self.issue}: {ref} is a planning document "
@@ -191,7 +173,6 @@ def refuse_pin(
     *,
     afk_exclusion: str | None,
     number: int | None = None,
-    require_parallel_safe: bool = False,
 ) -> PinRefusal | None:
     """Why this pin cannot be honoured, or ``None`` to accept it.
 
@@ -202,7 +183,6 @@ def refuse_pin(
             than derived, so the discriminator keeps one home.
         number: The pinned number, used only when ``issue`` is ``None`` and
             there is therefore no record to read it off.
-        require_parallel_safe: ``True`` for a **Parallel mode** invocation.
 
     Returns:
         The refusal, or ``None`` when the pin stands.
@@ -220,9 +200,5 @@ def refuse_pin(
             issue=issue.number,
             reason=PIN_REFUSAL_NOT_AFK_READY,
             detail=afk_exclusion,
-        )
-    if require_parallel_safe and _LABEL_PARALLEL_SAFE not in issue.labels:
-        return PinRefusal(
-            issue=issue.number, reason=PIN_REFUSAL_NOT_PARALLEL_SAFE
         )
     return None
