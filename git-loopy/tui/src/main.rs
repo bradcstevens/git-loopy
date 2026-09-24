@@ -1286,6 +1286,17 @@ mod tests {
     static UNIQUE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
+    fn the_repository_channel_is_the_one_the_fixture_names() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../conformance/unbound-run-notice.json"))
+                .expect("the shared fixture is valid JSON");
+        assert_eq!(
+            fixture["inputs"]["repository_channel"]["environment_variable"],
+            REPOSITORY_ENV
+        );
+    }
+
+    #[test]
     fn terminal_wheel_direction_and_coordinates_reach_the_session() {
         for (kind, action) in [
             (MouseEventKind::ScrollUp, PointerAction::WheelUp),

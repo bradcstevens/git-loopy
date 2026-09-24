@@ -1096,10 +1096,15 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.10 adds the optional ``effort_configurable`` Pickup fact and the
     dimensional Route-label delivery (§14.3/§14.5). Both are additive payload
     fields on known Events, so they too leave the wire axis at 1.2.
+
+    2.11 declares the optional ``issue_source`` on ``wrapper.run.start``
+    (§12), which the Unbound-Run notice reads (#642). Python already emitted
+    it; the declaration is what lets a consumer rely on it, and it is again an
+    additive payload field that leaves the wire axis at 1.2.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.10"
+    assert _EVENT_SCHEMA["contract_version"] == "2.11"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:

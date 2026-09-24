@@ -131,6 +131,9 @@ class Renderer:
     # ``_streamed_message`` record that the *current* block was streamed so the
     # matching final event finalises instead of re-printing the whole block.
     _stream_open: bool = False
+    #: The Run's declared ``issue_source`` (§12, contract 2.11); ``None`` is
+    #: undeclared, and then no candidate is claimed to carry a label.
+    _issue_source: str | None = None
     _streamed_reasoning: bool = False
     _streamed_message: bool = False
 
@@ -221,6 +224,8 @@ class Renderer:
 
     def _on_run_start(self, event: dict[str, Any]) -> None:
         run_id = event.get("run_id", "")
+        source = event.get("issue_source")
+        self._issue_source = source if isinstance(source, str) else None
         text = Text()
         text.append("▶ ", style=STYLES["success"])
         text.append("git-loopy run started", style=STYLES["panel_title"])
@@ -534,8 +539,10 @@ class Renderer:
             # tracker with no work (#303) — the first says "fix the issues you
             # already triaged", the second says "triage more". Saying so here
             # keeps the two apart on the one line that reports Pool size.
+            # Only the github source's candidates carry the label (§12).
+            labelled = "ready-for-agent " if self._issue_source == "github" else ""
             text.append(
-                f"  ({excluded} ready-for-agent candidate"
+                f"  ({excluded} {labelled}candidate"
                 f"{'' if excluded == 1 else 's'} excluded"
                 + (" — nothing eligible remains" if count == 0 else "")
                 + ")",

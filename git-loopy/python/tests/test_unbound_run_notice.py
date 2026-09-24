@@ -78,3 +78,10 @@ def test_every_blocked_reason_in_the_fixture_is_what_a_pickup_writes() -> None:
         blockers = blockers_from_skip_reason(reason)
         assert blockers, reason
         assert blocked_skip_reason(SKIP_BLOCKED_BY_OPEN_DEPENDENCY, blockers) == reason
+
+
+def test_the_launcher_hands_the_repository_on_the_fixtures_channel() -> None:
+    from git_loopy import run_sidecar
+
+    channel = _FIXTURE["inputs"]["repository_channel"]["environment_variable"]
+    assert run_sidecar.HELPER_REPOSITORY_ENV == channel

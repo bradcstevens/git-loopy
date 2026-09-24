@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.10 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.11 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -923,7 +923,8 @@ read an absent declaration or stamp in a historical trace as `unknown`, never as
 an inferred local placement. These are additive payload fields within Event schema
 compatibility 1; no envelope key or Event-type literal is added.
 
-`wrapper.run.start` MAY carry `issue_source`, naming where the Run's **Pool** comes from
+**Run-start issue source (contract 2.11, #642).** `wrapper.run.start` MAY carry
+`issue_source`, naming where the Run's **Pool** comes from
 (`github` or `prds`). It is optional-when-present, like the other additive fields above. A
 consumer that describes the Pool must read it before claiming the `ready-for-agent` label,
 because only the `github` source's candidates carry that label. An absent `issue_source` is an

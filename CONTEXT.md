@@ -1137,7 +1137,10 @@ A **Run** that ends without ever binding, activating or contributing to an issue
 was empty (`empty_pool`), or it is an **All-blocked Run** or an **All-skipped Run** that took
 nothing. The term spans all three because each ends seconds after it starts. They still differ
 in what they claim about the repository: "there is nothing to do" is not "I could not take any
-of what there is". A Run that bound work and *then* ran out is not unbound.
+of what there is". A Run that bound work and *then* ran out is not unbound. Nor is a Run that
+ended `preflight_failed` because a readiness read failed (**Unresolved readiness**). The contract's
+unbound-Pool rule covers that case too, but it is a failed *read*, and its own diagnostic already
+names the candidates.
 _Avoid_: no-work run, empty run, idle run.
 
 **Unbound-Run notice**:

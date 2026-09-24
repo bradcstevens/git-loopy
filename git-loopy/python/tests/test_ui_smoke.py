@@ -645,6 +645,32 @@ def test_wrapper_afk_ready_collected_renders_pool_summary() -> None:
     assert "3" in out
 
 
+@pytest.mark.parametrize(
+    ("issue_source", "expected"),
+    [
+        ("github", "2 ready-for-agent candidates excluded"),
+        ("prds", "2 candidates excluded"),
+        (None, "2 candidates excluded"),
+    ],
+)
+def test_the_pool_line_claims_the_label_only_for_the_github_source(
+    issue_source: str | None, expected: str
+) -> None:
+    """Only the github source's candidates carry ``ready-for-agent`` (§12, #642)."""
+    renderer, _summary, buf = _make_renderer()
+    start: dict[str, Any] = {"type": "wrapper.run.start", "run_id": "r"}
+    if issue_source is not None:
+        start["issue_source"] = issue_source
+    renderer.render(start)
+    renderer.render(
+        {"type": WRAPPER_AFK_READY_COLLECTED, "issues": [], "excluded": 2}
+    )
+    out = buf.getvalue()
+    assert expected in out
+    if issue_source != "github":
+        assert "ready-for-agent candidate" not in out
+
+
 # ---------------------------------------------------------------------------
 # Usage accumulation — silent at default
 # ---------------------------------------------------------------------------

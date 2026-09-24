@@ -3,6 +3,10 @@
   "description": "The Unbound-Run notice (#642): the lines that tell an operator why a Run ended without binding any issue. Only a Run that ended with one of unbound_run_outcomes, and never bound, activated or contributed to an issue, earns one. The Rust Dashboard draws these lines over a held Dashboard and adds its caller's quit hint. The Python attach client prints them after the Dashboard or line printer returns.",
   "inputs": {
     "repository": "The Run's owner/repo as gh resolves its default repository for the non-interactive Run worker: GH_REPO, else a remote gh-resolved marks, else the first remote on a host gh is signed in to, ranked upstream, github, origin, then the rest by name. Null when none resolves. It is what separates a blocker inside the Pool from one outside it: skip reasons carry full owner/repo#N references, while Pool members are bare numbers. Without it no blocker can be proven inside the Pool, so every blocker is named.",
+    "repository_channel": {
+      "environment_variable": "GIT_LOOPY_TUI_REPOSITORY",
+      "note": "How a launching client hands the repository to the Rust helper: an environment variable rather than an option, so an older helper that predates it still attaches (ADR-0052). Both the Python launcher and the helper binary assert their constant against this name."
+    },
     "membership": "Only wrapper.afk_ready.collected records Pool membership; the latest one replaces any earlier. A wrapper.pool.refreshed Membership read lists only candidates eligible to take, and is authority for nothing (ADR-0042), so it is never read as the Pool. A Run whose trace records no collection has an unknown membership: the notice counts nothing and says so. Only the github source's candidates are called ready-for-agent issues; every other source's, or an undeclared one's, are candidates.",
     "skip_reason": "A candidate refused for open blockers carries the reason '<skip_reason>: <owner/repo#N>, <owner/repo#N>' — readiness.blocked_skip_reason produces it, and the Python adapter pins every such reason in this fixture against that producer."
   },
