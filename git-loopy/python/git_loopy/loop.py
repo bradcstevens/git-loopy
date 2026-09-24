@@ -1333,6 +1333,9 @@ class _Loop:
         #: every later read.
         self._live_pin: int | None = config.issue_pin
         self._pin_unread = False
+        #: Set by the Rolling driver around the serial Iteration latched for
+        #: the Pin (#430): that Iteration binds the Pin or nothing.
+        self.holding_for_pin = False
         #: This Run's **Lease**s, or ``None`` when Leases are not in force —
         #: the PRDs backend has no remote to contend on, and a clone with no
         #: resolvable GitHub repository cannot address a Lease ref. ``None``
@@ -2063,6 +2066,9 @@ class _Loop:
                 # consistent even on the empty-pool path.
                 self._finish_iteration(iter_num, outcome="empty_pool")
                 return ("empty_pool", 0, 0)
+
+            if self.holding_for_pin and self._pin_unread:
+                return self._finish_unread_pin_iteration(iter_num)
 
             # 2a) Serial **Pickup** (#394, ADR-0032). The runner binds one
             #     issue *before* any session exists, taking the head of the
@@ -3610,6 +3616,23 @@ class _Loop:
         self._finish_iteration(iter_num, outcome="preflight_failed")
         return ("preflight_failed", 0, 0)
 
+    def _finish_unread_pin_iteration(self, iter_num: int) -> tuple[str, int, int]:
+        """End the Pin's Iteration unbound: its Pool read never showed the Pin.
+
+        Working the head of the order instead would be the silent substitution
+        #396 exists to prevent, so this Iteration binds nothing, and ends under
+        #541's ``preflight_failed`` like any other read that proved nothing. The
+        Rolling driver keeps serial ownership for the Pin and waits for the
+        tracker before granting it again (#430).
+        """
+        self._diag.warning(
+            "the Pool read did not show pinned issue #%s; binding nothing and "
+            "keeping its serial turn until the tracker answers",
+            self._live_pin,
+        )
+        self._finish_iteration(iter_num, outcome="preflight_failed")
+        return ("preflight_failed", 0, 0)
+
     def _infer_active_binding(
         self,
         pool: list[AfkReadyItem],
@@ -4332,6 +4355,7 @@ class _ParallelLoop:
                 cacheable=self._lane_candidate_cacheable,
                 on_membership_read=self._emit_membership_read,
                 read_refused=self._lane_lease_unreadable,
+                lane_first=self._lane_first_pin,
             )
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
@@ -4845,7 +4869,6 @@ class _ParallelLoop:
         scheduler.start()
         self._crash = None
         pin_iteration_pending = self._latch_serial_required_pin()
-        lane_first_pin = self._lane_first_pin()
 
         try:
             while True:
@@ -4879,14 +4902,6 @@ class _ParallelLoop:
                 # pack a six-observation window into a fraction of a second.
                 self._report_concurrency_change()
 
-                assert self._pool is not None
-                # Only an unspent Pin holds the walk (#430).
-                self._pool.hold_for = (
-                    lane_first_pin
-                    if lane_first_pin is not None
-                    and lane_first_pin == self._serial.live_pin
-                    else None
-                )
                 for reservation in scheduler.reserve():
                     task = asyncio.create_task(
                         self._guarded_lane_lifecycle(reservation)
@@ -4911,9 +4926,15 @@ class _ParallelLoop:
                 # `iteration_cap` / `stuck` instead.
                 if scheduler.may_start_work and scheduler.serial_turn():
                     self._report_serial_fallback(scheduler)
-                    outcome, _commits, _closures = (
-                        await self._serial._run_one_iteration(self._alloc_iter_num())
-                    )
+                    self._serial.holding_for_pin = pin_iteration_pending
+                    try:
+                        outcome, _commits, _closures = (
+                            await self._serial._run_one_iteration(
+                                self._alloc_iter_num()
+                            )
+                        )
+                    finally:
+                        self._serial.holding_for_pin = False
                     pin_unread = False
                     if pin_iteration_pending:
                         # The Pin is spent whatever its Iteration did with it:
@@ -4927,8 +4948,12 @@ class _ParallelLoop:
                     # scheduler's own ledger: it only spends a unit at
                     # `start_session` (Lane sessions), so a serial
                     # Iteration's unit is folded in here rather than tracked
-                    # by a second, divergeable counter.
-                    scheduler._units_spent += 1
+                    # by a second, divergeable counter. A Pin Iteration that
+                    # could not read the Pin started no session and bound
+                    # nothing, so like a Lane that never started it spends none
+                    # (#430).
+                    if not pin_unread:
+                        scheduler._units_spent += 1
                     if self._serial._stop_drain_requested:
                         return (
                             RUN_OUTCOME_OPERATOR_STOP,
@@ -5243,18 +5268,14 @@ class _ParallelLoop:
         nothing here: membership heads its order with the Pin
         (:func:`~git_loopy.issue_order.promote_pinned`), so it takes the first
         Lane reservation; while it is unspent the Pool walk holds for it
-        (:attr:`~git_loopy.rolling_pool.RollingPool.hold_for`), so one failed
+        (:attr:`~git_loopy.rolling_pool.RollingPool.lane_first`), so one failed
         validation read cannot hand that Lane to the next candidate.
 
         Returns:
             Whether the Pin's serial Iteration was latched.
         """
         pin = self._serial.live_pin
-        if (
-            pin is None
-            or not isinstance(self._source, sources_module.PinnedSource)
-            or self._source.pin_parallel_safe is not False
-        ):
+        if pin is None or self._pin_parallel_safe() is not False:
             return False
         collection = self._collect_pool_safely()
         self._latch_serial_demand(
@@ -5267,14 +5288,15 @@ class _ParallelLoop:
         )
         return True
 
-    def _lane_first_pin(self) -> int | None:
-        """The Pin, if preflight read it as ``parallel-safe``, else ``None``."""
-        if (
-            isinstance(self._source, sources_module.PinnedSource)
-            and self._source.pin_parallel_safe is True
-        ):
-            return self._serial.live_pin
+    def _pin_parallel_safe(self) -> bool | None:
+        """How preflight classified the Pin, or ``None`` with no Pin (#430)."""
+        if isinstance(self._source, sources_module.PinnedSource):
+            return self._source.pin_parallel_safe
         return None
+
+    def _lane_first_pin(self) -> int | None:
+        """The unspent Pin, if it is ``parallel-safe``: the next Lane is its."""
+        return self._serial.live_pin if self._pin_parallel_safe() else None
 
     async def _await_readable_pool(self) -> None:
         """Poll until a whole Pool read completes, running no Iteration (#430).

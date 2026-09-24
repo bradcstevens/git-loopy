@@ -6188,17 +6188,18 @@ def test_a_pin_the_startup_peek_could_not_read_is_still_worked_first(
 def test_a_pin_its_own_iteration_could_not_read_keeps_serial_ownership(
     tmp_path, monkeypatch
 ) -> None:
-    """An Iteration never offered the Pin does not spend it (#430).
+    """The Pin's Iteration binds the Pin or nothing (#430).
 
-    It binds the rest of the Pool instead, and the Pin keeps serial ownership
-    for its next Iteration rather than let a refill turn's Lanes go first.
+    Its read of the Pin failed while the rest of the Pool answered. Binding the
+    head of the order instead would be #396's silent substitution, so it binds
+    nothing, spends no unit, and keeps serial ownership for the Pin.
     """
     _wire_unreadable_pin(tmp_path, monkeypatch, nth=3)
 
-    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
 
     events = _logged_events(tmp_path)
-    assert _bindings(events) == [(42, "order"), (44, "pin")]
+    assert _bindings(events) == [(44, "pin")]
     assert [e for e in events if e["type"] == "wrapper.contribution.start"] == []
 
 
@@ -6219,6 +6220,35 @@ class _PinOutsidePoolGitHubClient(FakeGitHubClient):
             page,
             issues=tuple(i for i in page.issues if i.number != self._missing),
         )
+
+
+def test_an_unread_pin_does_not_end_the_run_on_the_rest_of_the_pool(
+    tmp_path, monkeypatch
+) -> None:
+    """A Pool whose only other issue is Blocked cannot end the Run before the Pin.
+
+    Binding from the rest of the Pool would find it all Blocked and end
+    ``all_blocked``, abandoning a Pin the Run was about to read (#430).
+    """
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    blocked = BlockedByRead(
+        total_count=1, nodes=(BlockerNode(ref="x/y#44", state="open"),)
+    )
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(44, labels=["ready-for-agent"]),
+            _make_issue(45, labels=["ready-for-agent"], blocked_by=blocked),
+        ],
+        gh_cls=_UnreadableOnceGitHubClient,
+        unreadable=44,
+        nth=3,
+    )
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
+
+    assert _bindings(_logged_events(tmp_path)) == [(44, "pin")]
 
 
 def test_a_pin_that_left_the_pool_is_spent_and_lanes_reopen(
@@ -6251,10 +6281,10 @@ def test_a_pin_that_left_the_pool_is_spent_and_lanes_reopen(
 
 def _wire_unlistable_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, failing: frozenset[int]
-) -> None:
+) -> FakeGitHubClient:
     # A pinned Rolling Run lists three times before any Lane can start: the
     # startup membership refresh, the startup peek, and the Pin's own Iteration.
-    _wire_rolling_run(
+    fake_gh = _wire_rolling_run(
         tmp_path,
         monkeypatch,
         [
@@ -6265,6 +6295,7 @@ def _wire_unlistable_pin(
         failing=failing,
     )
     monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    return fake_gh
 
 
 def test_a_serial_required_pin_goes_first_when_startup_reads_fail(
@@ -6275,10 +6306,12 @@ def test_a_serial_required_pin_goes_first_when_startup_reads_fail(
     The startup membership refresh and the startup peek both fail; the first
     reservation's own refresh would then have given a Lane the only unit (#430).
     """
-    _wire_unlistable_pin(tmp_path, monkeypatch, failing=frozenset({1, 2}))
+    fake_gh = _wire_unlistable_pin(tmp_path, monkeypatch, failing=frozenset({1, 2}))
 
     asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
 
+    assert isinstance(fake_gh, _ListRefusesWhenArmedGitHubClient)
+    assert fake_gh.list_refusals == 2
     events = _logged_events(tmp_path)
     assert _bindings(events) == [(44, "pin")]
     assert [e for e in events if e["type"] == "wrapper.contribution.start"] == []
@@ -6290,29 +6323,29 @@ def test_a_pin_whose_iteration_read_nothing_keeps_serial_ownership(
     """A Pin Iteration whose whole Pool read failed hands no turn to Lanes (#430).
 
     Its only listing gave out, so the Iteration ends ``preflight_failed``
-    without having been offered the Pin; the refill turn after it would
-    otherwise give the Run's last unit to a Lane.
+    without having been offered the Pin, and spends no unit; the refill turn
+    after it would otherwise give the Run's only unit to a Lane.
     """
     _wire_unlistable_pin(tmp_path, monkeypatch, failing=frozenset({3}))
 
-    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
 
     events = _logged_events(tmp_path)
     assert _bindings(events) == [(44, "pin")]
     assert [e for e in events if e["type"] == "wrapper.contribution.start"] == []
 
 
-def test_a_tracker_outage_in_the_pins_iteration_costs_one_unit(
+def test_a_tracker_outage_in_the_pins_iteration_costs_no_unit(
     tmp_path, monkeypatch
 ) -> None:
     """The Pin waits for the tracker on reads, not on spent Iterations (#430).
 
-    Listings 3-5 fail: the Pin's own Iteration and two polls behind it. Only
-    the Iteration spends a unit, so a cap of 2 still works the Pin.
+    Listings 3-5 fail: the Pin's own Iteration and two polls behind it. The
+    unread Iteration spends no unit, so a cap of 1 still works the Pin.
     """
     _wire_unlistable_pin(tmp_path, monkeypatch, failing=frozenset({3, 4, 5}))
 
-    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
 
     events = _logged_events(tmp_path)
     assert _bindings(events) == [(44, "pin")]

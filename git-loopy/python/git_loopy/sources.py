@@ -911,13 +911,10 @@ class GitHubIssueSource:
         return None if self._repository is None else self._repository.visibility
 
     def spend_pin(self) -> None:
-        """Stop promoting the Pin once it is spent (#430).
+        """Stop promoting the Pin: the Runner has spent it (#430).
 
-        The Runner spends it at the Pin's first binding, or at the end of the
-        serial Iteration latched for it unless that Iteration's incomplete read
-        never showed it — not when its issue leaves the Pool: an issue whose
-        pinned Iteration made no progress rejoins the §3.2 order like any other,
-        rather than heading every later read.
+        When is the Runner's rule (:meth:`git_loopy.loop._Loop.spend_pin`); this
+        only makes every later read order the Pin like any other issue.
         """
         self._pin_spent = True
 
