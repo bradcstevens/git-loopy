@@ -6243,17 +6243,38 @@ def test_a_pin_that_left_the_pool_is_spent_and_lanes_reopen(
 
 
 class _MembershipUnreadableGitHubClient(FakeGitHubClient):
-    """The first ``failures`` Pool listings fail; later ones answer."""
+    """The Pool listings numbered in ``failing`` fail (1-based); others answer.
 
-    def __init__(self, *, failures: int, **kwargs: Any) -> None:
+    A pinned Rolling Run lists three times before any Lane can start: the
+    startup membership refresh, the startup peek, and the Pin's own Iteration.
+    """
+
+    def __init__(self, *, failing: set[int], **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._failures = failures
+        self._failing = failing
+        self._lists = 0
 
     def issue_list(self, label: str, state: str = "open") -> gh_module.IssueListPage:
-        if self._failures > 0:
-            self._failures -= 1
+        self._lists += 1
+        if self._lists in self._failing:
             raise gh_module.GhError(["gh", "issue", "list"], 1, "HTTP 502")
         return super().issue_list(label, state)
+
+
+def _wire_unlistable_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, failing: set[int]
+) -> None:
+    _wire_rolling_run(tmp_path, monkeypatch, [])
+    fake_gh = _MembershipUnreadableGitHubClient(
+        failing=failing,
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
 
 
 def test_a_serial_required_pin_goes_first_when_startup_reads_fail(
@@ -6264,18 +6285,27 @@ def test_a_serial_required_pin_goes_first_when_startup_reads_fail(
     The startup membership refresh and the startup peek both fail; the first
     reservation's own refresh would then have given a Lane the only unit (#430).
     """
-    _wire_rolling_run(tmp_path, monkeypatch, [])
-    fake_gh = _MembershipUnreadableGitHubClient(
-        failures=2,
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
-            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
-            _make_issue(44, labels=["ready-for-agent"]),
-        ],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    _wire_unlistable_pin(tmp_path, monkeypatch, failing={1, 2})
 
     asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(44, "pin")]
+    assert [e for e in events if e["type"] == "wrapper.contribution.start"] == []
+
+
+def test_a_pin_whose_iteration_read_nothing_keeps_serial_ownership(
+    tmp_path, monkeypatch
+) -> None:
+    """A Pin Iteration whose whole Pool read failed hands no turn to Lanes (#430).
+
+    Its only listing gave out, so the Iteration ends ``preflight_failed``
+    without having been offered the Pin; the refill turn after it would
+    otherwise give the Run's last unit to a Lane.
+    """
+    _wire_unlistable_pin(tmp_path, monkeypatch, failing={3})
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
 
     events = _logged_events(tmp_path)
     assert _bindings(events) == [(44, "pin")]

@@ -1021,10 +1021,6 @@ _ITERATION_POOL_UNRESOLVED = "pool_unresolved"
 #: — including inside a Parallel Run's granted serial turn — because no later
 #: turn could read anything different, so carrying on would re-walk the same
 #: Pool until the iteration cap.
-#: Serial Iteration outcomes whose Pool read bound nothing because it found
-#: nothing: a finished Pool, or one whose read gave out (#541).
-_POOL_FOUND_NOTHING_OUTCOMES = frozenset({"empty_pool", "preflight_failed"})
-
 _SERIAL_DEFEATED_OUTCOMES = frozenset(
     {"all_skipped", "all_blocked", _ITERATION_POOL_UNRESOLVED}
 )
@@ -3408,7 +3404,7 @@ class _Loop:
         Pool read never showed it (:attr:`pin_unread`).
         """
         self._live_pin = None
-        if isinstance(self._source, sources_module.PinSpending):
+        if isinstance(self._source, sources_module.PinnedSource):
             self._source.spend_pin()
 
     def _take_lease_at_pickup(
@@ -4974,16 +4970,15 @@ class _ParallelLoop:
                     # would abandon issues the Run can name over one refused
                     # `gh` call. Both fall through to the idle-check, which polls
                     # until a read completes or the Run runs out of units.
-                    if (
-                        pin_unread
-                        and outcome not in _POOL_FOUND_NOTHING_OUTCOMES
-                        and scheduler.may_start_work
-                    ):
-                        # The Pin's own read gave out while the rest of the
-                        # Pool was read and worked. Keep serial ownership for
-                        # it rather than let a refill turn's Lanes go first
-                        # (#430). Bounded: each such Iteration bound other
-                        # work, and one whose read found nothing ends this.
+                    if pin_unread and scheduler.may_start_work:
+                        # The Pin's own read gave out, so keep serial ownership
+                        # for it rather than let a refill turn's Lanes go first
+                        # (#430). Each retry spends a unit like any Iteration;
+                        # one whose read found nothing at all (#541's
+                        # `preflight_failed`) waits out the idle poll first, so
+                        # a tracker that keeps refusing is not hammered.
+                        if outcome == "preflight_failed":
+                            await asyncio.sleep(_ROLLING_EMPTY_POLL_INTERVAL)
                         pin_iteration_pending = True
                         pin = self._serial.live_pin
                         assert pin is not None
@@ -5235,7 +5230,7 @@ class _ParallelLoop:
         serial ownership for the next one.
 
         The Pin is classified by the labels preflight read to accept it
-        (:attr:`~git_loopy.sources.PinSpending.pin_parallel_safe`), so a failed
+        (:attr:`~git_loopy.sources.PinnedSource.pin_parallel_safe`), so a failed
         startup read cannot let Lanes go first. A ``parallel-safe`` Pin needs
         nothing here: membership heads its order with the Pin
         (:func:`~git_loopy.issue_order.promote_pinned`), so it takes the first
@@ -5247,7 +5242,7 @@ class _ParallelLoop:
         pin = self._serial.live_pin
         if (
             pin is None
-            or not isinstance(self._source, sources_module.PinSpending)
+            or not isinstance(self._source, sources_module.PinnedSource)
             or self._source.pin_parallel_safe is not False
         ):
             return False

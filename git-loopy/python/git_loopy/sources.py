@@ -818,8 +818,12 @@ class RepositoryVisibilityReporting(Protocol):
 
 
 @runtime_checkable
-class PinSpending(Protocol):
-    """A source whose reads promote an invocation's **Pin** until it is spent."""
+class PinnedSource(Protocol):
+    """A source that carries an invocation's **Pin** (#430).
+
+    It reports how preflight classified the Pin, and its reads promote the Pin
+    until the Runner spends it.
+    """
 
     @property
     def pin_parallel_safe(self) -> bool | None:
