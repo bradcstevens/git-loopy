@@ -625,3 +625,120 @@ def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
         "the zone of the machine an operator is actually looking at"
     )
     assert zone_directory_path.read_text(encoding="utf-8") == str(zone_directory)
+
+
+# ---------------------------------------------------------------------------
+# A Run that found nothing it could work says so after the client returns
+# (#642)
+# ---------------------------------------------------------------------------
+
+
+def _no_work_fixture_case(case_id: str) -> dict[str, Any]:
+    fixture = json.loads(
+        (Path(__file__).parents[2] / "conformance" / "no-work-notice.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return next(case for case in fixture["cases"] if case["id"] == case_id)
+
+
+def _write_trace(trace_path: Path, events: list[dict[str, Any]]) -> None:
+    trace_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events), encoding="utf-8"
+    )
+
+
+def test_the_line_printer_client_says_why_a_run_found_no_workable_issues(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The exit status alone read as a crash; the notice names the blocker."""
+    from git_loopy import run_sidecar
+
+    case = _no_work_fixture_case("all_blocked_chain_names_only_the_roots_outside_the_pool")
+    trace_path = tmp_path / "run.trace.jsonl"
+    _write_trace(trace_path, case["events"])
+
+    rc = run_sidecar.run_terminal_client(
+        repository_root=tmp_path,
+        config=_config(),
+        trace_path=trace_path,
+        control_path=run_sidecar.control_path_for_trace(trace_path),
+        child=_finished_worker(1),
+        release_version="",
+        warn=lambda _message: None,
+        diagnostics_path=tmp_path / "run.log",
+    )
+
+    assert rc == 1, "the notice explains the exit; it does not change it"
+    err = capsys.readouterr().err
+    for line in case["notice"]:
+        assert line in err
+    assert err.count("No workable issues") == 1
+
+
+@pytest.mark.skipif(
+    not advisory_locking_available(),
+    reason="this platform has no flock advisory locks",
+)
+def test_the_dashboard_client_says_why_a_run_found_no_workable_issues(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reported defect: the Dashboard closed and the shell came back silent.
+
+    The helper leaving with 0 is the Dashboard closing, which used to be the
+    last thing the operator saw. The notice now follows it onto the terminal
+    the operator gets back.
+    """
+    from git_loopy import run_sidecar, tui_release
+
+    case = _no_work_fixture_case("empty_pool_says_nothing_is_labelled")
+    trace_path = tmp_path / "run.trace.jsonl"
+    _write_trace(trace_path, case["events"])
+    helper = tmp_path / "fake-dashboard.py"
+    helper.write_text("#!/usr/bin/env python3\nraise SystemExit(0)\n", encoding="utf-8")
+    helper.chmod(0o755)
+    monkeypatch.setattr(
+        tui_release, "resolve_runtime_helper", lambda *_args, **_kwargs: helper
+    )
+    monkeypatch.setattr(run_sidecar, "wait_for_run_control", lambda *_args: True)
+
+    rc = run_sidecar.run_terminal_client(
+        repository_root=tmp_path,
+        config=_config(),
+        trace_path=trace_path,
+        control_path=run_sidecar.control_path_for_trace(trace_path),
+        child=_finished_worker(0),
+        release_version="0.11.0",
+        warn=lambda _message: None,
+        diagnostics_path=tmp_path / "run.log",
+    )
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    for line in case["notice"]:
+        assert line in err
+
+
+def test_a_run_that_did_work_ends_without_a_no_work_notice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from git_loopy import run_sidecar
+
+    case = _no_work_fixture_case("a_run_that_bound_work_then_ran_out_is_not_a_no_work_run")
+    trace_path = tmp_path / "run.trace.jsonl"
+    _write_trace(trace_path, case["events"])
+
+    run_sidecar.run_terminal_client(
+        repository_root=tmp_path,
+        config=_config(),
+        trace_path=trace_path,
+        control_path=run_sidecar.control_path_for_trace(trace_path),
+        child=_finished_worker(1),
+        release_version="",
+        warn=lambda _message: None,
+        diagnostics_path=tmp_path / "run.log",
+    )
+
+    assert "No workable issues" not in capsys.readouterr().err

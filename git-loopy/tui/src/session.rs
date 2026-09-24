@@ -16,6 +16,7 @@ use crate::band::ActivityBand;
 use crate::event::{Event, IssueRef};
 use crate::input::{Input, Pointer, PointerAction};
 use crate::navigation::{Cursor, Flow, Key, LogPosition, Screen};
+use crate::notice::NoWorkTally;
 use crate::render::{
     activity_ceiling, activity_window_areas, dashboard_bands, drill_in_bands, log_height,
     DashboardBands,
@@ -52,6 +53,8 @@ pub struct DashboardFrame {
     pub capabilities: TerminalCapabilities,
     /// What the helper could not make sense of.
     pub diagnostics: Diagnostics,
+    /// Why a Run that found nothing it could work ended, when it did (#642).
+    pub notice: Option<Vec<String>>,
 }
 
 /// The longest an unreadable line is quoted back at the operator.
@@ -142,6 +145,10 @@ pub struct DashboardSession {
     /// The monotonic reading of that instant, when the Run declares one.
     last_monotonic: Option<f64>,
     diagnostics: Diagnostics,
+    /// Whether this Run ever had work, and why it ended if it did not.
+    no_work: NoWorkTally,
+    /// Keep the Dashboard up after a no-work Run until the operator quits.
+    hold_on_no_work: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -180,7 +187,34 @@ impl DashboardSession {
             last_instant: None,
             last_monotonic: None,
             diagnostics,
+            no_work: NoWorkTally::default(),
+            hold_on_no_work: false,
         }
+    }
+
+    /// Keep the Dashboard up when the Run found nothing it could work (#642).
+    ///
+    /// Such a Run ends seconds after it starts, so a Dashboard that closed with
+    /// it would flash an empty Queue and hand the terminal back unexplained.
+    /// Held, it states why and waits for the operator to quit. Opt-in, because
+    /// only a caller that owns a real keyboard can promise a quit will come.
+    pub fn hold_on_no_work(mut self) -> Self {
+        self.hold_on_no_work = true;
+        self
+    }
+
+    /// Why a Run that found nothing it could work ended, when it did.
+    pub fn notice(&self) -> Option<Vec<String>> {
+        let mut lines = self.no_work.lines()?;
+        if self.hold_on_no_work {
+            lines.push("Nothing more will run — press q to close the Dashboard.".to_string());
+        }
+        Some(lines)
+    }
+
+    /// Whether the end of the trace should leave the Dashboard up.
+    fn holds_at_end(&self) -> bool {
+        self.hold_on_no_work && self.no_work.lines().is_some()
     }
 
     /// Declare what the terminal can render.
@@ -216,6 +250,7 @@ impl DashboardSession {
         };
         self.last_instant = event.ts.or(self.last_instant);
         self.last_monotonic = event.observed_monotonic.or(self.last_monotonic);
+        self.no_work.observe(&event);
         let active = self.state.active_ref.clone();
         let log_head = first_ordinal(self.state.issue_log(self.cursor.selected()));
         let activity_head = first_ordinal(self.state.live_log());
@@ -324,6 +359,7 @@ impl DashboardSession {
             activity_band: self.band,
             capabilities: self.capabilities,
             diagnostics: self.diagnostics.clone(),
+            notice: self.notice(),
         }
     }
 
@@ -715,7 +751,13 @@ where
                 // reports; nothing about the Run changed, but where the bands
                 // are did, and a pointer gesture is answered against that.
                 Input::Resized(columns, rows) => session.resize(columns, rows),
-                Input::EndOfTrace => break,
+                // A no-work Run holds, so the operator reads why before the
+                // terminal is handed back; they quit it like any other.
+                Input::EndOfTrace => {
+                    if !session.holds_at_end() {
+                        break;
+                    }
+                }
                 // The helper owns its own exit code and nothing else: the Run
                 // belongs to the Orchestrator, which is still holding it.
                 Input::Failed(reason) => return Err(std::io::Error::other(reason)),

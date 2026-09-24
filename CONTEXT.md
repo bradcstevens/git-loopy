@@ -1132,6 +1132,18 @@ process wait for dependency closure rather than repair the Pool. Like an All-ski
 claim about the *work*, so a single **Unresolved readiness** refusal outranks it.
 _Avoid_: all-skipped run, empty pool, readiness-unprovable.
 
+**No-work notice**:
+The few lines that tell an operator why a **Run** ended having found nothing it could work.
+Only a Run that ended `empty_pool`, as an **All-blocked Run**, or as an **All-skipped Run**,
+without ever binding, activating or contributing to an issue, earns one (#642). It names the
+root blockers outside the **Pool**, or counts each **Pickup skip** kind once per candidate. The
+**Dashboard** holds with it drawn until the operator quits, and the attach client prints it
+once the Dashboard returns. It exists because such a Run ends seconds after it starts, and an
+empty Queue that closes unexplained reads as a crash. It is presentation, not a Wrapper-contract
+decision: the exit status and reason are unchanged. A Run that bound work and then ran out
+earns none.
+_Avoid_: empty-run warning, idle notice.
+
 **Run readback**:
 The block a **Run** prints at start and publishes on its own start Event, stating **Config** as
 the kit parsed it: the **Default pair** and context tier, the **Escalation rung**, whether an

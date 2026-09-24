@@ -237,6 +237,15 @@ when the operator quits. Attach mode (`--attach` + `--control`) draws that same
 client from a local trace file, replays from the start, ignores temporary EOF,
 and exits only when the trace records `wrapper.run.end`, the control lock
 releases, or the operator quits the client.
+There is one exception to exiting at the end of input. A Run that ends
+`empty_pool`, `all_blocked` or `all_skipped` without ever binding an issue
+leaves both `--render` and attach mode **held**: a "no workable issues" notice
+covers the Queue and names the reason — the root blockers outside the Pool, or
+each refusal kind with its count — and the Dashboard stays up until the operator
+quits (#642). Otherwise such a Run would flash an empty Queue for a few seconds
+and hand the terminal back with no explanation.
+`conformance/no-work-notice.json` pins which Runs earn the notice and its exact
+lines.
 On Unix, keyboard/mouse input and cursor-position replies come from the
 controlling terminal even when stdin is a trace pipe or `/dev/null`. The helper
 enables Crossterm's `use-dev-tty` backend so redirected input cannot leave startup
@@ -315,6 +324,7 @@ other's oracle, so the two cannot drift toward each other:
 | `tests/responsive_render.rs` | Column and Header reduction in importance order, never mid-word; the minimum-size state; narrow and below-floor snapshots |
 | `tests/bounded_input.rs` | Structural input is never dropped; only render-only deltas coalesce, to the newest value |
 | `tests/run_loop.rs` | Quitting, ticks, an unrecoverable read, bounded diagnostics, and restoration on every exit path |
+| `tests/no_work_notice.rs` | A Run that found nothing it could work holds the Dashboard with the `no-work-notice.json` lines until the operator quits; every other Run end still closes it |
 | `tests/log_guarantees.rs` | Logs are bounded per issue, retain pre-activation output with its own instants, and span Iterations |
 | `src/main.rs` unit tests | Attach parsing, replay from byte zero, temporary-EOF polling, run-end termination, and control-lock termination |
 | `tests/standalone_helper.rs` | `--schema-version` answers without reading stdin; `--render` selects the terminal; a mostly-unreadable trace still finishes, silently on stdout; the projection stays the default |

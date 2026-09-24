@@ -624,7 +624,10 @@ fn dashboard_session(options: &Options, capabilities: TerminalCapabilities) -> D
         options.zone.clone(),
         options.drill_in.clone(),
     )
-    .with_capabilities(capabilities);
+    .with_capabilities(capabilities)
+    // Both callers own the controlling terminal's keyboard, so the quit a held
+    // Dashboard waits for can always arrive (#642).
+    .hold_on_no_work();
     if let Some(monotonic) = options.render_at_monotonic {
         session.render_at_monotonic(monotonic);
     }

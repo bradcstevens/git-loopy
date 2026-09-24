@@ -18,7 +18,7 @@ use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
 use crate::band::{ActivityBand, ACTIVITY_BAND_MIN_HEIGHT, QUEUE_MIN_HEIGHT};
@@ -164,9 +164,58 @@ pub fn draw_frame(frame: &mut Frame, dashboard: &DashboardFrame) {
         return;
     }
     match dashboard.screen {
-        Screen::Dashboard => draw_dashboard(frame, dashboard),
+        Screen::Dashboard => {
+            draw_dashboard(frame, dashboard);
+            if let Some(notice) = &dashboard.notice {
+                draw_notice(frame, dashboard, notice);
+            }
+        }
         Screen::DrillIn => draw_drill_in(frame, dashboard),
     }
+}
+
+/// The widest a no-work notice is drawn, so it reads as a message box.
+const NOTICE_MAX_COLUMNS: u16 = 96;
+
+/// Why a Run that found nothing it could work ended, over the Queue (#642).
+///
+/// Drawn over the bands rather than as a band of its own, so no pointer target
+/// moves: a drag handle hit-tested against [`dashboard_bands`] is exactly where
+/// it was. Only on the Dashboard screen — a drill-in the operator opened is the
+/// thing they asked to read.
+fn draw_notice(frame: &mut Frame, dashboard: &DashboardFrame, notice: &[String]) {
+    let glyphs = Glyphs::for_terminal(&dashboard.capabilities);
+    let area = frame.area();
+    let target = dashboard_bands(area, &dashboard.activity_band)
+        .map(|bands| bands.queue)
+        .filter(|queue| queue.height >= 5)
+        .unwrap_or(area);
+    let width = target.width.saturating_sub(4).clamp(1, NOTICE_MAX_COLUMNS);
+    let inner = usize::from(width.saturating_sub(2).max(1));
+    let wrapped: usize = notice
+        .iter()
+        .map(|line| line.chars().count().div_ceil(inner).max(1))
+        .sum();
+    let height = u16::try_from(wrapped + 2)
+        .unwrap_or(u16::MAX)
+        .min(target.height);
+    let popup = Rect::new(
+        target.x + (target.width.saturating_sub(width)) / 2,
+        target.y + (target.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(notice.iter().cloned().map(Line::from).collect::<Vec<_>>())
+            .wrap(Wrap { trim: true })
+            .block(
+                glyphs
+                    .block(" no workable issues ")
+                    .title_style(Style::default().add_modifier(Modifier::BOLD)),
+            ),
+        popup,
+    );
 }
 
 /// The whole screen, when there is not enough of it to draw a band in.

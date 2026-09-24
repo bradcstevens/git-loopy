@@ -16,6 +16,7 @@ mod band;
 mod event;
 mod input;
 mod navigation;
+mod notice;
 mod render;
 mod session;
 mod state;

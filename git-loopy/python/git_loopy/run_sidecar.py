@@ -25,7 +25,7 @@ from git_loopy.static_route import RoutePolicy
 from git_loopy.ui import Renderer, RunSummary
 from git_loopy.ui.console import get_console
 from git_loopy.denomination import BilledCreditsDenomination
-from git_loopy import tui_release
+from git_loopy import no_work_notice, tui_release
 
 __all__ = [
     "DetachedRunSpec",
@@ -625,12 +625,14 @@ def run_terminal_client(
                     # Run working, so this client claims no knowledge that it
                     # ended and never waits; a worker already gone by now is
                     # still the Run's own result and is reported as such.
-                    return _report_worker_result(
+                    status = _report_worker_result(
                         child,
                         diagnostics_path=diagnostics_path,
                         watched=_WatchOutcome(traced=True, run_ended=False),
                         warn=warn,
                     )
+                    _print_no_work_notice(trace_path)
+                    return status
                 warn(
                     f"git-loopy-tui exited {result.returncode}; "
                     "following the replay log with the line printer."
@@ -641,9 +643,26 @@ def run_terminal_client(
         config=config,
         owner_alive=owner_alive,
     )
-    return _report_worker_result(
+    status = _report_worker_result(
         child,
         diagnostics_path=diagnostics_path,
         watched=watched,
         warn=warn,
     )
+    _print_no_work_notice(trace_path)
+    return status
+
+
+def _print_no_work_notice(trace_path: Path) -> None:
+    """Say why a Run that found nothing it could work ended (#642).
+
+    Such a Run ends seconds after it starts, and its exit status alone reads as
+    a crash. Printed after the Dashboard or line printer has returned, so it is
+    the last thing on the terminal the operator gets back. A Run still working
+    -- a Detach -- has no ``wrapper.run.end`` yet, so it earns nothing here.
+    """
+    lines = no_work_notice.trace_notice(trace_path)
+    if not lines:
+        return
+    for line in lines:
+        print(f"git-loopy: {line}", file=sys.stderr)

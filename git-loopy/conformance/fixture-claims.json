@@ -87,6 +87,12 @@
       "powershell": {"kind": "waived_out_of_scope", "reason": "The written contract keeps model-roster resolution Python-only pending Config parity."},
       "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard receives configured model facts in Events and does not resolve the model roster."}
     },
+    "no-work-notice.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_no_work_notice.py drives git_loopy.no_work_notice.no_work_notice with fixture Event streams."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "The notice is presentation owned by the Python attach client and the Rust Dashboard; the shell Orchestrator has no attach client."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "The notice is presentation owned by the Python attach client and the Rust Dashboard; the PowerShell Orchestrator has no attach client."},
+      "rust": {"kind": "claimed", "reason": "tui/tests/no_work_notice.rs folds fixture Event streams through the production DashboardSession and compares its notice."}
+    },
     "progress-strikes.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives production progress and Strike accounting with fixture steps."},
       "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh drives production progress and Strike accounting with fixture steps."},
