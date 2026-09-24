@@ -204,6 +204,11 @@ class RollingPool:
     #: ``unresolved`` count so the two dispatch modes cannot drift apart on
     #: what a Pool nobody could bind work out of is entitled to report.
     read_refused: Callable[[PoolCandidate], bool] = _never_read_refused
+    #: A ``parallel-safe`` **Pin** the walk may not pass (#430), or ``None``.
+    #: When its validation cannot be read, the walk stops there rather than give
+    #: the Lane to the next candidate — the Pin takes the first Lane — and it
+    #: is retried on the next walk even while quarantined.
+    hold_for: int | str | None = None
 
     _entries: list[_CachedCandidate] = field(default_factory=list, init=False)
     _refreshing: bool = field(default=False, init=False)
@@ -318,7 +323,8 @@ class RollingPool:
         """
         walked = list(self._entries)
         for position, entry in enumerate(walked, start=1):
-            if entry.quarantined or not self.eligible(entry.candidate):
+            held = self.hold_for is not None and entry.candidate.ref == self.hold_for
+            if (entry.quarantined and not held) or not self.eligible(entry.candidate):
                 continue
             pickup = self.source.pickup(entry.candidate.ref)
             if pickup.outcome == PICKUP_VALIDATED and pickup.item is not None:
@@ -333,6 +339,8 @@ class RollingPool:
                     "a later refresh still lists it",
                     entry.candidate.ref,
                 )
+                if held:
+                    return PoolTake(item=None, position=None, considered=len(walked))
                 continue
             self._entries.remove(entry)
         return PoolTake(item=None, position=None, considered=len(walked))

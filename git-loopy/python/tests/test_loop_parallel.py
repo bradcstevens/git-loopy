@@ -5939,13 +5939,20 @@ def _wire_rolling_run(
     issues: list[gh_module.Issue],
     *,
     client_cls: type[_ParallelFakeClient] = _ParallelFakeClient,
+    gh_cls: type[FakeGitHubClient] = FakeGitHubClient,
+    **gh_kwargs: Any,
 ) -> FakeGitHubClient:
-    """Wire a Rolling Run over ``issues``; the default serial agent closes its issue."""
+    """Wire a Rolling Run over ``issues``; the default serial agent closes its issue.
+
+    ``gh_cls`` and ``gh_kwargs`` substitute a tracker fake that fails or hides
+    particular reads.
+    """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-    fake_gh = FakeGitHubClient(
+    fake_gh = gh_cls(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=issues,
+        **gh_kwargs,
     )
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
     monkeypatch.setattr(
@@ -6150,17 +6157,17 @@ def _wire_unreadable_pin(
 ) -> None:
     # A Pin's first view is its preflight read, which must pass for the Run to
     # start; the second is the driver's startup peek, the third its own Iteration.
-    _wire_rolling_run(tmp_path, monkeypatch, [])
-    fake_gh = _UnreadableOnceGitHubClient(
-        unreadable=44,
-        nth=nth,
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
             _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
             _make_issue(44, labels=["ready-for-agent"]),
         ],
+        gh_cls=_UnreadableOnceGitHubClient,
+        unreadable=44,
+        nth=nth,
     )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
 
 
 def test_a_pin_the_startup_peek_could_not_read_is_still_worked_first(
@@ -6218,17 +6225,17 @@ def test_a_pin_that_left_the_pool_is_spent_and_lanes_reopen(
     tmp_path, monkeypatch
 ) -> None:
     """A complete read without the Pin spends it rather than hold Lanes back (#430)."""
-    _wire_rolling_run(tmp_path, monkeypatch, [])
-    fake_gh = _PinOutsidePoolGitHubClient(
-        missing=44,
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
             _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
             _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
             _make_issue(44, labels=["ready-for-agent"]),
         ],
+        gh_cls=_PinOutsidePoolGitHubClient,
+        missing=44,
     )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
 
     asyncio.run(loop_module.run(_pinned_config(44, max_iterations=0)))
 
@@ -6242,38 +6249,21 @@ def test_a_pin_that_left_the_pool_is_spent_and_lanes_reopen(
     assert lanes == [43]
 
 
-class _MembershipUnreadableGitHubClient(FakeGitHubClient):
-    """The Pool listings numbered in ``failing`` fail (1-based); others answer.
-
-    A pinned Rolling Run lists three times before any Lane can start: the
-    startup membership refresh, the startup peek, and the Pin's own Iteration.
-    """
-
-    def __init__(self, *, failing: set[int], **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._failing = failing
-        self._lists = 0
-
-    def issue_list(self, label: str, state: str = "open") -> gh_module.IssueListPage:
-        self._lists += 1
-        if self._lists in self._failing:
-            raise gh_module.GhError(["gh", "issue", "list"], 1, "HTTP 502")
-        return super().issue_list(label, state)
-
-
 def _wire_unlistable_pin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, failing: set[int]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, failing: frozenset[int]
 ) -> None:
-    _wire_rolling_run(tmp_path, monkeypatch, [])
-    fake_gh = _MembershipUnreadableGitHubClient(
-        failing=failing,
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
+    # A pinned Rolling Run lists three times before any Lane can start: the
+    # startup membership refresh, the startup peek, and the Pin's own Iteration.
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
             _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
             _make_issue(44, labels=["ready-for-agent"]),
         ],
+        gh_cls=_ListRefusesWhenArmedGitHubClient,
+        failing=failing,
     )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
     monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
 
 
@@ -6285,7 +6275,7 @@ def test_a_serial_required_pin_goes_first_when_startup_reads_fail(
     The startup membership refresh and the startup peek both fail; the first
     reservation's own refresh would then have given a Lane the only unit (#430).
     """
-    _wire_unlistable_pin(tmp_path, monkeypatch, failing={1, 2})
+    _wire_unlistable_pin(tmp_path, monkeypatch, failing=frozenset({1, 2}))
 
     asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
 
@@ -6303,13 +6293,59 @@ def test_a_pin_whose_iteration_read_nothing_keeps_serial_ownership(
     without having been offered the Pin; the refill turn after it would
     otherwise give the Run's last unit to a Lane.
     """
-    _wire_unlistable_pin(tmp_path, monkeypatch, failing={3})
+    _wire_unlistable_pin(tmp_path, monkeypatch, failing=frozenset({3}))
 
     asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
 
     events = _logged_events(tmp_path)
     assert _bindings(events) == [(44, "pin")]
     assert [e for e in events if e["type"] == "wrapper.contribution.start"] == []
+
+
+def test_a_tracker_outage_in_the_pins_iteration_costs_one_unit(
+    tmp_path, monkeypatch
+) -> None:
+    """The Pin waits for the tracker on reads, not on spent Iterations (#430).
+
+    Listings 3-5 fail: the Pin's own Iteration and two polls behind it. Only
+    the Iteration spends a unit, so a cap of 2 still works the Pin.
+    """
+    _wire_unlistable_pin(tmp_path, monkeypatch, failing=frozenset({3, 4, 5}))
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(44, "pin")]
+    iterations = [e for e in events if e["type"] == "wrapper.iteration.start"]
+    assert len(iterations) == 2
+
+
+def test_a_parallel_safe_pin_whose_first_read_fails_still_takes_the_first_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """One failed validation read holds the Lanes for the Pin (#430).
+
+    The Pin's first view is its preflight read; the second, failing here, is
+    the first Lane walk's validation. Without the hold the walk quarantines
+    the Pin and gives the cap's only unit to the next candidate.
+    """
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+        gh_cls=_UnreadableOnceGitHubClient,
+        unreadable=43,
+        nth=2,
+    )
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    assert _bindings(_logged_events(tmp_path)) == [(43, "pin")]
 
 
 def test_a_parallel_safe_pin_takes_the_first_lane_reservation(
@@ -6507,19 +6543,23 @@ class _ListRefusesWhenArmedGitHubClient(FakeGitHubClient):
     refusal on one exact call — which is the whole point of #541's Parallel
     half: the same transient failure means something different depending on
     whether it lands on the driver's peek or inside the serial Iteration the
-    peek's evidence went on to grant.
+    peek's evidence went on to grant. ``failing`` instead names the 1-based
+    listing calls that refuse, for a test that knows the call order.
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, failing: frozenset[int] = frozenset(), **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._armed = False
+        self._failing = failing
+        self._lists = 0
         self.list_refusals = 0
 
     def arm(self) -> None:
         self._armed = True
 
     def issue_list(self, label: str, state: str = "open"):
-        if self._armed:
+        self._lists += 1
+        if self._armed or self._lists in self._failing:
             self._armed = False
             self.list_refusals += 1
             self.issue_list_calls.append((label, state))

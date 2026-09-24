@@ -76,7 +76,8 @@ Under **Rolling dispatch** the pin is worked ahead of **Lanes** too. A pin witho
 `parallel-safe` takes serial ownership at Run start, before any Lane is reserved, and Lanes
 open only after its serial Iteration ends — whatever that Iteration does with it: closes it,
 makes no progress, or skips it as **Blocked** (the pin still bypasses nothing but order). A
-`parallel-safe` pin takes the first Lane reservation. Lacking `parallel-safe` is never a
+`parallel-safe` pin takes the first Lane reservation; a failed read of it holds the Lanes
+until the tracker answers rather than hand that Lane to the next candidate. Lacking `parallel-safe` is never a
 reason to refuse a pin.
 
 The pin is spent by its first binding, or by the end of that first serial Iteration unless
@@ -84,8 +85,15 @@ that Iteration's incomplete Pool read never showed it (the pin then keeps serial
 the next Iteration), and the oldest-first order then applies — including to the pinned issue if it is still open. The
 Python Runner does this in serial Pickups as well.
 
-**Conflict, flagged rather than resolved here:** the Wrapper contract's Pin clause 1 still says
-a Run "resumes oldest-first the moment its pinned issue leaves the **Pool**", and the shell and
-PowerShell Orchestrators promote the pin for as long as it stays open. #430 kept those members
-and the Conformance fixtures out of scope; reconciling them is
-[#644](https://github.com/bradcstevens/git-loopy/issues/644).
+**Conflicts, flagged rather than resolved here:**
+
+- The Wrapper contract's Pin clause 1 still says a Run "resumes oldest-first the moment its
+  pinned issue leaves the **Pool**", and the shell and PowerShell Orchestrators promote the pin
+  for as long as it stays open. #430 kept those members and the Conformance fixtures out of
+  scope; reconciling them is [#644](https://github.com/bradcstevens/git-loopy/issues/644).
+- [ADR-0020](0020-rolling-dispatch-with-bounded-green-integration.md)'s serial interleave (#219
+  §5.9-5.10) gives Rolling dispatch one full refill turn after each serial Iteration before
+  serial demand may relatch. A pin whose Iteration's read never showed it is the one
+  exception: that Iteration keeps serial ownership for the pin, with no refill turn in between,
+  because a refill turn is exactly how Lanes would go first. It ends at the first Iteration
+  that is offered the pin, or at the cap or a drain.

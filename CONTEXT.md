@@ -1517,7 +1517,8 @@ local-markdown items a **Parallel mode** Run must still drain. It is invisible t
 candidates, so the runner discovers it by its own reading of the Pool. Finding any
 latches serial demand: refill stops, started Lane work drains, and one unchanged serial
 Iteration is granted exclusive use of the base worktree before **Rolling dispatch** gets
-one full refill turn back.
+one full refill turn back — except while a **Pin**'s serial Iteration could not read the
+pin, which keeps serial ownership for it (ADR-0032).
 _Avoid_: plain work, non-parallel work, leftover.
 
 **Serial fallback**:

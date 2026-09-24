@@ -551,7 +551,9 @@ class RollingScheduler:
         gets *one* full refill decision, reserving every currently refillable
         Lane under all normal bounds. Only after that decision may remaining
         validated serial demand relatch — which is what keeps neither serial
-        nor Parallel-safe work starving the other.
+        nor Parallel-safe work starving the other. The one driver that relatches
+        without calling this is a **Pin** whose serial Iteration could not read
+        it (#430, ADR-0032).
         """
         self._phase = PHASE_ROLLING_REFILL_TURN
 

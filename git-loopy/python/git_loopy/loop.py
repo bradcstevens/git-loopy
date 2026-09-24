@@ -4845,6 +4845,7 @@ class _ParallelLoop:
         scheduler.start()
         self._crash = None
         pin_iteration_pending = self._latch_serial_required_pin()
+        lane_first_pin = self._lane_first_pin()
 
         try:
             while True:
@@ -4878,6 +4879,14 @@ class _ParallelLoop:
                 # pack a six-observation window into a fraction of a second.
                 self._report_concurrency_change()
 
+                assert self._pool is not None
+                # Only an unspent Pin holds the walk (#430).
+                self._pool.hold_for = (
+                    lane_first_pin
+                    if lane_first_pin is not None
+                    and lane_first_pin == self._serial.live_pin
+                    else None
+                )
                 for reservation in scheduler.reserve():
                     task = asyncio.create_task(
                         self._guarded_lane_lifecycle(reservation)
@@ -4973,12 +4982,11 @@ class _ParallelLoop:
                     if pin_unread and scheduler.may_start_work:
                         # The Pin's own read gave out, so keep serial ownership
                         # for it rather than let a refill turn's Lanes go first
-                        # (#430). Each retry spends a unit like any Iteration;
-                        # one whose read found nothing at all (#541's
-                        # `preflight_failed`) waits out the idle poll first, so
-                        # a tracker that keeps refusing is not hammered.
+                        # (#430). After a read that found nothing at all (#541's
+                        # `preflight_failed`), wait for the tracker to answer
+                        # again rather than spend a unit per retry.
                         if outcome == "preflight_failed":
-                            await asyncio.sleep(_ROLLING_EMPTY_POLL_INTERVAL)
+                            await self._await_readable_pool()
                         pin_iteration_pending = True
                         pin = self._serial.live_pin
                         assert pin is not None
@@ -5234,7 +5242,9 @@ class _ParallelLoop:
         startup read cannot let Lanes go first. A ``parallel-safe`` Pin needs
         nothing here: membership heads its order with the Pin
         (:func:`~git_loopy.issue_order.promote_pinned`), so it takes the first
-        Lane reservation.
+        Lane reservation; while it is unspent the Pool walk holds for it
+        (:attr:`~git_loopy.rolling_pool.RollingPool.hold_for`), so one failed
+        validation read cannot hand that Lane to the next candidate.
 
         Returns:
             Whether the Pin's serial Iteration was latched.
@@ -5256,6 +5266,28 @@ class _ParallelLoop:
             ),
         )
         return True
+
+    def _lane_first_pin(self) -> int | None:
+        """The Pin, if preflight read it as ``parallel-safe``, else ``None``."""
+        if (
+            isinstance(self._source, sources_module.PinnedSource)
+            and self._source.pin_parallel_safe is True
+        ):
+            return self._serial.live_pin
+        return None
+
+    async def _await_readable_pool(self) -> None:
+        """Poll until a whole Pool read completes, running no Iteration (#430).
+
+        A Pin's serial Iteration whose Pool read gave out keeps serial ownership
+        for the Pin. Retrying it at once would turn a few seconds of tracker
+        outage into spent ``max_iterations`` units, so this waits the way the
+        idle check does — on reads, not Iterations. An operator Stop ends it.
+        """
+        while not self._serial._stop_drain_requested:
+            await asyncio.sleep(_ROLLING_EMPTY_POLL_INTERVAL)
+            if self._collect_pool_safely().complete:
+                return
 
     def _latch_serial_demand(
         self, *, ref: int | str, serial_required: int | None
