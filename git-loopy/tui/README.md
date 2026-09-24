@@ -243,12 +243,13 @@ one of those, both `--render` and attach mode are **held** (#642): a "no workabl
 issues" notice names the reason, and the Dashboard stays up until the operator
 quits. The notice covers the Queue, or sits at the foot of a drill-in. It names
 the exclusions that emptied a Pool, the blockers outside the Pool, or each
-refusal kind with its count. The `GIT_LOOPY_REPOSITORY` environment variable
-(`owner/repo`) separates a blocker outside the Pool from a member. Without it,
-every blocker is named. The Python attach client sets it to the repository `gh`
-reads. It is a variable rather than an option because an older helper would
-reject an option it does not know, and ADR-0052 lets a launcher attach an older
-helper.
+refusal kind with its count. `GIT_LOOPY_TUI_REPOSITORY` (`owner/repo`)
+separates a blocker outside the Pool from a member. It is a private channel from
+the launcher to the helper, not operator Config. The Python attach client sets it
+to the repository `gh` reads, or removes it when none resolves. Without it,
+every blocker is named. It is an environment variable rather than an option
+because an older helper would reject an option it does not know, and ADR-0052
+lets a launcher attach an older helper.
 Without the hold, such a Run would flash an empty Queue for a few seconds and
 hand the terminal back with no explanation. `conformance/unbound-run-notice.json`
 pins which Runs earn the notice and its exact lines.

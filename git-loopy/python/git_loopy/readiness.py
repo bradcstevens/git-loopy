@@ -43,6 +43,8 @@ __all__ = [
     "BlockerNode",
     "BlockedByRead",
     "Readiness",
+    "blocked_skip_reason",
+    "blockers_from_skip_reason",
     "decide_readiness",
 ]
 
@@ -51,6 +53,35 @@ SKIP_BLOCKED_BY_OPEN_DEPENDENCY: Final[str] = "blocked_by_open_dependency"
 
 #: The ``blockedBy`` connection was incomplete, or a node came back unreadable.
 SKIP_READINESS_UNPROVABLE: Final[str] = "readiness_unprovable"
+
+#: Separates a refusal's kind from the blockers it names, and one blocker from
+#: the next, in a ``wrapper.pickup.skipped`` reason.
+_REASON_DETAIL: Final[str] = ": "
+_BLOCKER_SEPARATOR: Final[str] = ", "
+
+
+def blocked_skip_reason(skip_reason: str, blockers: tuple[str, ...]) -> str:
+    """The ``wrapper.pickup.skipped`` reason for a candidate waiting on blockers.
+
+    ``<skip_reason>: <owner/repo#N>, <owner/repo#N>``. The one producer of that
+    shape, so :func:`blockers_from_skip_reason` -- and the Unbound-Run notice
+    that reads it (#642) -- cannot drift from what a Pickup writes.
+    """
+    return f"{skip_reason}{_REASON_DETAIL}{_BLOCKER_SEPARATOR.join(blockers)}"
+
+
+def blockers_from_skip_reason(reason: str) -> tuple[str, ...]:
+    """The open blockers a skip reason names, or ``()`` when it names none.
+
+    The inverse of :func:`blocked_skip_reason`, for a refusal whose kind is
+    :data:`SKIP_BLOCKED_BY_OPEN_DEPENDENCY`; every other reason names none.
+    """
+    prefix = f"{SKIP_BLOCKED_BY_OPEN_DEPENDENCY}{_REASON_DETAIL.rstrip()}"
+    if not reason.startswith(prefix):
+        return ()
+    detail = reason[len(prefix):]
+    return tuple(part.strip() for part in detail.split(",") if part.strip())
+
 
 #: Every verdict a readiness read may reach. Closed, and pinned by
 #: ``issue-readiness.json``'s own ``verdicts`` list.

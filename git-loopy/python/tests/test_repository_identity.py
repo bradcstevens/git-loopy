@@ -85,14 +85,28 @@ def test_gh_repo_in_the_environment_overrides_every_remote() -> None:
     assert gh_default_repository(_FORK, {}, gh_repo="env/repo") == "env/repo"
 
 
-def test_the_ranking_is_upstream_github_origin_then_config_order() -> None:
+def test_the_ranking_is_upstream_github_origin_then_the_rest_by_name() -> None:
     remotes = (
         ("zeta", "https://github.com/z/z.git"),
         ("alpha", "https://github.com/a/a.git"),
         ("github", "https://github.com/g/g.git"),
     )
     assert gh_default_repository(remotes, {}) == "g/g"
-    assert gh_default_repository(remotes[:2], {}) == "z/z"
+    # ``git remote`` lists by name, whatever order the config holds them in.
+    assert gh_default_repository(remotes[:2], {}) == "a/a"
+
+
+def test_a_remote_on_a_host_gh_is_not_signed_in_to_is_ignored() -> None:
+    remotes = (
+        ("upstream", "https://gitlab.com/elsewhere/mirror.git"),
+        ("origin", "https://github.com/o/r.git"),
+    )
+    assert gh_default_repository(remotes, {}) == "o/r"
+    assert (
+        gh_default_repository(remotes, {}, hosts=("github.com", "gitlab.com"))
+        == "elsewhere/mirror"
+    )
+    assert gh_default_repository(remotes, {}, hosts=()) is None
 
 
 def test_remotes_that_name_no_hosted_repository_are_ignored() -> None:

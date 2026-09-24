@@ -145,6 +145,8 @@
       "required": ["release_version", "schema_version", "insight_capabilities", "parallel_capabilities"],
       "execution_host_optional": ["placement", "isolation_grade", "capacity", "starting_lane_limit"],
       "run_start_disclosures_optional": ["host_metering", "ci_trigger_identity"],
+      "source_optional": ["issue_source"],
+      "source_note": "Optional-when-present. issue_source names where the Run's Pool comes from (github or prds), so a consumer can say what an empty or refused Pool means without guessing: only the github source's candidates carry the ready-for-agent label. A consumer MUST read its absence as an undeclared source and claim no label.",
       "readback_optional": ["model", "effort", "context_tier", "escalation_rung", "routes", "unconfigured_task_type_keys", "routing_suppressed", "harness_version", "roster_cli_version", "roster_diverged", "route_policy"],
       "readback_pair_keys": ["model", "effort", "configured_effort", "gate_warnings"],
       "readback_route_keys": ["key", "model", "effort", "configured_effort", "gate_warnings"],

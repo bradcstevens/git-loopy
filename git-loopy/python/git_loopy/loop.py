@@ -225,6 +225,7 @@ from git_loopy.denomination import (
     CostDenomination,
 )
 from git_loopy.prompt import PromptMetadataError, load_prompt
+from git_loopy.readiness import blocked_skip_reason
 from git_loopy.rate_card import RateCard
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
@@ -3288,7 +3289,7 @@ class _Loop:
                 assert verdict.skip_reason is not None
                 if verdict.blockers:
                     return AdmissionRefusal(
-                        reason=f"{verdict.skip_reason}: {', '.join(verdict.blockers)}",
+                        reason=blocked_skip_reason(verdict.skip_reason, verdict.blockers),
                         waiting_on_blocker=True,
                     )
                 # An *unprovable* readiness read is not a refusal of this

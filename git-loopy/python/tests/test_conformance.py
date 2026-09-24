@@ -1176,6 +1176,17 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "host_metering",
                 "ci_trigger_identity",
             ],
+            # #642: the Unbound-Run notice words an empty or refused Pool by
+            # the source it came from.
+            "source_optional": ["issue_source"],
+            "source_note": (
+                "Optional-when-present. issue_source names where the Run's Pool"
+                " comes from (github or prds), so a consumer can say what an "
+                "empty or refused Pool means without guessing: only the github "
+                "source's candidates carry the ready-for-agent label. A "
+                "consumer MUST read its absence as an undeclared source and "
+                "claim no label."
+            ),
             # #410: the **Run readback**. Optional beside `required`, never in
             # it: a port that routes nothing has no Config to read back, and
             # obliging it to publish one would make it fabricate a table.

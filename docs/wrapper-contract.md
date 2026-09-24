@@ -923,6 +923,13 @@ read an absent declaration or stamp in a historical trace as `unknown`, never as
 an inferred local placement. These are additive payload fields within Event schema
 compatibility 1; no envelope key or Event-type literal is added.
 
+`wrapper.run.start` MAY carry `issue_source`, naming where the Run's **Pool** comes from
+(`github` or `prds`). It is optional-when-present, like the other additive fields above. A
+consumer that describes the Pool must read it before claiming the `ready-for-agent` label,
+because only the `github` source's candidates carry that label. An absent `issue_source` is an
+undeclared source, and a consumer MUST NOT infer one. The **Unbound-Run notice** (#642) is such a
+consumer.
+
 **A truthful `parallel_mode: true` can still yield a wholly serial Run, and it MUST say so
 (contract 1.28).** The rule above is about the *distribution*; an Orchestrator that declares
 Parallel mode truthfully may still meet a Run whose **issue source** has no **Parallel-safe**

@@ -657,21 +657,56 @@ def run_terminal_client(
     return status
 
 
-#: The variable the helper reads the Run's ``owner/repo`` from. A variable
-#: rather than an option, so an older helper that predates it still attaches:
-#: an unrecognized option is a usage error, an unread variable is nothing.
-HELPER_REPOSITORY_ENV = "GIT_LOOPY_REPOSITORY"
+#: The variable the helper reads the Run's ``owner/repo`` from: a private
+#: launcher-to-helper channel, not operator Config (§11). A variable rather
+#: than an option, so an older helper that predates it still attaches: an
+#: unrecognized option is a usage error, an unread variable is nothing.
+HELPER_REPOSITORY_ENV = "GIT_LOOPY_TUI_REPOSITORY"
 
 
-def _helper_environment(repository: str | None) -> dict[str, str] | None:
-    """The helper's environment: this one, plus the repository when known.
+def _helper_environment(repository: str | None) -> dict[str, str]:
+    """The helper's environment: this one, carrying exactly this repository.
 
     Inherited, never constructed: the helper resolves the viewing machine's
     zone from ``TZ`` and ``TZDIR`` (#597), which a scrubbed one would strip.
+    The channel itself is always overwritten or removed, so a stray inherited
+    value can never make the held Dashboard disagree with the notice this
+    client prints.
     """
-    if repository is None:
-        return None
-    return {**os.environ, HELPER_REPOSITORY_ENV: repository}
+    environment = {
+        key: value for key, value in os.environ.items() if key != HELPER_REPOSITORY_ENV
+    }
+    if repository is not None:
+        environment[HELPER_REPOSITORY_ENV] = repository
+    return environment
+
+
+def _gh_signed_in_hosts() -> tuple[str, ...]:
+    """The hosts ``gh`` is signed in to, from its local config alone.
+
+    ``gh`` ignores a remote on any other host when it picks its default
+    repository. Read from ``hosts.yml`` in ``gh``'s config directory, plus a
+    host an environment token signs in to; ``github.com`` when nothing says.
+    """
+    hosts: set[str] = set()
+    if os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"):
+        hosts.add("github.com")
+    if os.environ.get("GH_HOST"):
+        hosts.add(os.environ["GH_HOST"])
+    if os.environ.get("GH_CONFIG_DIR"):
+        config_dir = Path(os.environ["GH_CONFIG_DIR"])
+    elif os.environ.get("XDG_CONFIG_HOME"):
+        config_dir = Path(os.environ["XDG_CONFIG_HOME"]) / "gh"
+    else:
+        config_dir = Path.home() / ".config" / "gh"
+    try:
+        text = (config_dir / "hosts.yml").read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    for line in text.splitlines():
+        if line and not line[0].isspace() and line.rstrip().endswith(":"):
+            hosts.add(line.rstrip()[:-1].strip().strip("'\""))
+    return tuple(sorted(hosts)) or ("github.com",)
 
 
 def _run_repository(repository_root: Path) -> str | None:
@@ -711,7 +746,10 @@ def _run_repository(repository_root: Path) -> str | None:
         elif setting == "gh-resolved":
             gh_resolved[name] = value
     return gh_default_repository(
-        tuple(remotes.items()), gh_resolved, gh_repo=os.environ.get("GH_REPO")
+        tuple(remotes.items()),
+        gh_resolved,
+        hosts=_gh_signed_in_hosts(),
+        gh_repo=os.environ.get("GH_REPO"),
     )
 
 

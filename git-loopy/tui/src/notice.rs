@@ -37,6 +37,10 @@ pub fn unbound_run_outcomes() -> Vec<&'static str> {
 /// The skip reason whose detail names the open blockers.
 const BLOCKED_BY_OPEN_DEPENDENCY: &str = "blocked_by_open_dependency";
 
+/// Said when the trace recorded no collection, so nothing can be counted.
+const MEMBERSHIP_UNKNOWN: &str =
+    "The trace records no Pool membership, so it may not name every candidate; check the tracker.";
+
 /// The only issue source whose Pool is defined by the `ready-for-agent` label.
 const LABELLED_SOURCE: &str = "github";
 
@@ -49,9 +53,11 @@ pub(crate) struct UnboundRunTally {
     bound_work: bool,
     /// The issue source the Run declared on its start record.
     issue_source: Option<String>,
-    /// The Pool: the latest collection, plus any member a later Membership
-    /// read added — which never retires one (ADR-0042).
-    members: BTreeSet<IssueRef>,
+    /// The Pool, as the latest `wrapper.afk_ready.collected` recorded it, or
+    /// `None` when the trace recorded none. A Membership read is never read
+    /// as the Pool: it lists only candidates eligible to take, and is
+    /// authority for nothing (ADR-0042).
+    members: Option<BTreeSet<IssueRef>>,
     /// The most recent refusal of each candidate, in issue order.
     skips: BTreeMap<IssueRef, String>,
     /// The most recent exclusion of each candidate, in issue order.
@@ -75,10 +81,7 @@ impl UnboundRunTally {
             | EventPayload::IssueActivated(_)
             | EventPayload::ContributionStart(_) => self.bound_work = true,
             EventPayload::AfkReadyCollected(collected) => {
-                self.members = collected.issues.iter().cloned().collect();
-            }
-            EventPayload::PoolRefreshed(refreshed) => {
-                self.members.extend(refreshed.issues.iter().cloned());
+                self.members = Some(collected.issues.iter().cloned().collect());
             }
             // A candidate refused or excluded in several Iterations is one.
             EventPayload::PickupSkipped(pickup) => {
@@ -136,7 +139,7 @@ impl UnboundRunTally {
         let pool = self.pool();
         let mut lines = vec![format!(
             "The Run ended because {} on open blockers.",
-            self.candidates(pool.len(), "waits", "wait")
+            self.candidates(self.counted(&pool), "waits", "wait")
         )];
         let blockers = self.blockers(&pool);
         if !blockers.is_empty() {
@@ -149,6 +152,10 @@ impl UnboundRunTally {
                 "{label}: {} — resolve them, or label other work ready-for-agent.",
                 blockers.join(", ")
             ));
+        }
+        if self.members.is_none() {
+            lines.push(MEMBERSHIP_UNKNOWN.to_string());
+            return lines;
         }
         let unrecorded = pool
             .iter()
@@ -167,21 +174,44 @@ impl UnboundRunTally {
         let reasons = pool
             .iter()
             .map(|issue| self.skips.get(issue).map_or("unrecorded", String::as_str));
-        vec![format!(
-            "The Run ended because {} skipped: {}.",
-            self.candidates(pool.len(), "was", "were"),
-            reason_counts(reasons)
-        )]
+        if self.members.is_some() {
+            return vec![format!(
+                "The Run ended because {} skipped: {}.",
+                self.candidates(pool.len(), "was", "were"),
+                reason_counts(reasons)
+            )];
+        }
+        let every = self.candidates(0, "was", "were");
+        let first = if self.skips.is_empty() {
+            format!("The Run ended because {every} skipped.")
+        } else {
+            format!(
+                "The Run ended because {every} skipped; recorded skips: {}.",
+                reason_counts(reasons)
+            )
+        };
+        vec![first, MEMBERSHIP_UNKNOWN.to_string()]
     }
 
-    /// Every candidate the Run could not take: the Pool's membership, plus
-    /// any it refused that the membership did not list.
+    /// Every candidate the Run could not take: the collected Pool, plus any
+    /// it refused that the collection did not list.
     fn pool(&self) -> BTreeSet<IssueRef> {
         self.members
             .iter()
+            .flatten()
             .cloned()
             .chain(self.skips.keys().cloned())
             .collect()
+    }
+
+    /// How many candidates the notice may claim: none when the trace recorded
+    /// no collection, because then it cannot know how many there were.
+    fn counted(&self, pool: &BTreeSet<IssueRef>) -> usize {
+        if self.members.is_some() {
+            pool.len()
+        } else {
+            0
+        }
     }
 
     /// "all N ready-for-agent issues …", in the right number.

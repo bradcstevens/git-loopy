@@ -52,3 +52,29 @@ def test_a_trace_file_is_read_with_its_unreadable_lines_skipped(tmp_path: Path) 
 
 def test_a_missing_trace_has_no_notice(tmp_path: Path) -> None:
     assert trace_notice(tmp_path / "absent.jsonl") is None
+
+
+def test_every_blocked_reason_in_the_fixture_is_what_a_pickup_writes() -> None:
+    """The notice parses the Pickup's own reason, so the two share one shape.
+
+    The Rust Dashboard parses these same fixture reasons, so pinning them to
+    the one production producer pins both readers to what a Run writes.
+    """
+    from git_loopy.readiness import (
+        SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
+        blocked_skip_reason,
+        blockers_from_skip_reason,
+    )
+
+    blocked = [
+        event["reason"]
+        for case in _FIXTURE["cases"]
+        for event in case["events"]
+        if event["type"] == "wrapper.pickup.skipped"
+        and event["reason"].startswith(SKIP_BLOCKED_BY_OPEN_DEPENDENCY)
+    ]
+    assert blocked
+    for reason in blocked:
+        blockers = blockers_from_skip_reason(reason)
+        assert blockers, reason
+        assert blocked_skip_reason(SKIP_BLOCKED_BY_OPEN_DEPENDENCY, blockers) == reason

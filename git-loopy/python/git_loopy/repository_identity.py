@@ -25,7 +25,7 @@ repository must therefore produce one string.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from urllib.parse import urlsplit
 
 #: One path segment of a GitHub ``owner/repo``, restricted to what
@@ -96,14 +96,25 @@ def _strip_git_suffix(name: str) -> str:
 
 
 #: How ``gh`` ranks remotes when choosing its default repository; unnamed
-#: remotes rank last, in the order given (cli/cli ``context/remote.go``).
+#: remotes rank last (cli/cli ``context/remote.go``).
 _GH_REMOTE_RANK: Mapping[str, int] = {"upstream": 3, "github": 2, "origin": 1}
+
+
+def _remote_host(url: str) -> str | None:
+    """The host a hosted remote URL names, lower-cased, or ``None``."""
+    candidate = url.strip()
+    if "://" in candidate:
+        split = urlsplit(candidate)
+        return split.hostname.lower() if split.hostname else None
+    match = _SCP_LIKE.match(candidate)
+    return match.group("host").lower() if match else None
 
 
 def gh_default_repository(
     remotes: Sequence[tuple[str, str]],
     gh_resolved: Mapping[str, str],
     *,
+    hosts: Collection[str] = ("github.com",),
     gh_repo: str | None = None,
 ) -> str | None:
     """Return the ``owner/repo`` a non-interactive ``gh`` reads, or ``None``.
@@ -113,31 +124,35 @@ def gh_default_repository(
     reads without a round trip:
 
     1. ``GH_REPO`` (``[HOST/]OWNER/REPO``) overrides everything;
-    2. otherwise, in rank order, the first remote ``gh repo set-default``
-       marked — ``base`` means that remote's own repository, anything else is
-       the full name it recorded;
-    3. otherwise the first hosted remote, ranked ``upstream``, ``github``,
-       ``origin``, then the rest in the order given.
+    2. only remotes on a host ``gh`` is signed in to count, ordered by name
+       as ``git remote`` lists them, then ranked ``upstream``, ``github``,
+       ``origin``, then the rest;
+    3. the first of those ``gh repo set-default`` marked wins -- ``base``
+       means that remote's own repository, anything else is the full name it
+       recorded;
+    4. otherwise the first of them.
 
-    ``remotes`` is ``(name, url)`` in config order, and ``gh_resolved`` maps a
-    remote's name to its ``remote.<name>.gh-resolved`` value. A fork clone is
-    the case this exists for: its ``origin`` is the fork, but ``gh`` reads the
-    ``upstream`` it was forked from.
+    ``remotes`` is ``(name, url)``, ``gh_resolved`` maps a remote's name to its
+    ``remote.<name>.gh-resolved`` value, and ``hosts`` is where ``gh`` is
+    signed in. A fork clone is the case this exists for: its ``origin`` is the
+    fork, but ``gh`` reads the ``upstream`` it was forked from.
     """
     if gh_repo:
         parts = [part for part in gh_repo.strip().split("/") if part]
         if len(parts) >= 2:
             return "/".join(parts[-2:])
-    hosted = [
+    signed_in = {host.lower() for host in hosts}
+    usable = [
         (name, repository)
-        for name, url in remotes
-        if (repository := repository_from_remote_url(url)) is not None
+        for name, url in sorted(remotes, key=lambda remote: remote[0])
+        if _remote_host(url) in signed_in
+        and (repository := repository_from_remote_url(url)) is not None
     ]
-    hosted.sort(key=lambda remote: -_GH_REMOTE_RANK.get(remote[0].lower(), 0))
-    for name, repository in hosted:
+    usable.sort(key=lambda remote: -_GH_REMOTE_RANK.get(remote[0].lower(), 0))
+    for name, repository in usable:
         marker = gh_resolved.get(name, "").strip()
         if marker == "base":
             return repository
         if marker:
             return marker
-    return hosted[0][1] if hosted else None
+    return usable[0][1] if usable else None

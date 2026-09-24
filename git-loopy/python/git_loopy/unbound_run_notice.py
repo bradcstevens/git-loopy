@@ -20,8 +20,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from git_loopy.readiness import SKIP_BLOCKED_BY_OPEN_DEPENDENCY
+from git_loopy.readiness import blockers_from_skip_reason
 from git_loopy.wrapper import ExitReason
+
+#: Said when the trace recorded no collection, so nothing can be counted.
+_MEMBERSHIP_UNKNOWN: Final[str] = (
+    "The trace records no Pool membership, so it may not name every "
+    "candidate; check the tracker."
+)
 
 #: The only issue source whose Pool is defined by the ``ready-for-agent`` label.
 _LABELLED_SOURCE: Final[str] = "github"
@@ -64,9 +70,11 @@ class _Tally:
     repository: str | None
     bound_work: bool = False
     issue_source: str | None = None
-    #: The latest collection, plus any member a later Membership read added --
-    #: which never retires one (ADR-0042).
-    members: set[IssueKey] = field(default_factory=set)
+    #: The Pool as the latest ``wrapper.afk_ready.collected`` recorded it, or
+    #: ``None`` when the trace recorded none. A Membership read is never read
+    #: as the Pool: it lists only candidates eligible to take, and is
+    #: authority for nothing (ADR-0042).
+    members: set[IssueKey] | None = None
     skips: dict[IssueKey, str] = field(default_factory=dict)
     exclusions: dict[IssueKey, str] = field(default_factory=dict)
     outcome: str | None = None
@@ -78,14 +86,12 @@ class _Tally:
             self.issue_source = source if isinstance(source, str) else None
         elif kind in _BOUND_WORK_EVENTS:
             self.bound_work = True
-        elif kind in ("wrapper.afk_ready.collected", "wrapper.pool.refreshed"):
+        elif kind == "wrapper.afk_ready.collected":
             issues = event.get("issues")
             if isinstance(issues, list):
-                keys = {key for key in map(_issue_key, issues) if key is not None}
-                if kind == "wrapper.afk_ready.collected":
-                    self.members = keys
-                else:
-                    self.members |= keys
+                self.members = {
+                    key for key in map(_issue_key, issues) if key is not None
+                }
         elif kind in ("wrapper.pickup.skipped", "wrapper.pool.excluded"):
             # A candidate refused or excluded in several Iterations is one.
             issue = _issue_key(event.get("issue"))
@@ -99,7 +105,11 @@ class _Tally:
 
     def pool(self) -> list[IssueKey]:
         """The Pool's last recorded membership plus any refusal it did not list."""
-        return sorted(self.members | set(self.skips), key=_issue_order)
+        return sorted((self.members or set()) | set(self.skips), key=_issue_order)
+
+    def counted(self, pool: list[IssueKey]) -> int:
+        """How many candidates the notice may claim: none without a collection."""
+        return len(pool) if self.members is not None else 0
 
     def candidates(self, count: int, singular: str, plural: str) -> str:
         """'all N ready-for-agent issues …', in the right number.
@@ -134,7 +144,7 @@ class _Tally:
     def all_blocked(self) -> list[str]:
         pool = self.pool()
         lines = [
-            f"The Run ended because {self.candidates(len(pool), 'waits', 'wait')} "
+            f"The Run ended because {self.candidates(self.counted(pool), 'waits', 'wait')} "
             "on open blockers."
         ]
         blockers = self._blockers(pool)
@@ -148,6 +158,9 @@ class _Tally:
                 f"{label}: {', '.join(blockers)} — resolve them, or label other "
                 "work ready-for-agent."
             )
+        if self.members is None:
+            lines.append(_MEMBERSHIP_UNKNOWN)
+            return lines
         unrecorded = sum(1 for issue in pool if issue not in self.skips)
         if unrecorded:
             lines.append(
@@ -158,11 +171,21 @@ class _Tally:
 
     def all_skipped(self) -> list[str]:
         pool = self.pool()
-        reasons = (self.skips.get(issue, "unrecorded") for issue in pool)
-        return [
-            f"The Run ended because {self.candidates(len(pool), 'was', 'were')} "
-            f"skipped: {_reason_counts(reasons)}."
-        ]
+        reasons = [self.skips.get(issue, "unrecorded") for issue in pool]
+        if self.members is not None:
+            return [
+                f"The Run ended because {self.candidates(len(pool), 'was', 'were')} "
+                f"skipped: {_reason_counts(reasons)}."
+            ]
+        every = self.candidates(0, "was", "were")
+        if not self.skips:
+            first = f"The Run ended because {every} skipped."
+        else:
+            first = (
+                f"The Run ended because {every} skipped; recorded skips: "
+                f"{_reason_counts(reasons)}."
+            )
+        return [first, _MEMBERSHIP_UNKNOWN]
 
     def _blockers(self, pool: list[IssueKey]) -> list[str]:
         """The blockers an operator has to resolve before anything can move.
@@ -173,15 +196,11 @@ class _Tally:
         without the repository no blocker can be proven to be a member, and
         every one is named rather than a real root silently dropped.
         """
-        prefix = f"{SKIP_BLOCKED_BY_OPEN_DEPENDENCY}:"
         members = set(pool)
         named: list[str] = []
         for issue in sorted(self.skips, key=_issue_order):
-            reason = self.skips[issue]
-            if not reason.startswith(prefix):
-                continue
-            for blocker in (part.strip() for part in reason[len(prefix):].split(",")):
-                if blocker and not self._in_pool(blocker, members) and blocker not in named:
+            for blocker in blockers_from_skip_reason(self.skips[issue]):
+                if not self._in_pool(blocker, members) and blocker not in named:
                     named.append(blocker)
         return named
 

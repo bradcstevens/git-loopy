@@ -88,8 +88,8 @@ controls (--render, --attach):
   q, ctrl-c                 hand the terminal back and stop the client
 
 A Run that ends having bound no issue keeps the Dashboard up with a notice
-saying why, until q. GIT_LOOPY_REPOSITORY names the Run's owner/repo, so that
-notice names only the blockers outside its Pool.
+saying why, until q. The launching client sets GIT_LOOPY_TUI_REPOSITORY to the
+Run's owner/repo, so that notice names only the blockers outside its Pool.
 ";
 
 /// Malformed usage, matching the family's locked CLI framing.
@@ -651,8 +651,9 @@ fn dashboard_session(options: &Options, capabilities: TerminalCapabilities) -> D
     session
 }
 
-/// The Run's `owner/repo`, as the launching client resolved it.
-const REPOSITORY_ENV: &str = "GIT_LOOPY_REPOSITORY";
+/// The Run's `owner/repo`, as the launching client resolved it: a private
+/// launcher-to-helper channel, not operator Config (§11).
+const REPOSITORY_ENV: &str = "GIT_LOOPY_TUI_REPOSITORY";
 
 /// The line a held Dashboard adds to an Unbound-Run notice.
 const UNBOUND_HOLD_HINT: &str = "Nothing more will run — press q to close the Dashboard.";

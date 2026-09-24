@@ -632,6 +632,16 @@ def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_gh_repository(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolve the Run's repository from each test's clone, not this host's gh."""
+    monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path_factory.mktemp("gh-config")))
+    for name in ("GH_REPO", "GH_HOST", "GIT_LOOPY_TUI_REPOSITORY"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _unbound_fixture_case(case_id: str) -> dict[str, Any]:
     fixture = json.loads(
         (Path(__file__).parents[2] / "conformance" / "unbound-run-notice.json").read_text(
@@ -746,7 +756,7 @@ def test_the_dashboard_client_says_why_an_unbound_run_ended(
         f"#!{sys.executable}\n"
         "import json, os, sys\n"
         f"open({str(argv_path)!r}, 'w').write(json.dumps({{'argv': sys.argv[1:], "
-        "'repository': os.environ.get('GIT_LOOPY_REPOSITORY'), "
+        "'repository': os.environ.get('GIT_LOOPY_TUI_REPOSITORY'), "
         "'tz': os.environ.get('TZ', '<unset>')}))\n"
         "raise SystemExit(0)\n",
         encoding="utf-8",
@@ -820,3 +830,32 @@ def test_a_fork_clone_reads_the_repository_gh_reads_not_origin(tmp_path: Path) -
         check=True,
     )
     assert run_sidecar._run_repository(root) == "someone/git-loopy"
+
+
+def test_a_stray_inherited_repository_never_reaches_the_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The channel carries exactly what this client resolved, or nothing."""
+    from git_loopy import run_sidecar
+
+    monkeypatch.setenv(run_sidecar.HELPER_REPOSITORY_ENV, "stray/value")
+    assert run_sidecar.HELPER_REPOSITORY_ENV not in run_sidecar._helper_environment(None)
+    resolved = run_sidecar._helper_environment("o/r")
+    assert resolved[run_sidecar.HELPER_REPOSITORY_ENV] == "o/r"
+
+
+def test_gh_signed_in_hosts_are_read_from_its_own_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy import run_sidecar
+
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    config = tmp_path / "gh"
+    config.mkdir()
+    (config / "hosts.yml").write_text(
+        "github.com:\n    user: someone\nghe.example.com:\n    user: other\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GH_CONFIG_DIR", str(config))
+    assert run_sidecar._gh_signed_in_hosts() == ("ghe.example.com", "github.com")
