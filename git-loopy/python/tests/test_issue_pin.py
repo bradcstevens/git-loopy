@@ -136,9 +136,6 @@ class TestParallelSafety:
 
         assert refuse_pin(issue, afk_exclusion=None) is None
 
-    def test_no_refusal_reason_is_about_parallel_safety(self) -> None:
-        assert all("parallel" not in reason for reason in PIN_REFUSALS)
-
 
 class TestPrecedence:
     """One refusal, and it is the one an operator should act on first."""

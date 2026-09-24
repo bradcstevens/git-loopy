@@ -1044,9 +1044,8 @@ full list.
 issue `N` instead of the head of the selection order, and every other issue
 keeps its place in that order behind it. The pin **bypasses order and nothing
 else** — a pinned issue still has to be eligible, and a pin that is closed,
-missing, unreadable, lacks `ready-for-agent`, fails the AFK-ready body
-discriminator, or lacks `parallel-safe` **fails the
-invocation** rather than falling back to normal order, because silently working
+missing, unreadable, lacks `ready-for-agent`, or fails the AFK-ready body
+discriminator **fails the invocation** rather than falling back to normal order, because silently working
 a different issue than the one you named is worse than stopping. The refusal
 names what is wrong, down to the specific missing `##` section. It is
 deliberately a flag and not a label or an env var: those are globally scoped and

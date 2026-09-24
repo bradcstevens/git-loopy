@@ -70,7 +70,9 @@ is after selection. Sorting on it would sort on nothing.
   invocation rather than falling back, because silently working a different issue than the one
   named is worse than stopping.
   Under Rolling dispatch the pin goes first there too, including ahead of **Lanes** (#430):
-  a pin without `parallel-safe` takes serial ownership at Run start, before any Lane is
+  a Ready pin without `parallel-safe` takes serial ownership at Run start, before any Lane is
   reserved, and Lanes open only after its serial Iteration ends; a `parallel-safe` pin takes
-  the first Lane reservation. After the pin's turn the oldest-first order applies. Lacking
+  the first Lane reservation. The pin gets that one turn: after it, the oldest-first order
+  applies, including to the pinned issue if it is still open. A Blocked pin holds no Lane
+  back; it stays at the head and is worked the first time a Pickup can bind it. Lacking
   `parallel-safe` is never a reason to refuse a pin.

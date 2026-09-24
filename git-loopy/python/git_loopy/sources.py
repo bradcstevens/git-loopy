@@ -817,6 +817,15 @@ class RepositoryVisibilityReporting(Protocol):
         ...
 
 
+@runtime_checkable
+class PinSpending(Protocol):
+    """A source whose reads promote an invocation's **Pin** until it is spent."""
+
+    def spend_pin(self) -> None:
+        """Stop promoting the Pin: it has had its one turn this Run (#430)."""
+        ...
+
+
 # --------------------------------------------------------------------------- #
 # GitHub backend                                                              #
 # --------------------------------------------------------------------------- #
@@ -865,14 +874,16 @@ class GitHubIssueSource:
                 Two things follow from it, and they are deliberately separate:
                 :meth:`preflight` refuses the whole invocation when the pinned
                 issue is not eligible, and every read that decides sequence
-                promotes it to the head. The second is only ever reached once
-                the first has passed. Neither asks for ``parallel-safe``: a
-                serial-required Pin is worked on the serial path (#430).
+                promotes it to the head until :meth:`spend_pin`. The second is
+                only ever reached once the first has passed. Neither asks for
+                ``parallel-safe``: a serial-required Pin is worked on the serial
+                path (#430).
         """
         self._diag = diag
         self._gh = gh
         self._include_prs = include_prs
         self._pin = pin
+        self._pin_spent = False
         self._repository: gh_module.Repo | None = None
         # Which (ref, defect) pairs §3.2's undated diagnostic has already named.
         # A membership refresh repeats on a backoff and a broken `created_at`
@@ -885,6 +896,20 @@ class GitHubIssueSource:
     def repository_visibility(self) -> str | None:
         """The existing preflight's visibility fact, or unknown before it runs."""
         return None if self._repository is None else self._repository.visibility
+
+    def spend_pin(self) -> None:
+        """Stop promoting the Pin once it has had its turn (#430).
+
+        The Pin lasts one turn, not for as long as its issue stays open: an
+        issue that Strikes under its Pin rejoins the §3.2 order like any other,
+        rather than being handed the head of every later read.
+        """
+        self._pin_spent = True
+
+    @property
+    def _ordering_pin(self) -> int | None:
+        """The Pin reads still promote, or ``None`` once it is spent."""
+        return None if self._pin_spent else self._pin
 
     def rate_limited_reads(self) -> int | None:
         """How many reads GitHub throttled this Run, or ``None`` if unknown.
@@ -1061,7 +1086,9 @@ class GitHubIssueSource:
         # rather than an arbitrary subset of it; and every later consumer — the
         # prompt, the serial Pickup, the completion whitelist — reads one
         # sequence it did not have to re-derive.
-        ordered, undated = in_selection_order(ready_candidates, pin=self._pin)
+        ordered, undated = in_selection_order(
+            ready_candidates, pin=self._ordering_pin
+        )
         self._report_undated(undated)
 
         items: list[AfkReadyItem] = []
@@ -1150,7 +1177,7 @@ class GitHubIssueSource:
                     issue.body or "", title=issue.title, labels=issue.labels
                 )
             ],
-            pin=self._pin,
+            pin=self._ordering_pin,
         )
         self._report_undated(undated)
         candidates = tuple(
