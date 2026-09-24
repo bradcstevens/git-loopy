@@ -1836,10 +1836,11 @@ retains the legacy path for one Run, and non-local absence and shell/PowerShell
 stay on the deferred legacy path. 2.10 also adds the optional
 `effort_configurable` Pickup fact, Static execution authorized by a remote
 host's own listing (§14.3), and exact-dimension Route publication with its
-migration and capacity refresh (§14.5). The `routing-resolution.json`,
-`event-schema.json` and `dashboard-insights.json` fixtures these changes affect
-declare that provenance at 2.10; `discriminator.json` reached 2.10 separately
-with the Wayfinder-map exclusion (§3.1). Event wire compatibility remains 1.2,
+migration and capacity refresh (§14.5). `routing-resolution.json` declares
+that provenance at 2.10; `event-schema.json` and `dashboard-insights.json`
+carried it at 2.10 and have since advanced to 2.11 with the Run-start issue
+source (§12). `discriminator.json` reached 2.10 separately with the
+Wayfinder-map exclusion (§3.1). Event wire compatibility remains 1.2,
 and historical streams' interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the
