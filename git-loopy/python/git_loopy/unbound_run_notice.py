@@ -154,10 +154,13 @@ class _Tally:
                 if self.repository is not None
                 else "Open blockers they wait on"
             )
-            lines.append(
-                f"{label}: {', '.join(blockers)} — resolve them, or label other "
-                "work ready-for-agent."
+            # Only the github source's candidates carry the label (§12).
+            remedy = (
+                "resolve them, or label other work ready-for-agent"
+                if self.issue_source == _LABELLED_SOURCE
+                else "resolve them"
             )
+            lines.append(f"{label}: {', '.join(blockers)} — {remedy}.")
         if self.members is None:
             lines.append(_MEMBERSHIP_UNKNOWN)
             return lines

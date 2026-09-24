@@ -148,10 +148,13 @@ impl UnboundRunTally {
             } else {
                 "Open blockers they wait on"
             };
-            lines.push(format!(
-                "{label}: {} — resolve them, or label other work ready-for-agent.",
-                blockers.join(", ")
-            ));
+            // Only the github source's candidates carry the label (§12).
+            let remedy = if self.issue_source.as_deref() == Some(LABELLED_SOURCE) {
+                "resolve them, or label other work ready-for-agent"
+            } else {
+                "resolve them"
+            };
+            lines.push(format!("{label}: {} — {remedy}.", blockers.join(", ")));
         }
         if self.members.is_none() {
             lines.push(MEMBERSHIP_UNKNOWN.to_string());
