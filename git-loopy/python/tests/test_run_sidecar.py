@@ -859,3 +859,48 @@ def test_gh_signed_in_hosts_are_read_from_its_own_config(
     )
     monkeypatch.setenv("GH_CONFIG_DIR", str(config))
     assert run_sidecar._gh_signed_in_hosts() == ("ghe.example.com", "github.com")
+
+
+def test_an_undecodable_remote_resolves_no_repository_and_the_client_still_reports(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Resolving the repository is best effort; it must never cost the Run's result."""
+    from git_loopy import run_sidecar
+
+    root = tmp_path / "clone"
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    config = root / ".git" / "config"
+    config.write_bytes(
+        config.read_bytes() + b'[remote "origin"]\n\turl = /srv/r\xe9po.git\n'
+    )
+    assert run_sidecar._run_repository(root) is None
+
+    case = _unbound_fixture_case("all_blocked_without_a_repository_names_every_blocker")
+    trace_path = tmp_path / "run.trace.jsonl"
+    _write_trace(trace_path, case["events"])
+    rc = run_sidecar.run_terminal_client(
+        repository_root=root,
+        config=_config(),
+        trace_path=trace_path,
+        control_path=run_sidecar.control_path_for_trace(trace_path),
+        child=_finished_worker(1),
+        release_version="",
+        warn=lambda _message: None,
+        diagnostics_path=tmp_path / "run.log",
+    )
+    assert rc == 1
+    assert case["notice"][0] in capsys.readouterr().err
+
+
+def test_an_undecodable_gh_hosts_file_falls_back_to_github(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy import run_sidecar
+
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    config = tmp_path / "gh"
+    config.mkdir()
+    (config / "hosts.yml").write_bytes(b"gh\xe9.example.com:\n    user: x\n")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(config))
+    assert run_sidecar._gh_signed_in_hosts(), "an unreadable hosts file resolves to some host"

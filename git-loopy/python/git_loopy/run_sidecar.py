@@ -585,7 +585,10 @@ def run_terminal_client(
     def owner_alive() -> bool:
         return child.poll() is None
 
-    repository = _run_repository(repository_root)
+    try:
+        repository = _run_repository(repository_root)
+    except Exception:  # noqa: BLE001 - best effort; never costs the Run's result (ADR-0058)
+        repository = None
 
     helper: Path | None = None
     if not release_version:
@@ -700,7 +703,7 @@ def _gh_signed_in_hosts() -> tuple[str, ...]:
     else:
         config_dir = Path.home() / ".config" / "gh"
     try:
-        text = (config_dir / "hosts.yml").read_text(encoding="utf-8")
+        text = (config_dir / "hosts.yml").read_text(encoding="utf-8", errors="replace")
     except OSError:
         text = ""
     for line in text.splitlines():
@@ -731,7 +734,10 @@ def _run_repository(repository_root: Path) -> str | None:
                 r"^remote\..*\.(url|gh-resolved)$",
             ],
             capture_output=True,
-            text=True,
+            # Decoded defensively, as git.py decodes: a remote URL that is not
+            # UTF-8 names no hosted repository, which is an answer, not a fault.
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except OSError:
