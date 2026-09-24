@@ -25,7 +25,10 @@ from git_loopy.static_route import RoutePolicy
 from git_loopy.ui import Renderer, RunSummary
 from git_loopy.ui.console import get_console
 from git_loopy.denomination import BilledCreditsDenomination
-from git_loopy import no_work_notice, tui_release
+from git_loopy import tui_release, unbound_run_notice
+from git_loopy.git import GitError, SubprocessGitClient
+from git_loopy.lease_lifecycle import LEASE_REMOTE
+from git_loopy.repository_identity import repository_from_remote_url
 
 __all__ = [
     "DetachedRunSpec",
@@ -484,7 +487,12 @@ def _follow_trace_with_renderer(
 
 
 def _helper_args(
-    helper: Path, trace_path: Path, control_path: Path, config: RunConfig
+    helper: Path,
+    trace_path: Path,
+    control_path: Path,
+    config: RunConfig,
+    *,
+    repository: str | None = None,
 ) -> list[str]:
     args = [
         str(helper),
@@ -493,6 +501,8 @@ def _helper_args(
         "--control",
         str(control_path),
     ]
+    if repository is not None:
+        args.extend(["--repository", repository])
     if config.issue_pin is not None:
         args.extend(["--issue", str(config.issue_pin)])
     if config.model is not None:
@@ -584,6 +594,8 @@ def run_terminal_client(
     def owner_alive() -> bool:
         return child.poll() is None
 
+    repository = _run_repository(repository_root)
+
     helper: Path | None = None
     if not release_version:
         warn(
@@ -610,7 +622,9 @@ def run_terminal_client(
         else:
             try:
                 result = subprocess.run(  # noqa: S603 - the helper path was validated
-                    _helper_args(helper, trace_path, control_path, config),
+                    _helper_args(
+                        helper, trace_path, control_path, config, repository=repository
+                    ),
                     stdin=subprocess.DEVNULL,
                     check=False,
                 )
@@ -631,7 +645,7 @@ def run_terminal_client(
                         watched=_WatchOutcome(traced=True, run_ended=False),
                         warn=warn,
                     )
-                    _print_no_work_notice(trace_path)
+                    _print_unbound_run_notice(trace_path, repository)
                     return status
                 warn(
                     f"git-loopy-tui exited {result.returncode}; "
@@ -649,19 +663,34 @@ def run_terminal_client(
         watched=watched,
         warn=warn,
     )
-    _print_no_work_notice(trace_path)
+    _print_unbound_run_notice(trace_path, repository)
     return status
 
 
-def _print_no_work_notice(trace_path: Path) -> None:
-    """Say why a Run that found nothing it could work ended (#642).
+def _run_repository(repository_root: Path) -> str | None:
+    """The Run's ``owner/repo``, resolved as a **Lease** resolves it (ADR-0033).
+
+    A local config read of the clone's remote, never a round trip. It is what
+    lets an **Unbound-Run notice** tell a blocker inside the Pool from one
+    outside it; without it every blocker is named, which is noisier but never
+    drops a real one, so any failure to resolve it is simply ``None``.
+    """
+    try:
+        url = SubprocessGitClient(repository_root).remote_url(LEASE_REMOTE)
+    except (GitError, OSError):
+        return None
+    return repository_from_remote_url(url) if url else None
+
+
+def _print_unbound_run_notice(trace_path: Path, repository: str | None) -> None:
+    """Say why an **Unbound Run** ended (#642).
 
     Such a Run ends seconds after it starts, and its exit status alone reads as
     a crash. Printed after the Dashboard or line printer has returned, so it is
     the last thing on the terminal the operator gets back. A Run still working
     -- a Detach -- has no ``wrapper.run.end`` yet, so it earns nothing here.
     """
-    lines = no_work_notice.trace_notice(trace_path)
+    lines = unbound_run_notice.trace_notice(trace_path, repository=repository)
     if not lines:
         return
     for line in lines:

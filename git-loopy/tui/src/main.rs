@@ -68,6 +68,8 @@ options:
       --issue REF               drill in on this issue number or path
       --model NAME              the configured model for this Run
       --reasoning-effort LEVEL  the configured reasoning effort for this Run
+      --repository OWNER/REPO   the Run's repository, so a Run that ends having
+                                bound nothing names only blockers outside its Pool
       --schema-version          print the compatibility probe as JSON and exit
       --version                 print the version and exit
   -h, --help                    print this help and exit
@@ -86,6 +88,9 @@ controls (--render, --attach):
   click it, or a            collapse the band to its header, or restore it
   shift+up, shift+down      size it a row at a time, with no mouse at all
   q, ctrl-c                 hand the terminal back and stop the client
+
+A Run that ends having bound no issue keeps the Dashboard up with a notice
+saying why, until q.
 ";
 
 /// Malformed usage, matching the family's locked CLI framing.
@@ -102,6 +107,7 @@ struct Options {
     inputs: RunInputs,
     render: bool,
     attach: Option<AttachPaths>,
+    repository: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,6 +175,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
     let mut render = false;
     let mut attach = None;
     let mut control = None;
+    let mut repository = None;
 
     let mut arguments = arguments.peekable();
     while let Some(argument) = arguments.next() {
@@ -216,6 +223,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
             "--issue" => drill_in = Some(IssueRef::parse(&value()?)),
             "--model" => model = Some(value()?),
             "--reasoning-effort" => reasoning_effort = Some(value()?),
+            "--repository" => repository = Some(value()?),
             other => return Err(format!("unrecognized option: {other}")),
         }
     }
@@ -259,6 +267,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
         },
         render,
         attach,
+        repository,
     })))
 }
 
@@ -626,8 +635,12 @@ fn dashboard_session(options: &Options, capabilities: TerminalCapabilities) -> D
     )
     .with_capabilities(capabilities)
     // Both callers own the controlling terminal's keyboard, so the quit a held
-    // Dashboard waits for can always arrive (#642).
-    .hold_on_no_work();
+    // Dashboard waits for can always arrive (#642). This binary names the key
+    // in the hint because it is what maps the key, in `intent`.
+    .hold_when_unbound(UNBOUND_HOLD_HINT);
+    if let Some(repository) = &options.repository {
+        session = session.with_repository(repository.clone());
+    }
     if let Some(monotonic) = options.render_at_monotonic {
         session.render_at_monotonic(monotonic);
     }
@@ -636,6 +649,9 @@ fn dashboard_session(options: &Options, capabilities: TerminalCapabilities) -> D
     }
     session
 }
+
+/// The line a held Dashboard adds to an Unbound-Run notice.
+const UNBOUND_HOLD_HINT: &str = "Nothing more will run — press q to close the Dashboard.";
 
 /// The bounded buffer's depth, in pending inputs.
 ///

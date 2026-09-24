@@ -247,6 +247,8 @@ pub enum EventPayload {
     PickupBound(Pickup),
     /// `wrapper.pickup.skipped`
     PickupSkipped(Pickup),
+    /// `wrapper.pool.excluded`
+    PoolExcluded(PoolExcluded),
     /// `wrapper.routing.delivery`
     RoutingResolved(RoutingResolved),
     RoutingDelivery(RoutingDelivery),
@@ -316,6 +318,9 @@ pub struct RunStart {
     /// The selected Execution host, declared once for the Run.
     #[serde(default)]
     pub execution_host: Option<ExecutionHostDeclaration>,
+    /// Where the Pool comes from (`github`, `prds`), when the Run declares it.
+    #[serde(default)]
+    pub issue_source: Option<String>,
 }
 
 /// The Execution host facts announced on `wrapper.run.start`.
@@ -407,6 +412,19 @@ pub struct AfkReadyCollected {
     /// Pool membership in source order.
     #[serde(default)]
     pub issues: Vec<IssueRef>,
+}
+
+/// One `ready-for-agent` candidate the AFK-ready discriminator rejected.
+///
+/// Only `issue` is required, for the same reason a [`Pickup`] requires only
+/// it: an exclusion naming no issue is unattributable.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PoolExcluded {
+    /// The rejected candidate.
+    pub issue: IssueRef,
+    /// Why it was rejected, from the closed `wrapper.pool.excluded` set.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// One non-authoritative Membership read during a Parallel Run.
@@ -1129,6 +1147,10 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         },
         "wrapper.pickup.skipped" => match serde_json::from_value(value.clone()) {
             Ok(pickup) => EventPayload::PickupSkipped(pickup),
+            Err(_) => EventPayload::Other,
+        },
+        "wrapper.pool.excluded" => match serde_json::from_value(value.clone()) {
+            Ok(excluded) => EventPayload::PoolExcluded(excluded),
             Err(_) => EventPayload::Other,
         },
         // Provenance is only attributable when it names an issue; one that

@@ -1132,17 +1132,25 @@ process wait for dependency closure rather than repair the Pool. Like an All-ski
 claim about the *work*, so a single **Unresolved readiness** refusal outranks it.
 _Avoid_: all-skipped run, empty pool, readiness-unprovable.
 
-**No-work notice**:
-The few lines that tell an operator why a **Run** ended having found nothing it could work.
-Only a Run that ended `empty_pool`, as an **All-blocked Run**, or as an **All-skipped Run**,
-without ever binding, activating or contributing to an issue, earns one (#642). It names the
-root blockers outside the **Pool**, or counts each **Pickup skip** kind once per candidate. The
-**Dashboard** holds with it drawn until the operator quits, and the attach client prints it
-once the Dashboard returns. It exists because such a Run ends seconds after it starts, and an
-empty Queue that closes unexplained reads as a crash. It is presentation, not a Wrapper-contract
-decision: the exit status and reason are unchanged. A Run that bound work and then ran out
-earns none.
-_Avoid_: empty-run warning, idle notice.
+**Unbound Run**:
+A **Run** that ends without ever binding, activating or contributing to an issue: its **Pool**
+was empty (`empty_pool`), or it is an **All-blocked Run** or an **All-skipped Run** that took
+nothing. The term spans all three because each ends seconds after it starts. They still differ
+in what they claim about the repository: "there is nothing to do" is not "I could not take any
+of what there is". A Run that bound work and *then* ran out is not unbound.
+_Avoid_: no-work run, empty run, idle run.
+
+**Unbound-Run notice**:
+The few lines that tell an operator why an **Unbound Run** ended (#642). Each outcome keeps its
+own reason. An empty Pool names the exclusions that emptied it, or says nothing is labelled.
+An all-blocked Pool names the blockers outside the Pool. An all-skipped Pool counts each
+**Pickup skip** kind once per candidate. Telling a blocker inside the Pool from one outside it
+needs the Run's `owner/repo`, which the client resolves the way a **Lease** does. Without it,
+every blocker is named rather than risk dropping a real one. The **Dashboard** holds with the
+notice drawn until the operator quits, and the attach client prints it once the Dashboard
+returns. It is presentation, not a Wrapper-contract decision: exit status and reason are
+unchanged.
+_Avoid_: no-work notice, idle notice.
 
 **Run readback**:
 The block a **Run** prints at start and publishes on its own start Event, stating **Config** as

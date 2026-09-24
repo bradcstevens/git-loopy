@@ -628,14 +628,13 @@ def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
 
 
 # ---------------------------------------------------------------------------
-# A Run that found nothing it could work says so after the client returns
-# (#642)
+# An Unbound Run says why it ended after the client returns (#642)
 # ---------------------------------------------------------------------------
 
 
-def _no_work_fixture_case(case_id: str) -> dict[str, Any]:
+def _unbound_fixture_case(case_id: str) -> dict[str, Any]:
     fixture = json.loads(
-        (Path(__file__).parents[2] / "conformance" / "no-work-notice.json").read_text(
+        (Path(__file__).parents[2] / "conformance" / "unbound-run-notice.json").read_text(
             encoding="utf-8"
         )
     )
@@ -648,18 +647,35 @@ def _write_trace(trace_path: Path, events: list[dict[str, Any]]) -> None:
     )
 
 
-def test_the_line_printer_client_says_why_a_run_found_no_workable_issues(
+def _clone_of(root: Path, repository: str) -> Path:
+    """A clone whose ``origin`` names ``repository``, as a Lease reads it."""
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "remote", "add", "origin",
+         f"https://github.com/{repository}.git"],
+        check=True,
+    )
+    return root
+
+
+def test_the_line_printer_client_says_why_an_unbound_run_ended(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The exit status alone read as a crash; the notice names the blocker."""
+    """The exit status alone read as a crash; the notice names the root blocker.
+
+    The client resolves the Run's repository from ``origin``, so a blocker that
+    is itself a Pool member is left out of the roots, exactly as the fixture
+    case with that repository says.
+    """
     from git_loopy import run_sidecar
 
-    case = _no_work_fixture_case("all_blocked_chain_names_only_the_roots_outside_the_pool")
+    case = _unbound_fixture_case("all_blocked_chain_names_only_the_roots_outside_the_pool")
+    root = _clone_of(tmp_path / "clone", case["repository"])
     trace_path = tmp_path / "run.trace.jsonl"
     _write_trace(trace_path, case["events"])
 
     rc = run_sidecar.run_terminal_client(
-        repository_root=tmp_path,
+        repository_root=root,
         config=_config(),
         trace_path=trace_path,
         control_path=run_sidecar.control_path_for_trace(trace_path),
@@ -672,15 +688,41 @@ def test_the_line_printer_client_says_why_a_run_found_no_workable_issues(
     assert rc == 1, "the notice explains the exit; it does not change it"
     err = capsys.readouterr().err
     for line in case["notice"]:
-        assert line in err
+        assert f"git-loopy: {line}" in err
     assert err.count("No workable issues") == 1
+
+
+def test_a_clone_with_no_resolvable_repository_names_every_blocker(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No repository proves no blocker is a member, so none is dropped."""
+    from git_loopy import run_sidecar
+
+    case = _unbound_fixture_case("all_blocked_without_a_repository_names_every_blocker")
+    trace_path = tmp_path / "run.trace.jsonl"
+    _write_trace(trace_path, case["events"])
+
+    run_sidecar.run_terminal_client(
+        repository_root=tmp_path,  # not a clone: no origin to resolve
+        config=_config(),
+        trace_path=trace_path,
+        control_path=run_sidecar.control_path_for_trace(trace_path),
+        child=_finished_worker(1),
+        release_version="",
+        warn=lambda _message: None,
+        diagnostics_path=tmp_path / "run.log",
+    )
+
+    err = capsys.readouterr().err
+    for line in case["notice"]:
+        assert f"git-loopy: {line}" in err
 
 
 @pytest.mark.skipif(
     not advisory_locking_available(),
     reason="this platform has no flock advisory locks",
 )
-def test_the_dashboard_client_says_why_a_run_found_no_workable_issues(
+def test_the_dashboard_client_says_why_an_unbound_run_ended(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -689,15 +731,24 @@ def test_the_dashboard_client_says_why_a_run_found_no_workable_issues(
 
     The helper leaving with 0 is the Dashboard closing, which used to be the
     last thing the operator saw. The notice now follows it onto the terminal
-    the operator gets back.
+    the operator gets back, and the helper is told the repository so its own
+    held notice names the same roots.
     """
     from git_loopy import run_sidecar, tui_release
 
-    case = _no_work_fixture_case("empty_pool_says_nothing_is_labelled")
+    case = _unbound_fixture_case("empty_pool_on_github_says_nothing_is_labelled")
+    root = _clone_of(tmp_path / "clone", case["repository"])
     trace_path = tmp_path / "run.trace.jsonl"
     _write_trace(trace_path, case["events"])
+    argv_path = tmp_path / "helper-argv.json"
     helper = tmp_path / "fake-dashboard.py"
-    helper.write_text("#!/usr/bin/env python3\nraise SystemExit(0)\n", encoding="utf-8")
+    helper.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        f"open({str(argv_path)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
     helper.chmod(0o755)
     monkeypatch.setattr(
         tui_release, "resolve_runtime_helper", lambda *_args, **_kwargs: helper
@@ -705,7 +756,7 @@ def test_the_dashboard_client_says_why_a_run_found_no_workable_issues(
     monkeypatch.setattr(run_sidecar, "wait_for_run_control", lambda *_args: True)
 
     rc = run_sidecar.run_terminal_client(
-        repository_root=tmp_path,
+        repository_root=root,
         config=_config(),
         trace_path=trace_path,
         control_path=run_sidecar.control_path_for_trace(trace_path),
@@ -716,17 +767,20 @@ def test_the_dashboard_client_says_why_a_run_found_no_workable_issues(
     )
 
     assert rc == 0
+    arguments = json.loads(argv_path.read_text(encoding="utf-8"))
+    position = arguments.index("--repository")
+    assert arguments[position + 1] == case["repository"]
     err = capsys.readouterr().err
     for line in case["notice"]:
-        assert line in err
+        assert f"git-loopy: {line}" in err
 
 
-def test_a_run_that_did_work_ends_without_a_no_work_notice(
+def test_a_run_that_bound_work_ends_without_an_unbound_run_notice(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from git_loopy import run_sidecar
 
-    case = _no_work_fixture_case("a_run_that_bound_work_then_ran_out_is_not_a_no_work_run")
+    case = _unbound_fixture_case("a_run_that_bound_work_then_ran_out_is_not_an_unbound_run")
     trace_path = tmp_path / "run.trace.jsonl"
     _write_trace(trace_path, case["events"])
 

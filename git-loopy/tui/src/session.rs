@@ -16,7 +16,7 @@ use crate::band::ActivityBand;
 use crate::event::{Event, IssueRef};
 use crate::input::{Input, Pointer, PointerAction};
 use crate::navigation::{Cursor, Flow, Key, LogPosition, Screen};
-use crate::notice::NoWorkTally;
+use crate::notice::UnboundRunTally;
 use crate::render::{
     activity_ceiling, activity_window_areas, dashboard_bands, drill_in_bands, log_height,
     DashboardBands,
@@ -53,7 +53,7 @@ pub struct DashboardFrame {
     pub capabilities: TerminalCapabilities,
     /// What the helper could not make sense of.
     pub diagnostics: Diagnostics,
-    /// Why a Run that found nothing it could work ended, when it did (#642).
+    /// The **Unbound-Run notice**, when the Run ended without binding (#642).
     pub notice: Option<Vec<String>>,
 }
 
@@ -145,10 +145,11 @@ pub struct DashboardSession {
     /// The monotonic reading of that instant, when the Run declares one.
     last_monotonic: Option<f64>,
     diagnostics: Diagnostics,
-    /// Whether this Run ever had work, and why it ended if it did not.
-    no_work: NoWorkTally,
-    /// Keep the Dashboard up after a no-work Run until the operator quits.
-    hold_on_no_work: bool,
+    /// Whether this Run ever bound an issue, and why it ended if not.
+    unbound: UnboundRunTally,
+    /// The line a held Dashboard adds telling the operator how to leave it;
+    /// `Some` is what holds an **Unbound Run** until the operator quits.
+    unbound_hold_hint: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -187,34 +188,41 @@ impl DashboardSession {
             last_instant: None,
             last_monotonic: None,
             diagnostics,
-            no_work: NoWorkTally::default(),
-            hold_on_no_work: false,
+            unbound: UnboundRunTally::default(),
+            unbound_hold_hint: None,
         }
     }
 
-    /// Keep the Dashboard up when the Run found nothing it could work (#642).
+    /// Keep the Dashboard up when the Run ends unbound (#642).
     ///
-    /// Such a Run ends seconds after it starts, so a Dashboard that closed with
-    /// it would flash an empty Queue and hand the terminal back unexplained.
-    /// Held, it states why and waits for the operator to quit. Opt-in, because
-    /// only a caller that owns a real keyboard can promise a quit will come.
-    pub fn hold_on_no_work(mut self) -> Self {
-        self.hold_on_no_work = true;
+    /// An **Unbound Run** ends seconds after it starts, so a Dashboard that
+    /// closed with it would flash an empty Queue and hand the terminal back
+    /// unexplained. Held, it states why and waits for the operator to quit.
+    /// Opt-in, because only a caller that owns a real keyboard can promise a
+    /// quit will come — and that caller owns the key binding, so it supplies
+    /// the `hint` that names it.
+    pub fn hold_when_unbound(mut self, hint: impl Into<String>) -> Self {
+        self.unbound_hold_hint = Some(hint.into());
         self
     }
 
-    /// Why a Run that found nothing it could work ended, when it did.
+    /// The Run's `owner/repo`, which tells a blocker inside the Pool from one
+    /// outside it. Without it every blocker a refusal names is listed.
+    pub fn with_repository(mut self, repository: impl Into<String>) -> Self {
+        self.unbound.set_repository(repository.into());
+        self
+    }
+
+    /// The **Unbound-Run notice**, when the Run ended without binding.
     pub fn notice(&self) -> Option<Vec<String>> {
-        let mut lines = self.no_work.lines()?;
-        if self.hold_on_no_work {
-            lines.push("Nothing more will run — press q to close the Dashboard.".to_string());
-        }
+        let mut lines = self.unbound.lines()?;
+        lines.extend(self.unbound_hold_hint.clone());
         Some(lines)
     }
 
     /// Whether the end of the trace should leave the Dashboard up.
     fn holds_at_end(&self) -> bool {
-        self.hold_on_no_work && self.no_work.lines().is_some()
+        self.unbound_hold_hint.is_some() && self.unbound.lines().is_some()
     }
 
     /// Declare what the terminal can render.
@@ -250,7 +258,7 @@ impl DashboardSession {
         };
         self.last_instant = event.ts.or(self.last_instant);
         self.last_monotonic = event.observed_monotonic.or(self.last_monotonic);
-        self.no_work.observe(&event);
+        self.unbound.observe(&event);
         let active = self.state.active_ref.clone();
         let log_head = first_ordinal(self.state.issue_log(self.cursor.selected()));
         let activity_head = first_ordinal(self.state.live_log());
@@ -751,7 +759,7 @@ where
                 // reports; nothing about the Run changed, but where the bands
                 // are did, and a pointer gesture is answered against that.
                 Input::Resized(columns, rows) => session.resize(columns, rows),
-                // A no-work Run holds, so the operator reads why before the
+                // An Unbound Run holds, so the operator reads why before the
                 // terminal is handed back; they quit it like any other.
                 Input::EndOfTrace => {
                     if !session.holds_at_end() {

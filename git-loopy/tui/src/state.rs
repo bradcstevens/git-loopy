@@ -848,7 +848,9 @@ impl DashboardState {
                     self.parallel.serial_required = seen;
                 }
             }
-            EventPayload::Other | EventPayload::SubagentLifecycle(_) => {}
+            EventPayload::Other
+            | EventPayload::SubagentLifecycle(_)
+            | EventPayload::PoolExcluded(_) => {}
         }
     }
 

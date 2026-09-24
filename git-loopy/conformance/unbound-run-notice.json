@@ -1,0 +1,848 @@
+{
+  "fixture_schema_version": 1,
+  "description": "The Unbound-Run notice (#642): the lines that tell an operator why a Run ended without binding any issue. Only a Run that ended with one of unbound_run_outcomes, and never bound, activated or contributed to an issue, earns one. The Rust Dashboard draws these lines over a held Dashboard and adds its caller's quit hint. The Python attach client prints them after the Dashboard or line printer returns.",
+  "inputs": {
+    "repository": "The Run's owner/repo, resolved by the client from its clone's origin remote as a Lease resolves it (ADR-0033), or null when none resolves. It is what separates a blocker inside the Pool from one outside it: skip reasons carry full owner/repo#N references, while Pool members are bare numbers. Without it no blocker can be proven inside the Pool, so every blocker is named."
+  },
+  "unbound_run_outcomes": [
+    "empty_pool",
+    "all_blocked",
+    "all_skipped"
+  ],
+  "cases": [
+    {
+      "id": "all_blocked_chain_names_only_the_roots_outside_the_pool",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            458,
+            459,
+            465
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 458,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#430"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 459,
+          "position": 2,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#458"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 465,
+          "position": 3,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#459, bradcstevens/git-loopy#458"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 3 ready-for-agent issues wait on open blockers.",
+        "Blockers outside the Pool: bradcstevens/git-loopy#430 — resolve them, or label other work ready-for-agent."
+      ]
+    },
+    {
+      "id": "all_blocked_compares_the_repository_case_insensitively",
+      "repository": "BradCStevens/Git-Loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            458,
+            459,
+            465
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 458,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#430"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 459,
+          "position": 2,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#458"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 465,
+          "position": 3,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#459, bradcstevens/git-loopy#458"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 3 ready-for-agent issues wait on open blockers.",
+        "Blockers outside the Pool: bradcstevens/git-loopy#430 — resolve them, or label other work ready-for-agent."
+      ]
+    },
+    {
+      "id": "all_blocked_cross_repository_blocker_sharing_a_candidate_number_is_a_root",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            12,
+            45
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 2,
+          "issue": 12,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#45"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 2,
+          "issue": 45,
+          "position": 2,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy-skills#12"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 2 ready-for-agent issues wait on open blockers.",
+        "Blockers outside the Pool: bradcstevens/git-loopy-skills#12 — resolve them, or label other work ready-for-agent."
+      ]
+    },
+    {
+      "id": "all_blocked_without_a_repository_names_every_blocker",
+      "repository": null,
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            458,
+            459,
+            465
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 458,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#430"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 459,
+          "position": 2,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#458"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 465,
+          "position": 3,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#459, bradcstevens/git-loopy#458"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 3 ready-for-agent issues wait on open blockers.",
+        "Open blockers they wait on: bradcstevens/git-loopy#430, bradcstevens/git-loopy#458, bradcstevens/git-loopy#459 — resolve them, or label other work ready-for-agent."
+      ]
+    },
+    {
+      "id": "all_blocked_single_candidate_with_two_roots",
+      "repository": "o/r",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            7
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 1,
+          "issue": 7,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: o/r#3, other/repo#4"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because the only ready-for-agent issue waits on open blockers.",
+        "Blockers outside the Pool: o/r#3, other/repo#4 — resolve them, or label other work ready-for-agent."
+      ]
+    },
+    {
+      "id": "all_blocked_with_every_blocker_inside_the_pool_names_no_roots",
+      "repository": "o/r",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            1,
+            2
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 2,
+          "issue": 1,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: o/r#2"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 2,
+          "issue": 2,
+          "position": 2,
+          "reason": "blocked_by_open_dependency: o/r#1"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 2 ready-for-agent issues wait on open blockers."
+      ]
+    },
+    {
+      "id": "all_blocked_rolling_dispatch_counts_members_it_recorded_no_skip_for",
+      "repository": "o/r",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.pool.refreshed",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": null,
+          "issues": [
+            3,
+            4
+          ]
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 2 ready-for-agent issues wait on open blockers.",
+        "The trace names no blocker for 2 of them; see each issue's Blocked-by list."
+      ]
+    },
+    {
+      "id": "all_skipped_counts_each_member_once_by_reason_kind",
+      "repository": "o/r",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            10,
+            11,
+            12,
+            13
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 10,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: o/r#9"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 11,
+          "position": 2,
+          "reason": "route_unavailable"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 12,
+          "position": 3,
+          "reason": "route_unavailable"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 2,
+          "considered": 3,
+          "issue": 12,
+          "position": 3,
+          "reason": "route_unavailable"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_skipped"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_skipped.",
+        "The Run ended because all 4 ready-for-agent issues were skipped: route_unavailable (2), blocked_by_open_dependency (1), unrecorded (1)."
+      ]
+    },
+    {
+      "id": "empty_pool_on_github_says_nothing_is_labelled",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": []
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "empty_pool"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended empty_pool.",
+        "The AFK-ready pool is empty: no open issue is labelled ready-for-agent."
+      ]
+    },
+    {
+      "id": "empty_pool_names_the_exclusions_that_emptied_it",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.pool.excluded",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "issue": 5,
+          "title": "Issue 5",
+          "reason": "planning_document"
+        },
+        {
+          "type": "wrapper.pool.excluded",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "issue": 6,
+          "title": "Issue 6",
+          "reason": "missing_acceptance_criteria"
+        },
+        {
+          "type": "wrapper.pool.excluded",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "issue": 7,
+          "title": "Issue 7",
+          "reason": "planning_document"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": []
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "empty_pool"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended empty_pool.",
+        "The AFK-ready pool is empty: all 3 ready-for-agent issues were excluded: planning_document (2), missing_acceptance_criteria (1)."
+      ]
+    },
+    {
+      "id": "empty_pool_on_another_source_names_that_source",
+      "repository": null,
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "prds"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "empty_pool"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended empty_pool.",
+        "The AFK-ready pool is empty: the prds issue source offered no candidate."
+      ]
+    },
+    {
+      "id": "empty_pool_from_an_undeclared_source_claims_no_label",
+      "repository": null,
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "empty_pool"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended empty_pool.",
+        "The AFK-ready pool is empty: the issue source offered no candidate."
+      ]
+    },
+    {
+      "id": "a_run_that_bound_work_then_ran_out_is_not_an_unbound_run",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.pickup.bound",
+          "ts": "2026-09-23T22:42:20.000Z",
+          "run_id": "r1",
+          "iter": 1,
+          "issue": 635,
+          "reason": "order",
+          "position": 1,
+          "considered": 1
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            458,
+            459,
+            465
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 458,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#430"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 459,
+          "position": 2,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#458"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 465,
+          "position": 3,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#459, bradcstevens/git-loopy#458"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": null
+    },
+    {
+      "id": "a_lane_contribution_is_bound_work",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.contribution.start",
+          "ts": "2026-09-23T22:42:20.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue": 635,
+          "lane_issue": 635,
+          "lane": "lane-1",
+          "contribution_id": "c1"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "empty_pool"
+        }
+      ],
+      "notice": null
+    },
+    {
+      "id": "an_activation_is_bound_work",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.issue.activated",
+          "ts": "2026-09-23T22:42:20.000Z",
+          "run_id": "r1",
+          "iter": 1,
+          "issue": 635,
+          "activated_at": "2026-09-23T22:42:20.000Z",
+          "binding_source": "pickup"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "empty_pool"
+        }
+      ],
+      "notice": null
+    },
+    {
+      "id": "any_other_outcome_carries_no_notice",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "iteration_cap"
+        }
+      ],
+      "notice": null
+    },
+    {
+      "id": "a_run_that_has_not_ended_carries_no_notice",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            458,
+            459,
+            465
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 458,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#430"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 459,
+          "position": 2,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#458"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 3,
+          "issue": 465,
+          "position": 3,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#459, bradcstevens/git-loopy#458"
+        }
+      ],
+      "notice": null
+    }
+  ]
+}

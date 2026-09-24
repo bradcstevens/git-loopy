@@ -164,32 +164,34 @@ pub fn draw_frame(frame: &mut Frame, dashboard: &DashboardFrame) {
         return;
     }
     match dashboard.screen {
-        Screen::Dashboard => {
-            draw_dashboard(frame, dashboard);
-            if let Some(notice) = &dashboard.notice {
-                draw_notice(frame, dashboard, notice);
-            }
-        }
+        Screen::Dashboard => draw_dashboard(frame, dashboard),
         Screen::DrillIn => draw_drill_in(frame, dashboard),
+    }
+    if let Some(notice) = &dashboard.notice {
+        draw_notice(frame, dashboard, notice);
     }
 }
 
-/// The widest a no-work notice is drawn, so it reads as a message box.
+/// The widest an Unbound-Run notice is drawn, so it reads as a message box.
 const NOTICE_MAX_COLUMNS: u16 = 96;
 
-/// Why a Run that found nothing it could work ended, over the Queue (#642).
+/// Why an **Unbound Run** ended, drawn over the screen (#642).
 ///
 /// Drawn over the bands rather than as a band of its own, so no pointer target
 /// moves: a drag handle hit-tested against [`dashboard_bands`] is exactly where
-/// it was. Only on the Dashboard screen — a drill-in the operator opened is the
-/// thing they asked to read.
+/// it was. On the Dashboard it sits over the Queue, which an Unbound Run leaves
+/// empty; on a drill-in it sits at the foot of the screen, so the Log the
+/// operator opened stays readable above it.
 fn draw_notice(frame: &mut Frame, dashboard: &DashboardFrame, notice: &[String]) {
     let glyphs = Glyphs::for_terminal(&dashboard.capabilities);
     let area = frame.area();
-    let target = dashboard_bands(area, &dashboard.activity_band)
-        .map(|bands| bands.queue)
-        .filter(|queue| queue.height >= 5)
-        .unwrap_or(area);
+    let target = match dashboard.screen {
+        Screen::Dashboard => dashboard_bands(area, &dashboard.activity_band)
+            .map(|bands| bands.queue)
+            .filter(|queue| queue.height >= 5)
+            .unwrap_or(area),
+        Screen::DrillIn => area,
+    };
     let width = target.width.saturating_sub(4).clamp(1, NOTICE_MAX_COLUMNS);
     let inner = usize::from(width.saturating_sub(2).max(1));
     let wrapped: usize = notice
@@ -199,9 +201,13 @@ fn draw_notice(frame: &mut Frame, dashboard: &DashboardFrame, notice: &[String])
     let height = u16::try_from(wrapped + 2)
         .unwrap_or(u16::MAX)
         .min(target.height);
+    let top = match dashboard.screen {
+        Screen::Dashboard => target.y + (target.height.saturating_sub(height)) / 2,
+        Screen::DrillIn => target.y + target.height.saturating_sub(height + 1),
+    };
     let popup = Rect::new(
         target.x + (target.width.saturating_sub(width)) / 2,
-        target.y + (target.height.saturating_sub(height)) / 2,
+        top,
         width,
         height,
     );

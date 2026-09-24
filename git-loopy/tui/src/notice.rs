@@ -1,102 +1,181 @@
-//! The operator notice for a Run that found nothing it may work (#642).
+//! The **Unbound-Run notice** (#642).
 //!
-//! A Run whose Pool is empty, or whose every candidate was refused, ends within
-//! seconds of starting. Without a word from the Dashboard that is
-//! indistinguishable from a crash: an empty Queue flashes up and the terminal
-//! is handed back. The reasons are already in the trace — each refused
-//! candidate is a `wrapper.pickup.skipped` record and the Run's own outcome is
-//! on `wrapper.run.end` — so this module folds them into the few lines an
-//! operator needs to act on, and nothing else.
+//! An **Unbound Run** ends without binding any issue: its Pool was empty, or
+//! every candidate in it was refused. It ends within seconds of starting, and
+//! without a word from the Dashboard that is indistinguishable from a crash —
+//! an empty Queue flashes up and the terminal is handed back. The reasons are
+//! already in the trace: Pool membership, each exclusion and each refusal, and
+//! the Run's own outcome. This module folds them into the few lines an operator
+//! needs to act on, and nothing else.
 //!
 //! It is presentation, not projection: the semantic [`crate::view::RunView`]
 //! the shared Conformance fixture pins is unchanged, and the notice rides on
 //! the [`crate::session::DashboardFrame`] beside the operator's position.
+//! `conformance/unbound-run-notice.json` pins its lines against Python's.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::event::{Event, EventPayload, IssueRef};
 
-/// The terminal outcomes that mean "there was nothing to work".
-const NO_WORK_OUTCOMES: [&str; 3] = ["empty_pool", "all_blocked", "all_skipped"];
+/// The terminal outcomes an **Unbound Run** can end with.
+pub const UNBOUND_RUN_OUTCOMES: [&str; 3] = ["empty_pool", "all_blocked", "all_skipped"];
 
 /// The skip reason whose detail names the open blockers.
 const BLOCKED_BY_OPEN_DEPENDENCY: &str = "blocked_by_open_dependency";
 
-/// What a Run's trace says about whether it ever had work.
+/// The only issue source whose Pool is defined by the `ready-for-agent` label.
+const LABELLED_SOURCE: &str = "github";
+
+/// What a Run's trace says about whether it ever bound an issue.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct NoWorkTally {
+pub(crate) struct UnboundRunTally {
+    /// The Run's `owner/repo`, when the caller could resolve it.
+    repository: Option<String>,
     /// Whether any issue was bound, activated, or contributed to.
     bound_work: bool,
+    /// The issue source the Run declared on its start record.
+    issue_source: Option<String>,
+    /// The latest complete Pool membership the trace recorded.
+    members: Vec<IssueRef>,
     /// The most recent refusal of each candidate, in issue order.
     skips: BTreeMap<IssueRef, String>,
+    /// The most recent exclusion of each candidate, in issue order.
+    exclusions: BTreeMap<IssueRef, String>,
     /// The Run's terminal outcome, once it has one.
     outcome: Option<String>,
 }
 
-impl NoWorkTally {
+impl UnboundRunTally {
+    /// Record the Run's `owner/repo`, which tells a blocker inside the Pool
+    /// from one outside it.
+    pub(crate) fn set_repository(&mut self, repository: String) {
+        self.repository = Some(repository);
+    }
+
     /// Fold one Event in.
     pub(crate) fn observe(&mut self, event: &Event) {
         match &event.payload {
+            EventPayload::RunStart(start) => self.issue_source.clone_from(&start.issue_source),
             EventPayload::PickupBound(_)
             | EventPayload::IssueActivated(_)
             | EventPayload::ContributionStart(_) => self.bound_work = true,
+            EventPayload::AfkReadyCollected(collected) => {
+                self.members.clone_from(&collected.issues)
+            }
+            EventPayload::PoolRefreshed(refreshed) => self.members.clone_from(&refreshed.issues),
+            // A candidate refused or excluded in several Iterations is one.
             EventPayload::PickupSkipped(pickup) => {
-                // A candidate refused in several Iterations is one candidate.
                 self.skips.insert(
                     pickup.issue.clone(),
                     pickup.reason.clone().unwrap_or_default(),
                 );
             }
-            EventPayload::RunEnd(end) => self.outcome = end.outcome.clone(),
+            EventPayload::PoolExcluded(excluded) => {
+                self.exclusions.insert(
+                    excluded.issue.clone(),
+                    excluded.reason.clone().unwrap_or_default(),
+                );
+            }
+            EventPayload::RunEnd(end) => self.outcome.clone_from(&end.outcome),
             _ => {}
         }
     }
 
-    /// The notice, when the Run ended having found nothing it could work.
+    /// The notice, when the Run ended unbound.
     ///
-    /// A Run that bound work and *then* ran out is not one of these: it did
-    /// what it was asked, and the operator already watched it do so.
+    /// A Run that bound work and *then* ran out is not unbound: it did what it
+    /// was asked, and the operator already watched it do so.
     pub(crate) fn lines(&self) -> Option<Vec<String>> {
-        let outcome = self.outcome.as_deref()?;
-        if self.bound_work || !NO_WORK_OUTCOMES.contains(&outcome) {
+        if self.bound_work {
             return None;
         }
+        let outcome = self.outcome.as_deref()?;
+        let detail =
+            match outcome {
+                "empty_pool" => vec![self.empty_pool_line()],
+                "all_blocked" => self.all_blocked_lines(),
+                "all_skipped" => vec![format!(
+                    "The Run ended because {} skipped: {}.",
+                    candidates(self.pool().len(), "was", "were"),
+                    reason_counts(self.pool().iter().map(|issue| {
+                        self.skips.get(issue).map_or("unrecorded", String::as_str)
+                    }))
+                )],
+                _ => return None,
+            };
         let mut lines = vec![format!(
             "No workable issues: this Run bound nothing and ended {outcome}."
         )];
-        match outcome {
-            "empty_pool" => lines.push(
-                "The AFK-ready pool is empty: no open issue is labelled ready-for-agent."
-                    .to_string(),
-            ),
-            "all_blocked" => {
-                lines.push(format!(
-                    "The Run ended because {} on open blockers.",
-                    candidates(self.skips.len(), "waits", "wait")
-                ));
-                let roots = self.root_blockers();
-                if !roots.is_empty() {
-                    lines.push(format!(
-                        "Blockers outside the Pool: {} — resolve them, or label other work ready-for-agent.",
-                        roots.join(", ")
-                    ));
-                }
-            }
-            _ => lines.push(format!(
-                "The Run ended because {} skipped: {}.",
-                candidates(self.skips.len(), "was", "were"),
-                self.reason_counts()
-            )),
-        }
+        lines.extend(detail);
         Some(lines)
     }
 
-    /// Every blocker a refusal names that is not itself a refused candidate.
+    fn empty_pool_line(&self) -> String {
+        let reason = if !self.exclusions.is_empty() {
+            format!(
+                "{} excluded: {}",
+                candidates(self.exclusions.len(), "was", "were"),
+                reason_counts(self.exclusions.values().map(String::as_str))
+            )
+        } else {
+            match self.issue_source.as_deref() {
+                Some(LABELLED_SOURCE) => "no open issue is labelled ready-for-agent".to_string(),
+                Some(source) => format!("the {source} issue source offered no candidate"),
+                None => "the issue source offered no candidate".to_string(),
+            }
+        };
+        format!("The AFK-ready pool is empty: {reason}.")
+    }
+
+    fn all_blocked_lines(&self) -> Vec<String> {
+        let pool = self.pool();
+        let mut lines = vec![format!(
+            "The Run ended because {} on open blockers.",
+            candidates(pool.len(), "waits", "wait")
+        )];
+        let blockers = self.blockers(&pool);
+        if !blockers.is_empty() {
+            let label = if self.repository.is_some() {
+                "Blockers outside the Pool"
+            } else {
+                "Open blockers they wait on"
+            };
+            lines.push(format!(
+                "{label}: {} — resolve them, or label other work ready-for-agent.",
+                blockers.join(", ")
+            ));
+        }
+        let unrecorded = pool
+            .iter()
+            .filter(|issue| !self.skips.contains_key(issue))
+            .count();
+        if unrecorded > 0 {
+            lines.push(format!(
+                "The trace names no blocker for {unrecorded} of them; see each issue's Blocked-by list."
+            ));
+        }
+        lines
+    }
+
+    /// Every candidate the Run could not take: the Pool's last recorded
+    /// membership, plus any it refused that the membership did not list.
+    fn pool(&self) -> BTreeSet<IssueRef> {
+        self.members
+            .iter()
+            .cloned()
+            .chain(self.skips.keys().cloned())
+            .collect()
+    }
+
+    /// The blockers an operator has to resolve before anything can move.
     ///
-    /// A blocker inside the Pool is only a link in the chain; the ones outside
-    /// it are what an operator has to resolve before anything can move.
-    fn root_blockers(&self) -> Vec<String> {
-        let mut roots: Vec<String> = Vec::new();
+    /// A blocker inside the Pool is only a link in the chain, so it is left
+    /// out — but only when the Run's repository is known. Pool members are
+    /// bare numbers and blockers are full `owner/repo#N` references, so
+    /// without the repository no blocker can be proven to be a member, and
+    /// every one is named rather than a real root silently dropped.
+    fn blockers(&self, pool: &BTreeSet<IssueRef>) -> Vec<String> {
+        let mut named: Vec<String> = Vec::new();
         for reason in self.skips.values() {
             let Some(detail) = reason
                 .strip_prefix(BLOCKED_BY_OPEN_DEPENDENCY)
@@ -105,39 +184,48 @@ impl NoWorkTally {
                 continue;
             };
             for blocker in detail.split(',').map(str::trim).filter(|b| !b.is_empty()) {
-                let in_pool = blocker
-                    .rsplit_once('#')
-                    .and_then(|(_, number)| number.parse::<i64>().ok())
-                    .is_some_and(|number| self.skips.contains_key(&IssueRef::number(number)));
-                if !in_pool && !roots.iter().any(|root| root == blocker) {
-                    roots.push(blocker.to_string());
+                if !self.in_pool(blocker, pool) && !named.iter().any(|seen| seen == blocker) {
+                    named.push(blocker.to_string());
                 }
             }
         }
-        roots
+        named
     }
 
-    /// Each distinct refusal kind with how many candidates it refused.
-    fn reason_counts(&self) -> String {
-        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-        for reason in self.skips.values() {
-            let kind = reason.split(':').next().unwrap_or_default().trim();
-            let kind = if kind.is_empty() { "unstated" } else { kind };
-            *counts.entry(kind).or_default() += 1;
-        }
-        let mut ranked: Vec<_> = counts.into_iter().collect();
-        ranked.sort_by(|(a_kind, a_count), (b_kind, b_count)| {
-            b_count.cmp(a_count).then(a_kind.cmp(b_kind))
-        });
-        if ranked.is_empty() {
-            return "no refusal was recorded".to_string();
-        }
-        ranked
-            .into_iter()
-            .map(|(kind, count)| format!("{kind} ({count})"))
-            .collect::<Vec<_>>()
-            .join(", ")
+    fn in_pool(&self, blocker: &str, pool: &BTreeSet<IssueRef>) -> bool {
+        let Some(repository) = &self.repository else {
+            return false;
+        };
+        let Some((owner_repo, number)) = blocker.rsplit_once('#') else {
+            return false;
+        };
+        owner_repo.eq_ignore_ascii_case(repository)
+            && number
+                .parse::<i64>()
+                .is_ok_and(|number| pool.contains(&IssueRef::number(number)))
     }
+}
+
+/// Each distinct reason kind with how many candidates it covers, most first.
+fn reason_counts<'a>(reasons: impl Iterator<Item = &'a str>) -> String {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for reason in reasons {
+        let kind = reason.split(':').next().unwrap_or_default().trim();
+        let kind = if kind.is_empty() { "unstated" } else { kind };
+        *counts.entry(kind).or_default() += 1;
+    }
+    let mut ranked: Vec<_> = counts.into_iter().collect();
+    ranked.sort_by(|(a_kind, a_count), (b_kind, b_count)| {
+        b_count.cmp(a_count).then(a_kind.cmp(b_kind))
+    });
+    if ranked.is_empty() {
+        return "no refusal was recorded".to_string();
+    }
+    ranked
+        .into_iter()
+        .map(|(kind, count)| format!("{kind} ({count})"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// "all N ready-for-agent issues …", in the right number.
@@ -146,5 +234,23 @@ fn candidates(count: usize, singular: &str, plural: &str) -> String {
         0 => format!("every ready-for-agent issue {singular}"),
         1 => format!("the only ready-for-agent issue {singular}"),
         n => format!("all {n} ready-for-agent issues {plural}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The constant and the `lines` switch name the same outcomes, so neither
+    /// can gain or lose one without the other.
+    #[test]
+    fn every_unbound_run_outcome_earns_a_notice() {
+        for outcome in UNBOUND_RUN_OUTCOMES {
+            let tally = UnboundRunTally {
+                outcome: Some(outcome.to_string()),
+                ..UnboundRunTally::default()
+            };
+            assert!(tally.lines().is_some(), "{outcome}");
+        }
     }
 }
