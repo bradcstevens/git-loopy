@@ -6080,10 +6080,10 @@ def test_a_serial_required_pin_with_a_cap_of_one_works_only_the_pin(
     assert [n for (n, _c) in fake_gh.issue_close_calls] == [44]
 
 
-def test_a_pin_that_stays_open_rejoins_the_order_after_its_turn(
+def test_a_pin_that_stays_open_rejoins_the_order_once_spent(
     tmp_path, monkeypatch
 ) -> None:
-    """The Pin lasts one turn, not for as long as its issue stays open (#430).
+    """A Pin is spent by its first binding, not when its issue leaves (#430).
 
     Every read used to promote the Pin, so a Pin that made no progress headed
     the next serial latch too and was handed a second pinned turn ahead of the
@@ -6111,12 +6111,14 @@ def test_a_pin_that_stays_open_rejoins_the_order_after_its_turn(
     ]
 
 
-def test_a_blocked_pin_does_not_hold_the_lanes_back(tmp_path, monkeypatch) -> None:
-    """A Pin the serial turn could only skip is not given one ahead of Lanes (#430).
+def test_a_blocked_pin_is_spent_by_the_serial_iteration_that_skips_it(
+    tmp_path, monkeypatch
+) -> None:
+    """A Blocked Pin still takes the first serial Iteration, and a skip ends it (#430).
 
-    The Pin never bypasses **Readiness** (ADR-0047), so a serial turn latched
-    for a Blocked Pin would skip it and spend the Run's first unit working a
-    ``parallel-safe`` issue serially instead of in a Lane.
+    The Pin never bypasses **Readiness** (ADR-0047), so that Iteration records
+    the Pin as skipped and binds the next candidate in order. The Pin is then
+    spent: nothing later names it, however long its blocker stays open.
     """
     blocked = BlockedByRead(
         total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
@@ -6133,9 +6135,53 @@ def test_a_blocked_pin_does_not_hold_the_lanes_back(tmp_path, monkeypatch) -> No
     asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
 
     events = _logged_events(tmp_path)
-    first = _first_work(events)
-    assert (first["type"], first["issue"]) == ("wrapper.contribution.start", 41)
-    assert all(issue != 44 for issue, _reason in _bindings(events))
+    assert _first_work(events)["type"] == "wrapper.iteration.start"
+    skipped = [e["issue"] for e in events if e["type"] == "wrapper.pickup.skipped"]
+    assert skipped[0] == 44
+    assert _bindings(events) == [(41, "order")]
+
+
+class _PinUnreadableAtPeekGitHubClient(FakeGitHubClient):
+    """Fails exactly the second ``issue view`` of one issue: the startup peek's.
+
+    The first is the Pin's preflight read, which must pass for the Run to start.
+    """
+
+    def __init__(self, *, unreadable: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._unreadable = unreadable
+        self._views = 0
+
+    def issue_view(self, number: int) -> gh_module.Issue:
+        if number == self._unreadable:
+            self._views += 1
+            if self._views == 2:
+                raise gh_module.GhError("boom", returncode=1, stderr_tail="boom")
+        return super().issue_view(number)
+
+
+def test_a_pin_the_startup_peek_could_not_read_is_still_worked_first(
+    tmp_path, monkeypatch
+) -> None:
+    """One failed read must not let a Lane spend ``--issue N 1``'s only unit (#430)."""
+    _wire_rolling_run(tmp_path, monkeypatch, [])
+    fake_gh = _PinUnreadableAtPeekGitHubClient(
+        unreadable=44,
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(44, "pin")]
+    latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+    # The peek never saw the serial-required half, so it does not count it.
+    assert (latch["issue"], latch["serial_required"]) == (44, None)
 
 
 def test_a_parallel_safe_pin_takes_the_first_lane_reservation(

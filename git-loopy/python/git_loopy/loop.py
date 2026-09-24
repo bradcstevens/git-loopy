@@ -1327,10 +1327,11 @@ class _Loop:
         self._skill_exposure = skill_preflight.exposure
         self._source = source
         self._diag = diag
-        #: The invocation's **Pin** until it has had its one turn, then ``None``
-        #: (#430). Read wherever a Pickup names or promotes the Pin, so a Pin
-        #: that Strikes rejoins the order instead of heading every later read.
-        self.live_pin: int | None = config.issue_pin
+        #: The invocation's **Pin** until it is spent, then ``None`` (#430).
+        #: Read wherever a Pickup names or promotes the Pin, so a Pin whose
+        #: Iteration made no progress rejoins the order instead of heading
+        #: every later read.
+        self._live_pin: int | None = config.issue_pin
         #: This Run's **Lease**s, or ``None`` when Leases are not in force —
         #: the PRDs backend has no remote to contend on, and a clone with no
         #: resolvable GitHub repository cannot address a Lease ref. ``None``
@@ -3321,7 +3322,7 @@ class _Loop:
             return self._take_lease_at_pickup(item)
 
         while True:
-            pickup = pick_serial(pool, admit=admit, pin=self.live_pin)
+            pickup = pick_serial(pool, admit=admit, pin=self._live_pin)
             if pickup.item is None:
                 break
             try:
@@ -3367,13 +3368,26 @@ class _Loop:
                 considered=considered,
                 resolution=resolution,
             )
-            if bound.ref == self.live_pin:
-                self.spend_pin()
+            self.note_bound(bound.ref)
         return pickup
 
+    @property
+    def live_pin(self) -> int | None:
+        """The **Pin** a Pickup still promotes and names, or ``None`` once spent."""
+        return self._live_pin
+
+    def note_bound(self, ref: int | str) -> None:
+        """Spend the Pin if a Pickup, serial or Lane, just bound it (#430)."""
+        if ref == self._live_pin:
+            self.spend_pin()
+
     def spend_pin(self) -> None:
-        """End the Pin's one turn: later Pickups neither promote nor name it (#430)."""
-        self.live_pin = None
+        """Spend the Pin: later Pickups neither promote nor name it (#430).
+
+        A Pin is spent by the first Pickup that binds it, or by the end of the
+        serial Iteration latched for it, whichever comes first.
+        """
+        self._live_pin = None
         if isinstance(self._source, sources_module.PinSpending):
             self._source.spend_pin()
 
@@ -4100,7 +4114,7 @@ def _serial_required(items: Sequence[AfkReadyItem]) -> list[AfkReadyItem]:
     """The **serial-required** items of a full-Pool peek, in Pool order.
 
     The complement of :func:`~git_loopy.rolling_pool.is_parallel_safe` over
-    enriched items: a plain ``ready-for-agent`` issue, a pull request, or a
+    enriched items: an issue without ``parallel-safe``, a pull request, or a
     PRDs-backend item is never Lane work.
     """
     return [
@@ -4806,15 +4820,15 @@ class _ParallelLoop:
         :meth:`_service_serial_required_work` to have seen the whole other half
         this turn (#219 §2.13, criteria #5/#6).
 
-        The reserve-first rule has exactly one exception, the **Pin**'s own
-        turn: a serial-required Pin latches serial ownership before the first
-        reservation (:meth:`_latch_serial_required_pin`, #430).
+        The reserve-first rule has exactly one exception, the **Pin**'s serial
+        Iteration: a **Serial-required** Pin latches serial ownership before the
+        first reservation (:meth:`_latch_serial_required_pin`, #430).
         """
         assert self._scheduler is not None  # guarded by `self._rolling_capable`
         scheduler = self._scheduler
         scheduler.start()
         self._crash = None
-        pin_turn_pending = self._latch_serial_required_pin()
+        pin_iteration_pending = self._latch_serial_required_pin()
 
         try:
             while True:
@@ -4880,10 +4894,10 @@ class _ParallelLoop:
                     outcome, _commits, _closures = (
                         await self._serial._run_one_iteration(self._alloc_iter_num())
                     )
-                    if pin_turn_pending:
-                        # The Pin's turn is over whatever it did: closed,
-                        # Struck, or skipped (#430).
-                        pin_turn_pending = False
+                    if pin_iteration_pending:
+                        # The Pin is spent whatever its Iteration did: closed
+                        # it, made no progress, or skipped it (#430).
+                        pin_iteration_pending = False
                         self._serial.spend_pin()
                     # Reconcile the shared `max_iterations` budget into the
                     # scheduler's own ledger: it only spends a unit at
@@ -5172,42 +5186,54 @@ class _ParallelLoop:
         )
 
     def _latch_serial_required_pin(self) -> bool:
-        """Give a **serial-required** Pin serial ownership before any Lane (#430).
+        """Give a **Serial-required** Pin serial ownership before any Lane (#430).
 
         The one exception to the reserve-first rule (#219 §1.4) in
         :meth:`_drive_rolling`: the Pin is worked ahead of every other issue in
         the Run (ADR-0032), and reserving Lanes first would let them spend an
-        explicit ``max_iterations`` cap before the Pin's serial turn is ever
-        granted. Latching here, after the startup membership refresh and before
-        the first :meth:`~git_loopy.rolling_scheduler.RollingScheduler.reserve`,
-        makes the first turn reserve nothing and grant the Pin's serial
-        Iteration at once; the refill turn after it restores normal order.
+        explicit ``max_iterations`` cap before the Pin's serial Iteration is
+        ever granted. Latching here, after the startup membership refresh and
+        before the first
+        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.reserve`, makes the
+        first driver pass reserve nothing and grant the Pin's serial Iteration
+        at once. That Iteration spends the Pin whatever it does — closes it,
+        makes no progress, or skips it as **Blocked** — and the refill decision
+        after it restores normal order.
 
         A ``parallel-safe`` Pin needs nothing here: membership already heads its
         order with the Pin (:func:`~git_loopy.issue_order.promote_pinned`), so
-        it takes the first Lane reservation. Nor does a Pin this read cannot
-        show to be serial-required and Ready — one it could not read, or one
-        that is **Blocked**: holding every Lane back for a serial turn that
-        would only skip the Pin weakens the Run for the issues behind it. Such a
-        Pin stays promoted, and is worked the first time a Pickup can bind it.
+        it takes the first Lane reservation. Neither does a Pin a complete peek
+        shows is not in the Pool, which, as for ``promote_pinned``, is a no-op.
+
+        A Pin the peek could not read is held to the serial path. The Lane
+        membership cache holds every ``parallel-safe`` Pool member, and it does
+        not hold this one; letting Lanes go first on a failed read is the
+        silent substitution #396 exists to prevent.
 
         Returns:
-            Whether the Pin's serial turn was latched.
+            Whether the Pin's serial Iteration was latched.
         """
         assert self._pool is not None and self._scheduler is not None
         pin = self._serial.live_pin
         if pin is None or pin in self._pool.candidate_refs:
             return False
         collection = self._collect_pool_safely()
-        serial_required = _serial_required(collection.items)
-        pinned = next((item for item in serial_required if item.ref == pin), None)
-        if pinned is None or not self._source.readiness(pinned).admissible:
+        pinned = next((item for item in collection.items if item.ref == pin), None)
+        if pinned is None and collection.complete:
             return False
-        self._latch_serial_demand(ref=pin, serial_required=len(serial_required))
+        serial_required = _serial_required(collection.items)
+        if pinned is not None and pinned not in serial_required:
+            return False
+        self._latch_serial_demand(
+            ref=pin,
+            serial_required=None if pinned is None else len(serial_required),
+        )
         return True
 
-    def _latch_serial_demand(self, *, ref: int | str, serial_required: int) -> None:
-        """Stop refill for serial-required work the driver's peek found."""
+    def _latch_serial_demand(
+        self, *, ref: int | str, serial_required: int | None
+    ) -> None:
+        """Stop refill for **Serial-required** work, and report how much waits."""
         assert self._scheduler is not None
         self._scheduler.request_serial(
             ref=ref, reason=rolling_scheduler.SERIAL_LATCH_NOT_PARALLEL_SAFE
@@ -5712,8 +5738,7 @@ class _ParallelLoop:
             on_execution_host=True,
         )
         lane_binding.bind(ref, source="lane_pickup", at=datetime.now(timezone.utc))
-        if ref == self._serial.live_pin:
-            self._serial.spend_pin()
+        self._serial.note_bound(ref)
 
         try:
             recent = self._git.recent_commits(5)

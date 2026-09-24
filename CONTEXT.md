@@ -352,11 +352,11 @@ directly rather than in advance. A pin bypasses order and *nothing else*: the is
 still has to be eligible, and a pin that is not fails the invocation rather than
 falling back to the order, because silently working a different issue than the one
 named is worse than stopping. Under **Rolling dispatch** the pin also goes ahead of
-every **Lane**: a Ready pinned issue that is **Serial-required** is the run's first serial
-**Iteration**, and no Lane is reserved until it ends; a `parallel-safe` pin takes the first
-Lane. Lacking `parallel-safe` decides how a pin is worked, never whether. A pin gets one
-turn: an issue still open after it rejoins the order like any other. It lasts at most one
-invocation, which is why it is neither a label nor an environment variable — both are
+every **Lane**: a **Serial-required** pin is the run's first serial **Iteration**, and no
+Lane is reserved until it ends; a `parallel-safe` pin takes the first Lane. Lacking
+`parallel-safe` decides how a pin is worked, never whether. A pin is spent by its first
+binding, or by the end of that first Iteration if it was skipped there; an issue still open
+after that rejoins the order like any other. It lasts at most one invocation, which is why it is neither a label nor an environment variable — both are
 global, and would point every concurrent run at the same issue.
 _Avoid_: lock, claim, assignment, selection, priority.
 

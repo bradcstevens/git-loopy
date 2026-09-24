@@ -822,7 +822,7 @@ class PinSpending(Protocol):
     """A source whose reads promote an invocation's **Pin** until it is spent."""
 
     def spend_pin(self) -> None:
-        """Stop promoting the Pin: it has had its one turn this Run (#430)."""
+        """Stop promoting the Pin: it is spent for this Run (#430)."""
         ...
 
 
@@ -898,11 +898,11 @@ class GitHubIssueSource:
         return None if self._repository is None else self._repository.visibility
 
     def spend_pin(self) -> None:
-        """Stop promoting the Pin once it has had its turn (#430).
+        """Stop promoting the Pin once it is spent (#430).
 
-        The Pin lasts one turn, not for as long as its issue stays open: an
-        issue that Strikes under its Pin rejoins the §3.2 order like any other,
-        rather than being handed the head of every later read.
+        A Pin lasts until its first binding, not for as long as its issue stays
+        open: an issue whose pinned Iteration made no progress rejoins the §3.2
+        order like any other, rather than heading every later read.
         """
         self._pin_spent = True
 

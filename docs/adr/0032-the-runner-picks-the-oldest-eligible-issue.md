@@ -69,10 +69,22 @@ is after selection. Sorting on it would sort on nothing.
   and   not a **Lease** (ADR-0033); a pinned issue held by another live run fails the
   invocation rather than falling back, because silently working a different issue than the one
   named is worse than stopping.
-  Under Rolling dispatch the pin goes first there too, including ahead of **Lanes** (#430):
-  a Ready pin without `parallel-safe` takes serial ownership at Run start, before any Lane is
-  reserved, and Lanes open only after its serial Iteration ends; a `parallel-safe` pin takes
-  the first Lane reservation. The pin gets that one turn: after it, the oldest-first order
-  applies, including to the pinned issue if it is still open. A Blocked pin holds no Lane
-  back; it stays at the head and is worked the first time a Pickup can bind it. Lacking
-  `parallel-safe` is never a reason to refuse a pin.
+
+## Amendment: the pin goes first under Rolling dispatch, and once (#430)
+
+Under **Rolling dispatch** the pin is worked ahead of **Lanes** too. A pin without
+`parallel-safe` takes serial ownership at Run start, before any Lane is reserved, and Lanes
+open only after its serial Iteration ends — whatever that Iteration does with it: closes it,
+makes no progress, or skips it as **Blocked** (the pin still bypasses nothing but order). A
+`parallel-safe` pin takes the first Lane reservation. Lacking `parallel-safe` is never a
+reason to refuse a pin.
+
+The pin is spent by its first binding, or by the end of that first serial Iteration, and the
+oldest-first order then applies — including to the pinned issue if it is still open. The
+Python Runner does this in serial Pickups as well.
+
+**Conflict, flagged rather than resolved here:** the Wrapper contract's Pin clause 1 still says
+a Run "resumes oldest-first the moment its pinned issue leaves the **Pool**", and the shell and
+PowerShell Orchestrators promote the pin for as long as it stays open. #430 kept those members
+and the Conformance fixtures out of scope; reconciling them is
+[#644](https://github.com/bradcstevens/git-loopy/issues/644).
