@@ -1332,6 +1332,7 @@ class _Loop:
         #: Iteration made no progress rejoins the order instead of heading
         #: every later read.
         self._live_pin: int | None = config.issue_pin
+        self._pin_offered = False
         #: This Run's **Lease**s, or ``None`` when Leases are not in force —
         #: the PRDs backend has no remote to contend on, and a clone with no
         #: resolvable GitHub repository cannot address a Lease ref. ``None``
@@ -3266,6 +3267,9 @@ class _Loop:
         **Routed pair** it will never run on.
         """
         self._routes = {}
+        self._pin_offered = self._live_pin is not None and any(
+            item.ref == self._live_pin for item in pool
+        )
         routing_refusals: dict[int | str, str] = {}
 
         def admit(item: AfkReadyItem) -> str | AdmissionRefusal | None:
@@ -3368,7 +3372,7 @@ class _Loop:
                 considered=considered,
                 resolution=resolution,
             )
-            self.note_bound(bound.ref)
+            self.spend_pin_if_bound(bound.ref)
         return pickup
 
     @property
@@ -3376,7 +3380,12 @@ class _Loop:
         """The **Pin** a Pickup still promotes and names, or ``None`` once spent."""
         return self._live_pin
 
-    def note_bound(self, ref: int | str) -> None:
+    @property
+    def pin_offered(self) -> bool:
+        """Whether the last serial Pickup's Pool held the live Pin (#430)."""
+        return self._pin_offered
+
+    def spend_pin_if_bound(self, ref: int | str) -> None:
         """Spend the Pin if a Pickup, serial or Lane, just bound it (#430)."""
         if ref == self._live_pin:
             self.spend_pin()
@@ -4894,11 +4903,16 @@ class _ParallelLoop:
                     outcome, _commits, _closures = (
                         await self._serial._run_one_iteration(self._alloc_iter_num())
                     )
+                    pin_unread = False
                     if pin_iteration_pending:
-                        # The Pin is spent whatever its Iteration did: closed
-                        # it, made no progress, or skipped it (#430).
+                        # The Pin is spent whatever its Iteration did with it:
+                        # closed it, made no progress, or skipped it (#430). An
+                        # Iteration that was never offered it did none of those.
                         pin_iteration_pending = False
-                        self._serial.spend_pin()
+                        if self._serial.pin_offered:
+                            self._serial.spend_pin()
+                        else:
+                            pin_unread = True
                     # Reconcile the shared `max_iterations` budget into the
                     # scheduler's own ledger: it only spends a unit at
                     # `start_session` (Lane sessions), so a serial
@@ -4955,6 +4969,23 @@ class _ParallelLoop:
                     # would abandon issues the Run can name over one refused
                     # `gh` call. Both fall through to the idle-check, which polls
                     # until a read completes or the Run runs out of units.
+                    if (
+                        pin_unread
+                        and outcome not in {"empty_pool", "preflight_failed"}
+                        and scheduler.remaining_units != 0
+                        and not scheduler.abort_latched
+                        and not scheduler.stop_latched
+                    ):
+                        # The Pin's own read gave out while the rest of the
+                        # Pool was read and worked. Keep base serial for it
+                        # rather than let a refill turn's Lanes go first
+                        # (#430). Bounded: each such Iteration bound other
+                        # work, and one whose read found nothing ends this.
+                        pin_iteration_pending = True
+                        pin = self._serial.live_pin
+                        assert pin is not None
+                        self._latch_serial_demand(ref=pin, serial_required=None)
+                        continue
                     scheduler.serial_finished()
                     continue
 
@@ -5205,10 +5236,13 @@ class _ParallelLoop:
         it takes the first Lane reservation. Neither does a Pin a complete peek
         shows is not in the Pool, which, as for ``promote_pinned``, is a no-op.
 
-        A Pin the peek could not read is held to the serial path. The Lane
-        membership cache holds every ``parallel-safe`` Pool member, and it does
-        not hold this one; letting Lanes go first on a failed read is the
-        silent substitution #396 exists to prevent.
+        A Pin the peek could not read is held to the serial path once a complete
+        membership read has run: the Lane cache then holds every
+        ``parallel-safe`` Pool member and not this one, and letting Lanes go
+        first on a failed read is the silent substitution #396 exists to
+        prevent. Without a complete membership read nothing is known either
+        way, but nothing is cached to reserve either, and the Pin stays at the
+        head of every later peek.
 
         Returns:
             Whether the Pin's serial Iteration was latched.
@@ -5219,7 +5253,9 @@ class _ParallelLoop:
             return False
         collection = self._collect_pool_safely()
         pinned = next((item for item in collection.items if item.ref == pin), None)
-        if pinned is None and collection.complete:
+        if pinned is None and (
+            collection.complete or not self._pool.membership_complete
+        ):
             return False
         serial_required = _serial_required(collection.items)
         if pinned is not None and pinned not in serial_required:
@@ -5738,7 +5774,7 @@ class _ParallelLoop:
             on_execution_host=True,
         )
         lane_binding.bind(ref, source="lane_pickup", at=datetime.now(timezone.utc))
-        self._serial.note_bound(ref)
+        self._serial.spend_pin_if_bound(ref)
 
         try:
             recent = self._git.recent_commits(5)

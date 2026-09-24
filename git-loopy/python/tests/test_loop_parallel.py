@@ -6101,24 +6101,25 @@ def test_a_pin_that_stays_open_rejoins_the_order_once_spent(
     )
 
     asyncio.run(
-        loop_module.run(_pinned_config(44, max_iterations=3, max_nmt_strikes=10))
+        loop_module.run(_pinned_config(44, max_iterations=6, max_nmt_strikes=10))
     )
 
-    assert _bindings(_logged_events(tmp_path)) == [
-        (44, "pin"),
-        (42, "order"),
-        (41, "order"),
-    ]
+    bindings = _bindings(_logged_events(tmp_path))
+    assert bindings[:3] == [(44, "pin"), (42, "order"), (41, "order")]
+    # Its retry comes back in order, reported as `order`, never `pin` again.
+    assert (44, "order") in bindings
+    assert [reason for _issue, reason in bindings].count("pin") == 1
 
 
 def test_a_blocked_pin_is_spent_by_the_serial_iteration_that_skips_it(
     tmp_path, monkeypatch
 ) -> None:
-    """A Blocked Pin still takes the first serial Iteration, and a skip ends it (#430).
+    """A Blocked Pin still takes the first serial Iteration, and a skip spends it (#430).
 
     The Pin never bypasses **Readiness** (ADR-0047), so that Iteration records
-    the Pin as skipped and binds the next candidate in order. The Pin is then
-    spent: nothing later names it, however long its blocker stays open.
+    the Pin as skipped and binds the next candidate in order. Once spent, the
+    Pin no longer heads the next serial latch, however long its blocker stays
+    open.
     """
     blocked = BlockedByRead(
         total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
@@ -6127,46 +6128,52 @@ def test_a_blocked_pin_is_spent_by_the_serial_iteration_that_skips_it(
         tmp_path,
         monkeypatch,
         [
-            _make_issue(41, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(41, labels=["ready-for-agent"]),
+            _make_issue(42, labels=["ready-for-agent"]),
             _make_issue(44, labels=["ready-for-agent"], blocked_by=blocked),
         ],
     )
 
-    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=3)))
 
     events = _logged_events(tmp_path)
     assert _first_work(events)["type"] == "wrapper.iteration.start"
     skipped = [e["issue"] for e in events if e["type"] == "wrapper.pickup.skipped"]
     assert skipped[0] == 44
-    assert _bindings(events) == [(41, "order")]
+    latches = [e["issue"] for e in events if e["type"] == "wrapper.serial.requested"]
+    assert latches[:2] == [44, 42]
+    assert _bindings(events)[:2] == [(41, "order"), (42, "order")]
 
 
-class _PinUnreadableAtPeekGitHubClient(FakeGitHubClient):
-    """Fails exactly the second ``issue view`` of one issue: the startup peek's.
+class _FailingNthViewGitHubClient(FakeGitHubClient):
+    """Fails exactly the ``nth`` ``issue view`` of one issue.
 
-    The first is the Pin's preflight read, which must pass for the Run to start.
+    The first view of a Pin is its preflight read, which must pass for the Run
+    to start; the second is the driver's startup peek, the third the Pin's own
+    serial Iteration.
     """
 
-    def __init__(self, *, unreadable: int, **kwargs: Any) -> None:
+    def __init__(self, *, unreadable: int, nth: int, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._unreadable = unreadable
+        self._nth = nth
         self._views = 0
 
     def issue_view(self, number: int) -> gh_module.Issue:
         if number == self._unreadable:
             self._views += 1
-            if self._views == 2:
+            if self._views == self._nth:
                 raise gh_module.GhError("boom", returncode=1, stderr_tail="boom")
         return super().issue_view(number)
 
 
-def test_a_pin_the_startup_peek_could_not_read_is_still_worked_first(
-    tmp_path, monkeypatch
+def _wire_unreadable_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, nth: int
 ) -> None:
-    """One failed read must not let a Lane spend ``--issue N 1``'s only unit (#430)."""
     _wire_rolling_run(tmp_path, monkeypatch, [])
-    fake_gh = _PinUnreadableAtPeekGitHubClient(
+    fake_gh = _FailingNthViewGitHubClient(
         unreadable=44,
+        nth=nth,
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[
             _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
@@ -6175,6 +6182,13 @@ def test_a_pin_the_startup_peek_could_not_read_is_still_worked_first(
     )
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
 
+
+def test_a_pin_the_startup_peek_could_not_read_is_still_worked_first(
+    tmp_path, monkeypatch
+) -> None:
+    """One failed read must not let a Lane spend ``--issue N 1``'s only unit (#430)."""
+    _wire_unreadable_pin(tmp_path, monkeypatch, nth=2)
+
     asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
 
     events = _logged_events(tmp_path)
@@ -6182,6 +6196,23 @@ def test_a_pin_the_startup_peek_could_not_read_is_still_worked_first(
     latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
     # The peek never saw the serial-required half, so it does not count it.
     assert (latch["issue"], latch["serial_required"]) == (44, None)
+
+
+def test_a_pin_its_own_iteration_could_not_read_keeps_base_serial(
+    tmp_path, monkeypatch
+) -> None:
+    """An Iteration never offered the Pin does not spend it (#430).
+
+    It binds the rest of the Pool instead, and the Pin keeps base serial for
+    its next Iteration rather than let a refill turn's Lanes go first.
+    """
+    _wire_unreadable_pin(tmp_path, monkeypatch, nth=3)
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(42, "order"), (44, "pin")]
+    assert [e for e in events if e["type"] == "wrapper.contribution.start"] == []
 
 
 def test_a_parallel_safe_pin_takes_the_first_lane_reservation(
@@ -6205,6 +6236,36 @@ def test_a_parallel_safe_pin_takes_the_first_lane_reservation(
     assert (first["type"], first["issue"]) == ("wrapper.contribution.start", 43)
     # Only the Pin is promoted: the others keep the oldest-first order.
     assert _bindings(events) == [(43, "pin"), (41, "order"), (42, "order")]
+
+
+def test_a_parallel_safe_pin_that_stays_open_is_named_once(
+    tmp_path, monkeypatch
+) -> None:
+    """The Lane that binds a ``parallel-safe`` Pin spends it (#430).
+
+    A serial Pickup walks the whole Pool, ``parallel-safe`` members included,
+    so an unspent Pin that made no progress in its Lane would head the serial
+    Iteration latched for the older serial-required issue.
+    """
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+        client_cls=_NoProgressFakeClient,
+    )
+
+    asyncio.run(
+        loop_module.run(_pinned_config(43, max_iterations=3, max_nmt_strikes=10))
+    )
+
+    bindings = _bindings(_logged_events(tmp_path))
+    assert bindings[0] == (43, "pin")
+    assert set(bindings[:2]) == {(43, "pin"), (42, "order")}
+    assert bindings[2] == (41, "order")
 
 
 def test_a_parallel_safe_pin_with_a_cap_of_one_works_only_the_pin(

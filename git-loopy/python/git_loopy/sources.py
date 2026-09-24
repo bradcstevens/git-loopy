@@ -900,9 +900,11 @@ class GitHubIssueSource:
     def spend_pin(self) -> None:
         """Stop promoting the Pin once it is spent (#430).
 
-        A Pin lasts until its first binding, not for as long as its issue stays
-        open: an issue whose pinned Iteration made no progress rejoins the §3.2
-        order like any other, rather than heading every later read.
+        The Runner spends it at the Pin's first binding, or at the end of the
+        serial Iteration latched for it once that Iteration was offered it — not
+        when its issue leaves the Pool: an issue whose pinned Iteration made no
+        progress rejoins the §3.2 order like any other, rather than heading
+        every later read.
         """
         self._pin_spent = True
 

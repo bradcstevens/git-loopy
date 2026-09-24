@@ -79,8 +79,9 @@ makes no progress, or skips it as **Blocked** (the pin still bypasses nothing bu
 `parallel-safe` pin takes the first Lane reservation. Lacking `parallel-safe` is never a
 reason to refuse a pin.
 
-The pin is spent by its first binding, or by the end of that first serial Iteration, and the
-oldest-first order then applies — including to the pinned issue if it is still open. The
+The pin is spent by its first binding, or by the end of that first serial Iteration once the
+Iteration was offered it (one whose read of the pin gave out keeps base serial for it), and
+the oldest-first order then applies — including to the pinned issue if it is still open. The
 Python Runner does this in serial Pickups as well.
 
 **Conflict, flagged rather than resolved here:** the Wrapper contract's Pin clause 1 still says

@@ -239,6 +239,15 @@ class RollingPool:
         )
 
     @property
+    def membership_complete(self) -> bool:
+        """Whether a complete membership read has been reconciled this Run.
+
+        Until one has, the cache's silence about a candidate proves nothing
+        about its labels (#430).
+        """
+        return self._membership_read_seen
+
+    @property
     def unavailable_count(self) -> int:
         """How many cached candidates are quarantined (#219 §2.11).
 
