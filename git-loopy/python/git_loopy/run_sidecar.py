@@ -767,7 +767,10 @@ def _print_unbound_run_notice(trace_path: Path, repository: str | None) -> None:
     the last thing on the terminal the operator gets back. A Run still working
     -- a Detach -- has no ``wrapper.run.end`` yet, so it earns nothing here.
     """
-    lines = unbound_run_notice.trace_notice(trace_path, repository=repository)
+    try:
+        lines = unbound_run_notice.trace_notice(trace_path, repository=repository)
+    except Exception:  # noqa: BLE001 - the notice refines; it never costs the status (ADR-0058)
+        return
     if not lines:
         return
     for line in lines:

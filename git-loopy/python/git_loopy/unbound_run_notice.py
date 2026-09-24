@@ -81,6 +81,8 @@ class _Tally:
 
     def observe(self, event: Mapping[str, Any]) -> None:
         kind = event.get("type")
+        if not isinstance(kind, str):
+            return
         if kind == "wrapper.run.start":
             source = event.get("issue_source")
             self.issue_source = source if isinstance(source, str) else None
@@ -214,6 +216,9 @@ class _Tally:
         return (
             bool(sep)
             and owner_repo.lower() == self.repository.lower()
+            # ASCII digits only, as Rust's ``parse::<i64>`` reads them: ``²``
+            # is a digit to ``str.isdigit`` but no issue number.
+            and number.isascii()
             and number.isdigit()
             and int(number) in members
         )

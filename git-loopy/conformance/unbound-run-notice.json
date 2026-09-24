@@ -956,6 +956,58 @@
       ]
     },
     {
+      "id": "malformed_telemetry_is_skipped_and_a_non_ascii_number_is_no_member",
+      "repository": "o/r",
+      "events": [
+        {
+          "type": 7,
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": null
+        },
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            2
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 1,
+          "issue": 2,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: o/r#²"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because the only ready-for-agent issue waits on open blockers.",
+        "Blockers outside the Pool: o/r#² — resolve them, or label other work ready-for-agent."
+      ]
+    },
+    {
       "id": "a_run_that_bound_work_then_ran_out_is_not_an_unbound_run",
       "repository": "bradcstevens/git-loopy",
       "events": [

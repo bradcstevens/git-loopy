@@ -85,3 +85,15 @@ def test_the_launcher_hands_the_repository_on_the_fixtures_channel() -> None:
 
     channel = _FIXTURE["inputs"]["repository_channel"]["environment_variable"]
     assert run_sidecar.HELPER_REPOSITORY_ENV == channel
+
+
+def test_the_client_prints_no_notice_rather_than_lose_the_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy import run_sidecar, unbound_run_notice as module
+
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("a future break in the notice")
+
+    monkeypatch.setattr(module, "trace_notice", broken)
+    run_sidecar._print_unbound_run_notice(tmp_path / "run.trace.jsonl", None)
