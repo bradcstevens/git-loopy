@@ -1145,8 +1145,10 @@ The few lines that tell an operator why an **Unbound Run** ended (#642). Each ou
 own reason. An empty Pool names the exclusions that emptied it, or says nothing is labelled.
 An all-blocked Pool names the blockers outside the Pool. An all-skipped Pool counts each
 **Pickup skip** kind once per candidate. Telling a blocker inside the Pool from one outside it
-needs the Run's `owner/repo`, which the client resolves the way a **Lease** does. Without it,
-every blocker is named rather than risk dropping a real one. The **Dashboard** holds with the
+needs the Run's `owner/repo`. The client resolves it the way `gh` picks its default repository:
+in a fork clone that is the upstream, not `origin`. Without it, every blocker is named rather
+than risk dropping a real one. Its Pool is the latest collection plus whatever a **Membership
+read** adds; a Membership read never removes a member. The **Dashboard** holds with the
 notice drawn until the operator quits, and the attach client prints it once the Dashboard
 returns. It is presentation, not a Wrapper-contract decision: exit status and reason are
 unchanged.

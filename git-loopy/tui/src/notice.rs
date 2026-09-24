@@ -17,8 +17,22 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::event::{Event, EventPayload, IssueRef};
 
+/// What each outcome an **Unbound Run** can end with says about why.
+///
+/// The one place the outcome set is written: [`unbound_run_outcomes`] and
+/// [`UnboundRunTally::lines`] both read it, so the set and its wording cannot
+/// drift apart.
+type Detail = fn(&UnboundRunTally) -> Vec<String>;
+const DETAIL: [(&str, Detail); 3] = [
+    ("empty_pool", UnboundRunTally::empty_pool_lines),
+    ("all_blocked", UnboundRunTally::all_blocked_lines),
+    ("all_skipped", UnboundRunTally::all_skipped_lines),
+];
+
 /// The terminal outcomes an **Unbound Run** can end with.
-pub const UNBOUND_RUN_OUTCOMES: [&str; 3] = ["empty_pool", "all_blocked", "all_skipped"];
+pub fn unbound_run_outcomes() -> Vec<&'static str> {
+    DETAIL.iter().map(|(outcome, _)| *outcome).collect()
+}
 
 /// The skip reason whose detail names the open blockers.
 const BLOCKED_BY_OPEN_DEPENDENCY: &str = "blocked_by_open_dependency";
@@ -35,8 +49,9 @@ pub(crate) struct UnboundRunTally {
     bound_work: bool,
     /// The issue source the Run declared on its start record.
     issue_source: Option<String>,
-    /// The latest complete Pool membership the trace recorded.
-    members: Vec<IssueRef>,
+    /// The Pool: the latest collection, plus any member a later Membership
+    /// read added — which never retires one (ADR-0042).
+    members: BTreeSet<IssueRef>,
     /// The most recent refusal of each candidate, in issue order.
     skips: BTreeMap<IssueRef, String>,
     /// The most recent exclusion of each candidate, in issue order.
@@ -60,9 +75,11 @@ impl UnboundRunTally {
             | EventPayload::IssueActivated(_)
             | EventPayload::ContributionStart(_) => self.bound_work = true,
             EventPayload::AfkReadyCollected(collected) => {
-                self.members.clone_from(&collected.issues)
+                self.members = collected.issues.iter().cloned().collect();
             }
-            EventPayload::PoolRefreshed(refreshed) => self.members.clone_from(&refreshed.issues),
+            EventPayload::PoolRefreshed(refreshed) => {
+                self.members.extend(refreshed.issues.iter().cloned());
+            }
             // A candidate refused or excluded in several Iterations is one.
             EventPayload::PickupSkipped(pickup) => {
                 self.skips.insert(
@@ -90,31 +107,19 @@ impl UnboundRunTally {
             return None;
         }
         let outcome = self.outcome.as_deref()?;
-        let detail =
-            match outcome {
-                "empty_pool" => vec![self.empty_pool_line()],
-                "all_blocked" => self.all_blocked_lines(),
-                "all_skipped" => vec![format!(
-                    "The Run ended because {} skipped: {}.",
-                    candidates(self.pool().len(), "was", "were"),
-                    reason_counts(self.pool().iter().map(|issue| {
-                        self.skips.get(issue).map_or("unrecorded", String::as_str)
-                    }))
-                )],
-                _ => return None,
-            };
+        let (_, detail) = DETAIL.iter().find(|(known, _)| *known == outcome)?;
         let mut lines = vec![format!(
             "No workable issues: this Run bound nothing and ended {outcome}."
         )];
-        lines.extend(detail);
+        lines.extend(detail(self));
         Some(lines)
     }
 
-    fn empty_pool_line(&self) -> String {
+    fn empty_pool_lines(&self) -> Vec<String> {
         let reason = if !self.exclusions.is_empty() {
             format!(
                 "{} excluded: {}",
-                candidates(self.exclusions.len(), "was", "were"),
+                self.candidates(self.exclusions.len(), "was", "were"),
                 reason_counts(self.exclusions.values().map(String::as_str))
             )
         } else {
@@ -124,14 +129,14 @@ impl UnboundRunTally {
                 None => "the issue source offered no candidate".to_string(),
             }
         };
-        format!("The AFK-ready pool is empty: {reason}.")
+        vec![format!("The AFK-ready pool is empty: {reason}.")]
     }
 
     fn all_blocked_lines(&self) -> Vec<String> {
         let pool = self.pool();
         let mut lines = vec![format!(
             "The Run ended because {} on open blockers.",
-            candidates(pool.len(), "waits", "wait")
+            self.candidates(pool.len(), "waits", "wait")
         )];
         let blockers = self.blockers(&pool);
         if !blockers.is_empty() {
@@ -157,14 +162,43 @@ impl UnboundRunTally {
         lines
     }
 
-    /// Every candidate the Run could not take: the Pool's last recorded
-    /// membership, plus any it refused that the membership did not list.
+    fn all_skipped_lines(&self) -> Vec<String> {
+        let pool = self.pool();
+        let reasons = pool
+            .iter()
+            .map(|issue| self.skips.get(issue).map_or("unrecorded", String::as_str));
+        vec![format!(
+            "The Run ended because {} skipped: {}.",
+            self.candidates(pool.len(), "was", "were"),
+            reason_counts(reasons)
+        )]
+    }
+
+    /// Every candidate the Run could not take: the Pool's membership, plus
+    /// any it refused that the membership did not list.
     fn pool(&self) -> BTreeSet<IssueRef> {
         self.members
             .iter()
             .cloned()
             .chain(self.skips.keys().cloned())
             .collect()
+    }
+
+    /// "all N ready-for-agent issues …", in the right number.
+    ///
+    /// Only the github source's candidates carry the label, so any other
+    /// source's — or an undeclared one's — are called candidates.
+    fn candidates(&self, count: usize, singular: &str, plural: &str) -> String {
+        let (one, many) = if self.issue_source.as_deref() == Some(LABELLED_SOURCE) {
+            ("ready-for-agent issue", "ready-for-agent issues")
+        } else {
+            ("candidate", "candidates")
+        };
+        match count {
+            0 => format!("every {one} {singular}"),
+            1 => format!("the only {one} {singular}"),
+            n => format!("all {n} {many} {plural}"),
+        }
     }
 
     /// The blockers an operator has to resolve before anything can move.
@@ -226,31 +260,4 @@ fn reason_counts<'a>(reasons: impl Iterator<Item = &'a str>) -> String {
         .map(|(kind, count)| format!("{kind} ({count})"))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// "all N ready-for-agent issues …", in the right number.
-fn candidates(count: usize, singular: &str, plural: &str) -> String {
-    match count {
-        0 => format!("every ready-for-agent issue {singular}"),
-        1 => format!("the only ready-for-agent issue {singular}"),
-        n => format!("all {n} ready-for-agent issues {plural}"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The constant and the `lines` switch name the same outcomes, so neither
-    /// can gain or lose one without the other.
-    #[test]
-    fn every_unbound_run_outcome_earns_a_notice() {
-        for outcome in UNBOUND_RUN_OUTCOMES {
-            let tally = UnboundRunTally {
-                outcome: Some(outcome.to_string()),
-                ..UnboundRunTally::default()
-            };
-            assert!(tally.lines().is_some(), "{outcome}");
-        }
-    }
 }

@@ -68,8 +68,6 @@ options:
       --issue REF               drill in on this issue number or path
       --model NAME              the configured model for this Run
       --reasoning-effort LEVEL  the configured reasoning effort for this Run
-      --repository OWNER/REPO   the Run's repository, so a Run that ends having
-                                bound nothing names only blockers outside its Pool
       --schema-version          print the compatibility probe as JSON and exit
       --version                 print the version and exit
   -h, --help                    print this help and exit
@@ -90,7 +88,8 @@ controls (--render, --attach):
   q, ctrl-c                 hand the terminal back and stop the client
 
 A Run that ends having bound no issue keeps the Dashboard up with a notice
-saying why, until q.
+saying why, until q. GIT_LOOPY_REPOSITORY names the Run's owner/repo, so that
+notice names only the blockers outside its Pool.
 ";
 
 /// Malformed usage, matching the family's locked CLI framing.
@@ -107,7 +106,6 @@ struct Options {
     inputs: RunInputs,
     render: bool,
     attach: Option<AttachPaths>,
-    repository: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,7 +173,6 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
     let mut render = false;
     let mut attach = None;
     let mut control = None;
-    let mut repository = None;
 
     let mut arguments = arguments.peekable();
     while let Some(argument) = arguments.next() {
@@ -223,7 +220,6 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
             "--issue" => drill_in = Some(IssueRef::parse(&value()?)),
             "--model" => model = Some(value()?),
             "--reasoning-effort" => reasoning_effort = Some(value()?),
-            "--repository" => repository = Some(value()?),
             other => return Err(format!("unrecognized option: {other}")),
         }
     }
@@ -267,7 +263,6 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
         },
         render,
         attach,
-        repository,
     })))
 }
 
@@ -638,8 +633,14 @@ fn dashboard_session(options: &Options, capabilities: TerminalCapabilities) -> D
     // Dashboard waits for can always arrive (#642). This binary names the key
     // in the hint because it is what maps the key, in `intent`.
     .hold_when_unbound(UNBOUND_HOLD_HINT);
-    if let Some(repository) = &options.repository {
-        session = session.with_repository(repository.clone());
+    // An environment variable rather than an option, so a launcher that names
+    // the repository can still attach an older helper that predates it: an
+    // unrecognized option is a usage error, an unread variable is nothing.
+    if let Some(repository) = std::env::var(REPOSITORY_ENV)
+        .ok()
+        .filter(|repository| !repository.trim().is_empty())
+    {
+        session = session.with_repository(repository.trim());
     }
     if let Some(monotonic) = options.render_at_monotonic {
         session.render_at_monotonic(monotonic);
@@ -649,6 +650,9 @@ fn dashboard_session(options: &Options, capabilities: TerminalCapabilities) -> D
     }
     session
 }
+
+/// The Run's `owner/repo`, as the launching client resolved it.
+const REPOSITORY_ENV: &str = "GIT_LOOPY_REPOSITORY";
 
 /// The line a held Dashboard adds to an Unbound-Run notice.
 const UNBOUND_HOLD_HINT: &str = "Nothing more will run — press q to close the Dashboard.";

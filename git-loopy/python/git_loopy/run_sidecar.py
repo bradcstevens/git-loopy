@@ -26,9 +26,7 @@ from git_loopy.ui import Renderer, RunSummary
 from git_loopy.ui.console import get_console
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import tui_release, unbound_run_notice
-from git_loopy.git import GitError, SubprocessGitClient
-from git_loopy.lease_lifecycle import LEASE_REMOTE
-from git_loopy.repository_identity import repository_from_remote_url
+from git_loopy.repository_identity import gh_default_repository
 
 __all__ = [
     "DetachedRunSpec",
@@ -487,12 +485,7 @@ def _follow_trace_with_renderer(
 
 
 def _helper_args(
-    helper: Path,
-    trace_path: Path,
-    control_path: Path,
-    config: RunConfig,
-    *,
-    repository: str | None = None,
+    helper: Path, trace_path: Path, control_path: Path, config: RunConfig
 ) -> list[str]:
     args = [
         str(helper),
@@ -501,8 +494,6 @@ def _helper_args(
         "--control",
         str(control_path),
     ]
-    if repository is not None:
-        args.extend(["--repository", repository])
     if config.issue_pin is not None:
         args.extend(["--issue", str(config.issue_pin)])
     if config.model is not None:
@@ -622,11 +613,10 @@ def run_terminal_client(
         else:
             try:
                 result = subprocess.run(  # noqa: S603 - the helper path was validated
-                    _helper_args(
-                        helper, trace_path, control_path, config, repository=repository
-                    ),
+                    _helper_args(helper, trace_path, control_path, config),
                     stdin=subprocess.DEVNULL,
                     check=False,
+                    env=_helper_environment(repository),
                 )
             except OSError as exc:
                 warn(
@@ -667,19 +657,62 @@ def run_terminal_client(
     return status
 
 
-def _run_repository(repository_root: Path) -> str | None:
-    """The Run's ``owner/repo``, resolved as a **Lease** resolves it (ADR-0033).
+#: The variable the helper reads the Run's ``owner/repo`` from. A variable
+#: rather than an option, so an older helper that predates it still attaches:
+#: an unrecognized option is a usage error, an unread variable is nothing.
+HELPER_REPOSITORY_ENV = "GIT_LOOPY_REPOSITORY"
 
-    A local config read of the clone's remote, never a round trip. It is what
-    lets an **Unbound-Run notice** tell a blocker inside the Pool from one
-    outside it; without it every blocker is named, which is noisier but never
-    drops a real one, so any failure to resolve it is simply ``None``.
+
+def _helper_environment(repository: str | None) -> dict[str, str] | None:
+    """The helper's environment: this one, plus the repository when known.
+
+    Inherited, never constructed: the helper resolves the viewing machine's
+    zone from ``TZ`` and ``TZDIR`` (#597), which a scrubbed one would strip.
+    """
+    if repository is None:
+        return None
+    return {**os.environ, HELPER_REPOSITORY_ENV: repository}
+
+
+def _run_repository(repository_root: Path) -> str | None:
+    """The ``owner/repo`` the Run worker's ``gh`` reads, or ``None``.
+
+    The worker reads its tracker through ``gh`` with no ``--repo``, so the
+    Pool belongs to ``gh``'s default repository -- in a fork clone, the
+    upstream rather than ``origin``. It is resolved here from local config
+    alone, never a round trip. It is what lets an **Unbound-Run notice** tell a
+    blocker inside the Pool from one outside it; without it every blocker is
+    named, which is noisier but never drops a real one, so any failure to
+    resolve it is simply ``None``.
     """
     try:
-        url = SubprocessGitClient(repository_root).remote_url(LEASE_REMOTE)
-    except (GitError, OSError):
+        listed = subprocess.run(  # noqa: S603, S607 - fixed git argv
+            [
+                "git",
+                "-C",
+                str(repository_root),
+                "config",
+                "--get-regexp",
+                r"^remote\..*\.(url|gh-resolved)$",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
         return None
-    return repository_from_remote_url(url) if url else None
+    remotes: dict[str, str] = {}
+    gh_resolved: dict[str, str] = {}
+    for line in listed.stdout.splitlines():
+        key, _, value = line.partition(" ")
+        name, _, setting = key.removeprefix("remote.").rpartition(".")
+        if setting == "url":
+            remotes.setdefault(name, value)
+        elif setting == "gh-resolved":
+            gh_resolved[name] = value
+    return gh_default_repository(
+        tuple(remotes.items()), gh_resolved, gh_repo=os.environ.get("GH_REPO")
+    )
 
 
 def _print_unbound_run_notice(trace_path: Path, repository: str | None) -> None:

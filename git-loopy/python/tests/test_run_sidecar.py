@@ -744,8 +744,10 @@ def test_the_dashboard_client_says_why_an_unbound_run_ended(
     helper = tmp_path / "fake-dashboard.py"
     helper.write_text(
         f"#!{sys.executable}\n"
-        "import json, sys\n"
-        f"open({str(argv_path)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+        "import json, os, sys\n"
+        f"open({str(argv_path)!r}, 'w').write(json.dumps({{'argv': sys.argv[1:], "
+        "'repository': os.environ.get('GIT_LOOPY_REPOSITORY'), "
+        "'tz': os.environ.get('TZ', '<unset>')}))\n"
         "raise SystemExit(0)\n",
         encoding="utf-8",
     )
@@ -767,9 +769,12 @@ def test_the_dashboard_client_says_why_an_unbound_run_ended(
     )
 
     assert rc == 0
-    arguments = json.loads(argv_path.read_text(encoding="utf-8"))
-    position = arguments.index("--repository")
-    assert arguments[position + 1] == case["repository"]
+    handed = json.loads(argv_path.read_text(encoding="utf-8"))
+    assert "--repository" not in handed["argv"], (
+        "an option an older helper does not know makes it exit 2 (ADR-0052)"
+    )
+    assert handed["repository"] == case["repository"]
+    assert handed["tz"] == os.environ.get("TZ", "<unset>"), "the environment was scrubbed"
     err = capsys.readouterr().err
     for line in case["notice"]:
         assert f"git-loopy: {line}" in err
@@ -796,3 +801,22 @@ def test_a_run_that_bound_work_ends_without_an_unbound_run_notice(
     )
 
     assert "No workable issues" not in capsys.readouterr().err
+
+
+def test_a_fork_clone_reads_the_repository_gh_reads_not_origin(tmp_path: Path) -> None:
+    """``gh`` reads the upstream a fork came from, so the notice must too."""
+    from git_loopy import run_sidecar
+
+    root = _clone_of(tmp_path / "clone", "someone/git-loopy")
+    subprocess.run(
+        ["git", "-C", str(root), "remote", "add", "upstream",
+         "https://github.com/bradcstevens/git-loopy.git"],
+        check=True,
+    )
+    assert run_sidecar._run_repository(root) == "bradcstevens/git-loopy"
+
+    subprocess.run(
+        ["git", "-C", str(root), "config", "remote.origin.gh-resolved", "base"],
+        check=True,
+    )
+    assert run_sidecar._run_repository(root) == "someone/git-loopy"

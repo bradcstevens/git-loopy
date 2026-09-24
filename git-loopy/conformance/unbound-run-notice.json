@@ -2,7 +2,8 @@
   "fixture_schema_version": 1,
   "description": "The Unbound-Run notice (#642): the lines that tell an operator why a Run ended without binding any issue. Only a Run that ended with one of unbound_run_outcomes, and never bound, activated or contributed to an issue, earns one. The Rust Dashboard draws these lines over a held Dashboard and adds its caller's quit hint. The Python attach client prints them after the Dashboard or line printer returns.",
   "inputs": {
-    "repository": "The Run's owner/repo, resolved by the client from its clone's origin remote as a Lease resolves it (ADR-0033), or null when none resolves. It is what separates a blocker inside the Pool from one outside it: skip reasons carry full owner/repo#N references, while Pool members are bare numbers. Without it no blocker can be proven inside the Pool, so every blocker is named."
+    "repository": "The Run's owner/repo as gh resolves its default repository for the non-interactive Run worker: GH_REPO, else a remote gh-resolved marks, else the first remote ranked upstream, github, origin, then the rest. Null when none resolves. It is what separates a blocker inside the Pool from one outside it: skip reasons carry full owner/repo#N references, while Pool members are bare numbers. Without it no blocker can be proven inside the Pool, so every blocker is named.",
+    "membership": "wrapper.afk_ready.collected replaces the Pool membership; a wrapper.pool.refreshed Membership read only adds to it, because a Membership read is authority for nothing (ADR-0042). Only the github source's candidates are called ready-for-agent issues; every other source's, or an undeclared one's, are candidates."
   },
   "unbound_run_outcomes": [
     "empty_pool",
@@ -627,6 +628,209 @@
       "notice": [
         "No workable issues: this Run bound nothing and ended empty_pool.",
         "The AFK-ready pool is empty: the issue source offered no candidate."
+      ]
+    },
+    {
+      "id": "a_membership_read_adds_members_and_never_retires_one",
+      "repository": "o/r",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            1,
+            2
+          ]
+        },
+        {
+          "type": "wrapper.pool.refreshed",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": null,
+          "issues": [
+            1
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 2,
+          "issue": 1,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: o/r#2"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 2 ready-for-agent issues wait on open blockers.",
+        "The trace names no blocker for 1 of them; see each issue's Blocked-by list."
+      ]
+    },
+    {
+      "id": "a_collection_replaces_the_membership_it_supersedes",
+      "repository": "o/r",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            1,
+            2
+          ]
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 2,
+          "excluded": 0,
+          "issues": [
+            1
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 1,
+          "issue": 1,
+          "position": 1,
+          "reason": "blocked_by_open_dependency: o/r#2"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because the only ready-for-agent issue waits on open blockers.",
+        "Blockers outside the Pool: o/r#2 — resolve them, or label other work ready-for-agent."
+      ]
+    },
+    {
+      "id": "all_skipped_on_another_source_counts_candidates_not_labelled_issues",
+      "repository": null,
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "prds"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            "prds/a.md",
+            "prds/b.md"
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 2,
+          "issue": "prds/a.md",
+          "position": 1,
+          "reason": "route_unavailable"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 2,
+          "issue": "prds/b.md",
+          "position": 2,
+          "reason": "route_unavailable"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_skipped"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_skipped.",
+        "The Run ended because all 2 candidates were skipped: route_unavailable (2)."
+      ]
+    },
+    {
+      "id": "empty_pool_on_another_source_names_its_exclusions_as_candidates",
+      "repository": null,
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-23T22:42:10.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "prds"
+        },
+        {
+          "type": "wrapper.pool.excluded",
+          "ts": "2026-09-23T22:42:28.458Z",
+          "run_id": "r1",
+          "iter": 1,
+          "issue": "prds/c.md",
+          "title": "C",
+          "reason": "missing_what_to_build"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-23T22:42:28.462Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "empty_pool"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended empty_pool.",
+        "The AFK-ready pool is empty: the only candidate was excluded: missing_what_to_build (1)."
       ]
     },
     {

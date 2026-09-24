@@ -185,22 +185,18 @@ const NOTICE_MAX_COLUMNS: u16 = 96;
 fn draw_notice(frame: &mut Frame, dashboard: &DashboardFrame, notice: &[String]) {
     let glyphs = Glyphs::for_terminal(&dashboard.capabilities);
     let area = frame.area();
+    let width = area.width.saturating_sub(4).clamp(1, NOTICE_MAX_COLUMNS);
+    let needed = notice_height(notice, width);
+    // Over the Queue when it has room for every line; otherwise over the whole
+    // screen, because a notice cut short hides the blocker and the way out.
     let target = match dashboard.screen {
         Screen::Dashboard => dashboard_bands(area, &dashboard.activity_band)
             .map(|bands| bands.queue)
-            .filter(|queue| queue.height >= 5)
+            .filter(|queue| queue.height >= needed && queue.width >= width + 2)
             .unwrap_or(area),
         Screen::DrillIn => area,
     };
-    let width = target.width.saturating_sub(4).clamp(1, NOTICE_MAX_COLUMNS);
-    let inner = usize::from(width.saturating_sub(2).max(1));
-    let wrapped: usize = notice
-        .iter()
-        .map(|line| line.chars().count().div_ceil(inner).max(1))
-        .sum();
-    let height = u16::try_from(wrapped + 2)
-        .unwrap_or(u16::MAX)
-        .min(target.height);
+    let height = needed.min(target.height);
     let top = match dashboard.screen {
         Screen::Dashboard => target.y + (target.height.saturating_sub(height)) / 2,
         Screen::DrillIn => target.y + target.height.saturating_sub(height + 1),
@@ -222,6 +218,33 @@ fn draw_notice(frame: &mut Frame, dashboard: &DashboardFrame, notice: &[String])
             ),
         popup,
     );
+}
+
+/// Rows a notice needs at `width`, border included, word-wrapped as drawn.
+fn notice_height(notice: &[String], width: u16) -> u16 {
+    let inner = usize::from(width.saturating_sub(2).max(1));
+    let rows: usize = notice.iter().map(|line| wrapped_rows(line, inner)).sum();
+    u16::try_from(rows + 2).unwrap_or(u16::MAX)
+}
+
+/// How many rows `line` takes word-wrapped at `width` columns.
+fn wrapped_rows(line: &str, width: usize) -> usize {
+    let mut rows = 1;
+    let mut used = 0;
+    for word in line.split_whitespace() {
+        let length = word.chars().count();
+        let needed = if used == 0 { length } else { used + 1 + length };
+        if needed <= width {
+            used = needed;
+        } else {
+            rows += 1 + length.saturating_sub(1) / width;
+            used = length % width;
+            if used == 0 {
+                used = width;
+            }
+        }
+    }
+    rows
 }
 
 /// The whole screen, when there is not enough of it to draw a band in.

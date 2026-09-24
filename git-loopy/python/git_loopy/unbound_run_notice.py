@@ -32,10 +32,6 @@ _BOUND_WORK_EVENTS: Final[frozenset[str]] = frozenset(
     {"wrapper.pickup.bound", "wrapper.issue.activated", "wrapper.contribution.start"}
 )
 
-#: Pool membership records; the latest one is the Pool the Run ended on.
-_MEMBERSHIP_EVENTS: Final[frozenset[str]] = frozenset(
-    {"wrapper.afk_ready.collected", "wrapper.pool.refreshed"}
-)
 
 IssueKey = int | str
 
@@ -68,7 +64,9 @@ class _Tally:
     repository: str | None
     bound_work: bool = False
     issue_source: str | None = None
-    members: list[IssueKey] = field(default_factory=list)
+    #: The latest collection, plus any member a later Membership read added --
+    #: which never retires one (ADR-0042).
+    members: set[IssueKey] = field(default_factory=set)
     skips: dict[IssueKey, str] = field(default_factory=dict)
     exclusions: dict[IssueKey, str] = field(default_factory=dict)
     outcome: str | None = None
@@ -80,11 +78,14 @@ class _Tally:
             self.issue_source = source if isinstance(source, str) else None
         elif kind in _BOUND_WORK_EVENTS:
             self.bound_work = True
-        elif kind in _MEMBERSHIP_EVENTS:
+        elif kind in ("wrapper.afk_ready.collected", "wrapper.pool.refreshed"):
             issues = event.get("issues")
             if isinstance(issues, list):
-                keys = (_issue_key(issue) for issue in issues)
-                self.members = [key for key in keys if key is not None]
+                keys = {key for key in map(_issue_key, issues) if key is not None}
+                if kind == "wrapper.afk_ready.collected":
+                    self.members = keys
+                else:
+                    self.members |= keys
         elif kind in ("wrapper.pickup.skipped", "wrapper.pool.excluded"):
             # A candidate refused or excluded in several Iterations is one.
             issue = _issue_key(event.get("issue"))
@@ -98,12 +99,28 @@ class _Tally:
 
     def pool(self) -> list[IssueKey]:
         """The Pool's last recorded membership plus any refusal it did not list."""
-        return sorted({*self.members, *self.skips}, key=_issue_order)
+        return sorted(self.members | set(self.skips), key=_issue_order)
+
+    def candidates(self, count: int, singular: str, plural: str) -> str:
+        """'all N ready-for-agent issues …', in the right number.
+
+        Only the github source's candidates carry the label, so any other
+        source's -- or an undeclared one's -- are called candidates.
+        """
+        if self.issue_source == _LABELLED_SOURCE:
+            one, many = "ready-for-agent issue", "ready-for-agent issues"
+        else:
+            one, many = "candidate", "candidates"
+        if count == 0:
+            return f"every {one} {singular}"
+        if count == 1:
+            return f"the only {one} {singular}"
+        return f"all {count} {many} {plural}"
 
     def empty_pool(self) -> list[str]:
         if self.exclusions:
             reason = (
-                f"{_candidates(len(self.exclusions), 'was', 'were')} excluded: "
+                f"{self.candidates(len(self.exclusions), 'was', 'were')} excluded: "
                 f"{_reason_counts(self.exclusions.values())}"
             )
         elif self.issue_source == _LABELLED_SOURCE:
@@ -117,7 +134,7 @@ class _Tally:
     def all_blocked(self) -> list[str]:
         pool = self.pool()
         lines = [
-            f"The Run ended because {_candidates(len(pool), 'waits', 'wait')} "
+            f"The Run ended because {self.candidates(len(pool), 'waits', 'wait')} "
             "on open blockers."
         ]
         blockers = self._blockers(pool)
@@ -143,7 +160,7 @@ class _Tally:
         pool = self.pool()
         reasons = (self.skips.get(issue, "unrecorded") for issue in pool)
         return [
-            f"The Run ended because {_candidates(len(pool), 'was', 'were')} "
+            f"The Run ended because {self.candidates(len(pool), 'was', 'were')} "
             f"skipped: {_reason_counts(reasons)}."
         ]
 
@@ -244,12 +261,3 @@ def _reason_counts(reasons: Iterable[str]) -> str:
         return "no refusal was recorded"
     ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return ", ".join(f"{kind} ({count})" for kind, count in ranked)
-
-
-def _candidates(count: int, singular: str, plural: str) -> str:
-    """'all N ready-for-agent issues …', in the right number."""
-    if count == 0:
-        return f"every ready-for-agent issue {singular}"
-    if count == 1:
-        return f"the only ready-for-agent issue {singular}"
-    return f"all {count} ready-for-agent issues {plural}"

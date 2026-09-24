@@ -8,8 +8,8 @@
 //! notice its own way.
 
 use git_loopy_tui::{
-    draw_frame, drive_dashboard, DashboardFrame, DashboardSession, DashboardSurface, Input,
-    IssueRef, Key, RunInputs, Screen, Timestamp, Zone, UNBOUND_RUN_OUTCOMES,
+    draw_frame, drive_dashboard, unbound_run_outcomes, DashboardFrame, DashboardSession,
+    DashboardSurface, Input, IssueRef, Key, RunInputs, Screen, Timestamp, Zone,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -30,8 +30,12 @@ struct RecordingSurface {
 
 impl RecordingSurface {
     fn new() -> Self {
+        Self::sized(140, 40)
+    }
+
+    fn sized(columns: u16, rows: u16) -> Self {
         Self {
-            terminal: Terminal::new(TestBackend::new(140, 40))
+            terminal: Terminal::new(TestBackend::new(columns, rows))
                 .expect("a headless terminal is constructed"),
             frames: Vec::new(),
             screens: Vec::new(),
@@ -146,7 +150,7 @@ fn drive(
 fn the_fixture_names_the_outcomes_this_core_treats_as_unbound() {
     let declared: Vec<String> =
         serde_json::from_value(fixture()["unbound_run_outcomes"].clone()).expect("a list");
-    assert_eq!(declared, UNBOUND_RUN_OUTCOMES.map(str::to_string));
+    assert_eq!(declared, unbound_run_outcomes());
 }
 
 #[test]
@@ -253,4 +257,43 @@ fn the_notice_stays_on_screen_in_a_drill_in() {
     let frame = surface.last();
     assert!(frame.contains(&notice(&case).unwrap()[0]), "{frame}");
     assert!(frame.contains(HINT), "{frame}");
+}
+
+#[test]
+fn every_line_of_the_notice_fits_on_a_default_terminal() {
+    // 80x24 leaves the Queue five rows: too few for the notice, which must then
+    // outgrow it rather than hide the blocker and the way out.
+    for case in cases().into_iter().filter(|case| notice(case).is_some()) {
+        let mut session = session(&case, IssueRef::parse("")).hold_when_unbound(HINT);
+        let mut surface = RecordingSurface::sized(80, 24);
+
+        drive(
+            &mut session,
+            &mut surface,
+            &case,
+            vec![Input::Key(Key::Quit)],
+        );
+
+        let frame = surface.last();
+        let unboxed: String = frame
+            .chars()
+            .map(|c| {
+                if "│┌┐└┘─".contains(c) {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .collect();
+        let drawn: Vec<&str> = unboxed.split_whitespace().collect();
+        let mut expected = notice(&case).unwrap();
+        expected.push(HINT.to_string());
+        for word in expected.iter().flat_map(|line| line.split_whitespace()) {
+            assert!(
+                drawn.contains(&word),
+                "{}: {word:?} was cut\n{frame}",
+                id(&case)
+            );
+        }
+    }
 }
