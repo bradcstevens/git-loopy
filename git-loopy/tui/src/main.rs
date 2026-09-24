@@ -87,8 +87,8 @@ controls (--render, --attach):
   shift+up, shift+down      size it a row at a time, with no mouse at all
   q, ctrl-c                 hand the terminal back and stop the client
 
-A Run that ends having bound no issue keeps the Dashboard up with a notice
-saying why, until q. The launching client sets GIT_LOOPY_TUI_REPOSITORY to the
+A Run that ends empty_pool, all_blocked or all_skipped without binding an
+issue keeps the Dashboard up with a notice saying why, until q. The launching client sets GIT_LOOPY_TUI_REPOSITORY to the
 Run's owner/repo, so that notice names only the blockers outside its Pool.
 ";
 

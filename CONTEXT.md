@@ -1145,7 +1145,8 @@ _Avoid_: no-work run, empty run, idle run.
 
 **Unbound-Run notice**:
 The few lines that tell an operator why an **Unbound Run** ended (#642). Each outcome keeps its
-own reason. An empty Pool names the exclusions that emptied it, or says nothing is labelled.
+own reason. An empty Pool names the exclusions that emptied it; otherwise, for the github source it says
+nothing is labelled, and for any other source that the source offered nothing.
 An all-blocked Pool names the blockers outside the Pool. An all-skipped Pool counts each
 **Pickup skip** kind once per candidate. Telling a blocker inside the Pool from one outside it
 needs the Run's `owner/repo`. The client resolves it the way `gh` picks its default repository:
