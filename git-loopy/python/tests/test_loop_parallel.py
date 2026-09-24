@@ -6145,33 +6145,13 @@ def test_a_blocked_pin_is_spent_by_the_serial_iteration_that_skips_it(
     assert _bindings(events)[:2] == [(41, "order"), (42, "order")]
 
 
-class _FailingNthViewGitHubClient(FakeGitHubClient):
-    """Fails exactly the ``nth`` ``issue view`` of one issue.
-
-    The first view of a Pin is its preflight read, which must pass for the Run
-    to start; the second is the driver's startup peek, the third the Pin's own
-    serial Iteration.
-    """
-
-    def __init__(self, *, unreadable: int, nth: int, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._unreadable = unreadable
-        self._nth = nth
-        self._views = 0
-
-    def issue_view(self, number: int) -> gh_module.Issue:
-        if number == self._unreadable:
-            self._views += 1
-            if self._views == self._nth:
-                raise gh_module.GhError("boom", returncode=1, stderr_tail="boom")
-        return super().issue_view(number)
-
-
 def _wire_unreadable_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, nth: int
 ) -> None:
+    # A Pin's first view is its preflight read, which must pass for the Run to
+    # start; the second is the driver's startup peek, the third its own Iteration.
     _wire_rolling_run(tmp_path, monkeypatch, [])
-    fake_gh = _FailingNthViewGitHubClient(
+    fake_gh = _UnreadableOnceGitHubClient(
         unreadable=44,
         nth=nth,
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
@@ -6198,13 +6178,13 @@ def test_a_pin_the_startup_peek_could_not_read_is_still_worked_first(
     assert (latch["issue"], latch["serial_required"]) == (44, None)
 
 
-def test_a_pin_its_own_iteration_could_not_read_keeps_base_serial(
+def test_a_pin_its_own_iteration_could_not_read_keeps_serial_ownership(
     tmp_path, monkeypatch
 ) -> None:
     """An Iteration never offered the Pin does not spend it (#430).
 
-    It binds the rest of the Pool instead, and the Pin keeps base serial for
-    its next Iteration rather than let a refill turn's Lanes go first.
+    It binds the rest of the Pool instead, and the Pin keeps serial ownership
+    for its next Iteration rather than let a refill turn's Lanes go first.
     """
     _wire_unreadable_pin(tmp_path, monkeypatch, nth=3)
 
@@ -6212,6 +6192,93 @@ def test_a_pin_its_own_iteration_could_not_read_keeps_base_serial(
 
     events = _logged_events(tmp_path)
     assert _bindings(events) == [(42, "order"), (44, "pin")]
+    assert [e for e in events if e["type"] == "wrapper.contribution.start"] == []
+
+
+class _PinOutsidePoolGitHubClient(FakeGitHubClient):
+    """Every Pool listing omits one issue that preflight can still read open.
+
+    The shape of a Pin closed or relabelled between preflight and the Run's
+    first Pool read.
+    """
+
+    def __init__(self, *, missing: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._missing = missing
+
+    def issue_list(self, label: str, state: str = "open") -> gh_module.IssueListPage:
+        page = super().issue_list(label, state)
+        return dataclass_replace(
+            page,
+            issues=tuple(i for i in page.issues if i.number != self._missing),
+        )
+
+
+def test_a_pin_that_left_the_pool_is_spent_and_lanes_reopen(
+    tmp_path, monkeypatch
+) -> None:
+    """A complete read without the Pin spends it rather than hold Lanes back (#430)."""
+    _wire_rolling_run(tmp_path, monkeypatch, [])
+    fake_gh = _PinOutsidePoolGitHubClient(
+        missing=44,
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=0)))
+
+    events = _logged_events(tmp_path)
+    latches = [e["issue"] for e in events if e["type"] == "wrapper.serial.requested"]
+    assert latches == [44]
+    # The Iteration already granted to the Pin binds the head of the order;
+    # after it Lanes reopen instead of re-latching for a Pin that is gone.
+    assert _bindings(events)[0] == (42, "order")
+    lanes = [e["issue"] for e in events if e["type"] == "wrapper.contribution.start"]
+    assert lanes == [43]
+
+
+class _MembershipUnreadableGitHubClient(FakeGitHubClient):
+    """The first ``failures`` Pool listings fail; later ones answer."""
+
+    def __init__(self, *, failures: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._failures = failures
+
+    def issue_list(self, label: str, state: str = "open") -> gh_module.IssueListPage:
+        if self._failures > 0:
+            self._failures -= 1
+            raise gh_module.GhError(["gh", "issue", "list"], 1, "HTTP 502")
+        return super().issue_list(label, state)
+
+
+def test_a_serial_required_pin_goes_first_when_startup_reads_fail(
+    tmp_path, monkeypatch
+) -> None:
+    """The Pin is classified at preflight, so failed startup reads cannot reorder it.
+
+    The startup membership refresh and the startup peek both fail; the first
+    reservation's own refresh would then have given a Lane the only unit (#430).
+    """
+    _wire_rolling_run(tmp_path, monkeypatch, [])
+    fake_gh = _MembershipUnreadableGitHubClient(
+        failures=2,
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(44, "pin")]
     assert [e for e in events if e["type"] == "wrapper.contribution.start"] == []
 
 
@@ -6303,16 +6370,20 @@ class _UnreadableOnceGitHubClient(FakeGitHubClient):
     has always survived by *skipping* the candidate. Self-healing on the second
     ask is the point: a permanently unreadable issue would only prove the Run
     hangs, whereas a transient one proves the Run waits for evidence and then
-    acts on it.
+    acts on it. ``nth`` picks which read fails, the first by default.
     """
 
-    def __init__(self, *, unreadable: int, **kwargs: Any) -> None:
+    def __init__(self, *, unreadable: int, nth: int = 1, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._unreadable = unreadable
+        self._nth = nth
+        self._views = 0
         self.refusals = 0
 
     def issue_view(self, number: int) -> gh_module.Issue:
-        if number == self._unreadable and self.refusals == 0:
+        if number == self._unreadable:
+            self._views += 1
+        if number == self._unreadable and self._views == self._nth:
             self.refusals += 1
             self.issue_view_calls.append(number)
             raise gh_module.GhError(

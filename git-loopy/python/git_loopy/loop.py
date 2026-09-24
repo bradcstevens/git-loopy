@@ -1021,6 +1021,10 @@ _ITERATION_POOL_UNRESOLVED = "pool_unresolved"
 #: — including inside a Parallel Run's granted serial turn — because no later
 #: turn could read anything different, so carrying on would re-walk the same
 #: Pool until the iteration cap.
+#: Serial Iteration outcomes whose Pool read bound nothing because it found
+#: nothing: a finished Pool, or one whose read gave out (#541).
+_POOL_FOUND_NOTHING_OUTCOMES = frozenset({"empty_pool", "preflight_failed"})
+
 _SERIAL_DEFEATED_OUTCOMES = frozenset(
     {"all_skipped", "all_blocked", _ITERATION_POOL_UNRESOLVED}
 )
@@ -1332,7 +1336,7 @@ class _Loop:
         #: Iteration made no progress rejoins the order instead of heading
         #: every later read.
         self._live_pin: int | None = config.issue_pin
-        self._pin_offered = False
+        self._pin_unread = False
         #: This Run's **Lease**s, or ``None`` when Leases are not in force —
         #: the PRDs backend has no remote to contend on, and a clone with no
         #: resolvable GitHub repository cannot address a Lease ref. ``None``
@@ -2030,6 +2034,11 @@ class _Loop:
                 collection = self._source.collect_pool()
             pool = list(collection.items)
             pool_refs: list[int | str] = [item.ref for item in pool]
+            self._pin_unread = (
+                self._live_pin is not None
+                and self._live_pin not in pool_refs
+                and not collection.complete
+            )
             # Late-bind the iteration span's `issue` / `issues` attributes
             # now that we know the pool. `set_attribute` is no-op-safe so
             # this works whether OTel is enabled or not.
@@ -3267,9 +3276,6 @@ class _Loop:
         **Routed pair** it will never run on.
         """
         self._routes = {}
-        self._pin_offered = self._live_pin is not None and any(
-            item.ref == self._live_pin for item in pool
-        )
         routing_refusals: dict[int | str, str] = {}
 
         def admit(item: AfkReadyItem) -> str | AdmissionRefusal | None:
@@ -3381,9 +3387,13 @@ class _Loop:
         return self._live_pin
 
     @property
-    def pin_offered(self) -> bool:
-        """Whether the last serial Pickup's Pool held the live Pin (#430)."""
-        return self._pin_offered
+    def pin_unread(self) -> bool:
+        """Whether the last Iteration's incomplete Pool read never showed the Pin.
+
+        Distinct from a Pin a complete read did not find: that one left the
+        Pool, and nothing it could still be owed (#430).
+        """
+        return self._pin_unread
 
     def spend_pin_if_bound(self, ref: int | str) -> None:
         """Spend the Pin if a Pickup, serial or Lane, just bound it (#430)."""
@@ -3394,7 +3404,8 @@ class _Loop:
         """Spend the Pin: later Pickups neither promote nor name it (#430).
 
         A Pin is spent by the first Pickup that binds it, or by the end of the
-        serial Iteration latched for it, whichever comes first.
+        serial Iteration latched for it, unless that Iteration's incomplete
+        Pool read never showed it (:attr:`pin_unread`).
         """
         self._live_pin = None
         if isinstance(self._source, sources_module.PinSpending):
@@ -4893,12 +4904,7 @@ class _ParallelLoop:
                 # work, and a drain finishes started work rather than starting
                 # more — and the very next idle-check below reports
                 # `iteration_cap` / `stuck` instead.
-                if (
-                    scheduler.remaining_units != 0
-                    and not scheduler.abort_latched
-                    and not scheduler.stop_latched
-                    and scheduler.serial_turn()
-                ):
+                if scheduler.may_start_work and scheduler.serial_turn():
                     self._report_serial_fallback(scheduler)
                     outcome, _commits, _closures = (
                         await self._serial._run_one_iteration(self._alloc_iter_num())
@@ -4907,12 +4913,11 @@ class _ParallelLoop:
                     if pin_iteration_pending:
                         # The Pin is spent whatever its Iteration did with it:
                         # closed it, made no progress, or skipped it (#430). An
-                        # Iteration that was never offered it did none of those.
+                        # Iteration whose read never showed it did none of those.
                         pin_iteration_pending = False
-                        if self._serial.pin_offered:
+                        pin_unread = self._serial.pin_unread
+                        if not pin_unread:
                             self._serial.spend_pin()
-                        else:
-                            pin_unread = True
                     # Reconcile the shared `max_iterations` budget into the
                     # scheduler's own ledger: it only spends a unit at
                     # `start_session` (Lane sessions), so a serial
@@ -4971,14 +4976,12 @@ class _ParallelLoop:
                     # until a read completes or the Run runs out of units.
                     if (
                         pin_unread
-                        and outcome not in {"empty_pool", "preflight_failed"}
-                        and scheduler.remaining_units != 0
-                        and not scheduler.abort_latched
-                        and not scheduler.stop_latched
+                        and outcome not in _POOL_FOUND_NOTHING_OUTCOMES
+                        and scheduler.may_start_work
                     ):
                         # The Pin's own read gave out while the rest of the
-                        # Pool was read and worked. Keep base serial for it
-                        # rather than let a refill turn's Lanes go first
+                        # Pool was read and worked. Keep serial ownership for
+                        # it rather than let a refill turn's Lanes go first
                         # (#430). Bounded: each such Iteration bound other
                         # work, and one whose read found nothing ends this.
                         pin_iteration_pending = True
@@ -5223,46 +5226,39 @@ class _ParallelLoop:
         :meth:`_drive_rolling`: the Pin is worked ahead of every other issue in
         the Run (ADR-0032), and reserving Lanes first would let them spend an
         explicit ``max_iterations`` cap before the Pin's serial Iteration is
-        ever granted. Latching here, after the startup membership refresh and
-        before the first
+        ever granted. Latching here, before the first
         :meth:`~git_loopy.rolling_scheduler.RollingScheduler.reserve`, makes the
         first driver pass reserve nothing and grant the Pin's serial Iteration
-        at once. That Iteration spends the Pin whatever it does — closes it,
-        makes no progress, or skips it as **Blocked** — and the refill decision
-        after it restores normal order.
+        at once — even for a **Blocked** Pin, which that Iteration then skips.
+        :meth:`_drive_rolling` spends the Pin when the Iteration ends, unless
+        its own incomplete Pool read never showed the Pin; then the Pin keeps
+        serial ownership for the next one.
 
-        A ``parallel-safe`` Pin needs nothing here: membership already heads its
-        order with the Pin (:func:`~git_loopy.issue_order.promote_pinned`), so
-        it takes the first Lane reservation. Neither does a Pin a complete peek
-        shows is not in the Pool, which, as for ``promote_pinned``, is a no-op.
-
-        A Pin the peek could not read is held to the serial path once a complete
-        membership read has run: the Lane cache then holds every
-        ``parallel-safe`` Pool member and not this one, and letting Lanes go
-        first on a failed read is the silent substitution #396 exists to
-        prevent. Without a complete membership read nothing is known either
-        way, but nothing is cached to reserve either, and the Pin stays at the
-        head of every later peek.
+        The Pin is classified by the labels preflight read to accept it
+        (:attr:`~git_loopy.sources.PinSpending.pin_parallel_safe`), so a failed
+        startup read cannot let Lanes go first. A ``parallel-safe`` Pin needs
+        nothing here: membership heads its order with the Pin
+        (:func:`~git_loopy.issue_order.promote_pinned`), so it takes the first
+        Lane reservation.
 
         Returns:
             Whether the Pin's serial Iteration was latched.
         """
-        assert self._pool is not None and self._scheduler is not None
         pin = self._serial.live_pin
-        if pin is None or pin in self._pool.candidate_refs:
-            return False
-        collection = self._collect_pool_safely()
-        pinned = next((item for item in collection.items if item.ref == pin), None)
-        if pinned is None and (
-            collection.complete or not self._pool.membership_complete
+        if (
+            pin is None
+            or not isinstance(self._source, sources_module.PinSpending)
+            or self._source.pin_parallel_safe is not False
         ):
             return False
-        serial_required = _serial_required(collection.items)
-        if pinned is not None and pinned not in serial_required:
-            return False
+        collection = self._collect_pool_safely()
         self._latch_serial_demand(
             ref=pin,
-            serial_required=None if pinned is None else len(serial_required),
+            serial_required=(
+                len(_serial_required(collection.items))
+                if collection.complete
+                else None
+            ),
         )
         return True
 
@@ -5328,12 +5324,7 @@ class _ParallelLoop:
                 ref=serial_required[0].ref,
                 serial_required=len(serial_required),
             )
-            if (
-                self._lane_work
-                and self._scheduler.remaining_units != 0
-                and not self._scheduler.abort_latched
-                and not self._scheduler.stop_latched
-            ):
+            if self._lane_work and self._scheduler.may_start_work:
                 if self._serial._preparation is not None:
                     self._serial._preparation.interrupt_ahead()
                 self._serial._start_preparation_pass(serial_required, beside=None)

@@ -355,8 +355,8 @@ named is worse than stopping. Under **Rolling dispatch** the pin also goes ahead
 every **Lane**: a **Serial-required** pin is the run's first serial **Iteration**, and no
 Lane is reserved until it ends; a `parallel-safe` pin takes the first Lane. Lacking
 `parallel-safe` decides how a pin is worked, never whether. In the Python Runner a pin is
-spent by its first binding, or by the end of the serial Iteration latched for it once that
-Iteration was offered it; an issue still open after that rejoins the order like any other
+spent by its first binding, or by the end of the serial Iteration latched for it unless that
+Iteration's incomplete read never showed it; an issue still open after that rejoins the order like any other
 (the shell and PowerShell Orchestrators still promote it while it stays open, #644). It lasts at most one invocation, which is why it is neither a label nor an environment variable — both are
 global, and would point every concurrent run at the same issue.
 _Avoid_: lock, claim, assignment, selection, priority.

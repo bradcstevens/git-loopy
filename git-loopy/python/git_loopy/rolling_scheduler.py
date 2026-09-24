@@ -790,6 +790,20 @@ class RollingScheduler:
         self._serial_requests.append((ref, reason))
 
     @property
+    def may_start_work(self) -> bool:
+        """Whether a new unit of work may start: units remain and no drain is latched.
+
+        A serial Iteration or a serial preparation pass is *new* work, and a
+        cap or an abort/stop drain finishes started work rather than starting
+        more (#219 §7.7).
+        """
+        return (
+            self.remaining_units != 0
+            and not self._abort_latched
+            and not self._stop_latched
+        )
+
+    @property
     def serial_latched(self) -> bool:
         """Whether validated serial demand has stopped refill (#219 §5.3)."""
         return self._serial_latched

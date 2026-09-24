@@ -821,6 +821,14 @@ class RepositoryVisibilityReporting(Protocol):
 class PinSpending(Protocol):
     """A source whose reads promote an invocation's **Pin** until it is spent."""
 
+    @property
+    def pin_parallel_safe(self) -> bool | None:
+        """Whether the accepted Pin carried ``parallel-safe`` at preflight.
+
+        ``None`` when there is no accepted Pin.
+        """
+        ...
+
     def spend_pin(self) -> None:
         """Stop promoting the Pin: it is spent for this Run (#430)."""
         ...
@@ -884,6 +892,7 @@ class GitHubIssueSource:
         self._include_prs = include_prs
         self._pin = pin
         self._pin_spent = False
+        self._pin_parallel_safe: bool | None = None
         self._repository: gh_module.Repo | None = None
         # Which (ref, defect) pairs §3.2's undated diagnostic has already named.
         # A membership refresh repeats on a backoff and a broken `created_at`
@@ -901,12 +910,22 @@ class GitHubIssueSource:
         """Stop promoting the Pin once it is spent (#430).
 
         The Runner spends it at the Pin's first binding, or at the end of the
-        serial Iteration latched for it once that Iteration was offered it — not
-        when its issue leaves the Pool: an issue whose pinned Iteration made no
-        progress rejoins the §3.2 order like any other, rather than heading
-        every later read.
+        serial Iteration latched for it unless that Iteration's incomplete read
+        never showed it — not when its issue leaves the Pool: an issue whose
+        pinned Iteration made no progress rejoins the §3.2 order like any other,
+        rather than heading every later read.
         """
         self._pin_spent = True
+
+    @property
+    def pin_parallel_safe(self) -> bool | None:
+        """Whether the accepted Pin carried ``parallel-safe`` at preflight (#430).
+
+        Read off the record preflight already fetched to accept the Pin, so
+        dispatch can classify it without depending on a later Pool read that
+        may fail. ``None`` before preflight, or with no Pin.
+        """
+        return self._pin_parallel_safe
 
     @property
     def _ordering_pin(self) -> int | None:
@@ -1027,6 +1046,8 @@ class GitHubIssueSource:
             number=self._pin,
         )
         if refusal is None:
+            assert issue is not None
+            self._pin_parallel_safe = LABEL_PARALLEL_SAFE in issue.labels
             self._diag.info("pinned issue #%s accepted for this invocation", self._pin)
             return None
         self._diag.error("%s", refusal.message)
