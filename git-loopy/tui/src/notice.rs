@@ -266,7 +266,11 @@ impl UnboundRunTally {
         let Some((owner_repo, number)) = blocker.rsplit_once('#') else {
             return false;
         };
+        // ASCII digits only, as Python reads them: `parse` would also take a
+        // sign, and `+2` is no issue number.
         owner_repo.eq_ignore_ascii_case(repository)
+            && !number.is_empty()
+            && number.bytes().all(|byte| byte.is_ascii_digit())
             && number
                 .parse::<i64>()
                 .is_ok_and(|number| pool.contains(&IssueRef::number(number)))

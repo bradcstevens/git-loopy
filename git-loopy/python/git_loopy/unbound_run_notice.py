@@ -216,8 +216,9 @@ class _Tally:
         return (
             bool(sep)
             and owner_repo.lower() == self.repository.lower()
-            # ASCII digits only, as Rust's ``parse::<i64>`` reads them: ``²``
-            # is a digit to ``str.isdigit`` but no issue number.
+            # ASCII digits only, as the Rust notice reads them: ``²`` is a
+            # digit to ``str.isdigit`` but no issue number, and neither is a
+            # signed ``+2``.
             and number.isascii()
             and number.isdigit()
             and int(number) in members

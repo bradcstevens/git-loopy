@@ -956,11 +956,11 @@
       ]
     },
     {
-      "id": "malformed_telemetry_is_skipped_and_a_non_ascii_number_is_no_member",
+      "id": "malformed_telemetry_is_skipped_and_only_ascii_digits_name_a_member",
       "repository": "o/r",
       "events": [
         {
-          "type": 7,
+          "type": [],
           "ts": "2026-09-23T22:42:28.458Z",
           "run_id": "r1",
           "iter": null
@@ -990,7 +990,7 @@
           "considered": 1,
           "issue": 2,
           "position": 1,
-          "reason": "blocked_by_open_dependency: o/r#²"
+          "reason": "blocked_by_open_dependency: o/r#², o/r#+2"
         },
         {
           "type": "wrapper.run.end",
@@ -1004,7 +1004,7 @@
       "notice": [
         "No workable issues: this Run bound nothing and ended all_blocked.",
         "The Run ended because the only ready-for-agent issue waits on open blockers.",
-        "Blockers outside the Pool: o/r#² — resolve them, or label other work ready-for-agent."
+        "Blockers outside the Pool: o/r#², o/r#+2 — resolve them, or label other work ready-for-agent."
       ]
     },
     {
