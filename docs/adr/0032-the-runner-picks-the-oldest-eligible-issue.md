@@ -96,9 +96,12 @@ Python Runner does this in serial Pickups as well.
   serial demand may relatch. A pin whose Iteration's read never showed it is the one
   exception: that Iteration keeps serial ownership for the pin, with no refill turn in between,
   because a refill turn is exactly how Lanes would go first. It ends at the first Iteration
-  that is offered the pin, or at the cap or a drain. That Iteration binds the pin or nothing,
-  spends no unit, and is granted again only once a Pool read completes.
+  that is offered the pin, or at the cap or a drain. That Iteration binds the pin or nothing
+  (a failed Pool or **Lease** read of the pin binds nothing), spends a unit like any
+  Iteration, and is granted again only once a read shows the pin or proves it gone.
 - ADR-0020's quarantine rule (#219 §2.11) keeps one unreadable candidate from
   head-of-line-blocking the candidates behind it. An unspent `parallel-safe` pin is the one
   exception: a failed read of it stops the Lane walk and is retried on the next, because
-  passing it is exactly how another issue would take the pin's Lane.
+  passing it is exactly how another issue would take the pin's Lane. A failed **Lease** read
+  of that pin still passes it over for the Run; that gap, and the bounds on a pin the tracker
+  keeps refusing, are [#645](https://github.com/bradcstevens/git-loopy/issues/645).

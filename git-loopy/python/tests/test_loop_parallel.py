@@ -6153,7 +6153,11 @@ def test_a_blocked_pin_is_spent_by_the_serial_iteration_that_skips_it(
 
 
 def _wire_unreadable_pin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, nth: int
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    nth: int,
+    persistent: bool = False,
 ) -> None:
     # A Pin's first view is its preflight read, which must pass for the Run to
     # start; the second is the driver's startup peek, the third its own Iteration.
@@ -6167,7 +6171,9 @@ def _wire_unreadable_pin(
         gh_cls=_UnreadableOnceGitHubClient,
         unreadable=44,
         nth=nth,
+        persistent=persistent,
     )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
 
 
 def test_a_pin_the_startup_peek_could_not_read_is_still_worked_first(
@@ -6192,11 +6198,11 @@ def test_a_pin_its_own_iteration_could_not_read_keeps_serial_ownership(
 
     Its read of the Pin failed while the rest of the Pool answered. Binding the
     head of the order instead would be #396's silent substitution, so it binds
-    nothing, spends no unit, and keeps serial ownership for the Pin.
+    nothing and keeps serial ownership for the Pin.
     """
     _wire_unreadable_pin(tmp_path, monkeypatch, nth=3)
 
-    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
 
     events = _logged_events(tmp_path)
     assert _bindings(events) == [(44, "pin")]
@@ -6246,8 +6252,67 @@ def test_an_unread_pin_does_not_end_the_run_on_the_rest_of_the_pool(
         nth=3,
     )
 
-    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
 
+    assert _bindings(_logged_events(tmp_path))[0] == (44, "pin")
+
+
+def test_the_cap_ends_a_run_whose_pin_the_tracker_keeps_refusing(
+    tmp_path, monkeypatch
+) -> None:
+    """Retrying an unreadable Pin spends the cap, so the Run still ends (#430).
+
+    Every read of the Pin after preflight fails. Its Iteration binds nothing
+    and spends the only unit; the Run then ends ``iteration_cap`` rather than
+    poll for a Pin that never answers.
+    """
+    _wire_unreadable_pin(tmp_path, monkeypatch, nth=2, persistent=True)
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_pinned_config(44, max_iterations=1)), timeout=30
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == []
+    run_ends = [e["outcome"] for e in events if e["type"] == "wrapper.run.end"]
+    assert run_ends == ["iteration_cap"]
+
+
+def test_a_pin_whose_lease_read_fails_keeps_its_serial_iteration(
+    tmp_path, monkeypatch
+) -> None:
+    """A failed Lease read of the Pin binds nothing rather than the next issue (#430).
+
+    An unreadable Lease remote is a read that did not happen, not the Pin
+    refused, so its Iteration may not hand the Pin's turn to #42.
+    """
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    real_probe = fake_git.probe_remote_ref
+    failures = {"left": 1}
+
+    def probe_once_unreadable(remote: str, ref: str) -> str | None:
+        if ref == lease_ref(44) and failures["left"]:
+            failures["left"] -= 1
+            raise git_module.GitError(["git", "ls-remote", remote, ref], 128, "no route")
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe_once_unreadable)
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
+
+    assert failures["left"] == 0
     assert _bindings(_logged_events(tmp_path)) == [(44, "pin")]
 
 
@@ -6323,29 +6388,29 @@ def test_a_pin_whose_iteration_read_nothing_keeps_serial_ownership(
     """A Pin Iteration whose whole Pool read failed hands no turn to Lanes (#430).
 
     Its only listing gave out, so the Iteration ends ``preflight_failed``
-    without having been offered the Pin, and spends no unit; the refill turn
-    after it would otherwise give the Run's only unit to a Lane.
+    without having been offered the Pin; the refill turn after it would
+    otherwise give the Run's other unit to a Lane.
     """
     _wire_unlistable_pin(tmp_path, monkeypatch, failing=frozenset({3}))
 
-    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
 
     events = _logged_events(tmp_path)
     assert _bindings(events) == [(44, "pin")]
     assert [e for e in events if e["type"] == "wrapper.contribution.start"] == []
 
 
-def test_a_tracker_outage_in_the_pins_iteration_costs_no_unit(
+def test_a_tracker_outage_in_the_pins_iteration_costs_one_unit(
     tmp_path, monkeypatch
 ) -> None:
     """The Pin waits for the tracker on reads, not on spent Iterations (#430).
 
-    Listings 3-5 fail: the Pin's own Iteration and two polls behind it. The
-    unread Iteration spends no unit, so a cap of 1 still works the Pin.
+    Listings 3-5 fail: the Pin's own Iteration and two polls behind it. Only
+    the unread Iteration spends a unit, so a cap of 2 still works the Pin.
     """
     _wire_unlistable_pin(tmp_path, monkeypatch, failing=frozenset({3, 4, 5}))
 
-    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=1)))
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
 
     events = _logged_events(tmp_path)
     assert _bindings(events) == [(44, "pin")]
@@ -6469,20 +6534,25 @@ class _UnreadableOnceGitHubClient(FakeGitHubClient):
     has always survived by *skipping* the candidate. Self-healing on the second
     ask is the point: a permanently unreadable issue would only prove the Run
     hangs, whereas a transient one proves the Run waits for evidence and then
-    acts on it. ``nth`` picks which read fails, the first by default.
+    acts on it. ``nth`` picks which read fails, the first by default;
+    ``persistent`` makes every read from the ``nth`` on fail.
     """
 
-    def __init__(self, *, unreadable: int, nth: int = 1, **kwargs: Any) -> None:
+    def __init__(
+        self, *, unreadable: int, nth: int = 1, persistent: bool = False, **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
         self._unreadable = unreadable
         self._nth = nth
+        self._persistent = persistent
         self._views = 0
         self.refusals = 0
 
     def issue_view(self, number: int) -> gh_module.Issue:
         if number == self._unreadable:
             self._views += 1
-        if number == self._unreadable and self._views == self._nth:
+        failing = self._views >= self._nth if self._persistent else self._views == self._nth
+        if number == self._unreadable and failing:
             self.refusals += 1
             self.issue_view_calls.append(number)
             raise gh_module.GhError(
@@ -6643,10 +6713,10 @@ def test_parallel_recovers_when_a_granted_serial_turn_cannot_read_the_pool(
     real_run_one_iteration = loop_module._Loop._run_one_iteration
     armed = itertools.count(1)
 
-    async def _arm_then_iterate(self, iter_num: int):
+    async def _arm_then_iterate(self, iter_num: int, **kwargs: Any):
         if next(armed) == 1:
             fake_gh.arm()
-        return await real_run_one_iteration(self, iter_num)
+        return await real_run_one_iteration(self, iter_num, **kwargs)
 
     monkeypatch.setattr(
         loop_module._Loop, "_run_one_iteration", _arm_then_iterate
