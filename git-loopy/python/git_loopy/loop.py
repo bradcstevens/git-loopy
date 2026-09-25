@@ -273,6 +273,7 @@ from git_loopy.sources import (
     GitHubIssueSource,
     IssueSource,
     LABEL_PARALLEL_SAFE,
+    PICKUP_UNAVAILABLE,
     PICKUP_VALIDATED,
     PoolCandidate,
     PoolCollection,
@@ -1015,20 +1016,22 @@ _RUN_OUTCOMES_MID_ITERATION = frozenset({"iteration_cap", RUN_OUTCOME_INTERRUPTE
 #: not overrule it. It asked about exactly that work.
 _ITERATION_POOL_UNRESOLVED = "pool_unresolved"
 
-#: Serial-Iteration outcomes that end the Run on a **proven** fact about the
-#: Pool: it was walked to completion and every candidate in it was defeated
-#: (#413), or named and left unresolvable (#542). Terminal wherever they arrive
-#: — including inside a Parallel Run's granted serial turn — because no later
-#: turn could read anything different, so carrying on would re-walk the same
-#: Pool until the iteration cap.
 class _PinUnreadAtPickup(Exception):
-    """The Pin's own Iteration could not read the Pin's **Lease** (#430).
+    """The Pin's own Iteration could not read the Pin at Pickup (#430).
+
+    Its **Readiness** or **Lease** read did not happen.
 
     Raised out of the ordered walk so that Iteration binds nothing rather than
     the next candidate in order.
     """
 
 
+#: Serial-Iteration outcomes that end the Run on a **proven** fact about the
+#: Pool: it was walked to completion and every candidate in it was defeated
+#: (#413), or named and left unresolvable (#542). Terminal wherever they arrive
+#: — including inside a Parallel Run's granted serial turn — because no later
+#: turn could read anything different, so carrying on would re-walk the same
+#: Pool until the iteration cap.
 _SERIAL_DEFEATED_OUTCOMES = frozenset(
     {"all_skipped", "all_blocked", _ITERATION_POOL_UNRESOLVED}
 )
@@ -1112,6 +1115,15 @@ class DynamicRouteUnavailable(RuntimeError):
     (:class:`~git_loopy.dynamic_route.RoutingUnavailableReason`) as its message,
     so the **Pickup skip** an operator reads names which half of the decision
     failed rather than merely that one did.
+    """
+
+
+class _CandidateUnread(DynamicRouteUnavailable):
+    """The candidate's current record could not be read at preparation.
+
+    A read that did not happen rather than a routing refusal (#542). Callers
+    that do not tell them apart handle it as :class:`DynamicRouteUnavailable`;
+    the Pin's own Iteration treats it as the Pin unread (#430).
     """
 
 
@@ -2531,7 +2543,12 @@ class _Loop:
                 )
                 if current.outcome != PICKUP_VALIDATED:
                     self._preparation.take(item.ref)
-                    raise DynamicRouteUnavailable(
+                    unavailable = (
+                        _CandidateUnread
+                        if current.outcome == PICKUP_UNAVAILABLE
+                        else DynamicRouteUnavailable
+                    )
+                    raise unavailable(
                         f"current candidate eligibility {current.outcome}"
                     )
                 assert current.item is not None
@@ -3340,13 +3357,6 @@ class _Loop:
             except TaskTypeError as exc:
                 return f"routing refused: {exc}"
             self._routes[item.ref] = resolution
-            if holding_for_pin and item.ref == self._live_pin:
-                refusal = self._take_lease_at_pickup(item)
-                if isinstance(refusal, AdmissionRefusal) and refusal.unresolved:
-                    # A Lease read that did not happen is the Pin unread, not
-                    # the Pin refused: its Iteration binds nothing (#430).
-                    raise _PinUnreadAtPickup
-                return refusal
             # **Taking the Lease is the last step of Pickup** (ADR-0033 §2.4).
             # Last, so a candidate this Run would have passed over anyway never
             # costs a round trip or a Lease; and *inside* `admit`, because a
@@ -3356,18 +3366,34 @@ class _Loop:
             # Run over an issue somebody else is simply already working.
             return self._take_lease_at_pickup(item)
 
+        def admit_holding_for_pin(
+            item: AfkReadyItem,
+        ) -> str | AdmissionRefusal | None:
+            refusal = admit(item)
+            if (
+                item.ref == self._live_pin
+                and isinstance(refusal, AdmissionRefusal)
+                and refusal.unresolved
+            ):
+                # A Readiness or Lease read of the Pin that did not happen is
+                # the Pin unread, not the Pin refused, so the Iteration latched
+                # for it binds nothing rather than the next candidate (#430).
+                raise _PinUnreadAtPickup
+            return refusal
+
+        unbound = SerialPickup(
+            item=None, position=None, reason=None, skipped=(), considered=tuple(pool)
+        )
         while True:
             try:
-                pickup = pick_serial(pool, admit=admit, pin=self._live_pin)
+                pickup = pick_serial(
+                    pool,
+                    admit=admit_holding_for_pin if holding_for_pin else admit,
+                    pin=self._live_pin,
+                )
             except _PinUnreadAtPickup:
                 self._pin_unread = True
-                return SerialPickup(
-                    item=None,
-                    position=None,
-                    reason=None,
-                    skipped=(),
-                    considered=tuple(pool),
-                )
+                return unbound
             if pickup.item is None:
                 break
             try:
@@ -3375,6 +3401,16 @@ class _Loop:
                     pickup.item, routed=self._routes[pickup.item.ref]
                 )
             except DynamicRouteUnavailable as exc:
+                if (
+                    isinstance(exc, _CandidateUnread)
+                    and holding_for_pin
+                    and pickup.item.ref == self._live_pin
+                ):
+                    # The Pin's preparation read failed: the Pin unread (#430).
+                    self._routes.pop(pickup.item.ref, None)
+                    self._release_lease(pickup.item.ref)
+                    self._pin_unread = True
+                    return unbound
                 # Refuse this candidate once, not the useful Static work
                 # behind it. The ordered walk remains the only dispatcher.
                 routing_refusals[pickup.item.ref] = f"dynamic route unavailable: {exc}"
@@ -3426,7 +3462,8 @@ class _Loop:
         """Whether the last Iteration could not read the Pin (#430).
 
         Its incomplete Pool read never showed the Pin, or, in the Pin's own
-        Iteration, the Pin's **Lease** read failed at Pickup.
+        Iteration, the Pin's Readiness, preparation or **Lease** read failed
+        at Pickup.
 
         Distinct from a Pin a complete read did not find: that one left the
         Pool, and nothing it could still be owed (#430).
@@ -3442,8 +3479,8 @@ class _Loop:
         """Spend the Pin: later Pickups neither promote nor name it (#430).
 
         A Pin is spent by the first Pickup that binds it, or by the end of the
-        serial Iteration latched for it, unless that Iteration's incomplete
-        Pool read never showed it (:attr:`pin_unread`).
+        serial Iteration latched for it, unless that Iteration could not read
+        it (:attr:`pin_unread`).
         """
         self._live_pin = None
         if isinstance(self._source, sources_module.PinnedSource):
@@ -3655,8 +3692,8 @@ class _Loop:
     def _finish_unread_pin_iteration(self, iter_num: int) -> tuple[str, int, int]:
         """End the Pin's Iteration unbound: it could not read the Pin.
 
-        Either its Pool read never showed the Pin, or the Pin's **Lease** read
-        failed at Pickup.
+        Either its Pool read never showed the Pin, or the Pin's Readiness,
+        preparation or **Lease** read failed at Pickup.
 
         Working the head of the order instead would be the silent substitution
         #396 exists to prevent, so this Iteration binds nothing, and ends under
@@ -4975,7 +5012,7 @@ class _ParallelLoop:
                     if pin_iteration_pending:
                         # The Pin is spent whatever its Iteration did with it:
                         # closed it, made no progress, or skipped it (#430). An
-                        # Iteration whose read never showed it did none of those.
+                        # Iteration that could not read it did none of those.
                         pin_iteration_pending = False
                         pin_unread = self._serial.pin_unread
                         if not pin_unread:
@@ -5291,8 +5328,8 @@ class _ParallelLoop:
         first driver pass reserve nothing and grant the Pin's serial Iteration
         at once — even for a **Blocked** Pin, which that Iteration then skips.
         :meth:`_drive_rolling` spends the Pin when the Iteration ends, unless
-        its own incomplete Pool read never showed the Pin; then the Pin keeps
-        serial ownership for the next one.
+        it could not read the Pin (Pool, Readiness, preparation or **Lease**
+        read); then the Pin keeps serial ownership for the next one.
 
         The Pin is classified by the labels preflight read to accept it
         (:attr:`~git_loopy.sources.PinnedSource.pin_parallel_safe`), so a failed

@@ -81,8 +81,8 @@ until the tracker answers rather than hand that Lane to the next candidate. Lack
 reason to refuse a pin.
 
 The pin is spent by its first binding, or by the end of that first serial Iteration unless
-that Iteration's incomplete Pool read never showed it (the pin then keeps serial ownership for
-the next Iteration), and the oldest-first order then applies — including to the pinned issue if it is still open. The
+that Iteration could not read it — a failed Pool, Readiness, preparation or **Lease** read of
+the pin (the pin then keeps serial ownership for the next Iteration), and the oldest-first order then applies — including to the pinned issue if it is still open. The
 Python Runner does this in serial Pickups as well.
 
 **Conflicts, flagged rather than resolved here:**
@@ -97,7 +97,7 @@ Python Runner does this in serial Pickups as well.
   exception: that Iteration keeps serial ownership for the pin, with no refill turn in between,
   because a refill turn is exactly how Lanes would go first. It ends at the first Iteration
   that is offered the pin, or at the cap or a drain. That Iteration binds the pin or nothing
-  (a failed Pool or **Lease** read of the pin binds nothing), spends a unit like any
+  (any failed read of the pin binds nothing), spends a unit like any
   Iteration, and is granted again only once a read shows the pin or proves it gone.
 - ADR-0020's quarantine rule (#219 §2.11) keeps one unreadable candidate from
   head-of-line-blocking the candidates behind it. An unspent `parallel-safe` pin is the one

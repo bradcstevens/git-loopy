@@ -6168,7 +6168,7 @@ def _wire_unreadable_pin(
             _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
             _make_issue(44, labels=["ready-for-agent"]),
         ],
-        gh_cls=_UnreadableOnceGitHubClient,
+        gh_cls=_UnreadableViewGitHubClient,
         unreadable=44,
         nth=nth,
         persistent=persistent,
@@ -6247,7 +6247,7 @@ def test_an_unread_pin_does_not_end_the_run_on_the_rest_of_the_pool(
             _make_issue(44, labels=["ready-for-agent"]),
             _make_issue(45, labels=["ready-for-agent"], blocked_by=blocked),
         ],
-        gh_cls=_UnreadableOnceGitHubClient,
+        gh_cls=_UnreadableViewGitHubClient,
         unreadable=44,
         nth=3,
     )
@@ -6436,7 +6436,7 @@ def test_a_parallel_safe_pin_whose_first_read_fails_still_takes_the_first_lane(
             _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
             _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
         ],
-        gh_cls=_UnreadableOnceGitHubClient,
+        gh_cls=_UnreadableViewGitHubClient,
         unreadable=43,
         nth=2,
     )
@@ -6526,16 +6526,16 @@ def test_a_parallel_safe_pin_with_a_cap_of_one_works_only_the_pin(
 # ---------------------------------------------------------------------------
 
 
-class _UnreadableOnceGitHubClient(FakeGitHubClient):
-    """A tracker whose authoritative read of one issue fails exactly once.
+class _UnreadableViewGitHubClient(FakeGitHubClient):
+    """A tracker whose authoritative read of one issue fails, once by default.
 
     Models the ordinary transient ``gh issue view`` failure (a 502, a dropped
     connection) that :meth:`~git_loopy.sources.GitHubIssueSource.collect_pool`
-    has always survived by *skipping* the candidate. Self-healing on the second
-    ask is the point: a permanently unreadable issue would only prove the Run
-    hangs, whereas a transient one proves the Run waits for evidence and then
-    acts on it. ``nth`` picks which read fails, the first by default;
-    ``persistent`` makes every read from the ``nth`` on fail.
+    has always survived by *skipping* the candidate. By default it self-heals
+    on the second ask, which proves the Run waits for evidence and then acts on
+    it. ``nth`` picks which read fails, the first by default; ``persistent``
+    makes every read from the ``nth`` on fail, for a test that proves what
+    bounds a Run whose issue never answers.
     """
 
     def __init__(
@@ -6588,7 +6588,7 @@ def test_parallel_never_ends_empty_on_a_partial_pool_read(
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
-    fake_gh = _UnreadableOnceGitHubClient(
+    fake_gh = _UnreadableViewGitHubClient(
         unreadable=44,
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[_make_issue(44, labels=["ready-for-agent"])],
@@ -6641,13 +6641,14 @@ def test_parallel_never_ends_empty_on_a_partial_pool_read(
 class _ListRefusesWhenArmedGitHubClient(FakeGitHubClient):
     """A tracker whose ``gh issue list`` refuses once, on demand.
 
-    The peer of :class:`_UnreadableOnceGitHubClient` for the *other* read
+    The peer of :class:`_UnreadableViewGitHubClient` for the *other* read
     ``collect_pool`` makes. Armed rather than counted so a test can put the
     refusal on one exact call — which is the whole point of #541's Parallel
     half: the same transient failure means something different depending on
     whether it lands on the driver's peek or inside the serial Iteration the
     peek's evidence went on to grant. ``failing`` instead names the 1-based
-    listing calls that refuse, for a test that knows the call order.
+    listing calls that refuse without arming, for a test that knows the call
+    order.
     """
 
     def __init__(self, *, failing: frozenset[int] = frozenset(), **kwargs: Any) -> None:
@@ -9831,6 +9832,42 @@ def _dynamic_parallel_config(**overrides) -> RunConfig:
     )
     base.update(overrides)
     return RunConfig(**base)
+
+
+def test_a_pins_failed_preparation_read_binds_nothing_under_a_dynamic_route(
+    tmp_path, monkeypatch
+) -> None:
+    """A failed preparation read of the Pin is the Pin unread, not refused (#430).
+
+    The **Dynamic route** re-reads the bound candidate before it routes. One
+    failed read of the Pin there used to pass it over and bind #42 in the
+    Pin's own Iteration.
+    """
+    fake_gh = _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+        gh_cls=_UnreadableViewGitHubClient,
+        unreadable=44,
+        nth=4,
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    asyncio.run(
+        loop_module.run(_dynamic_parallel_config(issue_pin=44, max_iterations=2))
+    )
+
+    assert isinstance(fake_gh, _UnreadableViewGitHubClient)
+    assert fake_gh.refusals == 1
+    assert _bindings(_logged_events(tmp_path)) == [(44, "pin")]
 
 
 def test_each_lanes_final_dynamic_route_is_published_to_its_own_issue(
