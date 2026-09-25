@@ -9870,6 +9870,47 @@ def test_a_pins_failed_preparation_read_binds_nothing_under_a_dynamic_route(
     assert _bindings(_logged_events(tmp_path)) == [(44, "pin")]
 
 
+def test_a_transient_selector_failure_on_the_pin_binds_nothing(
+    tmp_path, monkeypatch
+) -> None:
+    """A router call that did not happen is the Pin unread, not refused (#430).
+
+    The selector fails once while routing the Pin. ``selector_unavailable``
+    says nothing about the Pin, so its Iteration binds nothing rather than #42.
+    """
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    elect = _elects_lane_model("claude-opus-5")
+    failures = {"left": 1}
+
+    def _flaky(request):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise RuntimeError("selector endpoint returned 502")
+        return elect(request)
+
+    _dynamic_lane_ports(monkeypatch, answer=_flaky)
+
+    asyncio.run(
+        loop_module.run(_dynamic_parallel_config(issue_pin=44, max_iterations=2))
+    )
+
+    events = _logged_events(tmp_path)
+    assert failures["left"] == 0
+    assert _bindings(events) == [(44, "pin")]
+
+
 def test_each_lanes_final_dynamic_route_is_published_to_its_own_issue(
     tmp_path, monkeypatch
 ) -> None:

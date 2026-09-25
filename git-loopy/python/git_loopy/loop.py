@@ -1119,12 +1119,32 @@ class DynamicRouteUnavailable(RuntimeError):
 
 
 class _CandidateUnread(DynamicRouteUnavailable):
-    """The candidate's current record could not be read at preparation.
+    """A read routing needed did not happen: not a refusal of the candidate.
 
-    A read that did not happen rather than a routing refusal (#542). Callers
-    that do not tell them apart handle it as :class:`DynamicRouteUnavailable`;
-    the Pin's own Iteration treats it as the Pin unread (#430).
+    The candidate's own record at preparation, or one of the router's external
+    reads (:data:`_TRANSIENT_ROUTING_REFUSALS`) (#542). Callers that do not
+    tell them apart handle it as :class:`DynamicRouteUnavailable`; the Pin's
+    own Iteration treats it as the Pin unread (#430).
     """
+
+
+#: Dynamic-routing refusals caused by an external read or call that did not
+#: happen — the evidence feed, the capability listing, the selector — rather
+#: than by anything proven about the candidate (#430).
+_TRANSIENT_ROUTING_REFUSALS: frozenset[RoutingUnavailableReason] = frozenset(
+    {
+        RoutingUnavailableReason.SOURCE_UNAVAILABLE,
+        RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE,
+        RoutingUnavailableReason.SELECTOR_UNAVAILABLE,
+    }
+)
+
+
+def _routing_refusal(reason: RoutingUnavailableReason) -> DynamicRouteUnavailable:
+    """The exception a router refusal raises: unread when transient (#430)."""
+    if reason in _TRANSIENT_ROUTING_REFUSALS:
+        return _CandidateUnread(reason.value)
+    return DynamicRouteUnavailable(reason.value)
 
 
 def _assessed_task_type(resolution: RoutingResolution) -> str:
@@ -1967,7 +1987,9 @@ class _Loop:
         """Run one AFK Iteration and give back every **Lease** it took.
 
         ``holding_for_pin`` marks the serial Iteration the Rolling driver
-        latched for the **Pin** (#430): it binds the Pin or nothing.
+        latched for the **Pin** (#430): a failed read of the Pin makes it bind
+        nothing rather than the next candidate. A Pin it reads and skips (for
+        example as **Blocked**) is passed over as in any Pickup.
 
         The release is in a ``finally`` because a Lease must not outlive the
         Iteration that took it *however* that Iteration ends — returned,
@@ -2626,7 +2648,7 @@ class _Loop:
         else:
             task_type_labelled = await self._labelled_for_routing(item)
         if isinstance(task_type_labelled, RoutingUnavailable):
-            raise DynamicRouteUnavailable(task_type_labelled.reason.value)
+            raise _routing_refusal(task_type_labelled.reason)
         resolution = routed
         if task_type_labelled is not item:
             try:
@@ -2890,7 +2912,7 @@ class _Loop:
         request = self._routing_request(item, resolution)
         decision = await self._bound_dynamic_decision(item, request, router)
         if isinstance(decision, RoutingUnavailable):
-            raise DynamicRouteUnavailable(decision.reason.value)
+            raise _routing_refusal(decision.reason)
         self._diag.info(
             "issue #%s %s to %s @ %s (%s): %s",
             item.ref,
@@ -3406,7 +3428,8 @@ class _Loop:
                     and holding_for_pin
                     and pickup.item.ref == self._live_pin
                 ):
-                    # The Pin's preparation read failed: the Pin unread (#430).
+                    # A Dynamic-route read for the Pin did not happen: the Pin
+                    # unread, not refused (#430).
                     self._routes.pop(pickup.item.ref, None)
                     self._release_lease(pickup.item.ref)
                     self._pin_unread = True
@@ -3462,7 +3485,7 @@ class _Loop:
         """Whether the last Iteration could not read the Pin (#430).
 
         Its incomplete Pool read never showed the Pin, or, in the Pin's own
-        Iteration, the Pin's Readiness, preparation or **Lease** read failed
+        Iteration, the Pin's Readiness, Dynamic-route or **Lease** read failed
         at Pickup.
 
         Distinct from a Pin a complete read did not find: that one left the
@@ -3693,7 +3716,7 @@ class _Loop:
         """End the Pin's Iteration unbound: it could not read the Pin.
 
         Either its Pool read never showed the Pin, or the Pin's Readiness,
-        preparation or **Lease** read failed at Pickup.
+        Dynamic-route or **Lease** read failed at Pickup.
 
         Working the head of the order instead would be the silent substitution
         #396 exists to prevent, so this Iteration binds nothing, and ends under
@@ -5328,7 +5351,7 @@ class _ParallelLoop:
         first driver pass reserve nothing and grant the Pin's serial Iteration
         at once — even for a **Blocked** Pin, which that Iteration then skips.
         :meth:`_drive_rolling` spends the Pin when the Iteration ends, unless
-        it could not read the Pin (Pool, Readiness, preparation or **Lease**
+        it could not read the Pin (Pool, Readiness, Dynamic-route or **Lease**
         read); then the Pin keeps serial ownership for the next one.
 
         The Pin is classified by the labels preflight read to accept it
