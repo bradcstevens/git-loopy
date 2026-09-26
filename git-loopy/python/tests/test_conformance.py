@@ -1019,6 +1019,12 @@ def test_wrapper_dashboard_fault_is_retired_and_unreusable() -> None:
     assert "wrapper.dashboard.fault" not in _EVENT_SCHEMA["event_types"].values()
 
 
+def test_wrapper_pipeline_quiescent_is_retired_and_unreusable() -> None:
+    """ADR-0065 retired it; the parity tests alone would pass a coordinated re-add."""
+    assert "WRAPPER_PIPELINE_QUIESCENT" not in events_module.__all__
+    assert "wrapper.pipeline.quiescent" not in _EVENT_SCHEMA["event_types"].values()
+
+
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """Two axes, and the literals are what keep them from being read as one.
 

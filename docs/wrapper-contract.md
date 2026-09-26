@@ -1869,13 +1869,15 @@ host's own listing (§14.3), and exact-dimension Route publication with its
 migration and capacity refresh (§14.5). `routing-resolution.json` declares
 that provenance at 2.10; `event-schema.json` and `dashboard-insights.json`
 carried it at 2.10 and advanced to 2.11 with the Run-start issue source and
-2.12 with Run-end refusals (§12). Contract 2.13 (ADR-0066) changed no Event
-fixture, so both stayed at 2.12 while the contract header and the Python
-`WRAPPER_CONTRACT_VERSION` read 2.13; both then moved from 2.12 straight to
-2.14 with the retirement of `wrapper.pipeline.quiescent` (ADR-0065), and
-neither ever carried 2.13. `discriminator.json` reached 2.10 separately with
-the Wayfinder-map exclusion (§3.1). Event wire compatibility remains 1.2,
-and historical streams' interpretation is unchanged.
+2.12 with Run-end refusals (§12). Contract 2.13 (ADR-0066) edited both
+fixtures' content, moving every `release_version` example from `-dev.N` to
+`-alpha.N` and rewording `event-schema.json`'s `wrapper.release.advanced`
+`emitted` rule, but left both version pins at 2.12 while the contract header
+and the Python `WRAPPER_CONTRACT_VERSION` read 2.13. Both pins then moved from
+2.12 straight to 2.14 with the retirement of `wrapper.pipeline.quiescent`
+(ADR-0065), so neither ever carried 2.13. `discriminator.json` reached 2.10
+separately with the Wayfinder-map exclusion (§3.1). Event wire compatibility
+remains 1.2, and historical streams' interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
