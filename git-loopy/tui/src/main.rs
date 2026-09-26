@@ -85,7 +85,8 @@ controls (--render, --attach):
   drag the Activity header  size the Activity band
   click it, or a            collapse the band to its header, or restore it
   shift+up, shift+down      size it a row at a time, with no mouse at all
-  q, ctrl-c                 hand the terminal back and stop the client
+  s                         request Stop of the attached Run; press again to escalate
+  q, ctrl-c                 hand the terminal back; the Run keeps going
 
 A Run that ends empty_pool, all_blocked or all_skipped without binding an
 issue keeps the Dashboard up with a notice saying why, until q. The launching client sets GIT_LOOPY_TUI_REPOSITORY to the
@@ -695,7 +696,7 @@ fn render(options: &Options) -> Result<(), String> {
     let pending = Arc::new(Pending::new(INPUT_CAPACITY));
     let stopping = Arc::new(AtomicBool::new(false));
     read_the_trace(Arc::clone(&pending));
-    read_the_keyboard(Arc::clone(&pending), Arc::clone(&stopping));
+    read_the_keyboard(Arc::clone(&pending), Arc::clone(&stopping), None);
 
     let outcome = drive_dashboard(&mut surface, &mut session, Pending::drain(&pending))
         .map_err(|error| format!("the presentation input failed: {error}"));
@@ -719,9 +720,13 @@ fn attach(options: &Options) -> Result<(), String> {
     read_the_attached_trace(
         Arc::clone(&pending),
         Arc::clone(&stopping),
-        AttachFollower::new(paths.trace, paths.control),
+        AttachFollower::new(paths.trace, paths.control.clone()),
     );
-    read_the_keyboard(Arc::clone(&pending), Arc::clone(&stopping));
+    read_the_keyboard(
+        Arc::clone(&pending),
+        Arc::clone(&stopping),
+        Some(paths.control),
+    );
 
     let outcome = drive_dashboard(&mut surface, &mut session, Pending::drain(&pending))
         .map_err(|error| format!("the presentation input failed: {error}"));
@@ -931,14 +936,158 @@ fn is_run_end_line(line: &str) -> bool {
     matches!(Event::from_jsonl_line(line), Some(event) if event.kind == "wrapper.run.end")
 }
 
+/// Where an attached client writes a Stop, beside the control artifact.
+///
+/// The artifact itself stays the liveness lock. This directory is the one
+/// verb that crosses into the Run, and it is the same layout the Python
+/// Runner reads: `<control-path>.stops/<request-id>` containing
+/// `{"verb":"stop","seq":N}`.
+fn stops_directory(control: &Path) -> PathBuf {
+    let mut name = control.as_os_str().to_os_string();
+    name.push(".stops");
+    PathBuf::from(name)
+}
+
+/// Link one logical Stop into the request directory.
+///
+/// `Ok(false)` is redelivery of an identity already on disk, not a second
+/// Stop. A failed write leaves no complete request, so the caller retries
+/// the same identity.
+fn submit_stop(control: &Path, request_id: &str, seq: i64) -> io::Result<bool> {
+    let directory = stops_directory(control);
+    std::fs::create_dir_all(&directory)?;
+    let target = directory.join(request_id);
+    if target.is_file() {
+        return Ok(false);
+    }
+    let temporary = directory.join(format!(".{request_id}.tmp"));
+    let body = serde_json::json!({"verb": "stop", "seq": seq});
+    {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temporary)?;
+        serde_json::to_writer(&mut file, &body)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+    }
+    match std::fs::hard_link(&temporary, &target) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&temporary);
+            Ok(true)
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&temporary);
+            Ok(false)
+        }
+        Err(_) if target.is_file() => {
+            let _ = std::fs::remove_file(&temporary);
+            Ok(false)
+        }
+        Err(error) => {
+            // `hard_link` can be refused on a filesystem that still accepts a
+            // rename. Rename only when the name is still absent, so a
+            // concurrent client cannot be overwritten.
+            if target.exists() {
+                let _ = std::fs::remove_file(&temporary);
+                return Ok(false);
+            }
+            std::fs::rename(&temporary, &target)
+                .map(|()| true)
+                .map_err(|rename| {
+                    let _ = std::fs::remove_file(&temporary);
+                    if target.is_file() {
+                        return io::Error::new(io::ErrorKind::AlreadyExists, error);
+                    }
+                    rename
+                })
+        }
+    }
+}
+
+/// One attached client's Stop gesture.
+///
+/// A keypress that reached disk is spent: the next press is a deliberate
+/// further Stop and takes a new identity. A keypress that did not reach disk
+/// is retried as the same identity, so automatic redelivery cannot escalate.
+struct StopGesture {
+    last_id: Option<String>,
+    delivered: bool,
+    ids: u64,
+}
+
+impl StopGesture {
+    fn new() -> Self {
+        Self {
+            last_id: None,
+            delivered: true,
+            ids: 0,
+        }
+    }
+
+    fn request_id(&mut self) -> String {
+        if !self.delivered {
+            return self
+                .last_id
+                .clone()
+                .expect("a failed Stop keeps the identity it already chose");
+        }
+        self.ids += 1;
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or(0);
+        let id = format!("s{nanos:x}{:x}", self.ids);
+        self.last_id = Some(id.clone());
+        self.delivered = false;
+        id
+    }
+
+    fn submit(&mut self, control: &Path) -> io::Result<bool> {
+        let id = self.request_id();
+        let seq = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| i64::try_from(since.as_nanos()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        match submit_stop(control, &id, seq) {
+            Ok(created) => {
+                self.delivered = true;
+                Ok(created)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// What one key does to the client, and whether it crosses into the Run.
+enum KeyEffect {
+    /// Local to this client. Never written anywhere.
+    Navigate(Key),
+    /// The one verb that crosses: a Stop request, not a navigation input.
+    Stop,
+}
+
+fn key_effect(code: KeyCode, modifiers: KeyModifiers) -> Option<KeyEffect> {
+    if modifiers.is_empty() && matches!(code, KeyCode::Char('s')) {
+        return Some(KeyEffect::Stop);
+    }
+    intent(code, modifiers).map(KeyEffect::Navigate)
+}
+
 /// The dedicated terminal reader.
 ///
 /// Reads the *controlling terminal*, never standard input: standard input is
 /// the Orchestrator's pipe, and the two must never contend for a byte. It reads
 /// the pointer as well as the keyboard, because both arrive on the one stream a
 /// terminal in mouse-reporting mode multiplexes them onto.
-fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>) {
+///
+/// `control` is the attached Run's control artifact. Without one, Stop has
+/// nowhere to go and is ignored — it does not become Quit. Navigation is never
+/// written to that artifact.
+fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>, control: Option<PathBuf>) {
     std::thread::spawn(move || {
+        let mut stop = StopGesture::new();
         while !stopping.load(Ordering::Relaxed) {
             match event::poll(POLL) {
                 Ok(true) => {}
@@ -947,8 +1096,14 @@ fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>) {
             }
             match event::read() {
                 Ok(TerminalEvent::Key(key)) if key.kind != KeyEventKind::Release => {
-                    if let Some(intent) = intent(key.code, key.modifiers) {
-                        pending.offer(Input::Key(intent));
+                    match key_effect(key.code, key.modifiers) {
+                        Some(KeyEffect::Navigate(intent)) => pending.offer(Input::Key(intent)),
+                        Some(KeyEffect::Stop) => {
+                            if let Some(control) = control.as_ref() {
+                                let _ = stop.submit(control);
+                            }
+                        }
+                        None => {}
                     }
                 }
                 Ok(TerminalEvent::Mouse(mouse)) => {
@@ -1365,6 +1520,62 @@ mod tests {
             intent(KeyCode::PageDown, KeyModifiers::CONTROL),
             Some(Key::ActivityPageDown)
         );
+    }
+
+    #[test]
+    fn navigation_stays_local_and_only_stop_crosses() {
+        for code in [
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('q'),
+            KeyCode::Up,
+            KeyCode::Enter,
+        ] {
+            assert!(
+                !matches!(key_effect(code, KeyModifiers::NONE), Some(KeyEffect::Stop)),
+                "navigation must not be a Stop"
+            );
+        }
+        assert!(matches!(
+            key_effect(KeyCode::Char('s'), KeyModifiers::NONE),
+            Some(KeyEffect::Stop)
+        ));
+        assert!(intent(KeyCode::Char('s'), KeyModifiers::NONE).is_none());
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("git-loopy-stop-{}-{nanos}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch dir");
+        let control = root.join("run.control");
+        std::fs::write(&control, b"").expect("control artifact");
+
+        let mut gesture = StopGesture::new();
+        assert!(gesture.submit(&control).expect("first Stop"));
+        let first = std::fs::read_dir(stops_directory(&control))
+            .expect("stops dir")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(first.len(), 1, "one logical Stop");
+
+        assert!(gesture.submit(&control).expect("second Stop"));
+        let names = std::fs::read_dir(stops_directory(&control))
+            .expect("stops dir")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(names.len(), 2, "a deliberate second Stop is a new identity");
+
+        let mut retry = StopGesture::new();
+        let id = retry.request_id();
+        assert_eq!(
+            retry.request_id(),
+            id,
+            "a failed write retries the same identity"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn invocation(arguments: &[&str]) -> Invocation {

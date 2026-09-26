@@ -127,7 +127,12 @@ did name rather than reporting nothing.
 | Scroll the Queue or open Log by a page | `PageUp`, `PageDown` |
 | Scroll the Activity tail without changing focus | `Ctrl-PageUp`, `Ctrl-PageDown` |
 | Resume following the Log and Activity tails | `f` |
+| Stop the attached Run | `s` (again to escalate; not Quit) |
 | Quit | `q`, `Ctrl-C`, `Ctrl-D` |
+
+`s` writes a Stop request beside the attached Run's control artifact and leaves
+this client attached, so the Wind-down is visible here. It does not Stop a
+Dashboard that is not attached. `q` still only hands the terminal back.
 
 The cursor holds an **issue, not a row**. The Queue groups active before queued
 before history, so a row moves the moment an issue is activated, and a

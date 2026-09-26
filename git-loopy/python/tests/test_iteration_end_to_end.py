@@ -88,7 +88,8 @@ from git_loopy import persist as persist_module
 from git_loopy.persist import WritersBundle, create_writers
 from git_loopy.readiness import BlockedByRead, BlockerNode
 from git_loopy.route_publication import RouteDeliveryError
-from git_loopy.run_control import is_run_alive
+from git_loopy.run_control import control_path_for_trace, is_run_alive
+from git_loopy.stop_request import await_stop_acknowledgment, submit_stop
 from git_loopy.run_routing_preflight import resolve_run_routing_preflight
 from git_loopy.session import SKILL_TOOL_NAME
 from git_loopy.sinks import SinkFanout
@@ -1788,6 +1789,54 @@ def test_the_second_stop_cancels_the_serial_session_and_charges_no_strike(
         await asyncio.sleep(0)
         assert not run_task.done(), "the first Stop cancels nothing"
         built[0].request_stop_cancel()
+        return await asyncio.wait_for(run_task, timeout=5)
+
+    assert asyncio.run(scenario()) == 1
+
+    events = _read_events(tmp_path)
+    assert [
+        (event["cause"], event["stage"], event["draining"])
+        for event in events
+        if event["type"] == "wrapper.stop.requested"
+    ] == [
+        ("operator_stop", "drain", 0),
+        ("operator_stop", "cancel", 0),
+    ]
+    assert [e for e in events if e["type"] == "wrapper.strike"] == []
+    (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
+    assert run_end["outcome"] == "operator_stop"
+
+
+def test_a_client_that_did_not_start_the_run_enters_the_same_two_stage_stop(
+    tmp_path, monkeypatch
+) -> None:
+    """A Stop written beside the control artifact is the launching terminal's Stop.
+
+    The client does not call the Run, and it does not emit the Wind-down. The
+    Run reads the request and announces the same two stages, once each.
+    Redelivery of the first request does not escalate.
+    """
+    _fake_git, started, _release, _built = _wire_serial_stop_run(
+        tmp_path, monkeypatch, issues=[42]
+    )
+    cfg = RunConfig(issue_source="github", max_iterations=3, max_nmt_strikes=3)
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        trace = next((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+        control = control_path_for_trace(trace)
+        submit_stop(control, "attached-client", seq=1)
+        drain = await asyncio.to_thread(
+            await_stop_acknowledgment, trace, stage="drain", timeout=2.0
+        )
+        assert drain.status == "acknowledged"
+        assert drain.stage == "drain"
+        assert not run_task.done(), "the first Stop cancels nothing"
+        submit_stop(control, "attached-client", seq=1)
+        await asyncio.sleep(0.2)
+        assert not run_task.done(), "redelivery is not a second Stop"
+        submit_stop(control, "another-client", seq=2)
         return await asyncio.wait_for(run_task, timeout=5)
 
     assert asyncio.run(scenario()) == 1

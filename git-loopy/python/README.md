@@ -990,6 +990,18 @@ rule `git-loopy sweep` already follows.
 The listing is purely observational: it starts no agent work, sends no Stop,
 reclaims nothing, and never reaches your issue tracker. It needs only `git`.
 
+An attached Dashboard requests **Stop** with `s`. That writes one durable
+request beside the Run's control artifact (`<trace>.control.stops/`); it does
+not emit a Wind-down. The Run reads the request and latches the same two-stage
+Wind-down a Stop from the launching terminal enters: the first distinct request
+drains, a deliberate second escalates to cancellation, and a further request
+adds no harder stage. Sending the same request again is redelivery, not a
+second Stop. `q` still only hands the terminal back — the Run keeps going.
+Acknowledgment is the Run's own `wrapper.stop.requested` record for the stage
+asked for, or a stronger one. A wait that elapses without that record is
+unconfirmed, not success, and not a claim that the Run has finished draining.
+The public `git-loopy stop <run-id>` command is not this surface.
+
 ---
 
 ## Exit codes

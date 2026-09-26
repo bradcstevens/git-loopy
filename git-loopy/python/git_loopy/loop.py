@@ -244,6 +244,7 @@ from git_loopy.release_version import (
     write_repository_release_version,
 )
 from git_loopy.run_control import RunControlArtifact
+from git_loopy import stop_request
 from git_loopy.run_environment_preflight import resolve_run_environment_preflight
 from git_loopy.static_route import (
     HarnessCapabilities,
@@ -8364,13 +8365,28 @@ async def run(
                 # module docstring for the propagation contract.
                 with telemetry.span("git_loopy.run"):
                     try:
-                        if driver is None:
-                            exit_code = await loop.drive()
-                        else:
-                            # ADR-0001: the app and the loop run as peer
-                            # asyncio tasks; the driver owns the peering and
-                            # Stop-cancels the loop task.
-                            exit_code = await driver.run(loop.drive)
+                        # Any attached client Stops through the same two entry
+                        # points the launching terminal uses. The watcher does
+                        # not emit; the Run does, once per latched stage.
+                        watcher = asyncio.create_task(
+                            stop_request.watch_client_stops(
+                                loop, control.path, diag
+                            )
+                        )
+                        try:
+                            if driver is None:
+                                exit_code = await loop.drive()
+                            else:
+                                # ADR-0001: the app and the loop run as peer
+                                # asyncio tasks; the driver owns the peering and
+                                # Stop-cancels the loop task.
+                                exit_code = await driver.run(loop.drive)
+                        finally:
+                            watcher.cancel()
+                            try:
+                                await watcher
+                            except asyncio.CancelledError:
+                                pass
                     except Exception as exc:
                         diag.error(
                             "git-loopy loop crashed: %s: %s",

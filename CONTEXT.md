@@ -418,11 +418,14 @@ _Avoid_: active time, waiting time.
 ### Leaving a run
 
 **Stop**:
-Ending a Run deliberately in two stages. The first Stop immediately latches a
+Ending a Run deliberately in two stages. Any attached client may request it; the
+request is a durable record beside the Run's control artifact, so a client that dies
+after writing it does not withdraw the Stop, and resending one request does not
+escalate. The first distinct request immediately latches a
 wind-down — no new Iteration, Lane reservation, or refill starts, while every started
-contribution and Integration operation finishes. The second Stop cancels only active
+contribution and Integration operation finishes. A later distinct request cancels only active
 agent sessions at their round boundaries after salvage; it never interrupts a publish
-transaction. A stopped contribution remains visible in the **Summary** and is
+transaction. The Run alone announces the latch. Navigation never requests a Stop. A stopped contribution remains visible in the **Summary** and is
 blameless. A third gesture does nothing: cancellation is requested rather than
 awaited, the operating system supplies the only harder stop, and **Salvage** is what
 makes that one safe. The Run exits with the decided non-zero `operator_stop` outcome.
@@ -509,6 +512,9 @@ _Avoid_: startup offset, stored timezone, execution timezone.
 Observing an existing **Run** through a client without starting or taking ownership
 of its work. Attach may be repeated or concurrent: navigation belongs to each client,
 while only an explicit **Stop** request crosses into the Run's lifecycle (ADR-0058).
+That request lives beside the control artifact, not in it: the artifact's lock stays
+the liveness oracle, and the Run — never the client — announces the Wind-down it
+latches.
 _Avoid_: reconnect (as a separate operation), resume (the Run did not stop).
 
 **Dashboard**:
