@@ -54,8 +54,8 @@ exhausted, an **Automation stop** occurs, or the strike limit is reached.
 
 **Agent**:
 One live harness session doing work in a **Run**, bound to a single **Routed pair** for
-its lifetime: a serial **Iteration**'s session, a **Lane**'s session, or an
-**Integration** auto-resolution session. It is the unit a **Run** has several of at once
+its lifetime: a serial **Iteration**'s session, a **Lane**'s session, or a
+**Recovery** session. It is the unit a **Run** has several of at once
 in **Parallel mode**, and the unit an **Activity window** shows. Distinct from the
 `ready-for-agent` label, which describes an issue's triage state rather than anything
 live.
@@ -372,7 +372,12 @@ _Avoid_: backlog, list.
 
 **Status**:
 An issue's lifecycle within a run: **queued** (seen, not yet worked), **active**
-(being worked now — several at once in **Parallel mode**, one per **Lane**), **closed**
+(being worked now — several at once in **Parallel mode**, one per **Lane**, and left the
+moment a **Lane contribution**'s Lane work finishes), **parked** (finished, still holding
+its Lane, waiting for the **Integration backlog** to admit it), **admitted** (in the
+Integration backlog, waiting its turn), **integrating** (being merged and gated in its
+**Integration stage**), **recovering** (in **Recovery** after that merge or gate failed),
+**closed**
 (finished and closed via a commit close-keyword), **advanced** (progressed but not
 closed), **no-progress** (worked without meaningful change), **gone** (left the Run's view
 without resolution — it was seen in a pool or a **Membership read**, and a later
@@ -1316,11 +1321,12 @@ _Avoid_: driver, engine; wrapper (the *contract* is the Wrapper contract — the
 Orchestrator).
 
 **TUI helper**:
-The single shared live-interface renderer for the non-Python runners — one Rust/ratatui codebase
+The single shared live-interface renderer — one Rust/ratatui codebase
 compiled to the standalone `git-loopy-tui` binary that the **shell** and **PowerShell**
 Orchestrators launch and feed over the **Event schema**, and embedded in-process by the **Rust**
-port. The Python runner keeps its own Textual renderer; the TUI helper gives the other ports live
-parity without a hand-rolled TUI per language.
+port. The Python runner hands it the terminal as well: a TTY **Run** detaches its worker and
+the helper owns the live interface, so it is the one live renderer every port shares, with no
+hand-rolled TUI per language.
 _Avoid_: "the TUI" (ambiguous with the Python Textual app), frontend, renderer (collides with the
 Python `Renderer`).
 
@@ -1440,7 +1446,7 @@ _Avoid_: stash, rescue, auto-commit, recovery, resume.
 **Lane contribution**:
 One **Parallel-safe** issue's end-to-end unit of **Parallel mode** work, beginning
 when its Lane agent session starts and ending at green publication or a terminal
-unpublished handoff. It persists through parking, **Integration**, and recovery even
+unpublished handoff. It persists through parking, **Integration**, and **Recovery** even
 after the reusable **Lane** moves on. It is the **accounting unit** of Parallel mode,
 not the **Lane** slot: it owns its own boundary events, its own **Consumption** and
 timing, its own **Summary** row, and its own durable record entry, so a refilled slot
@@ -1489,8 +1495,8 @@ _Avoid_: throttling, pausing, draining.
 
 **Integration stage**:
 The private worktree a **Lane contribution** is merged into and gated in before anything
-reaches the base branch. Each contribution gets its own stage, and bounded
-auto-resolution reuses the stage its contribution is already in. Because the stage is
+reaches the base branch. Each contribution gets its own stage, and **Recovery**
+reuses the stage its contribution is already in. Because the stage is
 private, a red or conflicting result is never observable on base and there is nothing to
 undo. Placed exactly like a **Lane workspace** — inside the clone's git directory, on a
 branch in the **Reserved branch namespace** — with an `integrate/` segment that keeps it
@@ -1527,10 +1533,30 @@ The serialized **Parallel mode** stage that consumes the **Integration backlog**
 contribution at a time. It merges each finished Lane branch into a private **Integration
 stage**, re-runs the feedback loops *there*, and only then publishes the verified result
 to the base branch and closes the issue — the issue is closed only after its contribution
-is verifiably published green. A conflicting or loop-failing contribution triggers a
-runner-driven auto-resolution attempt in that same stage; persistent failure falls back
-to a serial **Iteration**. Runner-owned — it never waits on a human.
+is verifiably published green. A conflicting or loop-failing contribution enters
+**Recovery** in that same stage, and an exhausted Recovery ends in a **Recovery handoff**
+to the serial path. Runner-owned — it never waits on a human.
 _Avoid_: merge (as the name for this step), landing.
+
+**Recovery**:
+The bounded, runner-driven repair of a **Lane contribution** whose private merge
+conflicted, or whose feedback loops failed or could not run, in its **Integration stage**.
+Each attempt is a fresh **Agent** on the contribution's own **Routed pair**, working in
+that same stage and counted outside the **Lane cap**; the stage is re-gated after every
+attempt, and the first green one is published like any other **Integration**. There are
+at most three attempts. Recovery's **Consumption** and commits belong to the originating
+contribution, and it spends none of the Run's iteration cap.
+_Avoid_: auto-resolution, resolution session, retry, rescue.
+
+**Recovery handoff**:
+How an exhausted **Recovery** ends: the **Lane contribution** finishes unpublished, its
+Lane branch is kept as a breadcrumb, and the Run latches serial demand for the issue,
+which may never take a second **Lane** in the same Run. It is not a **Serial fallback**,
+which is a serial **Iteration** worked because no **Parallel-safe** candidate was eligible.
+The wire nevertheless carries it as the `serial_fallback` reason of
+`wrapper.contribution.end` and `wrapper.serial.requested`, a literal kept for
+compatibility.
+_Avoid_: serial fallback, fallback (for this step), demotion.
 
 **Parallel-safe**:
 A `ready-for-agent` issue a human has additionally asserted is independent and
@@ -1558,8 +1584,11 @@ seat, from the flag being broken. So every fallback is named to the operator and
 as a `wrapper.parallel.serial_fallback` **Event** with the eligible count and a reason
 that separates "nothing carries `parallel-safe`", "this Run already worked them all",
 and "the ones there are could not be read". A serial Iteration running *alongside*
-remaining eligible Lane work is interleaving, not a fallback.
-_Avoid_: degraded mode, serial mode, **Parallel degrade** (that is the whole-Run one).
+remaining eligible Lane work is interleaving, not a fallback. Nor is the `serial_fallback`
+reason on `wrapper.contribution.end` or `wrapper.serial.requested`: that names a
+**Recovery handoff**.
+_Avoid_: degraded mode, serial mode, **Parallel degrade** (that is the whole-Run one),
+**Recovery handoff** (that is Integration's).
 
 **Parallel degrade**:
 A **Parallel mode** Run whose **issue source** has no **Parallel-safe** concept at all,
@@ -1644,7 +1673,7 @@ _Avoid_: model pin, routing input.
 - The **Activity** band shows one **Activity window** per live **Agent**; each window
   renders the same lines as that Agent's issue **Log**, so the band is a live view of
   existing per-issue record rather than a record of its own.
-- A serial **Iteration**, a **Lane**, and an **Integration** auto-resolution attempt each
+- A serial **Iteration**, a **Lane**, and a **Recovery** attempt each
   run exactly one **Agent**. An **Agent** may spawn many **Subagents**, whose
   **Consumption** its own telemetry already carries.
 - A **Checkpoint** is authored by the runner (not the agent) at a serial
@@ -1674,8 +1703,8 @@ _Avoid_: model pin, routing input.
 - **Integration** consumes that backlog serially, verifies each contribution in its own
   private **Integration stage**, then publishes it to base and closes the issue, so the
   **Queue** reaches **closed** the same way it does in serial mode.
-- An **Integration** auto-resolution attempt occupies no **Lane**: its contribution
-  released its Lane at admission, so that slot refills while recovery is still running.
+- A **Recovery** attempt occupies no **Lane**: its contribution
+  released its Lane at admission, so that slot refills while Recovery is still running.
   Recovery costs **Integration backlog** capacity, never **Lane cap** capacity.
 - A contribution that never goes green is never published, so base only ever carries
   verified results and the base branch is never observed red.

@@ -1,6 +1,9 @@
 # Rolling dispatch with bounded green-publish Integration
 
 **Status:** accepted
+**Partially superseded by:** [ADR-0065](0065-a-declared-rolling-event-is-seen-emitted-or-retired.md)
+only for the Parallel lifecycle list below, from which `wrapper.pipeline.quiescent` is retired, and
+for the "serial fallback" and "serial working" live statuses, which fold into existing Statuses.
 **Numbering:** authored as ADR-0015 on the `design/rolling-dispatch-adr` branch and landed
 as ADR-0020, because 0015 was taken on `main` by
 [closed-world Skill policy](0015-closed-world-skill-policy.md) while this decision sat on
