@@ -92,12 +92,13 @@ channel does not claim. A supported installation consumes the baseline through
 `git-loopy update` — including the `update` chained by `git-loopy upgrade` — with
 no Rust toolchain and no source checkout.
 
-**Known gap.** The Windows archive is built, verified, and published like every
-other target, but the helper does not yet implement the Runner's
-attachment/control protocol on Windows, so a Windows operator cannot yet attach
-the Dashboard to a Run. That is the outstanding obligation of
-[#459](https://github.com/bradcstevens/git-loopy/issues/459); no declared target
-was dropped to conceal it.
+The helper implements the Runner's attachment/control protocol on every
+declared target, including Windows. A Windows client probes the control
+artifact with a non-blocking shared `LockFileEx` of the first byte — the same
+range the Runner holds exclusively — and leaves when that lock releases or the
+trace records `wrapper.run.end`. No declared target was dropped. Native
+Windows proof is the family gate's Windows job; a non-Windows host does not
+execute that binary.
 
 ### Consuming an older helper from a source-only Runner Release
 
@@ -505,12 +506,14 @@ look like an oversight.
 
 ### Downloadable baseline and completion proof
 
-**No verified downloadable helper baseline is named yet.** On 2026-09-20,
-public Release readback still showed no attached helper assets, including for
-`v0.11.0-dev.4`. #592 remains open until an explicitly artifact-bearing
-prerelease delivers the full set. A successful build or source Release is not
-that baseline, and existing public tags and source-only promises must not be
-rewritten to create one.
+**No verified downloadable helper baseline is named yet.** `v0.11.0-dev.7` was
+the first artifact-bearing Release and was removed with the retired `-dev.N`
+line. Public readback on 2026-09-26 still shows helper assets on no Release;
+the latest is source-only `v0.10.0`. #592 remains open until a human tags an
+explicitly artifact-bearing prerelease and canonical readback verifies the
+full set. A prerelease tag stays a human act. A successful build or source
+Release is not that baseline, and existing public tags and source-only
+promises must not be rewritten to create one.
 
 The supported set comes from
 [`tui-artifacts.json`](../../git-loopy/conformance/tui-artifacts.json):

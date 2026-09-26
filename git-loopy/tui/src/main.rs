@@ -11,9 +11,7 @@
 //! decides *where* the frames go.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, IsTerminal, Write};
-#[cfg(unix)]
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{self, BufRead, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,6 +38,20 @@ use ratatui::Terminal;
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{
+    GetLastError, ERROR_LOCK_VIOLATION, ERROR_NOT_LOCKED, HANDLE,
+};
+#[cfg(all(windows, test))]
+use windows_sys::Win32::Storage::FileSystem::LOCKFILE_EXCLUSIVE_LOCK;
+#[cfg(windows)]
+use windows_sys::Win32::Storage::FileSystem::{
+    LockFileEx, UnlockFileEx, LOCKFILE_FAIL_IMMEDIATELY,
+};
+#[cfg(windows)]
+use windows_sys::Win32::System::IO::OVERLAPPED;
 
 const USAGE: &str = "\
 usage: git-loopy-tui [options] < events.jsonl
@@ -674,7 +686,6 @@ const TICK: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_millis(100);
 
 /// How long attach mode waits before checking whether its trace grew.
-#[cfg(unix)]
 const ATTACH_POLL: Duration = Duration::from_millis(100);
 
 /// Draw the live Dashboard on the controlling terminal until end of input.
@@ -704,7 +715,6 @@ fn render(options: &Options) -> Result<(), String> {
     outcome
 }
 
-#[cfg(unix)]
 fn attach(options: &Options) -> Result<(), String> {
     install_restoration_hook();
     let mut surface = CrosstermSurface::open(terminal_capabilities())?;
@@ -732,11 +742,6 @@ fn attach(options: &Options) -> Result<(), String> {
         .map_err(|error| format!("the presentation input failed: {error}"));
     stopping.store(true, Ordering::Relaxed);
     outcome
-}
-
-#[cfg(not(unix))]
-fn attach(_options: &Options) -> Result<(), String> {
-    Err("attach mode is not supported on this platform".to_string())
 }
 
 /// The bounded buffer, plus the one condition both sides wait on.
@@ -818,7 +823,6 @@ fn read_the_trace(pending: Arc<Pending>) {
 }
 
 /// The local trace follower attach mode drives from.
-#[cfg(unix)]
 struct AttachFollower {
     trace: PathBuf,
     control: PathBuf,
@@ -827,13 +831,11 @@ struct AttachFollower {
     finished: bool,
 }
 
-#[cfg(unix)]
 struct AttachPoll {
     lines: Vec<String>,
     finished: bool,
 }
 
-#[cfg(unix)]
 impl AttachFollower {
     fn new(trace: PathBuf, control: PathBuf) -> Self {
         Self {
@@ -899,7 +901,6 @@ impl AttachFollower {
 }
 
 /// The dedicated attach-mode trace reader.
-#[cfg(unix)]
 fn read_the_attached_trace(
     pending: Arc<Pending>,
     stopping: Arc<AtomicBool>,
@@ -931,7 +932,6 @@ fn read_the_attached_trace(
     });
 }
 
-#[cfg(unix)]
 fn is_run_end_line(line: &str) -> bool {
     matches!(Event::from_jsonl_line(line), Some(event) if event.kind == "wrapper.run.end")
 }
@@ -1199,16 +1199,22 @@ fn host_instant() -> Timestamp {
     )
 }
 
-#[cfg(unix)]
+/// Whether the Run still holds the control artifact's advisory lock.
+///
+/// A missing artifact is a dead Run. The probe must not itself look like the
+/// owner. POSIX takes a non-blocking exclusive `flock` and releases it.
+/// Windows takes a non-blocking *shared* `LockFileEx` of the first byte — the
+/// same range the Runner holds exclusively — so two attached clients cannot
+/// mistake each other for the Run.
 fn control_owner_alive(path: &Path) -> io::Result<bool> {
     let file = match OpenOptions::new().read(true).write(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error),
     };
-    match lock_nonblocking(&file) {
+    match probe_control_lock(&file) {
         Ok(()) => {
-            unlock(&file)?;
+            release_control_probe(&file)?;
             Ok(false)
         }
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(true),
@@ -1217,8 +1223,13 @@ fn control_owner_alive(path: &Path) -> io::Result<bool> {
 }
 
 #[cfg(unix)]
-fn lock_nonblocking(file: &File) -> io::Result<()> {
+fn probe_control_lock(file: &File) -> io::Result<()> {
     lock(file.as_raw_fd(), LOCK_EX | LOCK_NB)
+}
+
+#[cfg(unix)]
+fn release_control_probe(file: &File) -> io::Result<()> {
+    unlock(file)
 }
 
 #[cfg(unix)]
@@ -1247,12 +1258,82 @@ unsafe extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
 }
 
-#[cfg(all(test, unix))]
+/// The byte the Runner locks. Windows locks are ranges, not whole files, so a
+/// probe of any other range would miss a live Run.
+#[cfg(windows)]
+const CONTROL_LOCK_LENGTH: u32 = 1;
+
+#[cfg(windows)]
+fn probe_control_lock(file: &File) -> io::Result<()> {
+    lock_control_region(file, LOCKFILE_FAIL_IMMEDIATELY)
+}
+
+#[cfg(windows)]
+fn release_control_probe(file: &File) -> io::Result<()> {
+    unlock_control_region(file)
+}
+
+#[cfg(all(windows, test))]
+fn hold_control_lock(file: &File) -> io::Result<()> {
+    lock_control_region(file, LOCKFILE_EXCLUSIVE_LOCK)
+}
+
+#[cfg(windows)]
+fn lock_control_region(file: &File, flags: u32) -> io::Result<()> {
+    let mut overlapped = OVERLAPPED::default();
+    // The handle is a live Rust file, and `overlapped` stays valid for this
+    // synchronous call. The file is not opened for overlapped I/O, so the
+    // structure only carries the offset.
+    let (locked, code) = unsafe {
+        let locked = LockFileEx(
+            file.as_raw_handle() as HANDLE,
+            flags,
+            0,
+            CONTROL_LOCK_LENGTH,
+            0,
+            &mut overlapped,
+        );
+        let code = if locked == 0 { GetLastError() } else { 0 };
+        (locked, code)
+    };
+    if locked != 0 {
+        return Ok(());
+    }
+    if code == ERROR_LOCK_VIOLATION {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "the control lock is held",
+        ));
+    }
+    Err(io::Error::from_raw_os_error(code as i32))
+}
+
+#[cfg(windows)]
+fn unlock_control_region(file: &File) -> io::Result<()> {
+    let mut overlapped = OVERLAPPED::default();
+    let (unlocked, code) = unsafe {
+        let unlocked = UnlockFileEx(
+            file.as_raw_handle() as HANDLE,
+            0,
+            CONTROL_LOCK_LENGTH,
+            0,
+            &mut overlapped,
+        );
+        let code = if unlocked == 0 { GetLastError() } else { 0 };
+        (unlocked, code)
+    };
+    if unlocked != 0 || code == ERROR_NOT_LOCKED {
+        return Ok(());
+    }
+    Err(io::Error::from_raw_os_error(code as i32))
+}
+
+#[cfg(test)]
 struct ControlLock {
     file: File,
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 impl ControlLock {
     fn acquire(path: &Path) -> io::Result<Self> {
         if let Some(parent) = path.parent() {
@@ -1264,15 +1345,28 @@ impl ControlLock {
             .create(true)
             .truncate(false)
             .open(path)?;
-        lock(file.as_raw_fd(), LOCK_EX)?;
+        hold_for_test(&file)?;
         Ok(Self { file })
     }
 }
 
 #[cfg(all(test, unix))]
+fn hold_for_test(file: &File) -> io::Result<()> {
+    lock(file.as_raw_fd(), LOCK_EX)
+}
+
+#[cfg(all(test, windows))]
+fn hold_for_test(file: &File) -> io::Result<()> {
+    hold_control_lock(file)
+}
+
+#[cfg(test)]
 impl Drop for ControlLock {
     fn drop(&mut self) {
+        #[cfg(unix)]
         let _ = unlock(&self.file);
+        #[cfg(windows)]
+        let _ = unlock_control_region(&self.file);
     }
 }
 
@@ -1427,17 +1521,12 @@ const CONTROLLING_TERMINAL: &str = "CONOUT$";
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     use std::fs;
-    #[cfg(unix)]
     use std::io::Write;
-    #[cfg(unix)]
     use std::path::Path;
     use std::path::PathBuf;
-    #[cfg(unix)]
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
-    #[cfg(unix)]
     static UNIQUE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
@@ -1582,7 +1671,6 @@ mod tests {
         parse(arguments.iter().map(|argument| argument.to_string())).expect("the arguments parse")
     }
 
-    #[cfg(unix)]
     fn test_artifact_dir(name: &str) -> PathBuf {
         let unique = UNIQUE.fetch_add(1, AtomicOrdering::Relaxed);
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1594,7 +1682,6 @@ mod tests {
         path
     }
 
-    #[cfg(unix)]
     fn append(path: &Path, text: &str) {
         let mut file = OpenOptions::new()
             .create(true)
@@ -1640,7 +1727,6 @@ mod tests {
         assert!(error.contains("--control"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn attach_mode_replays_existing_lines_then_waits_for_more_until_the_run_ends() {
         let directory = test_artifact_dir("run-end");
@@ -1693,7 +1779,6 @@ mod tests {
         assert!(fifth.lines.is_empty() && fifth.finished);
     }
 
-    #[cfg(unix)]
     #[test]
     fn attach_mode_stops_when_the_control_lock_releases() {
         let directory = test_artifact_dir("control-release");
