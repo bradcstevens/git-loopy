@@ -1542,10 +1542,12 @@ contribution, and it spends none of the Run's iteration cap.
 _Avoid_: auto-resolution, resolution session, retry, rescue.
 
 **Recovery handoff**:
-How an exhausted **Recovery** ends: the **Lane contribution** finishes unpublished, its
-Lane branch is kept as a breadcrumb, and the Run latches serial demand for the issue,
-which may never take a second **Lane** in the same Run. It is not a **Serial fallback**,
-which is a serial **Iteration** worked because no **Parallel-safe** candidate was eligible.
+How a **Lane contribution** ends when **Integration** cannot publish it — usually because its
+**Recovery** was exhausted, otherwise because no **Integration stage** could be cut for it or
+its publication could not be made: the contribution finishes unpublished, its Lane branch is
+kept as a breadcrumb, and the Run latches serial demand for the issue, which may never take a
+second **Lane** in the same Run. It is not a **Serial fallback**, which is a serial
+**Iteration** worked because no **Parallel-safe** candidate was eligible.
 The wire nevertheless carries it as the `serial_fallback` reason of
 `wrapper.contribution.end` and `wrapper.serial.requested`, a literal kept for
 compatibility.

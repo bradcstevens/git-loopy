@@ -113,6 +113,6 @@ is what let eight types ride on one producer. The shell and PowerShell Orchestra
   Wrapper contract already requires; the Wrapper contract takes minor versions after #643's 2.12;
   `dashboard-insights.json` takes a fixture revision for the new Header entries and Statuses.
 - **Vocabulary.** **Recovery** is the canonical term for what code and older prose call
-  auto-resolution, and a **Recovery handoff** — Recovery exhausted, the issue handed to the serial
-  path — is named apart from **Serial fallback**, although the wire's `serial_fallback` reason
-  still carries it.
+  auto-resolution, and a **Recovery handoff** — a contribution Integration cannot publish, most
+  often because Recovery was exhausted, handed to the serial path — is named apart from
+  **Serial fallback**, although the wire's `serial_fallback` reason still carries it.
