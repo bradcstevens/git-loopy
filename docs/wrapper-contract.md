@@ -1050,8 +1050,7 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
 `wrapper.integration.branch_observed`, `wrapper.integration.recovery_started`,
 `wrapper.integration.published`, and `wrapper.contribution.end`. Scheduler-scoped:
 `wrapper.pool.refreshed`, `wrapper.concurrency.changed`, `wrapper.serial.requested`,
-`wrapper.rolling.refill_turn`,
-`wrapper.parallel.serial_fallback`, and `wrapper.parallel.degraded`.
+`wrapper.rolling.refill_turn`, `wrapper.parallel.serial_fallback`, and `wrapper.parallel.degraded`.
 
 **Retired `wrapper.pipeline.quiescent` (contract 2.14, ADR-0065).** Every phase it named is
 already announced by `wrapper.serial.requested`, `wrapper.stop.requested`, the serial Iteration's

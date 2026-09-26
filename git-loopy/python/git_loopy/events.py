@@ -404,11 +404,12 @@ CONTRIBUTION_IDENTITY_KEYS: tuple[str, ...] = ("contribution_id", "issue", "lane
 # ``iter``; :func:`make_event` refuses them otherwise. Scheduler-scoped rolling
 # events (``wrapper.pool.refreshed``, ``wrapper.concurrency.changed``,
 # ``wrapper.serial.requested``, ``wrapper.rolling.refill_turn``) are
-# deliberately absent: they describe the Run, not one contribution. Existing per-Lane events (``assistant.*``,
-# ``tool.*``, ``usage.tokens``, ``wrapper.commit.recorded``,
-# ``wrapper.checkpoint.recorded``, ``wrapper.auto_close``) are also absent
-# because the same literals stay valid for serial Iterations; a Lane emits them
-# through :func:`make_contribution_event`.
+# deliberately absent: they describe the Run, not one contribution. Existing
+# per-Lane events (``assistant.*``, ``tool.*``, ``usage.tokens``,
+# ``wrapper.commit.recorded``, ``wrapper.checkpoint.recorded``,
+# ``wrapper.auto_close``) are also absent because the same literals stay valid
+# for serial Iterations; a Lane emits them through
+# :func:`make_contribution_event`.
 CONTRIBUTION_SCOPED_EVENT_TYPES: frozenset[str] = frozenset(
     {
         WRAPPER_CONTRIBUTION_START,
