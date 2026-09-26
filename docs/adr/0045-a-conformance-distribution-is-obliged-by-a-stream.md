@@ -1,6 +1,9 @@
 # A Conformance distribution is obliged by a stream, not by serializing it
 
 **Status:** accepted
+**Premise overtaken by:** [ADR-0065](0065-a-declared-rolling-event-is-seen-emitted-or-retired.md),
+under which a rolling stream no longer carries types no producer emits. The fold-to-pinned-view
+rule below stands.
 
 Decided by [#432](https://github.com/bradcstevens/git-loopy/issues/432).
 
