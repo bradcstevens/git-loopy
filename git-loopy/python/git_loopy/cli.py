@@ -212,6 +212,11 @@ _COMMAND_SPECS = (
         "List this clone's Runs and whether each one is still running.",
     ),
     _CommandSpec(
+        "attach",
+        "Run control",
+        "Observe one Run without starting or owning it.",
+    ),
+    _CommandSpec(
         "stop",
         "Run control",
         "Request an acknowledged two-stage Stop of one live Run.",
@@ -1176,7 +1181,48 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "guessed. Another clone of the same repository is a separate "
             "control domain and is never listed. Listing observes only: it "
             "starts no work, stops nothing, and reclaims nothing (see "
-            "`git-loopy sweep` for that)."
+            "`git-loopy sweep` for that). `git-loopy attach` and "
+            "`git-loopy stop` name a Run through this same listing."
+        ),
+    )
+
+    # Importing attachcmd here would pull the renderer into every subcommand's
+    # dispatch. The handler imports it. Help stays on this parser alone.
+    attach = _add_command(
+        sub,
+        "attach",
+        description=(
+            "Observe one Run in this clone without starting, resuming, or "
+            "owning it. The Run identity is required; this command never "
+            "guesses the newest Run, and it never reaches another clone or a "
+            "machine-wide scan. Reattaching, or attaching from a second "
+            "terminal, is this same command. There is no reconnect operation. "
+            "Navigation stays in this client. Attach does not request a Stop "
+            "and does not open a channel into an Execution host, whether that "
+            "host is local or GitHub Actions.\n\n"
+            "A usable Dashboard helper draws the Run. `q` is Detach: this "
+            "client only, the terminal returns to the shell, and the worker "
+            "and other clients are unchanged. A missing or unusable helper is "
+            "diagnosed, and this client stays attached through the line "
+            "printer. That fallback is still Attach, not Detach and not Stop. "
+            "Interrupt the line printer to Detach.\n\n"
+            "A Dashboard fault after attachment restores the terminal, reports "
+            "the fault, and continues through the same line printer without "
+            "restarting the Dashboard. That is not Detach. It does not change "
+            "the Run's Events, outcome, or exit code. A lost worker is not "
+            "resumed. A trace that has no further bytes yet does not end "
+            "observation of a live Run. Liveness this host cannot prove is "
+            "reported as unknown, not as a finished Run and not as a live one.\n\n"
+            "Stop is a different command (`git-loopy stop`). Attach does not "
+            "write one."
+        ),
+    )
+    attach.add_argument(
+        "run_id",
+        metavar="RUN-ID",
+        help=(
+            "The Run to observe. The full identity, or an unambiguous leading "
+            "part of one. `git-loopy runs` lists this clone's Runs."
         ),
     )
 
@@ -1571,6 +1617,23 @@ def _run_runs(_args: argparse.Namespace) -> int:
         print(f"git-loopy: runs requires a git repository: {exc}", file=sys.stderr)
         return 1
     return runscmd.run_runs(repo_root=repo_root)
+
+
+def _run_attach(args: argparse.Namespace) -> int:
+    """Dispatch the public Attach command.
+
+    Same domain as ``runs`` and ``stop``: the invoking clone, never a
+    machine-wide search. The command observes. It does not start a worker
+    and it does not emit a Wind-down (ADR-0058).
+    """
+    from git_loopy import attachcmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: attach requires a git repository: {exc}", file=sys.stderr)
+        return 1
+    return attachcmd.run_attach(repo_root=repo_root, run_id=args.run_id)
 
 
 def _run_stop(args: argparse.Namespace) -> int:
@@ -3331,6 +3394,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_runs(sub_args)
         if sub_args.command == "stop":
             return _run_stop(sub_args)
+        if sub_args.command == "attach":
+            return _run_attach(sub_args)
         if sub_args.command == "config":
             return _run_config(sub_args)
         raise AssertionError(f"undispatched command {sub_args.command!r}")

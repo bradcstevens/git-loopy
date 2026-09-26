@@ -881,7 +881,8 @@ On a TTY the loop runs as a **detached worker** the terminal client watches, so
 the client reports that worker's exit status and echoes the tail of its startup
 diagnostics rather than showing an empty Dashboard and exiting `0`. Closing that
 terminal, or killing the client, leaves the worker running. A later client
-attaches by following the same trace; there is no separate reconnect. The handoff
+attaches by following the same trace; there is no separate reconnect. The public
+command is `git-loopy attach <run-id>`. The handoff
 uses ordinary scrollback — setup's wizard leaves the screen before the client
 takes it — so a blocked startup is readable after the fact instead of being
 erased by a screen restore.
@@ -964,8 +965,8 @@ Every Run of **this clone** — the worktree you invoked it from plus every othe
 worktree `git worktree list` registers — newest first. Run it from any of those
 worktrees and you get the same listing, including Runs that were started from a
 different one. `RUN` is the full Run identity, and `SCOPE` is the worktree the
-Run published its artefacts in; together they are what `git-loopy stop` targets,
-and what Attach will target, so the two cannot disagree about which Runs exist.
+Run published its artefacts in; together they are what `git-loopy attach` and
+`git-loopy stop` target, so the two cannot disagree about which Runs exist.
 
 The domain is the clone, never the machine. An independent clone of the same
 repository has its own Runs and its own listing; nothing here scans for them,
@@ -1001,6 +1002,47 @@ Acknowledgment is the Run's own `wrapper.stop.requested` record for the stage
 asked for, or a stronger one. A wait that elapses without that record is
 unconfirmed, not success, and not a claim that the Run has finished draining.
 `git-loopy stop` writes that same request; see below.
+
+---
+
+## Attaching to a Run (`git-loopy attach`)
+
+```bash
+git-loopy attach 01K6Z9QWERTYUIOPASDFGHJKLZ
+git-loopy attach 01K6Z9
+```
+
+Observes one Run of **this clone** without starting it, resuming it, or taking
+ownership of it. The identity is required. Resolution is the same listing as
+`git-loopy runs`: this worktree and every worktree it has registered, never
+another clone, and never the newest Run by default. An unambiguous leading
+prefix names that one Run; a prefix that names two is refused. Reattaching,
+and attaching from a second terminal, is this same command. There is no
+reconnect operation.
+
+A usable **Dashboard** helper draws the Run. **Detach** is `q` in that helper,
+or an interrupt of the line printer: this client only, the terminal returns to
+the shell, and the worker and other clients keep going. Navigation stays in
+the client that made it. It does not change the Run's Events, and it is not a
+**Stop**.
+
+A missing or unusable helper is diagnosed, and the client stays attached
+through the line printer. That fallback is still **Attach**, not Detach and
+not Stop. A **Dashboard fault** after attachment restores the terminal, reports
+the fault, and continues on that same line printer without restarting the
+Dashboard. The fault does not change the Run's Events, outcome, or exit code.
+
+A trace that has no further bytes yet does not end observation of a live Run.
+Observation ends when the trace carries `wrapper.run.end`, or when the control
+lock says the worker is gone. A lost worker is reported as gone. It is not
+resumed, and it is not presented as a Run this command started. Liveness this
+host cannot prove is reported as unknown — not as a finished Run, and not as a
+live one. Attach opens no channel into an Execution host. A Run whose
+contributions are local and a Run whose contributions are on GitHub Actions
+are observed the same way: through the Run's own trace and control artifact.
+
+**Stop** is `git-loopy stop`, or `s` in an attached Dashboard. Attach does not
+write one. Shell and PowerShell do not attach and do not provide this command.
 
 ---
 

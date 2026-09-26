@@ -38,6 +38,7 @@ __all__ = [
     "spawn_detached_child",
     "popen_detached",
     "attach_to_run",
+    "observe_existing_run",
     "wait_for_run_control",
     "run_terminal_client",
 ]
@@ -841,3 +842,481 @@ def _print_unbound_run_notice(trace_path: Path, repository: str | None) -> None:
         return
     for line in lines:
         print(f"git-loopy: {line}", file=sys.stderr)
+
+
+# The helper's own release, in ``CrosstermSurface::restore`` order: show the
+# cursor, disable mouse capture, leave the alternate screen. crossterm 0.29
+# writes exactly these sequences. A helper that exits 0 runs that restore
+# itself. A fault, or a Detach that terminates the helper, does not: Rust
+# does not run ``Drop`` on SIGTERM. The parent writes the same bytes, because
+# termios alone leaves the shell on the alternate screen and still reporting
+# the pointer.
+_DASHBOARD_RELEASE = (
+    b"\x1b[?25h"
+    b"\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l"
+    b"\x1b[?1049l"
+)
+
+
+class _TerminalOwner:
+    """The client's captured entry state for one controlling terminal.
+
+    A client never returns the shell to a mode it did not find (ADR-0058).
+    Capture is best-effort: a process with no controlling terminal has nothing
+    to restore, and that is not a failure of the observation. The Dashboard's
+    alternate screen and mouse reporting are not termios state, so once a
+    helper has been started they are released explicitly, even when that
+    helper is no longer alive to release them itself.
+    """
+
+    def __init__(self) -> None:
+        self._saved: tuple[Any, ...] | None = None
+        self._helper_started = False
+        self._screen_released = False
+
+    def capture(self) -> None:
+        self._saved = _capture_terminal()
+
+    def note_helper_started(self) -> None:
+        self._helper_started = True
+
+    def restore(self) -> None:
+        if self._helper_started and not self._screen_released:
+            self._screen_released = True
+            _release_dashboard_screen(self._saved)
+        if self._saved is not None:
+            _restore_terminal(self._saved)
+
+    def close(self) -> None:
+        saved = self._saved
+        self._saved = None
+        if saved is not None:
+            _close_terminal(saved)
+
+
+def _capture_terminal() -> tuple[Any, ...] | None:
+    if os.name == "nt":
+        return _capture_windows_console()
+    return _capture_posix_tty()
+
+
+def _capture_posix_tty() -> tuple[Any, ...] | None:
+    try:
+        import termios
+    except ImportError:
+        return None
+    try:
+        descriptor = os.open("/dev/tty", os.O_RDWR)
+    except OSError:
+        return None
+    try:
+        attributes = termios.tcgetattr(descriptor)
+    except termios.error:
+        os.close(descriptor)
+        return None
+    return ("posix", descriptor, attributes)
+
+
+def _capture_windows_console() -> tuple[Any, ...] | None:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetConsoleMode.argtypes = (
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    kernel32.GetConsoleMode.restype = wintypes.BOOL
+    handle = kernel32.GetStdHandle(-10)
+    output = kernel32.GetStdHandle(-11)
+    mode = wintypes.DWORD()
+    if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+        return None
+    return ("windows", handle, int(mode.value), output)
+
+
+def _restore_terminal(saved: tuple[Any, ...]) -> None:
+    if saved[0] == "posix":
+        import termios
+
+        try:
+            termios.tcsetattr(saved[1], termios.TCSANOW, saved[2])
+        except termios.error:
+            return
+        return
+    _restore_windows_console(saved)
+
+
+def _restore_windows_console(saved: tuple[Any, ...]) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.SetConsoleMode.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.SetConsoleMode.restype = wintypes.BOOL
+    kernel32.SetConsoleMode(saved[1], saved[2])
+    # The handle captured before the helper is the screen the shell was on.
+    # A WinAPI alternate buffer, unlike the ANSI one, survives the helper.
+    if len(saved) > 3:
+        kernel32.SetConsoleActiveScreenBuffer.argtypes = (wintypes.HANDLE,)
+        kernel32.SetConsoleActiveScreenBuffer.restype = wintypes.BOOL
+        kernel32.SetConsoleActiveScreenBuffer(saved[3])
+
+
+def _close_terminal(saved: tuple[Any, ...]) -> None:
+    if saved[0] != "posix":
+        return
+    try:
+        os.close(saved[1])
+    except OSError:
+        return
+
+
+def _release_dashboard_screen(saved: tuple[Any, ...] | None) -> None:
+    """Write the helper's release to the controlling terminal.
+
+    Best-effort. A missing terminal is not a failed observation: the line
+    printer still has a place to write, and a sequence that cannot be
+    delivered cannot be owed.
+    """
+    if saved is not None and saved[0] == "posix":
+        _write_dashboard_release(saved[1])
+        return
+    if os.name == "nt":
+        _release_windows_dashboard(saved)
+        return
+    try:
+        descriptor = os.open("/dev/tty", os.O_WRONLY)
+    except OSError:
+        return
+    try:
+        _write_dashboard_release(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_dashboard_release(descriptor: int) -> None:
+    try:
+        os.write(descriptor, _DASHBOARD_RELEASE)
+    except OSError:
+        return
+
+
+def _release_windows_dashboard(saved: tuple[Any, ...] | None) -> None:
+    """ANSI release, only where the console is already processing VT.
+
+    Mouse capture on Windows is a console mode, restored with the captured
+    input mode. The alternate screen is VT when the console says so, and a
+    screen buffer otherwise — that buffer is the handle captured at entry.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    enable_vt = 0x0004
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetConsoleMode.argtypes = (
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    kernel32.GetConsoleMode.restype = wintypes.BOOL
+    output = saved[3] if saved is not None and len(saved) > 3 else kernel32.GetStdHandle(-11)
+    mode = wintypes.DWORD()
+    if not kernel32.GetConsoleMode(output, ctypes.byref(mode)):
+        return
+    if not mode.value & enable_vt:
+        return
+    try:
+        descriptor = os.open("CONOUT$", os.O_WRONLY)
+    except OSError:
+        return
+    try:
+        _write_dashboard_release(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _trace_has_run_end(trace_path: Path) -> bool:
+    try:
+        text = trace_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    compact = text.replace(" ", "")
+    return '"type":"wrapper.run.end"' in compact
+
+
+def observe_existing_run(
+    *,
+    repository_root: Path,
+    trace_path: Path,
+    control_path: Path,
+    run_id: str,
+    output: Callable[[str], None] = print,
+    warn: Callable[[str], None] | None = None,
+    poll_interval: float = 0.05,
+) -> int:
+    """Observe a Run this process did not start. There is no reconnect.
+
+    The same call serves a second terminal, a reattach, and a client that
+    races another observer. It writes nothing, so losing it cannot change the
+    Run's Events, outcome, or exit code, and it never resumes a worker.
+
+    A usable Dashboard helper draws the Run. Exit 0 while the Run is still
+    live is Detach. Any other helper exit is a Dashboard fault: the terminal
+    is restored and this client stays on the line printer, once, without
+    restarting the helper. A missing helper is the same line printer, still
+    Attach. Interrupt that printer to Detach.
+    """
+    import signal
+
+    reporter = warn if warn is not None else _warn_line
+    owner = _TerminalOwner()
+    owner.capture()
+    installed = False
+    previous = None
+    if hasattr(signal, "SIGTERM"):
+        try:
+            previous = signal.signal(signal.SIGTERM, _detach_on_sigterm)
+            installed = True
+        except (OSError, ValueError):
+            installed = False
+    try:
+        try:
+            return _observe_existing_run(
+                repository_root=repository_root,
+                trace_path=trace_path,
+                control_path=control_path,
+                run_id=run_id,
+                output=output,
+                warn=reporter,
+                poll_interval=poll_interval,
+                owner=owner,
+            )
+        except KeyboardInterrupt:
+            owner.restore()
+            return _report_interrupt(
+                run_id, control_path, output=output
+            )
+    finally:
+        owner.restore()
+        owner.close()
+        if installed:
+            signal.signal(signal.SIGTERM, previous)
+
+
+def _detach_on_sigterm(_signum: int, _frame: object) -> None:
+    raise KeyboardInterrupt
+
+
+def _warn_line(message: str) -> None:
+    print(f"git-loopy: warning: {message}", file=sys.stderr)
+
+
+def _report_interrupt(
+    run_id: str,
+    control_path: Path,
+    *,
+    output: Callable[[str], None],
+) -> int:
+    alive = is_run_alive(control_path)
+    if alive is None:
+        _warn_line(
+            f"the liveness of Run {run_id} could not be read. Attach will not "
+            "report that as an ended Run and will not resume it."
+        )
+        return 1
+    if alive:
+        output(f"Detached from Run {run_id}. The Run keeps going.")
+        return 0
+    output(
+        f"Detached from Run {run_id}. The Run is no longer live. "
+        "Attach did not resume it."
+    )
+    return 0
+
+
+def _observe_existing_run(
+    *,
+    repository_root: Path,
+    trace_path: Path,
+    control_path: Path,
+    run_id: str,
+    output: Callable[[str], None],
+    warn: Callable[[str], None],
+    poll_interval: float,
+    owner: _TerminalOwner,
+) -> int:
+    output(f"Attached to Run {run_id}.")
+    try:
+        repository = _run_repository(repository_root)
+    except Exception:  # noqa: BLE001 - the notice refines; it never costs observation
+        repository = None
+    helper = _resolve_observer_helper(repository_root, warn)
+    if helper is None:
+        warn(_UNUSABLE_HELPER)
+    else:
+        code = _run_dashboard_helper(
+            helper, trace_path, control_path, repository, warn, owner
+        )
+        if code is None:
+            owner.restore()
+            warn(_UNUSABLE_HELPER)
+        elif code == 0:
+            owner.restore()
+            return _report_helper_exit(
+                run_id,
+                trace_path,
+                control_path,
+                repository,
+                output=output,
+            )
+        else:
+            owner.restore()
+            warn(_dashboard_fault(f"git-loopy-tui exited {code};"))
+    watched = attach_to_run(
+        trace_path,
+        control_path,
+        config=RunConfig(),
+        poll_interval=poll_interval,
+    )
+    _print_unbound_run_notice(trace_path, repository)
+    return _report_follower(
+        run_id,
+        control_path,
+        watched,
+        output=output,
+    )
+
+
+def _resolve_observer_helper(
+    repository_root: Path, warn: Callable[[str], None]
+) -> Path | None:
+    from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+
+    try:
+        release_version = read_runtime_release_version()
+    except ReleaseVersionError as exc:
+        warn(
+            "could not validate a git-loopy-tui Release identity "
+            f"({type(exc).__name__}: {exc})."
+        )
+        return None
+    if not release_version:
+        warn("could not validate a git-loopy-tui Release identity.")
+        return None
+    if not advisory_locking_available():
+        warn("this platform has no advisory-lock control artifact.")
+        return None
+    return tui_release.resolve_runtime_helper(
+        repository_root,
+        release_version=release_version,
+        warn=warn,
+    )
+
+
+_UNUSABLE_HELPER = (
+    "no usable Dashboard helper; attached through the line printer. "
+    "This is still Attach, not a Detach and not a Stop. The Dashboard "
+    "is not started. Interrupt this client to Detach; the Run keeps going."
+)
+
+
+def _dashboard_fault(detail: str) -> str:
+    return (
+        f"{detail} Dashboard fault. The terminal is restored and this client "
+        "stays attached through the line printer. The Dashboard is not "
+        "restarted. This is not a Detach and not a Stop."
+    )
+
+
+def _run_dashboard_helper(
+    helper: Path,
+    trace_path: Path,
+    control_path: Path,
+    repository: str | None,
+    warn: Callable[[str], None],
+    owner: _TerminalOwner,
+) -> int | None:
+    """Run the helper once. ``None`` means it could not be started.
+
+    One attempt. A fault does not restart it. The caller falls back to the
+    line printer instead. A process that did start is noted before the wait,
+    so a Detach that terminates it still releases the screen it may have taken.
+    """
+    try:
+        process = subprocess.Popen(  # noqa: S603 - the helper path was validated
+            _helper_args(helper, trace_path, control_path, RunConfig()),
+            stdin=subprocess.DEVNULL,
+            env=_helper_environment(repository),
+        )
+    except OSError as exc:
+        warn(f"could not start git-loopy-tui ({type(exc).__name__}: {exc}).")
+        return None
+    owner.note_helper_started()
+    try:
+        return process.wait()
+    except KeyboardInterrupt:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+        raise
+
+
+def _report_helper_exit(
+    run_id: str,
+    trace_path: Path,
+    control_path: Path,
+    repository: str | None,
+    *,
+    output: Callable[[str], None],
+) -> int:
+    """A helper that exited 0 left of its own accord. That is not a fault."""
+    alive = is_run_alive(control_path)
+    if alive is True:
+        output(f"Detached from Run {run_id}. The Run keeps going.")
+        return 0
+    if alive is None:
+        _warn_line(
+            f"the liveness of Run {run_id} could not be read. Attach will not "
+            "report that as an ended Run and will not resume it."
+        )
+        return 1
+    _print_unbound_run_notice(trace_path, repository)
+    output(_ended_or_lost(run_id, trace_path))
+    return 0
+
+
+def _report_follower(
+    run_id: str,
+    control_path: Path,
+    watched: _WatchOutcome,
+    *,
+    output: Callable[[str], None],
+) -> int:
+    alive = is_run_alive(control_path)
+    if alive is None and not watched.run_ended:
+        _warn_line(
+            f"the liveness of Run {run_id} could not be read. Attach will not "
+            "report that as an ended Run and will not resume it."
+        )
+        return 1
+    if watched.run_ended:
+        output(f"Run {run_id} has ended. Attach did not resume it.")
+        return 0
+    output(
+        f"Run {run_id} is no longer live. Attach did not resume it. "
+        "A lost worker is not started again."
+    )
+    return 0
+
+
+def _ended_or_lost(run_id: str, trace_path: Path) -> str:
+    if _trace_has_run_end(trace_path):
+        return f"Run {run_id} has ended. Attach did not resume it."
+    return (
+        f"Run {run_id} is no longer live. Attach did not resume it. "
+        "A lost worker is not started again."
+    )

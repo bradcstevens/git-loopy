@@ -107,6 +107,7 @@ _RUN_TEST_MODULES = frozenset(
         "test_routing_pool_conformance.py",
         "test_routing_retry_conformance.py",
         "test_saved_routing_consumption.py",
+        "test_attach_command.py",
         "test_stop_command.py",
         "test_sweep_run_start.py",
     }

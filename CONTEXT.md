@@ -514,7 +514,9 @@ _Avoid_: startup offset, stored timezone, execution timezone.
 
 **Attach**:
 Observing an existing **Run** through a client without starting or taking ownership
-of its work. Attach may be repeated or concurrent: navigation belongs to each client,
+of its work. `git-loopy attach <run-id>` is that observation when this process did
+not start the Run: it names one Run through the same resolution as **Stop** and
+never guesses the newest. Attach may be repeated or concurrent: navigation belongs to each client,
 while only an explicit **Stop** request crosses into the Run's lifecycle (ADR-0058).
 That request lives beside the control artifact, not in it: the artifact's lock stays
 the liveness oracle, and the Run — never the client — announces the Wind-down it

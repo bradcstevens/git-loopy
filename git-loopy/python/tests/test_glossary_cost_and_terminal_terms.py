@@ -106,6 +106,7 @@ def test_attach_observes_existing_work_without_owning_it() -> None:
 
     assert "existing **Run**" in entry
     assert "without starting or taking ownership of its work" in entry
+    assert "`git-loopy attach <run-id>`" in entry
     assert "repeated or concurrent" in entry
     assert "only an explicit **Stop** request" in entry
 
