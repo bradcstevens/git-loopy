@@ -26,8 +26,11 @@ Precedence rules (ADR-0006), applied key by key:
   overridden by an absent CLI flag. To remove an env baseline, unset
   the env var or use ``-E`` semantics in the wrapper script.
 * Per-run-only knobs (the positional ``<max-iterations>``, ``-v`` verbosity,
-  ``--no-reasoning``, ``--parallel``, ``GIT_LOOPY_PRICING_FILE``) are NEVER read
-  from a persisted ``config.toml`` — only from flags / env.
+  ``--no-reasoning``, ``GIT_LOOPY_PRICING_FILE``) are NEVER read
+  from a persisted ``config.toml`` — only from flags / env. The retired mode
+  switches (``--parallel``, ``--interactive``, ``--no-interactive``, and
+  ``GIT_LOOPY_MAX_PARALLEL`` / ``GIT_LOOPY_INTERACTIVE`` /
+  ``GIT_LOOPY_LANE_ADAPT``) are refused at preflight, not read.
 
 CLI surface — ``git-loopy`` is the single, canonical entrypoint (ADR-0007; the
 old bash launcher is retired):
@@ -3194,6 +3197,15 @@ def main(argv: list[str] | None = None) -> int:
         build_parser().print_help()
         return 0
 
+    # Retired mode variables are a preflight refusal on every invocation that
+    # would otherwise accept them and ignore them. ``--version`` stays exempt:
+    # it exits before configuration, discovery, or services.
+    if "--version" not in argv:
+        removed_env_error = _removed_mode_env_error(os.environ)
+        if removed_env_error is not None:
+            print(f"git-loopy: error: {removed_env_error}", file=sys.stderr)
+            return 1
+
     # Pre-dispatch on the first token: a reserved subcommand
     # routes to its own parser, so the bare run's optional positional
     # <max-iterations> can coexist with subcommands (argparse cannot host both
@@ -3255,11 +3267,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"git-loopy {release_version}")
         return 0
-
-    removed_env_error = _removed_mode_env_error(os.environ)
-    if removed_env_error is not None:
-        print(f"git-loopy: error: {removed_env_error}", file=sys.stderr)
-        return 1
 
     # Early git-root resolution so cwd-not-a-repo crashes with a clean
     # message before we pay the cost of importing the loop module

@@ -1405,10 +1405,14 @@ failure, TODO, backlog entry.
 ### Parallel execution
 
 **Parallel mode**:
-The opt-in execution mode in which the runner works several independent issues at once,
-each isolated in its own worktree, instead of one at a time. Off by default — the serial,
-one-issue-at-a-time loop is the default.
-_Avoid_: concurrent mode, multi mode.
+The execution mode in which the runner works several independent issues at once,
+each isolated in its own worktree. The Python Runner is always in it: a bare
+`git-loopy` uses **Rolling dispatch**, and the serial loop is an **Iteration
+driver** for a Run with no Lane work, announced only by the degraded and
+serial-fallback Events. Shell and PowerShell declare `parallel_mode`
+unsupported and keep an operator-selected Lane cap they refuse above 1
+([ADR-0067](docs/adr/0067-python-retires-the-mode-switches.md)).
+_Avoid_: concurrent mode, multi mode, opt-in mode.
 
 **Rolling dispatch**:
 The **Parallel mode** scheduling model that continuously refills reusable **Lanes**
@@ -1585,8 +1589,8 @@ _Avoid_: plain work, non-parallel work, leftover.
 **Serial fallback**:
 A serial **Iteration** a **Parallel mode** Run works because **Rolling dispatch** found
 no eligible **Parallel-safe** candidate. Because eligibility is a human assertion, the
-usual cause is that nothing carries the label — indistinguishable, from the operator's
-seat, from the flag being broken. So every fallback is named to the operator and carried
+usual cause is that nothing carries the label. So every fallback is named to the
+operator and carried
 as a `wrapper.parallel.serial_fallback` **Event** with the eligible count and a reason
 that separates "nothing carries `parallel-safe`", "this Run already worked them all",
 and "the ones there are could not be read". A serial Iteration running *alongside*

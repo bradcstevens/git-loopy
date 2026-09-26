@@ -87,7 +87,7 @@ work needs it.
 | **Your feedback loops as the gate** | The loops declared in `AGENTS.md` — lint, tests, builds — are what a change must survive, run by code and returned to the agent as evidence | [`AGENTS.md`](AGENTS.md) |
 | **Task-type routing** | Seven task types (`planning`, `review`, `implementation`, `test`, `docs`, `chore`, `bugfix`) each route to their own model and reasoning effort, so a chore never pays feature prices | [customization](docs/customization.md) |
 | **Measured routing** *(in progress)* | Routes calibrated from what Runs actually cost and deliver, rather than from a static opinion | [ADR-0027](docs/adr/0027-routing-is-calibrated-by-measurement.md) |
-| **Parallel Lanes** | Opt-in worktree-isolated Lanes work several `parallel-safe` issues at once, with a serialized, bounded-green Integration stage | [parallel mode](docs/parallel-mode.md) |
+| **Parallel Lanes** | Worktree-isolated Lanes work several `parallel-safe` issues at once, with a serialized, bounded-green Integration stage. A Run with no Lane work uses the serial Iteration driver and says so | [parallel mode](docs/parallel-mode.md) |
 | **Live interface** | Per-Iteration activity, context fill, observed tokens, and billed cost while the Run is happening — via the shared `git-loopy-tui` helper on a terminal, or the line printer everywhere else | [runners](docs/runners.md) |
 | **Closed-world Skill policy** | Exactly the Skills a Run may load — no ambient context bloat from whatever is installed on the host | [skill policy](docs/skill-policy.md) |
 
@@ -117,9 +117,8 @@ command that names the removed `[tui]` extra still succeeds, but your package
 manager warns that the extra does not exist; omit it.
 
 On a terminal, a Run detaches its worker and opens the Dashboard with the
-shared `git-loopy-tui` helper when available. To return to the line-printer
-view, use `--no-interactive` or set `GIT_LOOPY_INTERACTIVE=0`. A non-terminal
-Run uses the line printer directly.
+shared `git-loopy-tui` helper when available. A non-terminal Run uses the
+line printer directly.
 
 Useful variations:
 
