@@ -53,7 +53,6 @@ $script:EventTypes = [ordered]@{
     WRAPPER_CONTRIBUTION_END = "wrapper.contribution.end"
     WRAPPER_CONCURRENCY_CHANGED = "wrapper.concurrency.changed"
     WRAPPER_SERIAL_REQUESTED = "wrapper.serial.requested"
-    WRAPPER_PIPELINE_QUIESCENT = "wrapper.pipeline.quiescent"
     WRAPPER_ROLLING_REFILL_TURN = "wrapper.rolling.refill_turn"
     WRAPPER_PARALLEL_SERIAL_FALLBACK = "wrapper.parallel.serial_fallback"
     # Contract 1.28. Inert here for the reason the whole rolling block is: this

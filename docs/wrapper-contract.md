@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.13 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.14 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1050,8 +1050,13 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
 `wrapper.integration.branch_observed`, `wrapper.integration.recovery_started`,
 `wrapper.integration.published`, and `wrapper.contribution.end`. Scheduler-scoped:
 `wrapper.pool.refreshed`, `wrapper.concurrency.changed`, `wrapper.serial.requested`,
-`wrapper.pipeline.quiescent`, `wrapper.rolling.refill_turn`,
+`wrapper.rolling.refill_turn`,
 `wrapper.parallel.serial_fallback`, and `wrapper.parallel.degraded`.
+
+**Retired `wrapper.pipeline.quiescent` (contract 2.14, ADR-0065).** Every phase it named is
+already announced by `wrapper.serial.requested`, `wrapper.stop.requested`, the serial Iteration's
+`wrapper.iteration.start` or `wrapper.rolling.refill_turn`, and nothing read it. No Orchestrator
+declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
 
 - **Identity, not Lane.** Every contribution-scoped record MUST carry `contribution_id`, `issue`,
   and `lane_id`, and its envelope `iter` MUST be `null`. `lane_id` is the reusable **Lane** the
