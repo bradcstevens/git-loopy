@@ -257,9 +257,19 @@ case "${1-} ${2-}" in
     fi
     ;;
   "issue view")
+    # An opt-in per-Pickup view: `<n>.<list count>.json` answers the view the
+    # Pool read numbered `<list count>` made, so a scenario can change one
+    # issue's Readiness between Pickups. Every other view reads `<n>.json`.
+    view_file="$FAKE_GH_VIEW_DIR/${3}.json"
+    if [[ -f "$FAKE_GH_LIST_COUNT" ]]; then
+      list_count="$(<"$FAKE_GH_LIST_COUNT")"
+      if [[ -f "$FAKE_GH_VIEW_DIR/${3}.$list_count.json" ]]; then
+        view_file="$FAKE_GH_VIEW_DIR/${3}.$list_count.json"
+      fi
+    fi
     jq -c 'if has("blockedBy") then . else . + {
       blockedBy: {totalCount: 0, nodes: []}
-    } end' "$FAKE_GH_VIEW_DIR/${3}.json"
+    } end' "$view_file"
     ;;
   "issue close")
     if [[ "${FAKE_GH_CLOSE_STATUS:-0}" != "0" ]]; then
@@ -3439,5 +3449,97 @@ jq -se '
 
 assert_contains "$(<"$FAKE_COPILOT_PROMPT")" "=== Issue #72:" \
   "the agent was handed the pinned issue"
+
+# Wrapper contract §3.2 (contract 2.14, #644) — the first Pickup that reads the
+# Pin spends it. The pinned issue stays open through a no-progress agent, yet
+# only the first Pickup promotes it; every later one orders it by §3.2 like any
+# other issue.
+run_pin_lifetime() {
+  local label="$1"
+  local cap="$2"
+  export FAKE_GH_LOG="$temp_dir/pin-$label-gh.log"
+  export FAKE_GH_LIST_COUNT="$temp_dir/pin-$label-list.count"
+  rm -f "$FAKE_GH_LIST_COUNT"
+  setup_copilot_env "pin-$label"
+  export FAKE_COPILOT_COMMITS=0
+  set +e
+  run_turn_entrypoint "$pin_turn_repo" "$pin_turn_bin" \
+    "$temp_dir/pin-$label.stdout" "$temp_dir/pin-$label.stderr" "$cap" \
+    --issue 72
+  pin_lifetime_status=$?
+  set -e
+  unset FAKE_COPILOT_COMMITS
+}
+
+pin_open_blocker='{"totalCount": 1, "nodes": [{"id": "blocker-50", "number": 50,
+  "state": "OPEN", "title": "Dependency",
+  "url": "https://github.com/example/repo/issues/50"}]}'
+# Pickup `nth` views `number` with `blocked_by` in place of its own blockers.
+write_pin_pickup_view() {
+  local number="$1" nth="$2" blocked_by="$3"
+  jq --argjson blocked_by "$blocked_by" '.blockedBy = $blocked_by' \
+    "$temp_dir/pin-turn-views/$number.json" \
+    >"$temp_dir/pin-turn-views/$number.$nth.json"
+}
+clear_pin_pickup_views() {
+  rm -f "$temp_dir"/pin-turn-views/*.*.json
+}
+
+run_pin_lifetime spent 3
+[[ "$(<"$FAKE_COPILOT_CALLS")" == "3" ]] ||
+  fail "the pinned no-progress Run did not work three Iterations: \
+$(<"$temp_dir/pin-spent.stderr")"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.bound") | [.issue, .reason]]
+    == [[72, "pin"], [70, "order"], [70, "order"]])
+  and ([.[] | select(.type == "wrapper.pickup.bound" and .reason == "pin")]
+    | length == 1)
+  and ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues]
+    == [[72, 70, 71], [70, 71, 72], [70, 71, 72]])
+' "$temp_dir/pin-spent.stdout" >/dev/null ||
+  fail "a Pin bound once was promoted again while it stayed open"
+
+# A Pin skipped as Blocked was read — the open blocker is an answer about it —
+# so it is spent, and stays spent after it unblocks. Its later binding is the
+# order's, not the Pin's.
+clear_pin_pickup_views
+write_pin_pickup_view 72 1 "$pin_open_blocker"
+write_pin_pickup_view 70 2 "$pin_open_blocker"
+write_pin_pickup_view 71 2 "$pin_open_blocker"
+run_pin_lifetime blocked 2
+[[ "$(<"$FAKE_COPILOT_CALLS")" == "2" ]] ||
+  fail "the Blocked-Pin Run did not work two Iterations: \
+$(<"$temp_dir/pin-blocked.stderr")"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | [.issue, .reason]]
+    == [[72, "blocked_by_open_dependency: example/repo#50"],
+        [70, "blocked_by_open_dependency: example/repo#50"],
+        [71, "blocked_by_open_dependency: example/repo#50"]])
+  and ([.[] | select(.type == "wrapper.pickup.bound") | [.issue, .reason]]
+    == [[70, "order"], [72, "order"]])
+  and ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues]
+    == [[72, 70, 71], [70, 71, 72]])
+' "$temp_dir/pin-blocked.stdout" >/dev/null ||
+  fail "a Pin skipped as Blocked was promoted again after it unblocked"
+
+# A Pin whose Readiness could not be read was not read: the Pickup walks on and
+# binds the next candidate (§3.3), and the Pin stays live — promoted again at
+# the next Pickup, where it binds as `pin` once its Readiness reads.
+clear_pin_pickup_views
+write_pin_pickup_view 72 1 '{"totalCount": 1, "nodes": []}'
+run_pin_lifetime unread 2
+[[ "$(<"$FAKE_COPILOT_CALLS")" == "2" ]] ||
+  fail "the unread-Pin Run did not work two Iterations: \
+$(<"$temp_dir/pin-unread.stderr")"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | [.issue, .reason]]
+    == [[72, "readiness_unprovable"]])
+  and ([.[] | select(.type == "wrapper.pickup.bound") | [.issue, .reason]]
+    == [[70, "order"], [72, "pin"]])
+  and ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues]
+    == [[72, 70, 71], [72, 70, 71]])
+' "$temp_dir/pin-unread.stdout" >/dev/null ||
+  fail "a Pin the Pickup could not read was spent"
+clear_pin_pickup_views
 
 printf 'shell Orchestrator boundary: ok\n'

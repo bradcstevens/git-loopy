@@ -369,11 +369,15 @@ falling back to the order, because silently working a different issue than the o
 named is worse than stopping. Under **Rolling dispatch** the pin also goes ahead of
 every **Lane**: a **Serial-required** pin is the run's first serial **Iteration**, and no
 Lane is reserved until it ends; a `parallel-safe` pin takes the first Lane. Lacking
-`parallel-safe` decides how a pin is worked, never whether. In the Python Runner a pin is
-spent by its first binding, by a **Lane** Pickup whose answer is about it, or by the end of
-the serial Iteration latched for it unless that Iteration could not read it; an issue still
-open after that rejoins the order like any
-other (ADR-0032 records where the other Runner members still differ). It lasts at most
+`parallel-safe` decides how a pin is worked, never whether. The first **Pickup** that
+reads a pin spends it, in every Runner member: it binds it, passes it over for an answer
+about the pin itself (an open blocker, a **Lease** held elsewhere, a refused task type, or
+an authoritative read that finds it stale), or completes a Pool or **Membership read**
+that no longer lists it. A **Serial-required** pin is also spent by the end of the serial
+Iteration latched for it. A Pickup that could not read the pin — an incomplete read, or
+**Readiness** it could not prove — leaves it live, so the next Pickup promotes it again.
+Once spent, an issue still open rejoins the order like any other, so an invocation binds
+at most one issue as `pin`. It lasts at most
 one invocation, which is why it is neither a label nor an environment variable — both are
 global, and would point every concurrent run at the same issue.
 _Avoid_: lock, claim, assignment, selection, priority.

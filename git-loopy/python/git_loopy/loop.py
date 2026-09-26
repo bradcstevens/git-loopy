@@ -260,6 +260,12 @@ from git_loopy.rolling_pool import RollingPool, is_parallel_safe
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.run_readback import run_start_payload
 from git_loopy.run_start_disclosures import run_start_disclosures
+from git_loopy.issue_pin import (
+    PIN_READ_BOUND,
+    PIN_READ_REFUSED,
+    PIN_READ_UNREAD,
+    pin_live_after,
+)
 from git_loopy.serial_pickup import (
     AdmissionRefusal,
     SerialPickup,
@@ -2090,6 +2096,10 @@ class _Loop:
                 collection = self._source.collect_pool()
             pool = list(collection.items)
             pool_refs: list[int | str] = [item.ref for item in pool]
+            if self._live_pin is not None and self._live_pin not in pool_refs:
+                # A complete read without the Pin spends it; an incomplete one
+                # could not read it (#644).
+                self.observe_pin_read(listed=False, complete=collection.complete)
             self._pin_unread = (
                 self._live_pin is not None
                 and self._live_pin not in pool_refs
@@ -3423,6 +3433,7 @@ class _Loop:
         unbound = SerialPickup(
             item=None, position=None, reason=None, skipped=(), considered=tuple(pool)
         )
+        pin_route_unread = False
         while True:
             try:
                 pickup = pick_serial(
@@ -3451,6 +3462,13 @@ class _Loop:
                     self._release_lease(pickup.item.ref)
                     self._pin_unread = True
                     return unbound
+                if (
+                    isinstance(exc, _CandidateUnread)
+                    and pickup.item.ref == self._live_pin
+                ):
+                    # The walk moves on (§3.3), but the Pin was not read, so
+                    # it stays live (#644).
+                    pin_route_unread = True
                 # Refuse this candidate once, not the useful Static work
                 # behind it. The ordered walk remains the only dispatcher.
                 routing_refusals[pickup.item.ref] = f"dynamic route unavailable: {exc}"
@@ -3489,8 +3507,27 @@ class _Loop:
                 considered=considered,
                 resolution=resolution,
             )
-            self.spend_pin_if_bound(bound.ref)
+        self._observe_pin_at_serial_pickup(pickup, route_unread=pin_route_unread)
         return pickup
+
+    def _observe_pin_at_serial_pickup(
+        self, pickup: SerialPickup, *, route_unread: bool
+    ) -> None:
+        """Report what this serial Pickup read of the live Pin, if it reached it (#644)."""
+        pin = self._live_pin
+        if pin is None:
+            return
+        if pickup.item is not None and pickup.item.ref == pin:
+            self.observe_pin_read(listed=True, read=PIN_READ_BOUND)
+            return
+        for skip in pickup.skipped:
+            if skip.ref == pin:
+                unread = skip.unresolved or route_unread
+                self.observe_pin_read(
+                    listed=True,
+                    read=PIN_READ_UNREAD if unread else PIN_READ_REFUSED,
+                )
+                return
 
     @property
     def live_pin(self) -> int | None:
@@ -3526,17 +3563,29 @@ class _Loop:
             return True
         return self._lease.readable(pin)
 
-    def spend_pin_if_bound(self, ref: int | str) -> None:
-        """Spend the Pin if a Pickup, serial or Lane, just bound it (#430)."""
-        if ref == self._live_pin:
+    def observe_pin_read(
+        self, *, listed: bool, complete: bool = True, read: str | None = None
+    ) -> None:
+        """Apply one Pickup's read of the Pin to its lifetime (Wrapper contract §3.2, #644).
+
+        Every Pickup path, serial or Lane, reports here, and
+        :func:`~git_loopy.issue_pin.pin_live_after` alone decides: the first
+        Pickup that reads the Pin spends it, and one that could not read it
+        leaves it live.
+        """
+        live = self._live_pin is not None
+        if live and not pin_live_after(
+            live, listed=listed, complete=complete, read=read
+        ):
             self.spend_pin()
 
     def spend_pin(self) -> None:
         """Spend the Pin: later Pickups neither promote nor name it (#430).
 
-        A Pin is spent by the first Pickup that binds it, or by the end of the
-        serial Iteration latched for it, unless that Iteration could not read
-        it (:attr:`pin_unread`).
+        A Pin is spent by the first Pickup that reads it
+        (:meth:`observe_pin_read`, #644), or by the end of the serial Iteration
+        latched for it, unless that Iteration could not read it
+        (:attr:`pin_unread`).
         """
         self._live_pin = None
         if isinstance(self._source, sources_module.PinnedSource):
@@ -4485,6 +4534,7 @@ class _ParallelLoop:
                 on_membership_read=self._emit_membership_read,
                 read_refused=self._lane_lease_unreadable,
                 lane_first=self._lane_first_pin,
+                lane_first_read=self._lane_first_read,
             )
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
@@ -5450,6 +5500,12 @@ class _ParallelLoop:
         """The unspent Pin, if it is ``parallel-safe``: the next Lane is its."""
         return self._serial.live_pin if self._pin_parallel_safe() else None
 
+    def _lane_first_read(
+        self, *, listed: bool, complete: bool, read: str | None
+    ) -> None:
+        """What the Rolling cache read of the ``parallel-safe`` Pin (#644)."""
+        self._serial.observe_pin_read(listed=listed, complete=complete, read=read)
+
     async def _await_pin_readable(self) -> None:
         """Poll until a Pool read shows the Pin or proves it gone (#430).
 
@@ -5830,7 +5886,7 @@ class _ParallelLoop:
 
         def pin_refused() -> None:
             if is_pin:
-                self._serial.spend_pin()
+                self._serial.observe_pin_read(listed=True, read=PIN_READ_REFUSED)
 
         if not isinstance(ref, int):
             # Rolling-eligible candidates are always int refs
@@ -6024,7 +6080,8 @@ class _ParallelLoop:
             on_execution_host=True,
         )
         lane_binding.bind(ref, source="lane_pickup", at=datetime.now(timezone.utc))
-        self._serial.spend_pin_if_bound(ref)
+        if ref == self._serial.live_pin:
+            self._serial.observe_pin_read(listed=True, read=PIN_READ_BOUND)
         if is_pin:
             # Refill was held while the Pin's Lane was in setup (#645).
             self._capacity_freed.set()

@@ -87,6 +87,12 @@
       "powershell": {"kind": "waived_out_of_scope", "reason": "The written contract keeps model-roster resolution Python-only pending Config parity."},
       "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard receives configured model facts in Events and does not resolve the model roster."}
     },
+    "pin-duration.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives every Pickup step through production ordering, the Pickup reason and the Pin spend decision."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh drives every Pickup step through production ordering, the Pickup reason and the Pin spend decision."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 drives every Pickup step through production ordering, the Pickup reason and the Pin spend decision."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "How long a Pin lasts is an Orchestrator Pickup decision; the Dashboard renders the Pickup records it emits."}
+    },
     "progress-strikes.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives production progress and Strike accounting with fixture steps."},
       "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh drives production progress and Strike accounting with fixture steps."},

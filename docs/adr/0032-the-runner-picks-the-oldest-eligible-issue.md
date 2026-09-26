@@ -115,3 +115,17 @@ Python Runner does this in serial Pickups as well.
   release it uncached, and neither a Lane nor serial work fills behind it until it binds. Its
   retries are paced to one per idle poll interval. The bounds on a pin whose reads keep failing are
   [#647](https://github.com/bradcstevens/git-loopy/issues/647).
+
+## Amendment: one Pin lifetime across the Runner family (#644)
+
+[#644](https://github.com/bradcstevens/git-loopy/issues/644) resolved the first conflict the
+#430 amendment flagged. Wrapper contract 2.14 states one rule for every member: the first
+**Pickup** that reads the pin spends it — it binds it, passes it over for an answer about it,
+or completes a Pool or **Membership read** that no longer lists it — and a Pickup that could
+not read it leaves it live. The shell and PowerShell Orchestrators now promote the pin only
+while it is live, and `conformance/pin-duration.json` pins the rule for all three
+Orchestrators. The Python Runner also spends a `parallel-safe` pin that a Pickup, Lane walk
+or serial, passes over as **Blocked** or stale. A serial-only member walks on past an unread
+pin, as §3.3 does for any candidate; holding for it is **Rolling dispatch** behaviour, and it
+stays under the two exceptions above. The bounds on a pin whose reads keep failing stay with
+[#647](https://github.com/bradcstevens/git-loopy/issues/647).

@@ -43,8 +43,9 @@ Design notes:
   later complete refresh still lists it, and blocks an empty claim while it
   remains unresolved. The one exception is :attr:`RollingPool.lane_first`, an
   unspent **Pin** that takes the first Lane (#430).
-* **stdlib + ``git_loopy.sources`` only.** Same constraint the sources seam
-  carries: no SDK, no Rich, no peer-of-loop imports.
+* **stdlib + ``git_loopy.sources`` only**, plus the Pin-read vocabulary of the
+  pure :mod:`git_loopy.issue_pin`. Same constraint the sources seam carries: no
+  SDK, no Rich, no peer-of-loop imports.
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Callable
 
+from git_loopy.issue_pin import PIN_READ_REFUSED, PIN_READ_UNREAD
 from git_loopy.sources import (
     AfkReadyItem,
     LABEL_PARALLEL_SAFE,
@@ -94,6 +96,12 @@ def _ignore_membership_read(_candidates: tuple[PoolCandidate, ...]) -> None:
 def _no_lane_first() -> int | str | None:
     """Default for callers with no **Pin**: every walk may pass every candidate."""
     return None
+
+
+def _ignore_lane_first_read(
+    *, listed: bool, complete: bool, read: str | None
+) -> None:
+    """Default for callers with no **Pin**: nobody tracks its lifetime."""
 
 
 def _never_read_refused(_candidate: PoolCandidate) -> bool:
@@ -221,6 +229,12 @@ class RollingPool:
     #: the next candidate, and the candidate is retried on the next walk even
     #: while quarantined — the one exception to §2.11's head-of-line rule.
     lane_first: Callable[[], int | str | None] = _no_lane_first
+    #: Told what this cache read of :attr:`lane_first` (#644), with the keyword
+    #: arguments of :func:`git_loopy.issue_pin.pin_live_after`: a walk that
+    #: passed it over as Blocked or stale, or could not read it, and a complete
+    #: Membership read that no longer lists it. The caller decides whether that
+    #: spends the Pin.
+    lane_first_read: Callable[..., None] = _ignore_lane_first_read
 
     _entries: list[_CachedCandidate] = field(default_factory=list, init=False)
     _refreshing: bool = field(default=False, init=False)
@@ -347,6 +361,18 @@ class RollingPool:
         now = self.clock()
         for position, entry in enumerate(walked, start=1):
             held = first is not None and entry.candidate.ref == first
+            if held and not self.eligible(entry.candidate):
+                # The walk passes the Pin over (#644): a proven open blocker is
+                # an answer about it, an unread one is not.
+                if has_proven_open_blocker(entry.candidate):
+                    self.lane_first_read(
+                        listed=True, complete=True, read=PIN_READ_REFUSED
+                    )
+                elif has_unresolved_readiness(entry.candidate):
+                    self.lane_first_read(
+                        listed=True, complete=True, read=PIN_READ_UNREAD
+                    )
+                continue
             if (entry.quarantined and not held) or not self.eligible(entry.candidate):
                 continue
             if now < entry.not_before:
@@ -369,9 +395,17 @@ class RollingPool:
                     entry.candidate.ref,
                 )
                 if held:
+                    self.lane_first_read(
+                        listed=True, complete=True, read=PIN_READ_UNREAD
+                    )
                     return PoolTake(item=None, position=None, considered=len(walked))
                 continue
             self._entries.remove(entry)
+            if held:
+                # Stale at its authoritative read: no longer eligible (#644).
+                self.lane_first_read(
+                    listed=True, complete=True, read=PIN_READ_REFUSED
+                )
         return PoolTake(item=None, position=None, considered=len(walked))
 
     def requeue(self, item: AfkReadyItem, *, retry_after: float) -> None:
@@ -628,6 +662,10 @@ class RollingPool:
         break the position guarantee this method exists to hold.
         """
         observed = {c.ref: c for c in snapshot.candidates if self.cacheable(c)}
+        first = self.lane_first()
+        if first is not None and first not in observed:
+            # A complete Membership read that no longer lists the Pin (#644).
+            self.lane_first_read(listed=False, complete=True, read=None)
         survivors: list[_CachedCandidate] = []
         for entry in self._entries:
             fresh = observed.pop(entry.candidate.ref, None)

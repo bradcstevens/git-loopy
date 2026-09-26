@@ -609,8 +609,9 @@ def build_parser() -> argparse.ArgumentParser:
             "every concurrent run at the same issue. It bypasses order and "
             "nothing else -- a pinned issue that is closed, unreadable, lacks "
             "ready-for-agent, or fails the AFK-ready body discriminator fails "
-            "the invocation rather than falling back to normal order. May be "
-            "given at most once."
+            "the invocation rather than falling back to normal order. The "
+            "first Pickup that reads the pin spends it, and the issue then "
+            "rejoins the order like any other. May be given at most once."
         ),
     )
     parser.add_argument(

@@ -188,6 +188,51 @@ assert_equal \
   "$(jq -r '.pin_outranks_priority' "$conformance_dir/issue-ordering.json")" \
   "issue-ordering: the fixture declares that a Pin outranks Priority"
 
+# Wrapper contract §3.2 (contract 2.14, #644) — how long a Pin lasts. Each step
+# is one Pickup: it orders the Pool with the Pin live before it, names what a
+# binding of the Pin reports, then asks the production spend decision whether
+# the Pin is live afterwards.
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  pin_value="$(jq -r '.pin | tostring' <<<"$case_json")"
+  live=1
+  step_index=0
+  while IFS= read -r step_json; do
+    step_index=$((step_index + 1))
+    live_pin=""
+    ((live == 1)) && live_pin="$pin_value"
+    issues_json="$(jq -c '.issues' <<<"$step_json")"
+    result_json="$(git_loopy_order_issues "$issues_json" "$live_pin")"
+    pinned_json="$(
+      jq -c --argjson pin "$pin_value" \
+        'map(select(.number == $pin)) | .[0] // empty' <<<"$issues_json"
+    )"
+    listed=0
+    pin_reason="null"
+    if [[ -n "$pinned_json" ]]; then
+      listed=1
+      pin_reason="\"$(git_loopy_pickup_reason "$pinned_json" "$live_pin")\""
+    fi
+    complete="$(jq -r 'if .complete then 1 else 0 end' <<<"$step_json")"
+    read_value="$(jq -r '.pin_read // ""' <<<"$step_json")"
+    live="$(git_loopy_pin_live_after "$live" "$listed" "$complete" "$read_value")"
+    assert_equal \
+      "$(jq -c '.expected' <<<"$step_json")" \
+      "$(
+        jq -cn \
+          --argjson order "$(jq -c '.order' <<<"$result_json")" \
+          --argjson reason "$pin_reason" \
+          --argjson live "$([[ "$live" == 1 ]] && echo true || echo false)" \
+          '{order: $order, pin_reason: $reason, live_after: $live}'
+      )" \
+      "pin-duration: $case_id Pickup $step_index"
+  done < <(jq -c '.pickups[]' <<<"$case_json")
+done < <(jq -c '.cases[]' "$conformance_dir/pin-duration.json")
+assert_equal \
+  "$(jq -c '[.cases[].covers] | unique' "$conformance_dir/pin-duration.json")" \
+  '["a","b","c","d","e","f"]' \
+  "pin-duration: the rows cover cases (a)-(f)"
+
 # Wrapper contract §2.1 — the read the order is computed over. The schedule is a
 # family decision rather than this port's: two members walking different limits
 # read different backlogs, and a backlog is exactly what §3.2 orders.

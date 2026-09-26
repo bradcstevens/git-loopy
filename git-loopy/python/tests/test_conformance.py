@@ -85,6 +85,8 @@ from git_loopy.issue_order import (
     order_issues,
     promote_pinned,
 )
+from git_loopy.issue_pin import PIN_READS, pin_live_after
+from git_loopy.serial_pickup import reason_for
 from git_loopy.measured_routing import ProvingTask
 from git_loopy import measured_routing as measured_routing_module
 from git_loopy.staircase import Candidate
@@ -270,6 +272,69 @@ def test_ordering_cases_are_named_uniquely() -> None:
     """Case ids are the parametrize ids every port reports failures by."""
     ids = [case["id"] for case in _ISSUE_ORDERING["cases"]]
 
+    assert len(ids) == len(set(ids))
+
+
+_PIN_DURATION = _load_fixture("pin-duration.json")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _PIN_DURATION["cases"],
+    ids=lambda case: case["id"],
+)
+def test_pin_duration_fixture(case: dict[str, Any]) -> None:
+    """How long a **Pin** lasts: the first Pickup that reads it spends it (#644).
+
+    Each step is one Pickup. It orders the Pool with the Pin still live before
+    it, names what a binding of the Pin would report, then asks the production
+    spend decision whether the Pin is live afterwards. The read outcome is an
+    input, so eligibility stays out of the fixture.
+    """
+    pin = case["pin"]
+    live = True
+    for index, pickup in enumerate(case["pickups"], start=1):
+        live_pin = pin if live else None
+        issues = [_orderable(candidate) for candidate in pickup["issues"]]
+        order = promote_pinned(order_issues(issues).order, live_pin)
+        pinned = next((issue for issue in issues if issue.number == pin), None)
+        reason = (
+            None
+            if pinned is None
+            else reason_for(pinned.number, pinned.labels, pin=live_pin)
+        )
+        live = pin_live_after(
+            live,
+            listed=pinned is not None,
+            complete=pickup["complete"],
+            read=pickup["pin_read"],
+        )
+
+        assert {
+            "order": [issue.number for issue in order],
+            "pin_reason": reason,
+            "live_after": live,
+        } == pickup["expected"], f"Pickup {index}"
+
+
+def test_pin_duration_fixture_declares_the_production_read_vocabulary() -> None:
+    """The read outcomes a step may name are the ones the spend decision knows."""
+    assert set(_PIN_DURATION["pin_reads"]) == PIN_READS
+    used = {
+        pickup["pin_read"]
+        for case in _PIN_DURATION["cases"]
+        for pickup in case["pickups"]
+        if pickup["pin_read"] is not None
+    }
+    assert used == PIN_READS
+
+
+def test_pin_duration_fixture_covers_every_named_case() -> None:
+    """Cases (a)-(f) of #644 are each driven by at least one row."""
+    covered = {case["covers"] for case in _PIN_DURATION["cases"]}
+
+    assert covered == set(_PIN_DURATION["covers"]) == set("abcdef")
+    ids = [case["id"] for case in _PIN_DURATION["cases"]]
     assert len(ids) == len(set(ids))
 
 

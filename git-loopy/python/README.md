@@ -1055,6 +1055,16 @@ would point every concurrent run at the same issue, which is the opposite of
 what pinning is for. At most one issue may be pinned per invocation; a second
 `--issue` is a usage error. There is no config-file or environment equivalent.
 
+A pin lasts one turn, not the whole run (Wrapper contract 2.14, #644). The first
+Pickup that reads it spends it: it binds the issue, passes it over for an answer
+about it (an open blocker, a Lease held elsewhere, a refused task type, or a
+read that finds it no longer eligible), or completes a Pool read that no longer
+lists it. A Pickup that could not read it — an incomplete read, or Readiness it
+could not prove — leaves it live, so the next Pickup tries it first again. Once
+spent, an issue that is still open rejoins the selection order like any other,
+so a pinned issue that makes no progress does not head every later Iteration.
+The shell and PowerShell Orchestrators follow the same rule.
+
 ---
 
 ## Persistent Config (`config.toml`)

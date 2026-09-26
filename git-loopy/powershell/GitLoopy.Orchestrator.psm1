@@ -810,6 +810,14 @@ $Script:GitLoopyListMaxLimit = 1600
 # threading one nullable through every frame between them would touch the
 # Conformance seam's callers to carry a value all but one of them ignores.
 $Script:GitLoopyIssuePin = $null
+# Wrapper contract §3.2 (contract 2.14, #644) — whether the Pin is still live.
+# The first Pickup that reads the Pin spends it; one that could not read it
+# leaves it live. `Get-GitLoopyPinLiveAfter` alone decides, and only a live Pin
+# is promoted or reported as `pin`.
+$Script:GitLoopyPinLive = $true
+# Whether this Iteration's `gh issue view` of the Pin failed. The listing saw
+# the Pin, so a Pool without it is a read that did not happen, not an answer.
+$script:GitLoopyPinViewFailed = $false
 
 # The `--json` field set every shallow issue read asks for, named once so this
 # port cannot drift from the Python reference's `_SHALLOW_ISSUE_FIELDS`, and so
@@ -2228,6 +2236,7 @@ function Invoke-GitLoopyPreflight {
             return $null
         }
         $Script:GitLoopyIssuePin = $Config.IssuePin
+        $Script:GitLoopyPinLive = $true
         if (-not (Assert-GitLoopyPinEligible -Pin $Config.IssuePin)) {
             return $null
         }
@@ -2514,7 +2523,7 @@ function Get-GitLoopyOrderedCandidates {
         }
     }
     $Ordering = Get-GitLoopyIssueOrder -Candidates @($Projected) `
-        -Pin $Script:GitLoopyIssuePin
+        -Pin (Get-GitLoopyLivePin)
     foreach ($Entry in @($Ordering["undated"])) {
         $Key = "$($Entry["issue"])/$($Entry["defect"])"
         if (-not $script:GitLoopyReportedUndated.Add($Key)) {
@@ -2551,6 +2560,7 @@ function Get-GitLoopyGitHubPool {
     param()
 
     $script:GitLoopyPoolComplete = $true
+    $script:GitLoopyPinViewFailed = $false
     $Page = Get-GitLoopyIssueListToCompletion
     if (-not $Page["ok"]) {
         $script:GitLoopyPoolComplete = $false
@@ -2611,6 +2621,9 @@ function Get-GitLoopyGitHubPool {
                 "git-loopy: gh issue view #$Number failed; " +
                 "skipping this Iteration."
             )
+            if ("$Number" -ceq "$($Script:GitLoopyIssuePin)") {
+                $script:GitLoopyPinViewFailed = $true
+            }
             continue
         }
         # The date-safe reader: this read carries `createdAt`, and
@@ -2620,6 +2633,9 @@ function Get-GitLoopyGitHubPool {
             -Output $ViewOutput `
             -Description "gh issue view #$Number"
         if ($null -eq $Full -or $Full -isnot [Collections.IDictionary]) {
+            if ("$Number" -ceq "$($Script:GitLoopyIssuePin)") {
+                $script:GitLoopyPinViewFailed = $true
+            }
             continue
         }
         # `gh issue list --state open` is a snapshot; this per-issue view is the
@@ -2782,9 +2798,98 @@ function Get-GitLoopyPool {
     )
 
     if ($Config.IssueSource -ceq "github") {
-        return @(Get-GitLoopyGitHubPool)
+        $Items = @(Get-GitLoopyGitHubPool)
+        Update-GitLoopyPinInPool -Pool $Items
+        return $Items
     }
     return @(Get-GitLoopyPrdsPool -RepoRoot $RepoRoot)
+}
+
+# Wrapper contract §3.2 (#644) — a complete Pool read that does not list the
+# live Pin spends it. One that stopped short, failed, or failed to view the Pin
+# could not read it, so the Pin stays live. A listed Pin is read by the Pickup.
+function Update-GitLoopyPinInPool {
+    param(
+        [AllowEmptyCollection()]
+        [object[]]$Pool
+    )
+
+    $Pin = Get-GitLoopyLivePin
+    if ($null -eq $Pin) {
+        return
+    }
+    foreach ($Item in @($Pool)) {
+        if ("$($Item["number"])" -ceq "$Pin") {
+            return
+        }
+    }
+    Update-GitLoopyPinRead `
+        -Listed $false `
+        -Complete ($script:GitLoopyPoolComplete -and -not $script:GitLoopyPinViewFailed)
+}
+
+# Wrapper contract §3.2 (contract 2.14, #644) — the Pin spend decision, and the
+# Conformance seam `pin-duration.json` drives. `Live` is whether the Pin was
+# live before this Pickup, `Listed` whether its Pool read listed the Pin,
+# `Complete` whether that read was complete, and `Read` what the Pickup did
+# with a listed Pin (`bound`, `refused`, `unread`, or empty when it never
+# reached it). Returns whether the Pin is still live afterwards.
+#
+# The first Pickup that reads the Pin spends it: it binds it, passes it over
+# for an answer about it, or completes a read that does not list it. A Pickup
+# that could not read it leaves it live.
+function Get-GitLoopyPinLiveAfter {
+    param(
+        [Parameter(Mandatory)]
+        [bool]$Live,
+        [Parameter(Mandatory)]
+        [bool]$Listed,
+        [Parameter(Mandatory)]
+        [bool]$Complete,
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Read
+    )
+
+    if (-not [string]::IsNullOrEmpty($Read) -and
+        @("bound", "refused", "unread") -cnotcontains $Read) {
+        throw "git-loopy: unknown Pin read: $Read"
+    }
+    if (-not $Live) {
+        return $false
+    }
+    if (-not $Listed) {
+        return (-not $Complete)
+    }
+    return ([string]::IsNullOrEmpty($Read) -or $Read -ceq "unread")
+}
+
+# The Pin a Pickup still promotes and names, or `$null` once it is spent.
+function Get-GitLoopyLivePin {
+    if ($null -ne $Script:GitLoopyIssuePin -and $Script:GitLoopyPinLive) {
+        return $Script:GitLoopyIssuePin
+    }
+    return $null
+}
+
+# Apply one Pickup's read of the Pin to its lifetime.
+function Update-GitLoopyPinRead {
+    param(
+        [Parameter(Mandatory)]
+        [bool]$Listed,
+        [Parameter(Mandatory)]
+        [bool]$Complete,
+        [string]$Read = ""
+    )
+
+    if ($null -eq $Script:GitLoopyIssuePin) {
+        return
+    }
+    $Script:GitLoopyPinLive = Get-GitLoopyPinLiveAfter `
+        -Live $Script:GitLoopyPinLive `
+        -Listed $Listed `
+        -Complete $Complete `
+        -Read $Read
 }
 
 function ConvertFrom-GitLoopyLogOutput {
@@ -3471,6 +3576,7 @@ function Select-GitLoopySerialPickup {
     [int]$Position = 0
     [int]$Refused = 0
     [int]$Waiting = 0
+    $LivePin = Get-GitLoopyLivePin
     $UnresolvedLabels = [Collections.Generic.List[string]]::new()
     foreach ($Head in $Items) {
         $Position += 1
@@ -3480,11 +3586,24 @@ function Select-GitLoopySerialPickup {
         else {
             [string]$Head["ref"]
         }
+        $IsPin = $null -ne $LivePin -and $Ref -ceq ([string]$LivePin)
         $Readiness = Get-GitLoopyCandidateReadiness `
             -Candidate $Head `
             -IssueSource $IssueSource
         if (-not $Readiness["admissible"]) {
             $Reason = [string]$Readiness["skip_reason"]
+            if ($IsPin) {
+                # §3.2 (#644): an open blocker is an answer about the Pin and
+                # spends it; an unprovable read is not, and the Pin stays live.
+                # Either way the walk moves on (§3.3).
+                $PinRead = if ($Reason -ceq "readiness_unprovable") {
+                    "unread"
+                }
+                else {
+                    "refused"
+                }
+                Update-GitLoopyPinRead -Listed $true -Complete $true -Read $PinRead
+            }
             $Refused += 1
             $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
             if ($Reason -ceq "blocked_by_open_dependency") {
@@ -3535,17 +3654,28 @@ function Select-GitLoopySerialPickup {
                 "git-loopy: serial Pickup selected $Ref but its activation was " +
                 "refused; the Iteration works that issue on the standing binding."
             )
+            if ($IsPin) {
+                Update-GitLoopyPinRead -Listed $true -Complete $true -Read "bound"
+            }
             return @($Head)
         }
         $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
-        Write-GitLoopyPickupBound `
-            -Context $Context `
-            -EventTypes $EventTypes `
-            -Iteration $Iteration `
-            -Ref $Ref `
-            -Head $Head `
-            -Position $Position `
-            -Considered $Items.Count
+        # The record names the Pin while it is still live; the binding spends it.
+        try {
+            Write-GitLoopyPickupBound `
+                -Context $Context `
+                -EventTypes $EventTypes `
+                -Iteration $Iteration `
+                -Ref $Ref `
+                -Head $Head `
+                -Position $Position `
+                -Considered $Items.Count
+        }
+        finally {
+            if ($IsPin) {
+                Update-GitLoopyPinRead -Listed $true -Complete $true -Read "bound"
+            }
+        }
         [Console]::Error.WriteLine(
             "git-loopy: serial Pickup bound $Label (position $Position of $($Items.Count))"
         )
@@ -3659,21 +3789,35 @@ function Get-GitLoopyPickupRecord {
     # `pin` outranks `priority`, which outranks `order`. A pinned issue reached
     # the head because an operator named it (#396) whatever its labels said, so
     # crediting the label would make "did my Priority label do anything?"
-    # unanswerable on exactly the Runs where someone overrode it. `priority` in
-    # turn is a human assertion read off the issue, never inferred; every other
-    # head is the head because the order put it there.
-    $Reason = if (
-        $null -ne $Script:GitLoopyIssuePin -and
-        $Ref -ceq ([string]$Script:GitLoopyIssuePin)
-    ) { "pin" }
-    elseif ($Labels -ccontains "priority") { "priority" }
-    else { "order" }
+    # unanswerable on exactly the Runs where someone overrode it. Only the
+    # *live* Pin is named (contract 2.14, #644): a spent Pin is ordered like any
+    # other. `priority` in turn is a human assertion read off the issue, never
+    # inferred; every other head is the head because the order put it there.
     return [ordered]@{
         issue = $Issue
-        reason = $Reason
+        reason = Get-GitLoopyPickupReason `
+            -Ref $Ref `
+            -Labels $Labels `
+            -Pin (Get-GitLoopyLivePin)
         position = $Position
         considered = $Considered
     }
+}
+
+# Why a Pickup bound `Ref`, given its label names and the live Pin (or `$null`).
+function Get-GitLoopyPickupReason {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Ref,
+        [AllowEmptyCollection()]
+        [string[]]$Labels = @(),
+        [AllowNull()]
+        [object]$Pin
+    )
+
+    if ($null -ne $Pin -and $Ref -ceq ([string]$Pin)) { return "pin" }
+    if (@($Labels) -ccontains "priority") { return "priority" }
+    return "order"
 }
 
 function Set-GitLoopyActiveBinding {
@@ -4942,6 +5086,8 @@ Options:
                                 else -- a pinned issue that is closed, missing,
                                 unreadable, lacks ready-for-agent, or fails the
                                 AFK-ready discriminator fails the invocation.
+                                Spent by the first Pickup that reads it; the
+                                issue then rejoins the order like any other.
   --max-nmt-strikes N
   --deny-tool TOOL              Repeatable; unioned with GIT_LOOPY_DENY_TOOLS.
   --deny-skill SKILL            Repeatable; unioned with GIT_LOOPY_DENY_SKILLS.
@@ -5031,6 +5177,8 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyIssueInstant",
     "Get-GitLoopyTimestampDefect",
     "Get-GitLoopyIssueOrder",
+    "Get-GitLoopyPinLiveAfter",
+    "Get-GitLoopyPickupReason",
     "Assert-GitLoopyPinEligible",
     "Get-GitLoopyMissingSections",
     "Get-GitLoopyOrderedCandidates",

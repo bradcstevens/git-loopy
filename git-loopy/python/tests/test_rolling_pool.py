@@ -893,7 +893,9 @@ class TestModuleStructure:
         The cache sits on the source seam and below the scheduler. Reaching for
         ``loop``/``events``/``ui`` would invert that and make the scheduler
         untestable without a Run; reaching for ``gh`` would bypass the seam that
-        exists so the shallow/authoritative split can be substituted.
+        exists so the shallow/authoritative split can be substituted. The one
+        addition is ``git_loopy.issue_pin``, pure and stdlib-only, for the Pin
+        read vocabulary the cache reports in (#644).
         """
         import ast
         from pathlib import Path
@@ -901,7 +903,7 @@ class TestModuleStructure:
         from git_loopy import rolling_pool as module
 
         tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
-        allowed = {"sources"}
+        allowed = {"sources", "issue_pin"}
         offenders: list[str] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -1360,3 +1362,95 @@ class TestRequeue:
         pool.requeue(item, retry_after=1.0)
 
         assert pool.confirm_terminal_outcome() is None
+
+
+# --------------------------------------------------------------------------- #
+# What the cache reads of the Pin (#644)                                       #
+# --------------------------------------------------------------------------- #
+
+
+class TestLaneFirstRead:
+    """The walk and the Membership read report the Pin's reads; they spend nothing."""
+
+    @staticmethod
+    def _recording_pool(source, **kw):
+        reads: list[tuple[bool, bool, str | None]] = []
+
+        def record(*, listed: bool, complete: bool, read: str | None) -> None:
+            reads.append((listed, complete, read))
+
+        pool = _pool(source, lane_first=lambda: 7, lane_first_read=record, **kw)
+        return pool, reads
+
+    def test_a_walk_passing_a_blocked_pin_over_reports_it_refused(self) -> None:
+        from git_loopy.sources import is_lane_candidate
+
+        blocked = BlockedByRead(
+            total_count=1, nodes=(BlockerNode(ref="o/r#1", state="open"),)
+        )
+        source = ScriptedSource([
+            MembershipSnapshot(
+                candidates=(_candidate(7, blocked_by=blocked), _candidate(31)),
+                complete=True,
+            )
+        ])
+        pool, reads = self._recording_pool(source, eligible=is_lane_candidate)
+        pool.start()
+
+        taken = pool.take()
+
+        assert taken.item is not None and taken.item.ref == 31
+        assert reads == [(True, True, "refused")]
+
+    def test_a_walk_passing_an_unread_pin_over_reports_it_unread(self) -> None:
+        from git_loopy.sources import is_lane_candidate
+
+        source = ScriptedSource([
+            MembershipSnapshot(
+                candidates=(
+                    _candidate(7, blocked_by=BlockedByRead.unprovable()),
+                    _candidate(31),
+                ),
+                complete=True,
+            )
+        ])
+        pool, reads = self._recording_pool(source, eligible=is_lane_candidate)
+        pool.start()
+
+        pool.take()
+
+        assert reads == [(True, True, "unread")]
+
+    def test_a_stale_pin_is_reported_refused(self) -> None:
+        source = ScriptedSource([_snapshot([7, 31])], pickups={7: PICKUP_STALE})
+        pool, reads = self._recording_pool(source)
+        pool.start()
+
+        pool.take()
+
+        assert reads == [(True, True, "refused")]
+
+    def test_an_unavailable_pin_is_reported_unread(self) -> None:
+        source = ScriptedSource([_snapshot([7, 31])], pickups={7: PICKUP_UNAVAILABLE})
+        pool, reads = self._recording_pool(source)
+        pool.start()
+
+        pool.take()
+
+        assert reads == [(True, True, "unread")]
+
+    def test_a_complete_read_without_the_pin_reports_it_absent(self) -> None:
+        source = ScriptedSource([_snapshot([31])])
+        pool, reads = self._recording_pool(source)
+
+        pool.start()
+
+        assert reads == [(False, True, None)]
+
+    def test_an_incomplete_read_reports_nothing(self) -> None:
+        source = ScriptedSource([_snapshot([31], complete=False)])
+        pool, reads = self._recording_pool(source)
+
+        pool.start()
+
+        assert reads == []

@@ -1,0 +1,757 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.14",
+  "pin_reads": [
+    "bound",
+    "refused",
+    "unread"
+  ],
+  "covers": {
+    "a": "Bound once and still open: the next Pickup orders it by section 3.2 and reports order",
+    "b": "Passed over as Blocked: never promoted again, including after it unblocks",
+    "c": "Unread: promoted again at the next Pickup, and bound as pin",
+    "d": "Absent from a complete read: ordered like any other issue if it comes back",
+    "e": "Absent from an incomplete read: still live",
+    "f": "A spent Pin labelled priority: reports priority"
+  },
+  "cases": [
+    {
+      "id": "a-pin-bound-once-rejoins-the-order",
+      "covers": "a",
+      "pin": 72,
+      "pickups": [
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "bound",
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "pin",
+            "live_after": false
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": null,
+          "expected": {
+            "order": [
+              70,
+              71,
+              72
+            ],
+            "pin_reason": "order",
+            "live_after": false
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": null,
+          "expected": {
+            "order": [
+              70,
+              71,
+              72
+            ],
+            "pin_reason": "order",
+            "live_after": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "a-pin-passed-over-as-blocked-is-never-promoted-again",
+      "covers": "b",
+      "pin": 72,
+      "pickups": [
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "refused",
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "pin",
+            "live_after": false
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": null,
+          "expected": {
+            "order": [
+              70,
+              71,
+              72
+            ],
+            "pin_reason": "order",
+            "live_after": false
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "bound",
+          "expected": {
+            "order": [
+              72
+            ],
+            "pin_reason": "order",
+            "live_after": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "an-unread-pin-is-promoted-again-and-binds-as-pin",
+      "covers": "c",
+      "pin": 72,
+      "pickups": [
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "unread",
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "pin",
+            "live_after": true
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "unread",
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "pin",
+            "live_after": true
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "bound",
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "pin",
+            "live_after": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "a-pin-absent-from-a-complete-read-is-spent",
+      "covers": "d",
+      "pin": 72,
+      "pickups": [
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": null,
+          "expected": {
+            "order": [
+              70,
+              71
+            ],
+            "pin_reason": null,
+            "live_after": false
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": null,
+          "expected": {
+            "order": [
+              70,
+              71,
+              72
+            ],
+            "pin_reason": "order",
+            "live_after": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "a-pin-absent-from-an-incomplete-read-stays-live",
+      "covers": "e",
+      "pin": 72,
+      "pickups": [
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": false,
+          "pin_read": null,
+          "expected": {
+            "order": [
+              70,
+              71
+            ],
+            "pin_reason": null,
+            "live_after": true
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "bound",
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "pin",
+            "live_after": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "a-spent-pin-labelled-priority-reports-priority",
+      "covers": "f",
+      "pin": 72,
+      "pickups": [
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent",
+                "priority"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "refused",
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "pin",
+            "live_after": false
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent",
+                "priority"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": null,
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "priority",
+            "live_after": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "a-spent-pin-stays-spent-whatever-a-later-pickup-reads",
+      "covers": "a",
+      "pin": 72,
+      "pickups": [
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "bound",
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "pin",
+            "live_after": false
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": false,
+          "pin_read": null,
+          "expected": {
+            "order": [
+              70,
+              71
+            ],
+            "pin_reason": null,
+            "live_after": false
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "unread",
+          "expected": {
+            "order": [
+              70,
+              71,
+              72
+            ],
+            "pin_reason": "order",
+            "live_after": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "a-read-that-lists-the-pin-but-never-reaches-it-leaves-it-live",
+      "covers": "c",
+      "pin": 72,
+      "pickups": [
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": null,
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "pin",
+            "live_after": true
+          }
+        },
+        {
+          "issues": [
+            {
+              "number": 70,
+              "created_at": "2024-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 71,
+              "created_at": "2025-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            },
+            {
+              "number": 72,
+              "created_at": "2026-01-01T00:00:00Z",
+              "labels": [
+                "ready-for-agent"
+              ]
+            }
+          ],
+          "complete": true,
+          "pin_read": "bound",
+          "expected": {
+            "order": [
+              72,
+              70,
+              71
+            ],
+            "pin_reason": "pin",
+            "live_after": false
+          }
+        }
+      ]
+    }
+  ]
+}

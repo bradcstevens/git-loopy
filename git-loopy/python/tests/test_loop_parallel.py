@@ -6514,6 +6514,183 @@ def test_a_parallel_safe_pin_with_a_cap_of_one_works_only_the_pin(
 
 
 # ---------------------------------------------------------------------------
+# The first Pickup that reads a Pin spends it (#644)
+# ---------------------------------------------------------------------------
+
+
+class _TrackerChangesOnceGitHubClient(FakeGitHubClient):
+    """A tracker that changes once, right after the ``nth`` view of ``trigger``.
+
+    ``change`` replaces issues in the store. ``hidden`` is left out of every
+    listing until then: the shape of an issue closed after preflight and
+    reopened later.
+    """
+
+    def __init__(
+        self,
+        *,
+        trigger: int,
+        nth: int = 1,
+        change: Sequence[gh_module.Issue] = (),
+        hidden: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._trigger = trigger
+        self._nth = nth
+        self._views = 0
+        self._change = tuple(change)
+        self._hidden = hidden
+        self.changed = False
+
+    def issue_view(self, number: int) -> gh_module.Issue:
+        issue = super().issue_view(number)
+        if number == self._trigger:
+            self._views += 1
+        if self._views >= self._nth and not self.changed:
+            self.changed = True
+            for replacement in self._change:
+                self.seed_issue(replacement)
+        return issue
+
+    def issue_list(self, label: str, state: str = "open") -> gh_module.IssueListPage:
+        page = super().issue_list(label, state)
+        if self._hidden is None or self.changed:
+            return page
+        return dataclass_replace(
+            page,
+            issues=tuple(i for i in page.issues if i.number != self._hidden),
+        )
+
+
+_OPEN_BLOCKER = BlockedByRead(
+    total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+)
+_PARALLEL_SAFE = ["ready-for-agent", "parallel-safe"]
+
+
+def _run_parallel_safe_pin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    first_43: gh_module.Issue,
+    hidden: int | None = None,
+) -> list[tuple[int, str]]:
+    """``--issue 43`` over parallel-safe #41-#43; #43 reads normally once #41 is viewed."""
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=_PARALLEL_SAFE),
+            _make_issue(42, labels=_PARALLEL_SAFE),
+            first_43,
+        ],
+        client_cls=_NoProgressFakeClient,
+        gh_cls=_TrackerChangesOnceGitHubClient,
+        trigger=41,
+        change=[_make_issue(43, labels=_PARALLEL_SAFE)],
+        hidden=hidden,
+    )
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(
+                _pinned_config(43, max_iterations=4, max_nmt_strikes=10)
+            ),
+            timeout=30,
+        )
+    )
+    return _bindings(_logged_events(tmp_path))
+
+
+def test_a_parallel_safe_pin_the_lane_walk_passes_over_as_blocked_is_spent(
+    tmp_path, monkeypatch
+) -> None:
+    """A Blocked Pin the walk passes over is spent; unblocked later it binds `order` (#644)."""
+    bindings = _run_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        first_43=_make_issue(43, labels=_PARALLEL_SAFE, blocked_by=_OPEN_BLOCKER),
+    )
+
+    assert (43, "order") in bindings
+    assert (43, "pin") not in bindings
+
+
+def test_a_parallel_safe_pin_absent_from_a_complete_read_is_spent(
+    tmp_path, monkeypatch
+) -> None:
+    """A Pin closed after preflight and reopened later binds `order` (#644)."""
+    bindings = _run_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        first_43=_make_issue(43, labels=_PARALLEL_SAFE),
+        hidden=43,
+    )
+
+    assert (43, "order") in bindings
+    assert (43, "pin") not in bindings
+
+
+def test_a_parallel_safe_pin_whose_readiness_was_unread_stays_live(
+    tmp_path, monkeypatch
+) -> None:
+    """A Pin whose Readiness could not be read first still binds `pin` (#644)."""
+    bindings = _run_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        first_43=_make_issue(
+            43, labels=_PARALLEL_SAFE, blocked_by=BlockedByRead.unprovable()
+        ),
+    )
+
+    assert (43, "pin") in bindings
+    assert [reason for _issue, reason in bindings].count("pin") == 1
+
+
+def test_a_serial_pickup_that_skips_a_blocked_parallel_safe_pin_spends_it(
+    tmp_path, monkeypatch
+) -> None:
+    """The serial Pickup for #44 skips Blocked #43, and that skip spends the Pin (#644)."""
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(43, labels=_PARALLEL_SAFE, blocked_by=_OPEN_BLOCKER),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+        client_cls=_NoProgressFakeClient,
+        gh_cls=_TrackerChangesOnceGitHubClient,
+        # #44's first view is the startup peek; its second, the serial Pickup's.
+        trigger=44,
+        nth=2,
+        change=[_make_issue(43, labels=_PARALLEL_SAFE)],
+    )
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(
+                _pinned_config(43, max_iterations=3, max_nmt_strikes=10)
+            ),
+            timeout=30,
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    skips = [
+        (e["issue"], e["reason"])
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skips[0][0] == 43
+    assert skips[0][1].startswith("blocked_by_open_dependency")
+    bindings = _bindings(events)
+    assert bindings[0] == (44, "order")
+    assert (43, "order") in bindings
+    assert [reason for _issue, reason in bindings].count("pin") == 0
+
+
+# ---------------------------------------------------------------------------
 # Truthful termination (#308)
 # ---------------------------------------------------------------------------
 

@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.13 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.14 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -260,12 +260,29 @@ The pin **bypasses the order and nothing else** (ADR-0032), which is four separa
    moved to the head and every other issue keeps its §3.2 sequence behind it. The sort key stays
    what §3.2 requires — a pure function of the fetched issue fields — because a pin is one
    operator's instruction for one invocation and is not a property of any issue. A Run therefore
-   resumes oldest-first the moment its pinned issue leaves the **Pool**.
+   resumes oldest-first the moment the Pin is **spent** (contract 2.14, #644), and **the first
+   Pickup that reads the Pin spends it** for the rest of the invocation. A Pickup reads the Pin
+   when it binds it; when it passes it over for an answer about the Pin itself — an open
+   `blocked_by` dependency, a **Lease** held elsewhere, a refused **Task type**, or an
+   authoritative read that finds it no longer eligible; or when it completes its Pool or
+   Membership read (§2.1 `complete`) and the Pin is not in it. **A Pickup that could not read the
+   Pin leaves it live**: an incomplete or failed read that did not show it, or an admission read
+   of the Pin that did not resolve (`readiness_unprovable`, and a failed Lease or **Dynamic
+   route** read in a member that takes those reads). The next Pickup promotes a live Pin again. A
+   serial-only member walks on past an unread Pin exactly as §3.3 walks past any skip, binding the
+   next candidate while the Pin stays live; holding a Pickup for an unread Pin is **Rolling
+   dispatch** behaviour, not a family requirement. Once spent, the issue is ordered by §3.2 like
+   any other: it is never promoted again, even after it unblocks or reappears, so an invocation
+   has at most one `wrapper.pickup.bound` with reason `pin`. Until contract 2.14 this clause said
+   a Run resumed oldest-first only once the pinned issue left the **Pool**, which let a Pin that
+   made no progress head every later Pickup. `pin-duration.json` pins the spend decision as a
+   sequence of Pickups, each taking the Pool and how that Pickup read the Pin.
 2. **It outranks Priority.** A pinned issue reached the head because an operator named it,
    whatever its labels said. Were **Priority** to win, `--issue N` would work on most
    repositories and silently do nothing on exactly the ones that use the label. `wrapper.pickup.
-   bound` MUST report `reason: pin` for that binding, and `order`/`priority` for every other
-   binding in the same Run — the pin explains one binding, not the whole Run.
+   bound` MUST report `reason: pin` for a binding of the **live** Pin, and `order`/`priority` for
+   every other binding in the same Run, a binding of the spent Pin included — the pin explains
+   one binding, not the whole Run.
 3. **It does not bypass eligibility, and an ineligible pin FAILS the invocation.** A pinned issue
    that is closed, missing, unreadable, lacks `ready-for-agent`, or fails the §3.1 AFK-ready
    discriminator MUST end the invocation with the `preflight_failed` exit code, naming what is
@@ -274,7 +291,9 @@ The pin **bypasses the order and nothing else** (ADR-0032), which is four separa
    §3.3 makes a candidate the runner cannot take a *skip* precisely because a serial Run merely
    walked past it, whereas a pin is an operator naming an issue, and there is no next candidate
    that honours what they asked for. Silently working a different issue than the one named is
-   worse than stopping.
+   worse than stopping. (#430 removed this clause's former sentence requiring a Parallel-mode pin
+   to carry `parallel-safe`, without a version bump; contract 2.14 records that removal. Lacking
+   `parallel-safe` decides how a pin is worked, never whether.)
 4. **It weakens nothing for any other issue.** The pin promotes; it does not restrict the Pool.
    Every other candidate remains eligible on exactly the terms §3.1 and §3.2 already set.
 
@@ -344,8 +363,9 @@ An Orchestrator running serially MUST:
   pickup (`binding_source: lane_pickup`) exactly as it governs this one.
 - **Record the binding (contract 1.13).** A **Pickup** that binds MUST emit
   `wrapper.pickup.bound` (§12) carrying the issue, the selection reason — `pin` when §3.2's
-  **Pin** named this candidate, else `priority` or `order` — and where the candidate sat in the
-  order. Selection is the runner's decision as of contract 1.12, and a decision nobody
+  **live** Pin named this candidate (contract 2.14, #644), else `priority` or `order` — and where
+  the candidate sat in the order. Selection is the runner's decision as of contract 1.12, and a
+  decision nobody
   can see is a decision nobody can audit: the starvation §3.2 exists to end was invisible
   precisely because being passed over left no trace. The record is emitted *after* the
   `wrapper.issue.activated` that publishes the binding, so it never describes a binding the rest
@@ -1002,7 +1022,8 @@ Orchestrator rollout tickets own enabling those producers.
   Lane's contribution identity is minted when its session starts and a Pickup happens before
   that — an Event that demanded the identity triple could never be emitted at the moment it
   describes. `reason` on a binding is one of `order`, `priority`, or `pin` — `pin` exactly when
-  §3.2's **Pin** named the bound candidate, which outranks a `priority` label on the same issue;
+  §3.2's **live** Pin named the bound candidate (a spent Pin reports `order` or `priority`,
+  contract 2.14, #644), which outranks a `priority` label on the same issue;
   on a skip it is the free-text reason the candidate was passed over. `considered` is required rather than derivable:
   *the runner took the oldest* and *the runner took the only one left* are different facts about
   a backlog, and `position: 1` alone cannot tell them apart. Every skip that ended in a binding
