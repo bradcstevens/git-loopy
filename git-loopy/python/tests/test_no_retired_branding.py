@@ -37,7 +37,8 @@ Forbidden (matched case-insensitively) substrings::
 
 A small allowlist of files legitimately narrates the retirements themselves --
 the rename ADRs and their siblings, the raw feature-request intake, the domain
-glossary's "flagged ambiguities", and this guard -- so they are exempt.
+glossary's "flagged ambiguities", and this guard -- so they are exempt, as is a
+verbatim research capture of a third-party project that uses the word itself.
 """
 
 from __future__ import annotations
@@ -62,6 +63,10 @@ FORBIDDEN = re.compile(
 _EXEMPT_PREFIXES: tuple[str, ...] = (
     "docs/adr/",  # architecture decision records are immutable history
     "docs/feature-requests/",  # raw, human-owned intake (append-only)
+    # A point-in-time capture of a third-party project (Hermes). Its transcript and
+    # docs reference quote Hermes's own "Ralph-style loop" wording verbatim; that
+    # names an external technique, not this project's retired brand.
+    "docs/research/wanderloots-hermes-coordination/",
 )
 
 # Individual repo-relative files that are exempt for the same reason.
