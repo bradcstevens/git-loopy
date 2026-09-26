@@ -211,6 +211,9 @@ class RollingPool:
     _demand_unmet: bool = field(default=False, init=False)
     _interval: float = field(default=0.0, init=False)
     _next_refresh_at: float = field(default=0.0, init=False)
+    _terminal_survivors: tuple[PoolCandidate, ...] = field(
+        default=(), init=False
+    )
 
     def __post_init__(self) -> None:
         if self.jitter is None:
@@ -222,6 +225,11 @@ class RollingPool:
     def candidate_refs(self) -> tuple[int | str, ...]:
         """The cached candidate refs in stable FIFO order."""
         return tuple(entry.candidate.ref for entry in self._entries)
+
+    @property
+    def terminal_survivors(self) -> tuple[PoolCandidate, ...]:
+        """The survivors classified by the last terminal Membership read."""
+        return self._terminal_survivors
 
     @property
     def available_count(self) -> int:
@@ -380,6 +388,7 @@ class RollingPool:
         discipline :func:`~git_loopy.sources.confirms_empty_pool` keeps for
         emptiness.
         """
+        self._terminal_survivors = ()
         snapshot = self._refresh_now()
         if confirms_empty_pool(
             complete=snapshot.complete, remaining=len(self._entries)
@@ -445,13 +454,16 @@ class RollingPool:
                 len(survivors),
                 ", ".join(f"#{ref}" for ref in unread_lease),
             )
-        return unbound_pool_outcome(
+        outcome = unbound_pool_outcome(
             candidates=len(survivors),
             waiting=sum(
                 1 for candidate in survivors if has_proven_open_blocker(candidate)
             ),
             unresolved=len(unreadable) + len(unread_lease),
         )
+        if outcome in ("all_blocked", "all_skipped"):
+            self._terminal_survivors = survivors
+        return outcome
 
     def _refresh_now(self) -> MembershipSnapshot:
         """Force one refresh regardless of the backoff window."""

@@ -1151,8 +1151,9 @@ An all-blocked Pool names the blockers outside the Pool. An all-skipped Pool cou
 **Pickup skip** kind once per candidate. Telling a blocker inside the Pool from one outside it
 needs the Run's `owner/repo`. The client resolves it the way `gh` picks its default repository:
 in a fork clone that is the upstream, not `origin`. Without it, every blocker is named rather
-than risk dropping a real one. Its Pool is the latest collection. A **Membership read** is
-never counted as the Pool, and a trace that recorded no collection gets no count at all;
+than risk dropping a real one. Its Pool is the `refusals` recorded on a Rolling Run's
+end, or else the latest collection. A **Membership read** is never counted as the Pool,
+and a trace with neither a refusal record nor a collection gets no count at all;
 the notice says so instead. The **Dashboard** holds with the
 notice drawn until the operator quits, and the attach client prints it once the Dashboard
 returns. It is presentation, not a Wrapper-contract decision: exit status and reason are

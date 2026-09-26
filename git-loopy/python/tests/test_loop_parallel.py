@@ -1103,6 +1103,7 @@ def test_parallel_single_eligible_issue_starts_lane_immediately(
     events = _logged_events(tmp_path)
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "empty_pool"
+    assert "refusals" not in run_end  # #643: only a Rolling all_blocked/all_skipped
 
 
 def test_a_lane_session_window_updates_that_issues_model_context(
@@ -2358,6 +2359,7 @@ def test_parallel_the_first_stop_stops_refill_and_still_integrates_started_work(
     ] == [("operator_stop", "drain", 2)]
     (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
     assert run_end["outcome"] == "operator_stop"
+    assert "refusals" not in run_end  # #643: only a Rolling all_blocked/all_skipped
 
 
 def test_parallel_a_stop_never_interrupts_the_publish_transaction(
@@ -3762,6 +3764,7 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
     assert published == {42: True, 43: False}
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "iteration_cap"
+    assert "refusals" not in run_end  # #643: only a Rolling all_blocked/all_skipped
     # Exactly the two Lane sessions' units are spent -- no extra
     # serial-fallback round sneaks past the `max_iterations=2` cap even
     # though #43's disposition would otherwise latch one.
@@ -6406,6 +6409,129 @@ class _NoProgressFakeClient(_ParallelFakeClient):
     _session_cls = _NoProgressFakeSession
 
 
+@pytest.mark.parametrize("routing_refused", [False, True])
+def test_rolling_terminal_end_records_ordered_refusals_and_notice(
+    tmp_path, monkeypatch, routing_refused
+) -> None:
+    from git_loopy.unbound_run_notice import unbound_run_notice
+
+    fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    fake_gh.seed_issue(_make_issue(
+        42,
+        labels=["ready-for-agent", "parallel-safe"],
+        blocked_by=BlockedByRead(
+            total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+        ),
+    ))
+    fake_gh.seed_issue(_make_issue(
+        43,
+        labels=[
+            "ready-for-agent", "parallel-safe",
+            *(["task-type:bogus"] if routing_refused else []),
+        ],
+        blocked_by=(
+            BlockedByRead(total_count=0)
+            if routing_refused
+            else BlockedByRead(
+                total_count=2,
+                nodes=(
+                    BlockerNode(ref="other/repo#9", state="open"),
+                    BlockerNode(ref="x/y#42", state="open"),
+                ),
+            )
+        ),
+    ))
+    assert asyncio.run(asyncio.wait_for(loop_module.run(cfg), timeout=20)) == (
+        loop_module.exit_code_for("all_skipped" if routing_refused else "all_blocked")
+    )
+    events = _logged_events(tmp_path)
+    end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert end["outcome"] == ("all_skipped" if routing_refused else "all_blocked")
+    assert end["refusals"][0] == {
+        "issue": 42, "reason": "blocked_by_open_dependency: x/y#7"
+    }
+    assert [entry["issue"] for entry in end["refusals"]] == [42, 43]
+    skips = [e for e in events if e["type"] == "wrapper.pickup.skipped"]
+    if routing_refused:
+        assert len(skips) == 1 and skips[0]["issue"] == 43
+        assert skips[0]["reason"].startswith("routing refused:")
+        assert end["refusals"][1]["reason"] == skips[0]["reason"]
+        assert unbound_run_notice(events, repository="x/y") == [
+            "No workable issues: this Run bound nothing and ended all_skipped.",
+            "The Run ended because all 2 ready-for-agent issues were skipped: "
+            "blocked_by_open_dependency (1), routing refused (1).",
+        ]
+    else:
+        assert skips == []
+        assert end["refusals"][1] == {
+            "issue": 43,
+            "reason": "blocked_by_open_dependency: other/repo#9, x/y#42",
+        }
+        assert unbound_run_notice(events, repository="x/y") == [
+            "No workable issues: this Run bound nothing and ended all_blocked.",
+            "The Run ended because all 2 ready-for-agent issues wait on open blockers.",
+            "Blockers outside the Pool: x/y#7, other/repo#9 — resolve them, "
+            "or label other work ready-for-agent.",
+        ]
+
+
+@pytest.mark.parametrize("parallel_safe_43", [False, True], ids=["serial", "mixed"])
+def test_serial_all_blocked_end_records_its_skips_and_no_refusals(
+    tmp_path, monkeypatch, parallel_safe_43
+) -> None:
+    """#643 scenario (c): a serial Iteration already collects the whole Pool.
+
+    Its collection and Pickup skips are the record, exactly as before, so its
+    ``wrapper.run.end`` carries no ``refusals`` — only a Rolling terminal
+    decision does.
+    """
+    from git_loopy.unbound_run_notice import unbound_run_notice
+
+    _fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    fake_gh.seed_issue(_make_issue(
+        42,
+        labels=["ready-for-agent"],
+        blocked_by=BlockedByRead(
+            total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+        ),
+    ))
+    fake_gh.seed_issue(_make_issue(
+        43,
+        labels=["ready-for-agent", *(["parallel-safe"] if parallel_safe_43 else [])],
+        blocked_by=BlockedByRead(
+            total_count=2,
+            nodes=(
+                BlockerNode(ref="other/repo#9", state="open"),
+                BlockerNode(ref="x/y#42", state="open"),
+            ),
+        ),
+    ))
+    assert asyncio.run(asyncio.wait_for(loop_module.run(cfg), timeout=20)) == (
+        loop_module.exit_code_for("all_blocked")
+    )
+    events = _logged_events(tmp_path)
+    (end,) = [e for e in events if e["type"] == "wrapper.run.end"]
+    assert end["outcome"] == "all_blocked"
+    assert "refusals" not in end
+    collections = [e for e in events if e["type"] == "wrapper.afk_ready.collected"]
+    assert collections and collections[-1]["issues"] == [42, 43]
+    skips = {
+        e["issue"]: e["reason"]
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped"
+    }
+    assert skips == {
+        42: "blocked_by_open_dependency: x/y#7",
+        43: "blocked_by_open_dependency: other/repo#9, x/y#42",
+    }
+    assert unbound_run_notice(events, repository="x/y") == [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 2 ready-for-agent issues wait on open blockers.",
+        "Blockers outside the Pool: x/y#7, other/repo#9 — resolve them, "
+        "or label other work ready-for-agent.",
+    ]
+
+
 def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
     tmp_path, monkeypatch
 ) -> None:
@@ -6536,6 +6662,7 @@ def test_parallel_serial_iteration_that_binds_nothing_ends_the_run_all_skipped(
     events = _logged_events(tmp_path)
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "all_skipped"
+    assert "refusals" not in run_end
     starts = [e for e in events if e["type"] == "wrapper.iteration.start"]
     assert len(starts) == 3, (
         f"expected two worked Iterations then the one that took nothing, "
@@ -10404,6 +10531,7 @@ def test_a_lane_whose_lease_remote_cannot_be_read_passes_over_and_ends(
     # `preflight_failed` from `all_skipped` -- both are 1.
     run_ends = [event for event in events if event["type"] == "wrapper.run.end"]
     assert [event["outcome"] for event in run_ends] == ["preflight_failed"], run_ends
+    assert all("refusals" not in event for event in run_ends)  # #643
     assert exit_code == loop_module.exit_code_for("preflight_failed"), exit_code
     lease_probes = [probe for probe in probes if probe[1] == lease_ref(42)]
     assert len(lease_probes) == 1, lease_probes

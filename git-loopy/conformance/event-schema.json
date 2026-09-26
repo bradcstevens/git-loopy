@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.11",
+  "contract_version": "2.12",
   "event_schema_version": "1.2",
   "insight_capabilities": {
     "names": [
@@ -134,6 +134,10 @@
     "note": "Contract 2.2. Host metering and CI-trigger identity are siblings of execution_host on wrapper.run.start, because where the orchestrator publishes is a deployment fact, not an Execution-host fact. host_metering declares no meter for local work as not applicable, a free standard GitHub Actions runner on a public target, or metered GitHub Actions work. It is a disclosure, never host-compute Cost: no number, unit, Dashboard column, or Consumption entry follows from it. ci_trigger_identity names the GitHub Actions deployment route whose existing job identity cannot trigger downstream CI; git-loopy never selects, transports, or upgrades a credential to change that behaviour. An absent disclosure is unknown on an old trace."
   },
   "payload_contracts": {
+    "wrapper.run.end": {
+      "refusals_optional": ["issue", "reason"],
+      "refusals_note": "Contract 2.12, #643. Rolling Pool-cache all_blocked and all_skipped endings carry one refusal per surviving candidate, in selection order, with the wrapper.pickup.skipped reason vocabulary; no other ending carries it. It is not a Pool collection. A consumer ignores malformed entries without losing outcome, and an absent field preserves the old notice. Event schema compatibility stays 1.2."
+    },
     "calibration.trial.start": {
       "required": ["calibration_id", "trial_id", "model", "effort", "issue", "base_commit", "oracle_commit", "slot"]
     },

@@ -898,6 +898,21 @@ pub struct RunEnd {
     /// The Run outcome literal.
     #[serde(default)]
     pub outcome: Option<String>,
+    /// The candidates a Rolling terminal decision refused, in selection order
+    /// (contract 2.12, #643). Present only on a Rolling `all_blocked` or
+    /// `all_skipped` end; a malformed list or entry is dropped, never the
+    /// outcome.
+    #[serde(default, deserialize_with = "lenient_run_refusals")]
+    pub refusals: Option<Vec<RunRefusal>>,
+}
+
+/// One candidate the Run refused, with its recorded reason.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RunRefusal {
+    /// The refused candidate.
+    pub issue: IssueRef,
+    /// A reason from `wrapper.pickup.skipped`'s vocabulary.
+    pub reason: String,
 }
 
 /// The two-stage operator Stop transition.
@@ -1282,4 +1297,24 @@ fn lenient_issue_rows<'de, D: Deserializer<'de>>(
         .into_iter()
         .filter_map(|row| serde_json::from_value(row).ok())
         .collect())
+}
+
+/// A malformed optional list or entry must not discard the Run's outcome
+/// (contract 2.12, #643). An entry without an issue or a non-empty reason is
+/// skipped, and a list with no well-formed entry reads as no record at all.
+fn lenient_run_refusals<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<RunRefusal>>, D::Error> {
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value
+        .and_then(|value| {
+            value.as_array().map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| serde_json::from_value::<RunRefusal>(entry.clone()).ok())
+                    .filter(|refusal| !refusal.reason.is_empty())
+                    .collect::<Vec<_>>()
+            })
+        })
+        .filter(|refusals| !refusals.is_empty()))
 }

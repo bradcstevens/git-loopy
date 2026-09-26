@@ -76,6 +76,10 @@ class _Tally:
     #: authority for nothing (ADR-0042).
     members: set[IssueKey] | None = None
     skips: dict[IssueKey, str] = field(default_factory=dict)
+    #: The Run end's ``refusals`` in candidate order, or ``None`` when it
+    #: recorded none. When present it is both the Pool and its recorded skips,
+    #: ahead of any collection, because it is the decision that ended the Run.
+    refusals: dict[IssueKey, str] | None = None
     exclusions: dict[IssueKey, str] = field(default_factory=dict)
     outcome: str | None = None
 
@@ -104,14 +108,34 @@ class _Tally:
         elif kind == "wrapper.run.end":
             outcome = event.get("outcome")
             self.outcome = outcome if isinstance(outcome, str) else None
+            # §12, contract 2.12 (#643): a Rolling terminal decision's record of
+            # every candidate it refused. A malformed entry is skipped, and a
+            # list with no well-formed entry is read as no record at all.
+            refusals = event.get("refusals")
+            if isinstance(refusals, list):
+                recorded: dict[IssueKey, str] = {}
+                for entry in refusals:
+                    if not isinstance(entry, Mapping):
+                        continue
+                    issue = _issue_key(entry.get("issue"))
+                    reason = entry.get("reason")
+                    if issue is not None and isinstance(reason, str) and reason:
+                        recorded[issue] = reason
+                self.refusals = recorded or None
 
     def pool(self) -> list[IssueKey]:
-        """The Pool's last recorded membership plus any refusal it did not list."""
+        """The Run end's refusals, or the last collection plus any skip it missed."""
+        if self.refusals is not None:
+            return list(self.refusals)
         return sorted((self.members or set()) | set(self.skips), key=_issue_order)
 
     def counted(self, pool: list[IssueKey]) -> int:
-        """How many candidates the notice may claim: none without a collection."""
-        return len(pool) if self.members is not None else 0
+        """How many candidates the notice may claim: none without a Pool record."""
+        return len(pool) if self.refusals is not None or self.members is not None else 0
+
+    def recorded_skips(self) -> dict[IssueKey, str]:
+        """The refusals the Run end recorded, or else every recorded Pickup skip."""
+        return self.refusals if self.refusals is not None else self.skips
 
     def candidates(self, count: int, singular: str, plural: str) -> str:
         """'all N ready-for-agent issues …', in the right number.
@@ -163,10 +187,11 @@ class _Tally:
                 else "resolve them"
             )
             lines.append(f"{label}: {', '.join(blockers)} — {remedy}.")
-        if self.members is None:
+        if self.refusals is None and self.members is None:
             lines.append(_MEMBERSHIP_UNKNOWN)
             return lines
-        unrecorded = sum(1 for issue in pool if issue not in self.skips)
+        skips = self.recorded_skips()
+        unrecorded = sum(1 for issue in pool if issue not in skips)
         if unrecorded:
             lines.append(
                 f"The trace names no blocker for {unrecorded} of them; see each "
@@ -176,8 +201,9 @@ class _Tally:
 
     def all_skipped(self) -> list[str]:
         pool = self.pool()
-        reasons = [self.skips.get(issue, "unrecorded") for issue in pool]
-        if self.members is not None:
+        skips = self.recorded_skips()
+        reasons = [skips.get(issue, "unrecorded") for issue in pool]
+        if self.refusals is not None or self.members is not None:
             return [
                 f"The Run ended because {self.candidates(len(pool), 'was', 'were')} "
                 f"skipped: {_reason_counts(reasons)}."
@@ -203,8 +229,12 @@ class _Tally:
         """
         members = set(pool)
         named: list[str] = []
-        for issue in sorted(self.skips, key=_issue_order):
-            for blocker in blockers_from_skip_reason(self.skips[issue]):
+        skips = self.recorded_skips()
+        issues = pool if self.refusals is not None else sorted(skips, key=_issue_order)
+        for issue in issues:
+            if issue not in skips:
+                continue
+            for blocker in blockers_from_skip_reason(skips[issue]):
                 if not self._in_pool(blocker, members) and blocker not in named:
                     named.append(blocker)
         return named

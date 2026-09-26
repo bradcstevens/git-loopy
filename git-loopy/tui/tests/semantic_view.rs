@@ -591,6 +591,25 @@ fn a_membership_read_only_adds_queued_rows_to_the_queue() {
 }
 
 #[test]
+fn run_end_refusals_neither_add_queue_rows_nor_sweep_existing_ones() {
+    let projected = reduce_jsonl(
+        &[
+            r#"{"type":"wrapper.afk_ready.collected","issues":[42,43]}"#,
+            r#"{"type":"wrapper.run.end","outcome":"all_skipped","refusals":[{"issue":99,"reason":"not_ready"}]}"#,
+        ],
+        IssueRef::number(42),
+    );
+    let rows = projected["dashboard"]["queue"]["rows"]
+        .as_array()
+        .expect("Queue rows are a list");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(queue_row(&projected, 42)["status"], "queued");
+    assert_eq!(queue_row(&projected, 43)["status"], "queued");
+    assert!(rows.iter().all(|row| row["issue"] != 99));
+    assert_eq!(projected["dashboard"]["header"]["status"], "all_skipped");
+}
+
+#[test]
 fn a_membership_read_keeps_source_order_and_leaves_new_rows_unworked() {
     let projected = reduce_jsonl(
         &[r#"{"type":"wrapper.pool.refreshed","issues":[49,10,51]}"#],
