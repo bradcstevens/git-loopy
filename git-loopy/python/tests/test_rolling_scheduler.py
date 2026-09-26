@@ -981,3 +981,47 @@ def test_only_a_pool_with_work_left_earns_a_lane_back() -> None:
         c for _ in range(30) if (c := busy.observe_pressure(**calm)) is not None
     ]
     assert [c.effective_lane_limit for c in changes] == [2, 3]
+
+
+# --------------------------------------------------------------------------- #
+# A parallel-safe Pin keeps the next Lane through an unread setup step (#645)
+# --------------------------------------------------------------------------- #
+
+
+def test_no_lane_fills_behind_the_pin_while_its_lane_is_in_setup() -> None:
+    scheduler, _source = _scheduler([13, 11, 12], lane_cap=3)
+    scheduler.pool.lane_first = lambda: 13
+    scheduler.start()
+
+    first = scheduler.reserve()
+    again = scheduler.reserve()
+
+    assert [r.item.ref for r in first] == [13]
+    assert again == ()
+
+
+def test_releasing_the_pin_for_a_requeue_puts_it_back_first() -> None:
+    scheduler, _source, clock = _scheduler_with_clock([13, 11, 12], lane_cap=3)
+    scheduler.pool.lane_first = lambda: 13
+    scheduler.start()
+    (reservation,) = scheduler.reserve()
+
+    scheduler.release(reservation, requeue_after=1.0)
+    requeued = scheduler.pool.candidate_refs
+    waiting = scheduler.reserve()
+    clock.advance(1.0)
+    retried = scheduler.reserve()
+
+    assert requeued == (13, 11, 12)
+    assert waiting == ()
+    assert [r.item.ref for r in retried] == [13]
+
+
+def test_a_plain_release_still_leaves_the_candidate_out_of_the_cache() -> None:
+    scheduler, _source = _scheduler([11, 12], lane_cap=1)
+    scheduler.start()
+    (reservation,) = scheduler.reserve()
+
+    scheduler.release(reservation)
+
+    assert reservation.item.ref not in scheduler.pool.candidate_refs
