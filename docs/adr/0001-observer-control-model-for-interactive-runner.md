@@ -1,13 +1,11 @@
 # Observer control model for the interactive AFK runner
 
-**Status:** accepted; its **exit-model clause only** is superseded by
-[ADR-0024](0024-terminal-ownership-and-dashboard-fault-recovery.md). The peer-task
-core below — the loop is a peer the app merely *observes*, so **Detach** is possible
-at all — stands unchanged. What ADR-0024 replaces is the single clause that an app
-exit which is *not* a flagged Detach is a **Stop**: a **Dashboard fault** carries no
-intent to read, and now takes the Detach path instead. Terminal restoration also
-stops being a side effect of the app's teardown and becomes the **Terminal owner**'s
-job.
+**Status:** superseded in full by
+[ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md).
+The earlier partial supersession by
+[ADR-0024](0024-terminal-ownership-and-dashboard-fault-recovery.md) is historical
+too: the peer-task and sink-swap model below no longer hosts a Run. The
+non-interactive output invariant survives as a client obligation in ADR-0068.
 
 ## Context
 

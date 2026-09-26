@@ -52,6 +52,21 @@ One invocation of the git-loopy loop, identified by a `run_id`, spanning serial
 **Iterations** and/or parallel **Lane contributions** until its authorized work is
 exhausted, an **Automation stop** occurs, or the strike limit is reached.
 
+**Execution host**:
+Where one **Lane contribution** executes. A Run selects one host; each contribution
+binds to it and returns an outcome for the Run's own **Integration**. The host declares
+placement, capacity, and **Isolation grade**; it does not schedule work or publish
+the integrated result. A serial **Iteration** binds no host, and running the
+Orchestrator inside Actions does not itself change the host's placement.
+_Avoid_: Run host, Orchestrator deployment, Dashboard host.
+
+**Isolation grade**:
+The Execution host's declared isolation boundary: **workspace separation only**
+(separate worktrees with the operator's authority) or **machine boundary** (a
+separate machine for the contribution). These are two categories, not a
+scale; placement alone never proves either.
+_Avoid_: Sandbox, security score, host placement.
+
 **Agent**:
 One live harness session doing work in a **Run**, bound to a single **Routed pair** for
 its lifetime: a serial **Iteration**'s session, a **Lane**'s session, or a
@@ -1447,8 +1462,10 @@ the existing message and trailer verbatim, so close-keyword-free — before the 
 reclaimed. It is what lets reclamation carry no retention policy: nothing is destroyed, so a
 workspace is preserved on exactly one condition, salvage itself failing, which is the one
 case where reclaiming would lose work. Salvage emits no **Event**, not even a Checkpoint
-one, because a Run that was interrupted never worked that issue and a **Queue** row for it
-would trace work that did not happen. It makes cancelled work *recoverable, not resumable*:
+one, because reclamation is not issue work and a **Queue** row for it would trace
+work that did not happen. Both a live Run reclaiming its own workspaces at
+Stop/exit and a later **Sweep** reclaiming a dead Run's residue perform Salvage.
+It makes cancelled work *recoverable, not resumable*:
 a later Run mints a new Lane branch for the issue rather than continuing the salvaged one,
 which is what lets a Stop cancel safely without pretending the work will be picked up.
 _Avoid_: stash, rescue, auto-commit, recovery, resume.
@@ -1560,13 +1577,20 @@ _Avoid_: auto-resolution, resolution session, retry, rescue.
 
 **Recovery handoff**:
 How an exhausted **Recovery** ends: the **Lane contribution** finishes unpublished, its
-Lane branch is kept as a breadcrumb, and the Run latches serial demand for the issue,
+Lane branch is kept as a **Breadcrumb**, and the Run latches serial demand for the issue,
 which may never take a second **Lane** in the same Run. It is not a **Serial fallback**,
 which is a serial **Iteration** worked because no **Parallel-safe** candidate was eligible.
 The wire nevertheless carries it as the `serial_fallback` reason of
 `wrapper.contribution.end` and `wrapper.serial.requested`, a literal kept for
 compatibility.
 _Avoid_: serial fallback, fallback (for this step), demotion.
+
+**Breadcrumb**:
+A preserved reference to unfinished issue work, such as an unpublished Lane branch
+after a **Recovery handoff** or a **Salvage** Checkpoint. It lets an operator recover
+work by hand; it is not a retained Lane workspace and does not cause a later Run to
+resume that contribution.
+_Avoid_: retained directory, automatic resume, published result.
 
 **Parallel-safe**:
 A `ready-for-agent` issue a human has additionally asserted is independent and
@@ -1760,9 +1784,6 @@ _Avoid_: model pin, routing input.
   ADR-0005 had retained "Ralph loop" as the name of the *technique*;
   [ADR-0031](docs/adr/0031-encoded-workflows-retire-the-loop-name.md) retires that last use too, so `ralph`
   now survives only in the point-in-time records that narrate the renames.
-- `sandbox per issue` (from the feature request) implied a fresh isolation unit keyed
-  to an issue — resolved: the **Sandbox** is scoped to an **Iteration**, which subsumes
-  per-issue because every issue boundary is also an **Iteration** boundary.
 - `the runner` / `the bash port` / `the script` were used loosely once a second and third
   language port arrived — resolved: the whole is the **Runner family**; a single member is a
   named **Orchestrator** (the Python, shell, PowerShell, or Rust Orchestrator); the shared
