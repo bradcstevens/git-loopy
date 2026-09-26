@@ -1019,6 +1019,12 @@ def test_wrapper_dashboard_fault_is_retired_and_unreusable() -> None:
     assert "wrapper.dashboard.fault" not in _EVENT_SCHEMA["event_types"].values()
 
 
+def test_wrapper_pipeline_quiescent_is_retired_and_unreusable() -> None:
+    """ADR-0065 retired it; the parity tests alone would pass a coordinated re-add."""
+    assert "WRAPPER_PIPELINE_QUIESCENT" not in events_module.__all__
+    assert "wrapper.pipeline.quiescent" not in _EVENT_SCHEMA["event_types"].values()
+
+
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """Two axes, and the literals are what keep them from being read as one.
 
@@ -1105,10 +1111,13 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.12 adds ``refusals`` to Rolling ``wrapper.run.end`` (§12, #643).
     Consumers that do not read the optional field continue unchanged, so
     wire compatibility remains 1.2.
+
+    2.14 retires ``wrapper.pipeline.quiescent`` (ADR-0065). Nothing read it,
+    so, as with ADR-0046's removal, the wire axis stays at 1.2.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.12"
+    assert _EVENT_SCHEMA["contract_version"] == "2.14"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "issue",
         "reason",

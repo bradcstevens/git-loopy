@@ -1,6 +1,6 @@
 {
   "fixture_schema_version": "1.6",
-  "wrapper_contract_version": "2.12",
+  "wrapper_contract_version": "2.14",
   "event_schema_version": "1.2",
   "semantic_contract": {
     "dashboard_band_order": [
@@ -9662,14 +9662,6 @@
           "refill_stopped": true
         },
         {
-          "ts": "2026-05-16T00:00:26.000Z",
-          "run_id": "01HXR0000000000000000000DD",
-          "iter": null,
-          "type": "wrapper.pipeline.quiescent",
-          "phase": "draining_for_serial",
-          "reason": "serial_latched"
-        },
-        {
           "ts": "2026-05-16T00:00:27.000Z",
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
@@ -9982,7 +9974,7 @@
           }
         },
         {
-          "after_event_count": 36,
+          "after_event_count": 35,
           "render_at_utc": "2026-05-16T00:00:32.000Z",
           "expected": {
             "dashboard": {

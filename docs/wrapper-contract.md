@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.13 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.14 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1050,8 +1050,12 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
 `wrapper.integration.branch_observed`, `wrapper.integration.recovery_started`,
 `wrapper.integration.published`, and `wrapper.contribution.end`. Scheduler-scoped:
 `wrapper.pool.refreshed`, `wrapper.concurrency.changed`, `wrapper.serial.requested`,
-`wrapper.pipeline.quiescent`, `wrapper.rolling.refill_turn`,
-`wrapper.parallel.serial_fallback`, and `wrapper.parallel.degraded`.
+`wrapper.rolling.refill_turn`, `wrapper.parallel.serial_fallback`, and `wrapper.parallel.degraded`.
+
+**Retired `wrapper.pipeline.quiescent` (contract 2.14, ADR-0065).** Every phase it named is
+already announced by `wrapper.serial.requested`, `wrapper.stop.requested`, the serial Iteration's
+`wrapper.iteration.start` or `wrapper.rolling.refill_turn`, and nothing read it. No Orchestrator
+declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
 
 - **Identity, not Lane.** Every contribution-scoped record MUST carry `contribution_id`, `issue`,
   and `lane_id`, and its envelope `iter` MUST be `null`. `lane_id` is the reusable **Lane** the
@@ -1864,10 +1868,16 @@ stay on the deferred legacy path. 2.10 also adds the optional
 host's own listing (§14.3), and exact-dimension Route publication with its
 migration and capacity refresh (§14.5). `routing-resolution.json` declares
 that provenance at 2.10; `event-schema.json` and `dashboard-insights.json`
-carried it at 2.10 and have since advanced to 2.11 with the Run-start issue
-source and 2.12 with Run-end refusals (§12). `discriminator.json` reached 2.10 separately with the
-Wayfinder-map exclusion (§3.1). Event wire compatibility remains 1.2,
-and historical streams' interpretation is unchanged.
+carried it at 2.10 and advanced to 2.11 with the Run-start issue source and
+2.12 with Run-end refusals (§12). Contract 2.13 (ADR-0066) edited both
+fixtures' content, moving every `release_version` example from `-dev.N` to
+`-alpha.N` and rewording `event-schema.json`'s `wrapper.release.advanced`
+`emitted` rule, but left both version pins at 2.12 while the contract header
+and the Python `WRAPPER_CONTRACT_VERSION` read 2.13. Both pins then moved from
+2.12 straight to 2.14 with the retirement of `wrapper.pipeline.quiescent`
+(ADR-0065), so neither ever carried 2.13. `discriminator.json` reached 2.10
+separately with the Wayfinder-map exclusion (§3.1). Event wire compatibility
+remains 1.2, and historical streams' interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run

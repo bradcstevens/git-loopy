@@ -113,7 +113,6 @@ __all__ = [
     "WRAPPER_CONTRIBUTION_END",
     "WRAPPER_CONCURRENCY_CHANGED",
     "WRAPPER_SERIAL_REQUESTED",
-    "WRAPPER_PIPELINE_QUIESCENT",
     "WRAPPER_ROLLING_REFILL_TURN",
     "WRAPPER_PARALLEL_SERIAL_FALLBACK",
     "WRAPPER_PARALLEL_DEGRADED",
@@ -367,7 +366,6 @@ WRAPPER_INTEGRATION_PUBLISHED = "wrapper.integration.published"
 WRAPPER_CONTRIBUTION_END = "wrapper.contribution.end"
 WRAPPER_CONCURRENCY_CHANGED = "wrapper.concurrency.changed"
 WRAPPER_SERIAL_REQUESTED = "wrapper.serial.requested"
-WRAPPER_PIPELINE_QUIESCENT = "wrapper.pipeline.quiescent"
 WRAPPER_ROLLING_REFILL_TURN = "wrapper.rolling.refill_turn"
 # Emitted once per serial **Iteration** a Parallel-mode Run works because it
 # found no eligible **Parallel-safe** candidate (#304). Scheduler-scoped: it
@@ -405,13 +403,13 @@ CONTRIBUTION_IDENTITY_KEYS: tuple[str, ...] = ("contribution_id", "issue", "lane
 # one of these MUST carry :data:`CONTRIBUTION_IDENTITY_KEYS` and a null
 # ``iter``; :func:`make_event` refuses them otherwise. Scheduler-scoped rolling
 # events (``wrapper.pool.refreshed``, ``wrapper.concurrency.changed``,
-# ``wrapper.serial.requested``, ``wrapper.pipeline.quiescent``,
-# ``wrapper.rolling.refill_turn``) are deliberately absent: they describe the
-# Run, not one contribution. Existing per-Lane events (``assistant.*``,
-# ``tool.*``, ``usage.tokens``, ``wrapper.commit.recorded``,
-# ``wrapper.checkpoint.recorded``, ``wrapper.auto_close``) are also absent
-# because the same literals stay valid for serial Iterations; a Lane emits them
-# through :func:`make_contribution_event`.
+# ``wrapper.serial.requested``, ``wrapper.rolling.refill_turn``) are
+# deliberately absent: they describe the Run, not one contribution. Existing
+# per-Lane events (``assistant.*``, ``tool.*``, ``usage.tokens``,
+# ``wrapper.commit.recorded``, ``wrapper.checkpoint.recorded``,
+# ``wrapper.auto_close``) are also absent because the same literals stay valid
+# for serial Iterations; a Lane emits them through
+# :func:`make_contribution_event`.
 CONTRIBUTION_SCOPED_EVENT_TYPES: frozenset[str] = frozenset(
     {
         WRAPPER_CONTRIBUTION_START,
