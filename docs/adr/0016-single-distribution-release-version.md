@@ -18,6 +18,10 @@
 > beforehand is preserved, and publication never waits on a person to write prose. The
 > notes must still exist, be non-empty, and be committed at the tag. The reasoning below is
 > preserved as the record of what was decided at the time.
+>
+> **Note (superseded in part by [ADR-0066](0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md)):**
+> The `dev.N` fragment above is now an `-alpha.N`, `-beta.N` or `-rc.N` fragment; `-dev.N`
+> is retired as a Release-line value.
 
 > **Note (one sentence superseded by [ADR-0052](0052-the-release-line-advances-per-issue.md) and [#492](https://github.com/bradcstevens/git-loopy/issues/492)):**
 > The sentence “Artifacts selected as one packaged distribution require exact

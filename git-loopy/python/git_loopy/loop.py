@@ -1370,6 +1370,7 @@ class _Loop:
         lease: LeaseLifecycle | None = None,
         static_capabilities: HarnessCapabilities | None = None,
         host_capabilities: HarnessCapabilities | None = None,
+        release_line_reader: Callable[[], tuple[str, ReleaseLine]] | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1525,7 +1526,14 @@ class _Loop:
                 if task_type_client is not None
                 else _make_task_type_label_client()
             ),
-            release_line=lambda: read_repository_release_line(git.root, self._git),
+            # A Parallel Run passes Integration's cached reader, so Pickup labels
+            # against the baseline the line advances from even once an untagged
+            # Promotion has been followed by a prerelease advance.
+            release_line=(
+                release_line_reader
+                if release_line_reader is not None
+                else lambda: read_repository_release_line(git.root, self._git)
+            ),
             diag=self._diag,
         )
         # The one scrub-and-fan-out seam (issue #43): compose -> scrub once ->
@@ -4653,6 +4661,7 @@ class _ParallelLoop:
             lease=lease,
             static_capabilities=static_capabilities,
             host_capabilities=host_capabilities,
+            release_line_reader=self._read_release_line,
         )
 
     def request_stop_drain(self) -> None:

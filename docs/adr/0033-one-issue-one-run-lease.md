@@ -2,6 +2,10 @@
 
 **Status:** proposed
 
+> **Note (superseded in part by [ADR-0066](0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md)):**
+> Pickup no longer applies a `semver:` label; it writes the issue's `vX.Y.Z` Release-target
+> label, or nothing when it infers no version change. The ordering argued below is unchanged.
+
 Implemented by [#390](https://github.com/bradcstevens/git-loopy/issues/390), which is blocked by
 [#389](https://github.com/bradcstevens/git-loopy/issues/389).
 

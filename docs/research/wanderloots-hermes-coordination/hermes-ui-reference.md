@@ -288,7 +288,7 @@ Contents ([running](images/video/33m30s-running-card-activity.jpg), [done](image
 ([docs](images/video/31m16s-docs-goal-mode-cards.jpg))
 
 - **Default:** one shot per worker (`kanban_complete` / `kanban_block`, then exit).
-- **With `--goal` / `goal_mode=True`:** a Ralph-style loop. An auxiliary judge checks the
+- **With `--goal` / `goal_mode=True`:** a goal loop that repeats until done. An auxiliary judge checks the
   output after each turn against the card title + body as acceptance criteria.
 - **Stop conditions:** the judge agrees, the worker ends the task, or the turn budget
   (`--goal-max-turns`, default 20) runs out, which **blocks** the card for review.

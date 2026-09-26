@@ -859,7 +859,7 @@ chips: Budget tracker, Flashcards, Discord bot, Novel, Screenplay, Recipe box.*
 
 - **How it works:** by default each worker gets one shot: do the work, call `kanban_complete`
   / `kanban_block`, and exit. With `--goal` (CLI) or `goal_mode=True` (tool/dashboard), the
-  worker runs the same Ralph-style engine as `/goal`. After each turn an auxiliary judge
+  worker runs the same repeat-until-done goal engine as `/goal`. After each turn an auxiliary judge
   checks the output against the card's title + body as acceptance criteria. The worker keeps
   going until the judge agrees, the worker ends the task, or the budget runs out, which
   **blocks** the card for human review.

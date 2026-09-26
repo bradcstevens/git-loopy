@@ -140,6 +140,7 @@ from git_loopy.issue_lease import lease_ref
 from git_loopy.readiness import BlockedByRead, BlockerNode
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
+    ReleaseLine,
     read_runtime_release_version,
     validate_repository_release_version,
 )
@@ -8428,6 +8429,102 @@ def test_a_lane_classifies_its_unlabelled_issue_before_it_routes(
     assert [(e["issue"], e["model"], e["routing_source"]) for e in bound] == [
         (42, "claude-opus-4.7", "routed")
     ]
+
+
+class _BumpClassifyingLaneSession(_ClassifyingLaneSession):
+    """A classifying session that also answers the Bump class."""
+
+    async def send_and_wait(
+        self, prompt: str, *, timeout: float = 60.0, **_extra: Any
+    ) -> SessionEvent | None:
+        if "Bump class" not in prompt:
+            return await super().send_and_wait(prompt, timeout=timeout, **_extra)
+        self.send_and_wait_calls.append((prompt, timeout))
+        event = SessionEvent(
+            data=AssistantMessageData(
+                content="<bump-class>patch</bump-class>", message_id="b1"
+            ),
+            id=uuid4(),
+            timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+            type=SessionEventType.ASSISTANT_MESSAGE,
+        )
+        if self._on_event is not None:
+            self._on_event(event)
+        return event
+
+
+class _BumpClassifyingLaneClient(_ClassifyingLaneClient):
+    async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+        if kwargs.get("model") != self._classifier_model:
+            return await super().create_session(**kwargs)
+        previous = type(self)._session_cls
+        self._session_cls = _BumpClassifyingLaneSession  # type: ignore[misc]
+        try:
+            return await _ParallelFakeClient.create_session(self, **kwargs)
+        finally:
+            self._session_cls = previous  # type: ignore[misc]
+
+
+def test_a_lane_pickup_labels_against_the_baseline_integration_advances_from(
+    tmp_path, monkeypatch
+) -> None:
+    """Pickup and Integration read one Release line, never two (ADR-0066).
+
+    Integration caches the last stable Release the Run started from, because a
+    committed but untagged Promotion is invisible to a tag read once the next
+    advance makes ``VERSION`` a prerelease again. A Pickup that re-read the
+    repository instead would label against the older tagged Release, so a
+    `minor` could be written as that Release's patch successor.
+    """
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+        ),
+    )
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _BumpClassifyingLaneClient(
+            classifier_model="gpt-5-mini",
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.7")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    tracker = _RecordingTaskTypeLabelClient()
+    monkeypatch.setattr(loop_module, "_make_task_type_label_client", lambda: tracker)
+    monkeypatch.setattr(
+        loop_module._ParallelLoop,
+        "_read_release_line",
+        lambda self: ("1.9.9", ReleaseLine(target="1.9.9", counter=0)),
+    )
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                routing={"bugfix": ("claude-opus-4.7", "high")},
+            ),
+            staircase=PriceStaircase(
+                candidates=(
+                    Candidate(model="gpt-5-mini", effort=None, multiplier=0.33),
+                    Candidate(model="claude-opus-5", effort="max", multiplier=10.0),
+                )
+            ),
+        )
+    ) == 0
+
+    assert (42, "v1.9.10") in tracker.applied
 
 
 # ---------------------------------------------------------------------------
