@@ -8339,15 +8339,22 @@ class _ClassifyingLaneSession(_ParallelFakeSession):
 class _ClassifyingLaneClient(_ParallelFakeClient):
     """A harness that answers the classifier's prompt and works otherwise."""
 
-    def __init__(self, *, classifier_model: str, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        classifier_model: str,
+        classifier_session: type[_ParallelFakeSession] = _ClassifyingLaneSession,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._classifier_model = classifier_model
+        self._classifier_session = classifier_session
 
     async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
         classifying = kwargs.get("model") == self._classifier_model
         previous = type(self)._session_cls
         self._session_cls = (  # type: ignore[misc]
-            _ClassifyingLaneSession if classifying else previous
+            self._classifier_session if classifying else previous
         )
         try:
             return await super().create_session(**kwargs)
@@ -8453,18 +8460,6 @@ class _BumpClassifyingLaneSession(_ClassifyingLaneSession):
         return event
 
 
-class _BumpClassifyingLaneClient(_ClassifyingLaneClient):
-    async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
-        if kwargs.get("model") != self._classifier_model:
-            return await super().create_session(**kwargs)
-        previous = type(self)._session_cls
-        self._session_cls = _BumpClassifyingLaneSession  # type: ignore[misc]
-        try:
-            return await _ParallelFakeClient.create_session(self, **kwargs)
-        finally:
-            self._session_cls = previous  # type: ignore[misc]
-
-
 def test_a_lane_pickup_labels_against_the_baseline_integration_advances_from(
     tmp_path, monkeypatch
 ) -> None:
@@ -8490,8 +8485,9 @@ def test_a_lane_pickup_labels_against_the_baseline_integration_advances_from(
     monkeypatch.setattr(
         loop_module,
         "_make_client",
-        lambda: _BumpClassifyingLaneClient(
+        lambda: _ClassifyingLaneClient(
             classifier_model="gpt-5-mini",
+            classifier_session=_BumpClassifyingLaneSession,
             fake_git=fake_git,
             scripted_events=[_usage_event("claude-opus-4.7")],
         ),
