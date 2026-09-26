@@ -421,7 +421,11 @@ _Avoid_: active time, waiting time.
 Ending a Run deliberately in two stages. Any attached client may request it; the
 request is a durable record beside the Run's control artifact, so a client that dies
 after writing it does not withdraw the Stop, and resending one request does not
-escalate. The first distinct request immediately latches a
+escalate. `git-loopy stop <run-id>` is that request without a Dashboard: success is
+the Run's acknowledgment of the asked stage, not a finished Run, and a wait that
+elapses is unconfirmed. A second invocation is a deliberate further Stop; repeating
+the printed request id is redelivery and does not escalate. It does not resume
+workers. The first distinct request immediately latches a
 wind-down — no new Iteration, Lane reservation, or refill starts, while every started
 contribution and Integration operation finishes. A later distinct request cancels only active
 agent sessions at their round boundaries after salvage; it never interrupts a publish

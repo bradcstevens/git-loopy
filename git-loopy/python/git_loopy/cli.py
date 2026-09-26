@@ -212,6 +212,11 @@ _COMMAND_SPECS = (
         "List this clone's Runs and whether each one is still running.",
     ),
     _CommandSpec(
+        "stop",
+        "Run control",
+        "Request an acknowledged two-stage Stop of one live Run.",
+    ),
+    _CommandSpec(
         "labels",
         "Repository maintenance",
         "Report or reconcile the tracker Label vocabulary.",
@@ -773,8 +778,8 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="git-loopy",
         description=(
-            "git-loopy subcommands (setup, Config, Skill management, Sweep, "
-            "Calibration, and installation identity)."
+            "git-loopy subcommands (setup, Config, Skill management, Run control, "
+            "Sweep, Calibration, and installation identity)."
         ),
     )
     sub = parser.add_subparsers(
@@ -1175,6 +1180,65 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # The numeric default lives in stopcmd. Importing it here would pull the
+    # trace parser, and through it the SDK, into every subcommand's dispatch.
+    # The help test keeps this literal aligned with that constant.
+    stop = _add_command(
+        sub,
+        "stop",
+        description=(
+            "Request a two-stage Wind-down of one live Run in this clone. The "
+            "Run identity is required; this command never guesses the newest "
+            "Run, and it never reaches another clone or a machine-wide scan. "
+            "It writes one Stop request beside that Run's control artifact and "
+            "returns success only after the Run acknowledges the requested "
+            "stage. Acknowledgment is not a finished Run: draining work may "
+            "still be in progress, and this command does not wait for it. A "
+            "timeout is unconfirmed, not success, and not a claim that the "
+            "Run stopped.\n\n"
+            "The first distinct request asks for drain. A later `git-loopy "
+            "stop` of the same Run, with a new request identity, is a "
+            "deliberate second Stop and asks for cancellation. A further "
+            "request adds no harder stage. Cancellation is requested, not "
+            "awaited. It does not resume workers, discard salvaged local or "
+            "remote contributions, or interrupt a publish transaction. Pass "
+            "`--request-id` with the id a previous invocation printed to "
+            "redeliver that one request; a redelivery does not escalate. No "
+            "Dashboard helper and no remote-control service is involved: the "
+            "Run reads the request itself, on either Execution host, and is "
+            "the only party that records the Wind-down."
+        ),
+    )
+    stop.add_argument(
+        "run_id",
+        metavar="RUN-ID",
+        help=(
+            "The Run to stop. The full identity, or an unambiguous leading "
+            "part of one. `git-loopy runs` lists this clone's Runs."
+        ),
+    )
+    stop.add_argument(
+        "--request-id",
+        default=None,
+        help=(
+            "Redeliver this logical request instead of starting a new Stop. "
+            "Use the id a previous invocation printed. A redelivery cannot "
+            "escalate and cannot duplicate a latched transition. Omit it to "
+            "make a deliberate further Stop."
+        ),
+    )
+    stop.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help=(
+            "Seconds to wait for the Run to acknowledge the requested stage "
+            "(default 10). Elapsing the bound is "
+            "unconfirmed, not success, and does not wait for draining work "
+            "to finish."
+        ),
+    )
+
     config = _add_command(
         sub,
         "config",
@@ -1507,6 +1571,31 @@ def _run_runs(_args: argparse.Namespace) -> int:
         print(f"git-loopy: runs requires a git repository: {exc}", file=sys.stderr)
         return 1
     return runscmd.run_runs(repo_root=repo_root)
+
+
+def _run_stop(args: argparse.Namespace) -> int:
+    """Dispatch the public Stop command.
+
+    Same domain as ``runs``: the invoking clone, never a machine-wide search.
+    The command waits for the Run's own acknowledgment; it does not emit the
+    Wind-down itself (ADR-0058).
+    """
+    from git_loopy import stopcmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: stop requires a git repository: {exc}", file=sys.stderr)
+        return 1
+    timeout = (
+        stopcmd.DEFAULT_STOP_ACK_TIMEOUT if args.timeout is None else args.timeout
+    )
+    return stopcmd.run_stop(
+        repo_root=repo_root,
+        run_id=args.run_id,
+        request_id=args.request_id,
+        timeout=timeout,
+    )
 
 
 def _run_info(
@@ -3240,6 +3329,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_sweep(sub_args)
         if sub_args.command == "runs":
             return _run_runs(sub_args)
+        if sub_args.command == "stop":
+            return _run_stop(sub_args)
         if sub_args.command == "config":
             return _run_config(sub_args)
         raise AssertionError(f"undispatched command {sub_args.command!r}")

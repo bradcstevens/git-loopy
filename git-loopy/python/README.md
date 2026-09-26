@@ -964,8 +964,8 @@ Every Run of **this clone** — the worktree you invoked it from plus every othe
 worktree `git worktree list` registers — newest first. Run it from any of those
 worktrees and you get the same listing, including Runs that were started from a
 different one. `RUN` is the full Run identity, and `SCOPE` is the worktree the
-Run published its artefacts in; together they are what the forthcoming Attach
-and Stop commands target by.
+Run published its artefacts in; together they are what `git-loopy stop` targets,
+and what Attach will target, so the two cannot disagree about which Runs exist.
 
 The domain is the clone, never the machine. An independent clone of the same
 repository has its own Runs and its own listing; nothing here scans for them,
@@ -1000,7 +1000,52 @@ second Stop. `q` still only hands the terminal back — the Run keeps going.
 Acknowledgment is the Run's own `wrapper.stop.requested` record for the stage
 asked for, or a stronger one. A wait that elapses without that record is
 unconfirmed, not success, and not a claim that the Run has finished draining.
-The public `git-loopy stop <run-id>` command is not this surface.
+`git-loopy stop` writes that same request; see below.
+
+---
+
+## Stopping a Run (`git-loopy stop`)
+
+```bash
+git-loopy stop 01K6Z9QWERTYUIOPASDFGHJKLZ
+git-loopy stop 01K6Z9QWERTYUIOPASDFGHJKLZ --timeout 10
+git-loopy stop 01K6Z9QWERTYUIOPASDFGHJKLZ --request-id cli-0123abcd
+```
+
+Requests the same two-stage **Wind-down** an attached Dashboard requests with
+`s`. No Dashboard helper and no remote-control service is required. The Run
+identity is required. Resolution is the same clone-scoped listing as
+`git-loopy runs`: this worktree and every worktree it has registered, never
+another clone, and never the newest Run by default. A Run whose liveness this
+host cannot prove is refused. A Run that has ended is refused — there is
+nothing to stop, and the command will not claim that it stopped one.
+
+The command writes one Stop request beside that Run's control artifact and
+waits for the Run to acknowledge the stage that request asks for. Success is
+that acknowledgment (`wrapper.stop.requested` at the asked stage, or a stronger
+one). It is the latch, not a finished Run, and the command does not wait for
+draining contributions to finish. A bounded timeout (`--timeout`, default 10
+seconds) is **unconfirmed**: a non-success result, and not a claim that the Run
+stopped or finished.
+
+The first distinct request asks for drain. Running `git-loopy stop` again, with
+a new request identity, is a deliberate second Stop and asks for cancellation. A
+further request adds no harder stage. Cancellation is requested, not awaited.
+It does not resume workers. It does not discard salvaged local or remote
+contributions, and it does not interrupt a publish transaction — those
+protections stay the Run's. This command does not grow a second lifecycle, and
+it does not open a channel into an Execution host. The Run reads the request
+wherever its contributions execute, including GitHub Actions.
+
+`--request-id` redelivers one logical request. Use the id the previous
+invocation printed. A redelivery cannot escalate and cannot duplicate a latched
+transition. Omitting it always starts a new logical Stop. If the write itself
+has to be retried, the command reuses the identity it already chose, so that
+retry is not a second Stop.
+
+A client that dies after the request is linked does not withdraw it. Another
+client — a Dashboard pressing `s`, or a second `git-loopy stop` — sees the same
+two stages. Shell and PowerShell do not attach and do not provide this command.
 
 ---
 
