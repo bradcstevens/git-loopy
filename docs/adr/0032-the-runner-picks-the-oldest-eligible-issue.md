@@ -82,7 +82,9 @@ reason to refuse a pin.
 
 The pin is spent by its first binding, or by the end of that first serial Iteration unless
 that Iteration could not read it — a failed Pool, Readiness, Dynamic-route or **Lease** read of
-the pin (the pin then keeps serial ownership for the next Iteration), and the oldest-first order then applies — including to the pinned issue if it is still open. The
+the pin (the pin then keeps serial ownership for the next Iteration), or by a Lane Pickup whose
+answer is about the pin — its **Lease** held by another Run, a `task-type:` label routing
+refuses, or a Dynamic-route refusal that is not a read that failed (#645) — and the oldest-first order then applies — including to the pinned issue if it is still open. The
 Python Runner does this in serial Pickups as well.
 
 **Conflicts, flagged rather than resolved here:**
@@ -99,10 +101,17 @@ Python Runner does this in serial Pickups as well.
   that is offered the pin, or at the cap or a drain. An Iteration that could not read the pin
   binds nothing rather than the next candidate (a pin it reads and skips is passed over as in
   any Pickup), spends a unit like any
-  Iteration, and is granted again only once a read shows the pin or proves it gone.
+  Iteration, and is granted again only once a read shows the pin or proves it gone — or, when
+  the read that failed was the pin's **Lease** probe, once the Lease remote answers for the pin
+  or a complete read proves it gone, so a Lease-remote outage costs one unit as a tracker
+  outage does (#645).
 - ADR-0020's quarantine rule (#219 §2.11) keeps one unreadable candidate from
   head-of-line-blocking the candidates behind it. An unspent `parallel-safe` pin is the one
   exception: a failed read of it stops the Lane walk and is retried on the next, because
-  passing it is exactly how another issue would take the pin's Lane. A failed **Lease** read
-  of that pin still passes it over for the Run; that gap, and the bounds on a pin the tracker
-  keeps refusing, are [#645](https://github.com/bradcstevens/git-loopy/issues/645).
+  passing it is exactly how another issue would take the pin's Lane. The same holds after the
+  walk has taken the pin (#645): a later Lane Pickup step whose read or setup did not happen —
+  the **Lease** probe, a Dynamic-route read that failed, the base revision, the worktree — puts
+  the pin back at the head of the cache, quarantined, rather than refuse it for the Run or
+  release it uncached, and neither a Lane nor serial work fills behind it until it binds. Its
+  retries are paced to one per idle poll interval. The bounds on a pin whose reads keep failing are
+  [#647](https://github.com/bradcstevens/git-loopy/issues/647).
