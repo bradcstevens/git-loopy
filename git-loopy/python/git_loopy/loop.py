@@ -5900,7 +5900,7 @@ class _ParallelLoop:
             )
             self._release_lane_lease(ref)
             scheduler.release(
-                reservation, requeue_after=_ROLLING_EMPTY_POLL_INTERVAL
+                reservation, retry_after=_ROLLING_EMPTY_POLL_INTERVAL
             )
 
         def pin_refused() -> None:
