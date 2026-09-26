@@ -60,4 +60,4 @@ pub const SUPPORTED_EVENT_SCHEMA_VERSION: u32 = 1;
 /// (`tests/wrapper_contract_version.rs`, ADR-0044): the Wrapper contract went
 /// to 2.0 when Continuation was decommissioned (ADR-0046), a breaking change
 /// no minor bump could honestly encode.
-pub const WRAPPER_CONTRACT_VERSION: &str = "2.11";
+pub const WRAPPER_CONTRACT_VERSION: &str = "2.12";

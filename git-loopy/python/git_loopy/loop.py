@@ -225,7 +225,7 @@ from git_loopy.denomination import (
     CostDenomination,
 )
 from git_loopy.prompt import PromptMetadataError, load_prompt
-from git_loopy.readiness import blocked_skip_reason
+from git_loopy.readiness import blocked_skip_reason, decide_readiness
 from git_loopy.rate_card import RateCard
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
@@ -4240,7 +4240,7 @@ class _ParallelLoop:
         # A Lane routing refusal is a **Pickup skip**, not a fatal worker
         # exception. Keep the candidate cached but ineligible for this Run so
         # the terminal classifier can honestly report all_skipped.
-        self._rolling_refused: set[int | str] = set()
+        self._rolling_refused: dict[int | str, str] = {}
         # The subset of :attr:`_rolling_refused` a **Lease** *read* refused
         # rather than a rival's answer. Kept apart because the two are not the
         # same fact: a rival holding the issue is the mechanism working, while
@@ -4359,6 +4359,7 @@ class _ParallelLoop:
         # be allowed to complete once they have begun.
         self._active_agent_tasks: set[asyncio.Task[object]] = set()
         self._stop_cancel_requested = False
+        self._terminal_refusals: list[dict[str, int | str]] | None = None
 
         # Compose a serial `_Loop` for serial Iterations AND to share its
         # Strike machine / event emitter / summary counters / Checkpoint
@@ -4663,6 +4664,12 @@ class _ParallelLoop:
                     iter_num=None,
                     outcome=outcome_label,
                     iterations_run=iterations_run,
+                    **(
+                        {"refusals": self._terminal_refusals}
+                        if outcome_label in ("all_blocked", "all_skipped")
+                        and self._terminal_refusals is not None
+                        else {}
+                    ),
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 self._diag.warning("wrapper.run.end emit failed: %s", exc)
@@ -4999,6 +5006,20 @@ class _ParallelLoop:
                             )
                         scheduler.serial_finished()
                         continue
+                    if terminal_outcome in ("all_blocked", "all_skipped"):
+                        self._terminal_refusals = []
+                        for candidate in scheduler.terminal_survivors:
+                            readiness = decide_readiness(candidate.blocked_by)
+                            if readiness.blockers:
+                                assert readiness.skip_reason is not None
+                                reason = blocked_skip_reason(
+                                    readiness.skip_reason, readiness.blockers
+                                )
+                            else:
+                                reason = self._rolling_refused[candidate.ref]
+                            self._terminal_refusals.append(
+                                {"issue": candidate.ref, "reason": reason}
+                            )
                     return (
                         terminal_outcome,
                         exit_code_for(terminal_outcome),
@@ -5497,8 +5518,9 @@ class _ParallelLoop:
             )
         except TaskTypeError as exc:
             self._diag.error("lane #%s routing refused: %s", ref, exc)
-            passed_over(f"routing refused: {exc}")
-            self._rolling_refused.add(ref)
+            reason = f"routing refused: {exc}"
+            passed_over(reason)
+            self._rolling_refused[ref] = reason
             scheduler.release(reservation)
             return
 
@@ -5528,7 +5550,7 @@ class _ParallelLoop:
             # construction (§8.2); the Lane path has to be told to.
             self._diag.info("lane #%s passed over: %s", ref, refusal)
             passed_over(refusal)
-            self._rolling_refused.add(ref)
+            self._rolling_refused[ref] = refusal
             if refusal != _LEASE_HELD_ELSEWHERE:
                 # A probe that failed refused nothing; it only failed to ask.
                 # Bounding the candidate is still right — see above — but the
@@ -5566,8 +5588,9 @@ class _ParallelLoop:
             # :meth:`_run_lane_lifecycle`'s ``finally``, which covers every
             # exit before a contribution exists.
             self._diag.warning("lane #%s dynamic route unavailable: %s", ref, exc)
-            passed_over(f"dynamic route unavailable: {exc}")
-            self._rolling_refused.add(ref)
+            reason = f"dynamic route unavailable: {exc}"
+            passed_over(reason)
+            self._rolling_refused[ref] = reason
             scheduler.release(reservation)
             return
         if scheduler.stop_latched or scheduler.abort_latched:

@@ -1101,10 +1101,18 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     (§12), which the Unbound-Run notice reads (#642). Python already emitted
     it; the declaration is what lets a consumer rely on it, and it is again an
     additive payload field that leaves the wire axis at 1.2.
+
+    2.12 adds ``refusals`` to Rolling ``wrapper.run.end`` (§12, #643).
+    Consumers that do not read the optional field continue unchanged, so
+    wire compatibility remains 1.2.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.11"
+    assert _EVENT_SCHEMA["contract_version"] == "2.12"
+    assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
+        "issue",
+        "reason",
+    ]
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -1401,6 +1409,20 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
             "redacted": (
                 "Skill identity is the canonical name: no absolute path, home "
                 "directory, exposure directory, or Skill content may appear."
+            ),
+        },
+        # #643: the candidates a Rolling terminal decision refused, which the
+        # Unbound-Run notice reads as the Pool. Optional, so the wire stays 1.2.
+        "wrapper.run.end": {
+            "refusals_optional": ["issue", "reason"],
+            "refusals_note": (
+                "Contract 2.12, #643. Rolling Pool-cache all_blocked and "
+                "all_skipped endings carry one refusal per surviving candidate, "
+                "in selection order, with the wrapper.pickup.skipped reason "
+                "vocabulary; no other ending carries it. It is not a Pool "
+                "collection. A consumer ignores malformed entries without "
+                "losing outcome, and an absent field preserves the old notice. "
+                "Event schema compatibility stays 1.2."
             ),
         },
     }

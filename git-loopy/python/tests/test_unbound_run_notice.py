@@ -40,6 +40,40 @@ def test_the_shared_fixture_pins_the_notice(case: dict[str, Any]) -> None:
     )
 
 
+def test_each_rolling_case_has_a_contract_212_sibling_that_records_refusals() -> None:
+    """#643: every ``rolling_*`` case keeps its trace and gains a sibling.
+
+    The originals pin what a trace without ``refusals`` prints, unchanged; each
+    sibling pins what the same kind of Run prints once its end records them.
+    """
+    cases = {case["id"]: case for case in _FIXTURE["cases"]}
+    for name in (
+        "rolling_all_blocked_records_no_pool_membership",
+        "rolling_all_skipped_names_only_the_skips_it_recorded",
+        "rolling_all_blocked_still_names_the_blockers_it_recorded",
+    ):
+        assert "refusals" not in cases[name]["events"][-1]
+        sibling = cases[f"{name}_with_refusals"]
+        assert sibling["contract_version"] == "2.12"
+        assert isinstance(sibling["events"][-1]["refusals"], list)
+
+
+@pytest.mark.parametrize(
+    "refusals",
+    [None, "invalid", {"issue": 42}, [], [{"issue": 42}, {"reason": "x"}, None]],
+)
+def test_malformed_refusal_list_does_not_erase_the_outcome(refusals: Any) -> None:
+    assert unbound_run_notice([
+        {"type": "wrapper.run.start", "issue_source": "github"},
+        {"type": "wrapper.run.end", "outcome": "all_skipped", "refusals": refusals},
+    ]) == [
+        "No workable issues: this Run bound nothing and ended all_skipped.",
+        "The Run ended because every ready-for-agent issue was skipped.",
+        "The trace records no Pool membership, so it may not name every candidate; "
+        "check the tracker.",
+    ]
+
+
 def test_a_trace_file_is_read_with_its_unreadable_lines_skipped(tmp_path: Path) -> None:
     case = _FIXTURE["cases"][0]
     trace = tmp_path / "run.trace.jsonl"
@@ -66,12 +100,24 @@ def test_every_blocked_reason_in_the_fixture_is_what_a_pickup_writes() -> None:
         blockers_from_skip_reason,
     )
 
-    blocked = [
+    reasons = [
         event["reason"]
         for case in _FIXTURE["cases"]
         for event in case["events"]
         if event["type"] == "wrapper.pickup.skipped"
-        and event["reason"].startswith(SKIP_BLOCKED_BY_OPEN_DEPENDENCY)
+    ] + [
+        # #643: a Run end's refusals use the same vocabulary as a Pickup skip.
+        refusal["reason"]
+        for case in _FIXTURE["cases"]
+        for event in case["events"]
+        if event["type"] == "wrapper.run.end"
+        for refusal in event.get("refusals", [])
+        if isinstance(refusal.get("reason"), str)
+    ]
+    blocked = [
+        reason
+        for reason in reasons
+        if reason.startswith(SKIP_BLOCKED_BY_OPEN_DEPENDENCY)
     ]
     assert blocked
     for reason in blocked:

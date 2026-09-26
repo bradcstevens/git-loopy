@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.11 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.12 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -446,7 +446,9 @@ Where **every** candidate was refused and **at least one** refusal was `readines
 Run MUST end under `preflight_failed` (§10) — not `all_skipped`, and not `all_blocked`. Where every
 refusal was `blocked_by_open_dependency` the Run ends `all_blocked`, and otherwise `all_skipped`,
 both exactly as before. `conformance/exit-codes.json` pins this as `unbound_pool_cases`, so the
-family asks one rule rather than restating it per member.
+family asks one rule rather than restating it per member. Where Rolling dispatch reaches
+`all_blocked` or `all_skipped` from its Pool cache, the Run's end records the candidates behind
+that claim as `refusals` (§12, contract 2.12, #643); `preflight_failed` carries none.
 
 This is §2.2's rule at the next seam down. `all_skipped` means "a labelling mistake an operator can
 fix" and `all_blocked` means "every candidate proves an open blocker" — both are claims about the
@@ -481,8 +483,11 @@ scheduler's own collision guard is untouched.
 Because both seams read the same assertion, **both orders MUST agree**: a Lane MUST NOT reserve an
 issue a serial Iteration of the same Run already found blocked, and a serial fallback taken while
 Lane concurrency is throttled MUST NOT bind one the scheduler already refused. A candidacy refusal
-is silent by design — it is the churn this rule exists to remove — while a serial Pickup skip
-reports itself as §3.3.1 requires.
+emits no Pickup skip — it is the churn this rule exists to remove — while a serial Pickup skip
+reports itself as §3.3.1 requires. A Lane's refusal of candidacy is instead recorded on the Run's
+end (contract 2.12, #643): when a Rolling terminal decision ends `all_blocked` or `all_skipped`,
+`wrapper.run.end`'s `refusals` (§12) names every survivor it refused and why, including candidates
+no Lane Pickup ever saw.
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
@@ -618,6 +623,8 @@ candidate proves an open dependency. A mixed Pool remains `all_skipped`, so wait
 work an operator can fix — except where the mix holds a refusal nobody could read, which §3.3.1
 sends to `preflight_failed` instead. Both of these reasons are claims about the *work* in the
 Pool, and neither may be established by a *read* that failed.
+For a Rolling terminal decision, the Run-end refusal record (§12, contract 2.12, #643)
+captures the candidates behind either claim; a failed read has no such record.
 
 ### 10.1 An operator Stop is a decided outcome (contract 2.3, MUST)
 
@@ -930,6 +937,27 @@ consumer that describes the Pool must read it before claiming the `ready-for-age
 because only the `github` source's candidates carry that label. An absent `issue_source` is an
 undeclared source, and a consumer MUST NOT infer one. The **Unbound-Run notice** (#642) is such a
 consumer.
+
+**Run-end refusals (contract 2.12, #643).** A Rolling Run that ends `all_blocked` or
+`all_skipped` from its Pool cache MUST carry `refusals` on `wrapper.run.end`: one
+`{"issue": <issue ref>, "reason": <skip reason>}` entry for every surviving candidate
+the terminal Membership read classified, in §3.2 selection order. A Blocked
+candidate's reason is `blocked_by_open_dependency: <owner/repo#N>, ...`, listing
+every proven open blocker exactly as a serial `wrapper.pickup.skipped` does. A
+candidate refused by a Lane Pickup repeats the reason that Pickup recorded,
+using the same reason vocabulary; the Pickup skip itself remains unchanged.
+No other ending carries `refusals`, including serial Iterations, `empty_pool`,
+`preflight_failed`, Stop and cap endings; a Runner without Rolling dispatch
+never emits it. It is a terminal refusal record, **not** a Pool collection or
+a Membership read: it MUST NOT add Queue rows or trigger the `gone` sweep
+reserved for `wrapper.afk_ready.collected` (ADR-0042).
+
+For an Unbound-Run notice, present `refusals` takes precedence over the latest
+collection: its valid issues define the Pool for counting and the
+outside-the-Pool blocker rule, and its reasons count as recorded skips. An
+absent field leaves the historical notice unchanged. Malformed entries are
+ignored without losing the Run's outcome. This additive payload field changes
+neither the Event type nor `event_schema_version` (still 1.2).
 
 **A truthful `parallel_mode: true` can still yield a wholly serial Run, and it MUST say so
 (contract 1.28).** The rule above is about the *distribution*; an Orchestrator that declares
@@ -1839,7 +1867,7 @@ host's own listing (§14.3), and exact-dimension Route publication with its
 migration and capacity refresh (§14.5). `routing-resolution.json` declares
 that provenance at 2.10; `event-schema.json` and `dashboard-insights.json`
 carried it at 2.10 and have since advanced to 2.11 with the Run-start issue
-source (§12). `discriminator.json` reached 2.10 separately with the
+source and 2.12 with Run-end refusals (§12). `discriminator.json` reached 2.10 separately with the
 Wayfinder-map exclusion (§3.1). Event wire compatibility remains 1.2,
 and historical streams' interpretation is unchanged.
 

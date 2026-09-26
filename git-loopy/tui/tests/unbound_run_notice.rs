@@ -165,6 +165,120 @@ fn every_fixture_case_folds_to_its_notice() {
 }
 
 #[test]
+fn rolling_end_refusals_cover_each_unbound_outcome_in_the_shared_fixture() {
+    for name in [
+        "rolling_all_blocked_records_no_pool_membership_with_refusals",
+        "rolling_all_skipped_names_only_the_skips_it_recorded_with_refusals",
+        "rolling_all_blocked_still_names_the_blockers_it_recorded_with_refusals",
+    ] {
+        let case = case(name);
+        let end = case["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["type"] == "wrapper.run.end")
+            .expect("rolling case has a Run end");
+        assert!(end["refusals"].is_array(), "{name}: end names refusals");
+        let mut session = session(&case, IssueRef::parse(""));
+        for line in trace(&case) {
+            session.ingest(&line);
+        }
+        assert_eq!(session.notice(), notice(&case), "{name}");
+        assert!(session.diagnostics().is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn malformed_run_end_refusals_leave_the_outcome_and_valid_entries_intact() {
+    let mut session = DashboardSession::new(
+        RunInputs::new("test-model", "medium"),
+        Zone::from_offset_minutes(0),
+        IssueRef::number(1),
+    )
+    .with_repository("owner/repo");
+    session.ingest(r#"{"type":"wrapper.run.start","issue_source":"github"}"#);
+    session.ingest(
+        r#"{"type":"wrapper.run.end","outcome":"all_skipped","refusals":[{"issue":12,"reason":"not_ready"},{"issue":13},{"issue":false,"reason":"not_ready"},{"issue":14,"reason":7},null,{"issue":"15","reason":"paused"}]}"#,
+    );
+    assert_eq!(
+        session.notice(),
+        Some(vec![
+            "No workable issues: this Run bound nothing and ended all_skipped.".to_string(),
+            "The Run ended because all 2 ready-for-agent issues were skipped: not_ready (1), paused (1).".to_string(),
+        ])
+    );
+    assert!(session.diagnostics().is_empty());
+
+    for invalid in [
+        r#""not a list""#,
+        r#"{"issue":12,"reason":"not_ready"}"#,
+        "null",
+    ] {
+        let mut session = DashboardSession::new(
+            RunInputs::new("test-model", "medium"),
+            Zone::from_offset_minutes(0),
+            IssueRef::number(1),
+        );
+        session.ingest(&format!(
+            r#"{{"type":"wrapper.run.end","outcome":"all_skipped","refusals":{invalid}}}"#
+        ));
+        let notice = session
+            .notice()
+            .expect("outcome survived malformed refusals");
+        assert!(
+            notice[1].contains("every candidate was skipped"),
+            "{invalid}"
+        );
+        assert!(notice[2].contains("no Pool membership"), "{invalid}");
+        assert!(session.diagnostics().is_empty(), "{invalid}");
+    }
+}
+
+#[test]
+fn run_end_refusals_replace_the_latest_collection_and_prior_skips() {
+    let mut session = DashboardSession::new(
+        RunInputs::new("test-model", "medium"),
+        Zone::from_offset_minutes(0),
+        IssueRef::number(1),
+    )
+    .with_repository("owner/repo");
+    for line in [
+        r#"{"type":"wrapper.run.start","issue_source":"github"}"#,
+        r#"{"type":"wrapper.afk_ready.collected","issues":[1,2,3]}"#,
+        r#"{"type":"wrapper.pickup.skipped","issue":1,"reason":"stale_reason"}"#,
+        r#"{"type":"wrapper.run.end","outcome":"all_blocked","refusals":[{"issue":4,"reason":"blocked_by_open_dependency: owner/repo#99"},{"issue":5,"reason":"blocked_by_open_dependency: owner/repo#4"}]}"#,
+    ] {
+        session.ingest(line);
+    }
+    assert_eq!(
+        session.notice(),
+        Some(vec![
+            "No workable issues: this Run bound nothing and ended all_blocked.".to_string(),
+            "The Run ended because all 2 ready-for-agent issues wait on open blockers.".to_string(),
+            "Blockers outside the Pool: owner/repo#99 — resolve them, or label other work ready-for-agent.".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn run_end_refusal_blockers_follow_candidate_order() {
+    let mut session = DashboardSession::new(
+        RunInputs::new("test-model", "medium"),
+        Zone::from_offset_minutes(0),
+        IssueRef::number(1),
+    )
+    .with_repository("owner/repo");
+    session.ingest(
+        r#"{"type":"wrapper.run.end","outcome":"all_blocked","refusals":[{"issue":9,"reason":"blocked_by_open_dependency: owner/repo#99"},{"issue":2,"reason":"blocked_by_open_dependency: owner/repo#88"}]}"#,
+    );
+    let notice = session.notice().expect("the Run ended unbound");
+    assert_eq!(
+        notice[2],
+        "Blockers outside the Pool: owner/repo#99, owner/repo#88 — resolve them."
+    );
+}
+
+#[test]
 fn an_unbound_run_holds_the_dashboard_until_the_operator_quits() {
     for case in cases().into_iter().filter(|case| notice(case).is_some()) {
         let mut session = session(&case, IssueRef::parse("")).hold_when_unbound(HINT);
