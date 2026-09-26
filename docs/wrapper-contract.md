@@ -274,9 +274,7 @@ The pin **bypasses the order and nothing else** (ADR-0032), which is four separa
    §3.3 makes a candidate the runner cannot take a *skip* precisely because a serial Run merely
    walked past it, whereas a pin is an operator naming an issue, and there is no next candidate
    that honours what they asked for. Silently working a different issue than the one named is
-   worse than stopping. In **Parallel mode** the pin MUST additionally carry `parallel-safe`,
-   because a **Lane** Pool requires it and a pinned issue that never enters the Pool would leave
-   the Run working the head of the order — the same silent substitution, arrived at by omission.
+   worse than stopping.
 4. **It weakens nothing for any other issue.** The pin promotes; it does not restrict the Pool.
    Every other candidate remains eligible on exactly the terms §3.1 and §3.2 already set.
 

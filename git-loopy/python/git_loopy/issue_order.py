@@ -378,7 +378,8 @@ def promote_pinned(
       Priority won, ``--issue N`` would silently do nothing on exactly the
       repositories that use the label — the flag would work until it mattered.
     * **Stable.** The tail keeps §3.2's sequence, so a pinned Run resumes the
-      oldest-first order the moment its named issue leaves the **Pool**. A
+      oldest-first order the moment its named issue leaves the **Pool** — or,
+      in the Python Runner, the moment the Pin is spent (#430, #644). A
       promotion that re-sorted the remainder would be a second ordering
       decision competing with the one this module exists to be.
     * **A pin naming a non-member is a no-op, not an error.** Eligibility is

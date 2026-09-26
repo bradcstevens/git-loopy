@@ -351,9 +351,15 @@ of the order and ahead of **Priority** — it outranks the label because a human
 directly rather than in advance. A pin bypasses order and *nothing else*: the issue
 still has to be eligible, and a pin that is not fails the invocation rather than
 falling back to the order, because silently working a different issue than the one
-named is worse than stopping. It lasts exactly one invocation, which is why it is
-neither a label nor an environment variable — both are global, and would point every
-concurrent run at the same issue.
+named is worse than stopping. Under **Rolling dispatch** the pin also goes ahead of
+every **Lane**: a **Serial-required** pin is the run's first serial **Iteration**, and no
+Lane is reserved until it ends; a `parallel-safe` pin takes the first Lane. Lacking
+`parallel-safe` decides how a pin is worked, never whether. In the Python Runner a pin is
+spent by its first binding, or by the end of the serial Iteration latched for it unless that
+Iteration could not read it; an issue still open after that rejoins the order like any
+other (ADR-0032 records where the other Runner members still differ). It lasts at most
+one invocation, which is why it is neither a label nor an environment variable — both are
+global, and would point every concurrent run at the same issue.
 _Avoid_: lock, claim, assignment, selection, priority.
 
 **Queue**:
@@ -1540,7 +1546,8 @@ local-markdown items a **Parallel mode** Run must still drain. It is invisible t
 candidates, so the runner discovers it by its own reading of the Pool. Finding any
 latches serial demand: refill stops, started Lane work drains, and one unchanged serial
 Iteration is granted exclusive use of the base worktree before **Rolling dispatch** gets
-one full refill turn back.
+one full refill turn back — except while a **Pin**'s serial Iteration could not read the
+pin, which keeps serial ownership for it (ADR-0032).
 _Avoid_: plain work, non-parallel work, leftover.
 
 **Serial fallback**:

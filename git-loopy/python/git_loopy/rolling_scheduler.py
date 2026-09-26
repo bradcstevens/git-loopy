@@ -551,7 +551,9 @@ class RollingScheduler:
         gets *one* full refill decision, reserving every currently refillable
         Lane under all normal bounds. Only after that decision may remaining
         validated serial demand relatch — which is what keeps neither serial
-        nor Parallel-safe work starving the other.
+        nor Parallel-safe work starving the other. The one driver that relatches
+        without calling this is a **Pin** whose serial Iteration could not read
+        it (#430, ADR-0032).
         """
         self._phase = PHASE_ROLLING_REFILL_TURN
 
@@ -788,6 +790,20 @@ class RollingScheduler:
             raise ValueError(f"unknown serial-latch reason: {reason!r}")
         self._serial_latched = True
         self._serial_requests.append((ref, reason))
+
+    @property
+    def may_start_work(self) -> bool:
+        """Whether a new unit of work may start: units remain and no drain is latched.
+
+        A serial Iteration or a serial preparation pass is *new* work, and a
+        cap or an abort/stop drain finishes started work rather than starting
+        more (#219 §7.7).
+        """
+        return (
+            self.remaining_units != 0
+            and not self._abort_latched
+            and not self._stop_latched
+        )
 
     @property
     def serial_latched(self) -> bool:

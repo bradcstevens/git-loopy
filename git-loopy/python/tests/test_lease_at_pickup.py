@@ -285,7 +285,7 @@ def test_an_iteration_gives_back_every_lease_it_took(tmp_path: Path) -> None:
     loop, git, _, lease = _build(tmp_path)
     assert loop._take_lease_at_pickup(_item(390)) is None
 
-    async def explode(iter_num: int) -> tuple[str, int, int]:
+    async def explode(iter_num: int, **_kwargs: object) -> tuple[str, int, int]:
         raise RuntimeError("iteration blew up")
 
     loop._iterate = explode  # type: ignore[method-assign]

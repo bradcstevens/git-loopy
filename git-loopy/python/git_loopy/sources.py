@@ -817,6 +817,27 @@ class RepositoryVisibilityReporting(Protocol):
         ...
 
 
+@runtime_checkable
+class PinnedSource(Protocol):
+    """A source that carries an invocation's **Pin** (#430).
+
+    It reports how preflight classified the Pin, and its reads promote the Pin
+    until the Runner spends it.
+    """
+
+    @property
+    def pin_parallel_safe(self) -> bool | None:
+        """Whether the accepted Pin carried ``parallel-safe`` at preflight.
+
+        ``None`` when there is no accepted Pin.
+        """
+        ...
+
+    def spend_pin(self) -> None:
+        """Stop promoting the Pin: it is spent for this Run (#430)."""
+        ...
+
+
 # --------------------------------------------------------------------------- #
 # GitHub backend                                                              #
 # --------------------------------------------------------------------------- #
@@ -845,7 +866,6 @@ class GitHubIssueSource:
         gh: gh_module.GitHubClient,
         include_prs: bool = False,
         pin: int | None = None,
-        pin_requires_parallel_safe: bool = False,
     ) -> None:
         """Construct a backend that logs diagnostics via ``diag``.
 
@@ -866,19 +886,17 @@ class GitHubIssueSource:
                 Two things follow from it, and they are deliberately separate:
                 :meth:`preflight` refuses the whole invocation when the pinned
                 issue is not eligible, and every read that decides sequence
-                promotes it to the head. The second is only ever reached once
-                the first has passed.
-            pin_requires_parallel_safe: ``True`` when the resolved run is
-                **Parallel mode**, where a **Lane** Pool additionally requires
-                ``parallel-safe``. The source is told rather than asked because
-                it holds no Config, and it is the same object that serves both
-                modes.
+                promotes it to the head until :meth:`spend_pin`. The second is
+                only ever reached once the first has passed. Neither asks for
+                ``parallel-safe``: a serial-required Pin is worked on the serial
+                path (#430).
         """
         self._diag = diag
         self._gh = gh
         self._include_prs = include_prs
         self._pin = pin
-        self._pin_requires_parallel_safe = pin_requires_parallel_safe
+        self._pin_spent = False
+        self._pin_parallel_safe: bool | None = None
         self._repository: gh_module.Repo | None = None
         # Which (ref, defect) pairs §3.2's undated diagnostic has already named.
         # A membership refresh repeats on a backoff and a broken `created_at`
@@ -891,6 +909,29 @@ class GitHubIssueSource:
     def repository_visibility(self) -> str | None:
         """The existing preflight's visibility fact, or unknown before it runs."""
         return None if self._repository is None else self._repository.visibility
+
+    def spend_pin(self) -> None:
+        """Stop promoting the Pin: the Runner has spent it (#430).
+
+        When is the Runner's rule (:meth:`git_loopy.loop._Loop.spend_pin`); this
+        only makes every later read order the Pin like any other issue.
+        """
+        self._pin_spent = True
+
+    @property
+    def pin_parallel_safe(self) -> bool | None:
+        """Whether the accepted Pin carried ``parallel-safe`` at preflight (#430).
+
+        Read off the record preflight already fetched to accept the Pin, so
+        dispatch can classify it without depending on a later Pool read that
+        may fail. ``None`` before preflight, or with no Pin.
+        """
+        return self._pin_parallel_safe
+
+    @property
+    def _ordering_pin(self) -> int | None:
+        """The Pin reads still promote, or ``None`` once it is spent."""
+        return None if self._pin_spent else self._pin
 
     def rate_limited_reads(self) -> int | None:
         """How many reads GitHub throttled this Run, or ``None`` if unknown.
@@ -1004,9 +1045,10 @@ class GitHubIssueSource:
                 )
             ),
             number=self._pin,
-            require_parallel_safe=self._pin_requires_parallel_safe,
         )
         if refusal is None:
+            assert issue is not None
+            self._pin_parallel_safe = LABEL_PARALLEL_SAFE in issue.labels
             self._diag.info("pinned issue #%s accepted for this invocation", self._pin)
             return None
         self._diag.error("%s", refusal.message)
@@ -1068,7 +1110,9 @@ class GitHubIssueSource:
         # rather than an arbitrary subset of it; and every later consumer — the
         # prompt, the serial Pickup, the completion whitelist — reads one
         # sequence it did not have to re-derive.
-        ordered, undated = in_selection_order(ready_candidates, pin=self._pin)
+        ordered, undated = in_selection_order(
+            ready_candidates, pin=self._ordering_pin
+        )
         self._report_undated(undated)
 
         items: list[AfkReadyItem] = []
@@ -1157,7 +1201,7 @@ class GitHubIssueSource:
                     issue.body or "", title=issue.title, labels=issue.labels
                 )
             ],
-            pin=self._pin,
+            pin=self._ordering_pin,
         )
         self._report_undated(undated)
         candidates = tuple(

@@ -41,7 +41,8 @@ Design notes:
   issue is dropped; a candidate whose read failed is **quarantined** — it keeps
   its FIFO position, stops blocking the candidates behind it, is retried when a
   later complete refresh still lists it, and blocks an empty claim while it
-  remains unresolved.
+  remains unresolved. The one exception is :attr:`RollingPool.lane_first`, an
+  unspent **Pin** that takes the first Lane (#430).
 * **stdlib + ``git_loopy.sources`` only.** Same constraint the sources seam
   carries: no SDK, no Rich, no peer-of-loop imports.
 """
@@ -88,6 +89,11 @@ def is_parallel_safe(candidate: PoolCandidate) -> bool:
 
 def _ignore_membership_read(_candidates: tuple[PoolCandidate, ...]) -> None:
     """Default visibility seam for callers that do not publish Membership reads."""
+
+
+def _no_lane_first() -> int | str | None:
+    """Default for callers with no **Pin**: every walk may pass every candidate."""
+    return None
 
 
 def _never_read_refused(_candidate: PoolCandidate) -> bool:
@@ -204,6 +210,12 @@ class RollingPool:
     #: ``unresolved`` count so the two dispatch modes cannot drift apart on
     #: what a Pool nobody could bind work out of is entitled to report.
     read_refused: Callable[[PoolCandidate], bool] = _never_read_refused
+    #: The candidate the next Lane must go to, or ``None`` (#430): an unspent
+    #: ``parallel-safe`` **Pin**, which takes the first Lane. When its
+    #: validation read fails, the walk stops there rather than give that Lane to
+    #: the next candidate, and the candidate is retried on the next walk even
+    #: while quarantined — the one exception to §2.11's head-of-line rule.
+    lane_first: Callable[[], int | str | None] = _no_lane_first
 
     _entries: list[_CachedCandidate] = field(default_factory=list, init=False)
     _refreshing: bool = field(default=False, init=False)
@@ -315,7 +327,8 @@ class RollingPool:
         removed on the spot, with no full refresh; an **unavailable** one is
         quarantined, keeps its position, and stops being retried until a later
         complete refresh still lists it, so one unreachable issue can never
-        head-of-line-block the candidates behind it.
+        head-of-line-block the candidates behind it — except
+        :attr:`lane_first`, which the walk retries and will not pass (#430).
 
         Returns:
             The walk (#397): the validated, enriched item — removed from the
@@ -325,8 +338,10 @@ class RollingPool:
             at anyway; see :class:`PoolTake`.
         """
         walked = list(self._entries)
+        first = self.lane_first()
         for position, entry in enumerate(walked, start=1):
-            if entry.quarantined or not self.eligible(entry.candidate):
+            held = first is not None and entry.candidate.ref == first
+            if (entry.quarantined and not held) or not self.eligible(entry.candidate):
                 continue
             pickup = self.source.pickup(entry.candidate.ref)
             if pickup.outcome == PICKUP_VALIDATED and pickup.item is not None:
@@ -341,6 +356,8 @@ class RollingPool:
                     "a later refresh still lists it",
                     entry.candidate.ref,
                 )
+                if held:
+                    return PoolTake(item=None, position=None, considered=len(walked))
                 continue
             self._entries.remove(entry)
         return PoolTake(item=None, position=None, considered=len(walked))

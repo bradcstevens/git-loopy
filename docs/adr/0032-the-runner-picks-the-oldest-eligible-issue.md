@@ -69,3 +69,40 @@ is after selection. Sorting on it would sort on nothing.
   and   not a **Lease** (ADR-0033); a pinned issue held by another live run fails the
   invocation rather than falling back, because silently working a different issue than the one
   named is worse than stopping.
+
+## Amendment: the pin goes first under Rolling dispatch, and once (#430)
+
+Under **Rolling dispatch** the pin is worked ahead of **Lanes** too. A pin without
+`parallel-safe` takes serial ownership at Run start, before any Lane is reserved, and Lanes
+open only after its serial Iteration ends — whatever that Iteration does with it: closes it,
+makes no progress, or skips it as **Blocked** (the pin still bypasses nothing but order). A
+`parallel-safe` pin takes the first Lane reservation; a failed read of it holds the Lanes
+until the tracker answers rather than hand that Lane to the next candidate. Lacking `parallel-safe` is never a
+reason to refuse a pin.
+
+The pin is spent by its first binding, or by the end of that first serial Iteration unless
+that Iteration could not read it — a failed Pool, Readiness, Dynamic-route or **Lease** read of
+the pin (the pin then keeps serial ownership for the next Iteration), and the oldest-first order then applies — including to the pinned issue if it is still open. The
+Python Runner does this in serial Pickups as well.
+
+**Conflicts, flagged rather than resolved here:**
+
+- The Wrapper contract's Pin clause 1 still says a Run "resumes oldest-first the moment its
+  pinned issue leaves the **Pool**", and the shell and PowerShell Orchestrators promote the pin
+  for as long as it stays open. #430 kept those members and the Conformance fixtures out of
+  scope; reconciling them is [#644](https://github.com/bradcstevens/git-loopy/issues/644).
+- [ADR-0020](0020-rolling-dispatch-with-bounded-green-integration.md)'s serial interleave (#219
+  §5.9-5.10) gives Rolling dispatch one full refill turn after each serial Iteration before
+  serial demand may relatch. A pin whose Iteration's read never showed it is the one
+  exception: that Iteration keeps serial ownership for the pin, with no refill turn in between,
+  because a refill turn is exactly how Lanes would go first. It ends at the first Iteration
+  that is offered the pin, or at the cap or a drain. An Iteration that could not read the pin
+  binds nothing rather than the next candidate (a pin it reads and skips is passed over as in
+  any Pickup), spends a unit like any
+  Iteration, and is granted again only once a read shows the pin or proves it gone.
+- ADR-0020's quarantine rule (#219 §2.11) keeps one unreadable candidate from
+  head-of-line-blocking the candidates behind it. An unspent `parallel-safe` pin is the one
+  exception: a failed read of it stops the Lane walk and is retried on the next, because
+  passing it is exactly how another issue would take the pin's Lane. A failed **Lease** read
+  of that pin still passes it over for the Run; that gap, and the bounds on a pin the tracker
+  keeps refusing, are [#645](https://github.com/bradcstevens/git-loopy/issues/645).
