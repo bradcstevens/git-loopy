@@ -2,6 +2,13 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md):**
+the Strike abort and operator Stop share a Wind-down latch, not a revocable
+exit. A green publication can clear the Strike condition and lift that drain;
+an operator Stop remains latched even after a green publication and never
+resumes refill. This makes explicit the asymmetry already described below;
+it does not reverse the two-stage Stop decision.
+
 Decided on [#358](https://github.com/bradcstevens/git-loopy/issues/358), under map
 [#342](https://github.com/bradcstevens/git-loopy/issues/342).
 

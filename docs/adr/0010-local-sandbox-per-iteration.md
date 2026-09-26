@@ -1,8 +1,10 @@
 # Per-Iteration local sandbox for the AFK loop
 
-**Status:** blocked — the chosen mechanism does not survive the feasibility spike; see
-[Spike outcome](#spike-outcome-2026-07-02-mechanism-not-deliverable-on-the-pinned-toolchain).
-Blocked pending upstream headless-sandbox support.
+**Status:** superseded in full by
+[ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md).
+The mechanism did not survive the feasibility spike below; local blast-radius
+containment is now refused by Isolation grade, not blocked pending upstream
+headless-sandbox support. The historical revisit trigger below is retired.
 
 ## Context
 

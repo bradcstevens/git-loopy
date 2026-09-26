@@ -1,6 +1,14 @@
 # Rolling dispatch with bounded green-publish Integration
 
 **Status:** accepted
+
+**Amended by [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md):**
+"published" also requires base to be as durable as the tracker closure
+attesting to it wherever an upstream exists. Green gating and verified
+closure remain necessary, but are not sufficient if the base commit exists
+only locally. This adds a durability condition to publication, not a
+reversal of green-before-publication ordering.
+
 **Partially superseded by:** [ADR-0065](0065-a-declared-rolling-event-is-seen-emitted-or-retired.md)
 only for the Parallel lifecycle list below, from which `wrapper.pipeline.quiescent` is retired, and
 for the "serial fallback" and "serial working" live statuses, which fold into existing Statuses.
@@ -15,9 +23,9 @@ only for Wave/barrier scheduling, and
 barrier-triggered Integration, batch ordering, and publishing an unverified merge before
 reverting it.
 
-ADR-0008 and ADR-0009 remain historical records. Their other decisions remain live:
-Parallel mode is opt-in; a human must apply `parallel-safe`; each issue has one isolated
-Lane worktree, branch, and per-Lane Sandbox policy; the full feedback loop is the
+ADR-0008 and ADR-0009 remain historical records. Their surviving decisions include:
+a human must apply `parallel-safe`; each issue has one isolated
+Lane workspace and branch; the full feedback loop is the
 load-bearing gate; Integration is serialized and runner-owned; recovery is bounded at
 K <= 3 before serial fallback; and successful work closes through the runner rather than
 waiting for a human.
@@ -64,7 +72,8 @@ Parallel mode uses **Rolling dispatch**, not Waves or replacement rounds.
 - One issue may be dispatched to at most one Lane in a Run. The Run-scoped guard survives
   parking, Integration, recovery, and serial fallback.
 
-The serial default path remains unchanged when Parallel mode is off.
+The serial path described here remains an Iteration driver; the Python Runner
+no longer exposes a mode switch (ADR-0067).
 
 ### Hybrid Pool refresh
 
