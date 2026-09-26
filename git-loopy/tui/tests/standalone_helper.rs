@@ -238,9 +238,11 @@ fn render_mode_ends_when_its_input_ends_rather_than_waiting_for_a_key() {
 #[cfg(unix)]
 mod live_terminal {
     use super::*;
+    use std::ffi::OsStr;
     use std::fs::{self, File};
     use std::io::{self, Read};
     use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::process::CommandExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -266,13 +268,17 @@ mod live_terminal {
         }
     }
 
-    /// How long the harness keeps reading after the helper exits. The restore
+    /// How long the test keeps reading after the helper exits. The restore
     /// is already written by then, so this only has to outlast PTY delivery
     /// under load.
     const RESTORE_DRAIN: Duration = Duration::from_secs(3);
+    const POLL_INTERVAL: Duration = Duration::from_millis(25);
+    const LEAVE_ALTERNATE_SCREEN: &[u8] = b"\x1b[?1049l";
 
     fn left_the_alternate_screen(output: &[u8]) -> bool {
-        output.windows(8).any(|bytes| bytes == b"\x1b[?1049l")
+        output
+            .windows(LEAVE_ALTERNATE_SCREEN.len())
+            .any(|bytes| bytes == LEAVE_ALTERNATE_SCREEN)
     }
 
     struct TerminalChild {
@@ -368,7 +374,9 @@ mod live_terminal {
                     events: libc::POLLIN,
                     revents: 0,
                 };
-                let ready = unsafe { libc::poll(&mut descriptor, 1, 25) };
+                let ready = unsafe {
+                    libc::poll(&mut descriptor, 1, POLL_INTERVAL.as_millis() as libc::c_int)
+                };
                 if ready < 0 {
                     let error = io::Error::last_os_error();
                     assert_eq!(error.kind(), io::ErrorKind::Interrupted, "{error}");
@@ -381,6 +389,11 @@ mod live_terminal {
                         .read(&mut buffer)
                         .expect("terminal output is readable");
                     output.extend_from_slice(&buffer[..count]);
+                    // macOS revokes the terminal when the helper's session
+                    // ends, and then the master polls ready with nothing to read.
+                    if count == 0 {
+                        std::thread::sleep(POLL_INTERVAL);
+                    }
                     let requests = output
                         .windows(4)
                         .filter(|bytes| *bytes == b"\x1b[6n")
@@ -420,28 +433,28 @@ mod live_terminal {
                     break;
                 }
             }
+            let captured = String::from_utf8_lossy(&output);
             assert_eq!(
                 next_step,
                 steps.len(),
-                "the helper did not reach {:?} with redirected stdin: {:?}",
+                "the helper did not reach {:?} with redirected stdin: {captured:?}",
                 steps.get(next_step).map(|(expected, _)| expected),
-                String::from_utf8_lossy(&output)
             );
             assert_eq!(
                 status.and_then(|status| status.code()),
                 Some(0),
-                "the terminal quit key must end the client"
+                "the terminal quit key must end the client: {captured:?}"
             );
             let restored = terminal_mode(&self.master);
-            assert_eq!(restored.c_iflag, self.original_mode.c_iflag);
-            assert_eq!(restored.c_oflag, self.original_mode.c_oflag);
-            assert_eq!(restored.c_cflag, self.original_mode.c_cflag);
-            assert_eq!(restored.c_lflag, self.original_mode.c_lflag);
-            assert_eq!(restored.c_cc, self.original_mode.c_cc);
+            let unrestored = format!("the helper must restore the terminal mode: {captured:?}");
+            assert_eq!(restored.c_iflag, self.original_mode.c_iflag, "{unrestored}");
+            assert_eq!(restored.c_oflag, self.original_mode.c_oflag, "{unrestored}");
+            assert_eq!(restored.c_cflag, self.original_mode.c_cflag, "{unrestored}");
+            assert_eq!(restored.c_lflag, self.original_mode.c_lflag, "{unrestored}");
+            assert_eq!(restored.c_cc, self.original_mode.c_cc, "{unrestored}");
             assert!(
                 left_the_alternate_screen(&output),
-                "the helper must leave the alternate screen within {RESTORE_DRAIN:?} of exiting: {:?}",
-                String::from_utf8_lossy(&output)
+                "the helper must leave the alternate screen within {RESTORE_DRAIN:?} of exiting: {captured:?}"
             );
         }
     }
@@ -515,32 +528,34 @@ mod live_terminal {
     }
 
     /// A child that exits before its last terminal bytes are read, the way the
-    /// helper can on Linux: a grandchild writes the restore only after the
-    /// harness has already reaped the child. The hangup the session leader's
+    /// helper can on Linux: a grandchild writes `last_write` only after the
+    /// test has already reaped the child. The hangup the session leader's
     /// exit sends is ignored, and the grandchild reopens the terminal by path
     /// because macOS revokes the session's open descriptors when its leader
     /// exits.
-    fn exits_before_its_restore_is_read(restore: &str) -> Command {
+    fn exits_before_its_last_write_is_read(last_write: &[u8]) -> Command {
         let mut command = Command::new("sh");
         command
             .arg("-c")
-            .arg(format!(
-                "trap '' HUP; t=$(tty <&2) || exit 1; (sleep 0.5; printf '{restore}' >\"$t\") & exit 0"
-            ))
+            .arg("trap '' HUP; t=$(tty <&2) || exit 1; (sleep 0.5; printf '%s' \"$1\" >\"$t\") & exit 0")
+            .arg("sh")
+            .arg(OsStr::from_bytes(last_write))
             .stdin(Stdio::null());
         command
     }
 
     #[test]
-    fn the_harness_keeps_reading_the_terminal_after_the_helper_exits() {
-        TerminalChild::spawn(&mut exits_before_its_restore_is_read("\\033[?1049l"))
-            .assert_interactions(&[]);
+    fn a_restore_read_only_after_the_helper_exits_still_counts() {
+        TerminalChild::spawn(&mut exits_before_its_last_write_is_read(
+            LEAVE_ALTERNATE_SCREEN,
+        ))
+        .assert_interactions(&[]);
     }
 
     #[test]
     #[should_panic(expected = "never-restored")]
-    fn the_harness_shows_the_terminal_when_the_restore_never_arrives() {
-        TerminalChild::spawn(&mut exits_before_its_restore_is_read("never-restored"))
+    fn a_restore_that_never_arrives_fails_with_the_captured_terminal() {
+        TerminalChild::spawn(&mut exits_before_its_last_write_is_read(b"never-restored"))
             .assert_interactions(&[]);
     }
 }
