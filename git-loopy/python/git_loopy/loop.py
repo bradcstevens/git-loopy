@@ -1386,6 +1386,7 @@ class _Loop:
         #: every later read.
         self._live_pin: int | None = config.issue_pin
         self._pin_unread = False
+        self._pin_lease_unread = False
         #: This Run's **Lease**s, or ``None`` when Leases are not in force —
         #: the PRDs backend has no remote to contend on, and a clone with no
         #: resolvable GitHub repository cannot address a Lease ref. ``None``
@@ -2094,6 +2095,7 @@ class _Loop:
                 and self._live_pin not in pool_refs
                 and not collection.complete
             )
+            self._pin_lease_unread = False
             # Late-bind the iteration span's `issue` / `issues` attributes
             # now that we know the pool. `set_attribute` is no-op-safe so
             # this works whether OTel is enabled or not.
@@ -3414,6 +3416,7 @@ class _Loop:
                 # A Readiness or Lease read of the Pin that did not happen is
                 # the Pin unread, not the Pin refused, so the Iteration latched
                 # for it binds nothing rather than the next candidate (#430).
+                self._pin_lease_unread = refusal.reason == _LEASE_UNREADABLE
                 raise _PinUnreadAtPickup
             return refusal
 
@@ -3507,6 +3510,22 @@ class _Loop:
         """
         return self._pin_unread
 
+    @property
+    def pin_lease_unread(self) -> bool:
+        """Whether the Pin went unread because its **Lease** probe failed (#645).
+
+        The tracker still shows such a Pin, so waiting on a Pool read that
+        shows it would return at once and spend a unit per retry.
+        """
+        return self._pin_lease_unread
+
+    def pin_lease_readable(self) -> bool:
+        """Whether the Lease remote answers for the live Pin now (#645)."""
+        pin = self._live_pin
+        if self._lease is None or not isinstance(pin, int):
+            return True
+        return self._lease.readable(pin)
+
     def spend_pin_if_bound(self, ref: int | str) -> None:
         """Spend the Pin if a Pickup, serial or Lane, just bound it (#430)."""
         if ref == self._live_pin:
@@ -3561,10 +3580,7 @@ class _Loop:
         # candidate this way, and a terminal outcome that called that
         # `all_skipped` would report a fact about the Pool that nobody ever
         # established.
-        return AdmissionRefusal(
-            reason="Lease could not be taken (remote unreadable)",
-            unresolved=True,
-        )
+        return AdmissionRefusal(reason=_LEASE_UNREADABLE, unresolved=True)
 
     def _release_lease(self, ref: int | str) -> None:
         """Give back one issue's **Lease**, if this Run holds it.
@@ -5030,7 +5046,16 @@ class _ParallelLoop:
 
                 self._prepare_rolling_pool_ahead()
 
-                serial_pool_seen = self._service_serial_required_work()
+                # While the Pin's Lane is in setup, or the Pin waits for its
+                # paced retry after an unread setup step, refill waits behind
+                # it (#645), so the serial peek waits too: latching serial
+                # demand now would stop the refill the Pin's binding releases,
+                # or, with the Pin's Lane freed, take the turn it is owed.
+                serial_pool_seen = (
+                    False
+                    if scheduler.lane_first_awaited
+                    else self._service_serial_required_work()
+                )
 
                 # `serial_turn()` itself has neither `max_iterations` nor abort
                 # awareness (it only gates on the serial latch + full
@@ -5435,12 +5460,25 @@ class _ParallelLoop:
         asks about the Pin alone, so another issue the tracker keeps refusing
         cannot hold it; a complete read without the Pin ends it too, and the
         next Iteration spends the departed Pin. An operator Stop ends it.
+
+        When the read that failed was the Pin's **Lease** probe, the tracker
+        still shows the Pin, so a Pool read would end the wait at once. That
+        wait lasts until the Lease remote answers for the Pin instead, or a
+        complete Pool read proves the Pin gone (#645).
         """
         pin = self._serial.live_pin
+        lease_unread = self._serial.pin_lease_unread
         while not self._serial._stop_drain_requested:
             await asyncio.sleep(_ROLLING_EMPTY_POLL_INTERVAL)
+            if lease_unread and self._serial.pin_lease_readable():
+                return
             collection = self._collect_pool_safely()
-            if collection.complete or any(i.ref == pin for i in collection.items):
+            shown = any(i.ref == pin for i in collection.items)
+            if lease_unread:
+                if collection.complete and not shown:
+                    return
+                continue
+            if collection.complete or shown:
                 return
 
     def _latch_serial_demand(
@@ -5771,6 +5809,29 @@ class _ParallelLoop:
                 considered=reservation.considered,
             )
 
+        # An unspent `parallel-safe` Pin owns the next Lane (#430), and until a
+        # Lane binds it each failure below is one of two things (#645): a read
+        # or setup step that did not happen, which puts the Pin back to take
+        # the next Lane (`pin_unread`), or an answer about the Pin, which
+        # spends it after today's refusal handling (`pin_refused`). Any other
+        # candidate keeps exactly today's handling.
+        is_pin = ref == self._lane_first_pin()
+
+        def pin_unread(what: str) -> None:
+            self._diag.warning(
+                "lane #%s: the Pin was not read (%s); it keeps the next Lane",
+                ref,
+                what,
+            )
+            self._release_lane_lease(ref)
+            scheduler.release(
+                reservation, requeue_after=_ROLLING_EMPTY_POLL_INTERVAL
+            )
+
+        def pin_refused() -> None:
+            if is_pin:
+                self._serial.spend_pin()
+
         if not isinstance(ref, int):
             # Rolling-eligible candidates are always int refs
             # (`is_parallel_safe` requires it); this only defends a future
@@ -5804,6 +5865,7 @@ class _ParallelLoop:
             reason = f"routing refused: {exc}"
             passed_over(reason)
             self._rolling_refused[ref] = reason
+            pin_refused()
             scheduler.release(reservation)
             return
 
@@ -5823,6 +5885,9 @@ class _ParallelLoop:
         # issue a rival Run holds a live Lease on, and buy an AI session for
         # work it is about to be refused.
         refusal = self._take_lane_lease(item)
+        if refusal == _LEASE_UNREADABLE and is_pin:
+            pin_unread(refusal)
+            return
         if refusal is not None:
             # Refused *candidacy* for the rest of this Run, not merely this
             # reservation. A bare release would hand the candidate straight
@@ -5839,6 +5904,7 @@ class _ParallelLoop:
                 # Bounding the candidate is still right — see above — but the
                 # Run must not then report it as work it was *refused*.
                 self._lease_unreadable.add(ref)
+            pin_refused()
             scheduler.release(reservation)
             return
 
@@ -5852,6 +5918,9 @@ class _ParallelLoop:
                 item, routed=resolution, parallel_required=True
             )
         except DynamicRouteUnavailable as exc:
+            if is_pin and isinstance(exc, _CandidateUnread):
+                pin_unread(f"dynamic route unavailable: {exc}")
+                return
             # The Lane half of AC11's explicit unavailable decision, and it
             # takes the candidate out of this Run's rolling pool exactly as the
             # routing refusal above does. Leaving it eligible looks kinder and
@@ -5874,6 +5943,7 @@ class _ParallelLoop:
             reason = f"dynamic route unavailable: {exc}"
             passed_over(reason)
             self._rolling_refused[ref] = reason
+            pin_refused()
             scheduler.release(reservation)
             return
         if scheduler.stop_latched or scheduler.abort_latched:
@@ -5890,6 +5960,9 @@ class _ParallelLoop:
                 ref,
                 exc,
             )
+            if is_pin:
+                pin_unread(f"base revision failed: {exc}")
+                return
             passed_over(f"base revision failed: {exc}")
             scheduler.release(reservation)
             return
@@ -5902,6 +5975,9 @@ class _ParallelLoop:
                 "worktree add for issue #%s failed: %s; releasing reservation",
                 ref, exc,
             )
+            if is_pin:
+                pin_unread(f"worktree setup failed: {exc}")
+                return
             passed_over(f"worktree setup failed: {exc}")
             scheduler.release(reservation)
             return
@@ -5949,6 +6025,9 @@ class _ParallelLoop:
         )
         lane_binding.bind(ref, source="lane_pickup", at=datetime.now(timezone.utc))
         self._serial.spend_pin_if_bound(ref)
+        if is_pin:
+            # Refill was held while the Pin's Lane was in setup (#645).
+            self._capacity_freed.set()
 
         try:
             recent = self._git.recent_commits(5)

@@ -279,6 +279,23 @@ class LeaseLifecycle:
             displaced_run_id=hold.displaced_run_id,
         )
 
+    def readable(self, issue: int) -> bool:
+        """Whether the Lease remote answers for ``issue`` right now (#645).
+
+        A pure read: it claims nothing, renews nothing and changes nothing this
+        lifecycle holds. It exists for a caller waiting out a ``take`` that was
+        ``unavailable``, which must not spend another attempt until the remote
+        can answer. An issue this Run has lost needs no round trip, because
+        ``take`` refuses it without one.
+        """
+        if issue in self._lost:
+            return True
+        try:
+            self._transport.observe(issue, now=self._now())
+        except GitError:
+            return False
+        return True
+
     def lost(self, issue: int) -> bool:
         """Whether this Run has already been shown to have lost ``issue``."""
         return issue in self._lost

@@ -129,6 +129,11 @@ class _CachedCandidate:
 
     candidate: PoolCandidate
     quarantined: bool = False
+    #: The :attr:`RollingPool.clock` reading before which :meth:`RollingPool.take`
+    #: must not read this candidate again (#645). Set only by
+    #: :meth:`RollingPool.requeue`, and kept across a refresh, so a candidate
+    #: put back after a read that did not happen is retried at a paced rate.
+    not_before: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -339,9 +344,16 @@ class RollingPool:
         """
         walked = list(self._entries)
         first = self.lane_first()
+        now = self.clock()
         for position, entry in enumerate(walked, start=1):
             held = first is not None and entry.candidate.ref == first
             if (entry.quarantined and not held) or not self.eligible(entry.candidate):
+                continue
+            if now < entry.not_before:
+                # Put back after a read that did not happen (#645): not due
+                # yet. The held candidate keeps the next Lane while it waits.
+                if held:
+                    return PoolTake(item=None, position=None, considered=len(walked))
                 continue
             pickup = self.source.pickup(entry.candidate.ref)
             if pickup.outcome == PICKUP_VALIDATED and pickup.item is not None:
@@ -361,6 +373,57 @@ class RollingPool:
                 continue
             self._entries.remove(entry)
         return PoolTake(item=None, position=None, considered=len(walked))
+
+    def requeue(self, item: AfkReadyItem, *, retry_after: float) -> None:
+        """Put a taken candidate back at the head of the cache (#645).
+
+        :meth:`take` removes the candidate it validates, so a **Lane Pickup**
+        whose later step fails because a read did not happen — the **Lease**
+        probe, a **Dynamic route** preparation read, the base revision, the
+        worktree — would otherwise leave the candidate out until a refresh
+        re-lists it, or out for good once the Run refuses it. That is right for
+        an ordinary candidate and wrong for :attr:`lane_first`, whose failure
+        said nothing about it: the next Lane is still its.
+
+        The candidate goes back first and **quarantined**: only
+        :attr:`lane_first` retries a quarantined candidate, so if the candidate
+        stops being the one the next Lane must go to, it waits for a refresh
+        that still lists it like any other. It is not read again until
+        ``retry_after`` seconds of :attr:`clock` have passed, so a read that
+        keeps failing costs one round trip per interval rather than a hot loop.
+        """
+        self._entries = [
+            entry for entry in self._entries if entry.candidate.ref != item.ref
+        ]
+        self._entries.insert(
+            0,
+            _CachedCandidate(
+                candidate=PoolCandidate(
+                    ref=item.ref,
+                    title=item.title,
+                    labels=item.labels,
+                    created_at=item.created_at,
+                    blocked_by=item.blocked_by,
+                ),
+                quarantined=True,
+                not_before=self.clock() + retry_after,
+            ),
+        )
+
+    def lane_first_paced(self) -> bool:
+        """Whether :attr:`lane_first` is back in the cache and not yet due (#645).
+
+        Only :meth:`requeue` makes a candidate wait, so this is the Pin whose
+        Lane step went unread, holding the next Lane until its paced retry.
+        """
+        first = self.lane_first()
+        if first is None:
+            return False
+        now = self.clock()
+        return any(
+            entry.candidate.ref == first and now < entry.not_before
+            for entry in self._entries
+        )
 
     # -- termination -------------------------------------------------------- #
 
@@ -570,8 +633,13 @@ class RollingPool:
             fresh = observed.pop(entry.candidate.ref, None)
             if fresh is None:
                 continue
-            # Still listed by an authoritative read: worth validating again.
-            survivors.append(_CachedCandidate(candidate=fresh, quarantined=False))
+            # Still listed by an authoritative read: worth validating again,
+            # though no sooner than a requeue's pacing allows (#645).
+            survivors.append(
+                _CachedCandidate(
+                    candidate=fresh, quarantined=False, not_before=entry.not_before
+                )
+            )
         survivors.extend(
             _CachedCandidate(candidate=c)
             for c in snapshot.candidates

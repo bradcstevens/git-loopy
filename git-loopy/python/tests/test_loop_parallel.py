@@ -10027,6 +10027,437 @@ def test_a_transient_selector_failure_on_the_pin_binds_nothing(
     assert _bindings(events) == [(44, "pin")]
 
 
+# ---------------------------------------------------------------------------
+# A parallel-safe Pin keeps the next Lane through a failure that is not an
+# answer about it (#645)
+# ---------------------------------------------------------------------------
+
+
+def _wire_parallel_safe_pin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pin_labels: Sequence[str] = (),
+    gh_cls: type[FakeGitHubClient] = FakeGitHubClient,
+    **gh_kwargs: Any,
+) -> tuple[FakeGitHubClient, FakeGitClient]:
+    """#41-#43 all ``parallel-safe``, with Leases in force; #43 is the Pin."""
+    fake_gh = _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(
+                43, labels=["ready-for-agent", "parallel-safe", *pin_labels]
+            ),
+        ],
+        gh_cls=gh_cls,
+        **gh_kwargs,
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    return fake_gh, fake_git
+
+
+def _fail_lease_probes(
+    monkeypatch: pytest.MonkeyPatch, fake_git: FakeGitClient, issue: int, *, times: int
+) -> dict[str, Any]:
+    """Make the first ``times`` probes of ``issue``'s **Lease** remote fail.
+
+    Returns a record of the failures still to come and when each probe ran.
+    """
+    real_probe = fake_git.probe_remote_ref
+    record: dict[str, Any] = {"left": times, "at": []}
+
+    def probe(remote: str, ref: str) -> str | None:
+        if ref == lease_ref(issue):
+            record["at"].append(time.monotonic())
+            if record["left"]:
+                record["left"] -= 1
+                raise git_module.GitError(
+                    ["git", "ls-remote", remote, ref], 128, "no route to host"
+                )
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
+    return record
+
+
+class _PreparationReadFailsGitHubClient(FakeGitHubClient):
+    """A tracker whose **Dynamic route** preparation read of one issue fails once.
+
+    Only the read ``refresh_for_preparation`` makes fails, so the failure lands
+    at the same step whatever order the driver and the Lane threads read in.
+    Pair it with :func:`_no_preparation_ahead`, so that read is the Lane
+    Pickup's own.
+    """
+
+    def __init__(self, *, unreadable: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._unreadable = unreadable
+        self.refusals = 0
+
+    def issue_view(self, number: int) -> gh_module.Issue:
+        preparing = any(
+            frame.function == "refresh_for_preparation"
+            for frame in inspect.stack(context=0)
+        )
+        if number == self._unreadable and preparing and not self.refusals:
+            self.refusals += 1
+            raise gh_module.GhError(
+                ["gh", "issue", "view", str(number)], 1, "HTTP 502"
+            )
+        return super().issue_view(number)
+
+
+def _no_preparation_ahead(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prepare no route ahead of a Lane, so each preparation read is a Pickup's."""
+    monkeypatch.setattr(
+        loop_module._ParallelLoop, "_prepare_rolling_pool_ahead", lambda self: None
+    )
+
+
+def _record_pin_spends(monkeypatch: pytest.MonkeyPatch) -> list[int | None]:
+    """Record the Pin each :meth:`spend_pin` call spends, in order."""
+    spent: list[int | None] = []
+    real_spend = loop_module._Loop.spend_pin
+
+    def spend(self: Any) -> None:
+        spent.append(self.live_pin)
+        real_spend(self)
+
+    monkeypatch.setattr(loop_module._Loop, "spend_pin", spend)
+    return spent
+
+
+def _lane_starts(events: list[dict[str, Any]]) -> list[int]:
+    return [e["issue"] for e in events if e["type"] == "wrapper.contribution.start"]
+
+
+def test_a_failed_lease_probe_of_a_parallel_safe_pin_keeps_its_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """An unread Lease is not an answer about the Pin, so it keeps the Lane (#645).
+
+    The walk had already taken the Pin out of the Rolling cache when its Lease
+    probe failed, and that used to refuse it for the Run: ``--issue 43 1``
+    spent its only unit on #41.
+    """
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    probes = _fail_lease_probes(monkeypatch, fake_git, 43, times=1)
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    assert probes["left"] == 0
+    assert _bindings(_logged_events(tmp_path)) == [(43, "pin")]
+
+
+def test_serial_work_waits_while_a_parallel_safe_pin_is_paced(
+    tmp_path, monkeypatch
+) -> None:
+    """Serial-required work does not take the turn a paced Pin is waiting for (#645).
+
+    Putting the Pin back frees its Lane, which leaves the pipeline quiescent
+    until the paced retry. A serial Iteration latched in that gap would spend
+    ``--issue 43 1``'s only unit before the Pin gets its Lane.
+    """
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.05)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    probes = _fail_lease_probes(monkeypatch, fake_git, 43, times=2)
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    events = _logged_events(tmp_path)
+    assert probes["left"] == 0
+    assert _bindings(events) == [(43, "pin")]
+    assert _lane_starts(events) == [43]
+
+
+def test_a_failed_worktree_add_for_a_parallel_safe_pin_keeps_its_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """A worktree that could not be cut says nothing about the Pin (#645)."""
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    real_add = fake_git.add_worktree
+    failures = {"left": 1}
+
+    def add_once_failing(path: Path, *, branch: str, base: str):
+        if Path(path).name == "issue-43" and failures["left"]:
+            failures["left"] -= 1
+            raise git_module.GitError(["git", "worktree", "add"], 128, "disk full")
+        return real_add(path, branch=branch, base=base)
+
+    monkeypatch.setattr(fake_git, "add_worktree", add_once_failing)
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    assert failures["left"] == 0
+    assert _bindings(_logged_events(tmp_path)) == [(43, "pin")]
+
+
+def test_a_failed_base_revision_read_for_a_parallel_safe_pin_keeps_its_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """A base revision that could not be read says nothing about the Pin (#645)."""
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    real_head = fake_git.head_sha
+    failures = {"left": 1}
+
+    def head_once_failing_for_a_lane() -> str:
+        caller = inspect.currentframe().f_back.f_code.co_name
+        if caller == "_drive_lane_lifecycle" and failures["left"]:
+            failures["left"] -= 1
+            raise git_module.GitError(["git", "rev-parse", "HEAD"], 128, "busy")
+        return real_head()
+
+    monkeypatch.setattr(fake_git, "head_sha", head_once_failing_for_a_lane)
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    assert failures["left"] == 0
+    assert _bindings(_logged_events(tmp_path)) == [(43, "pin")]
+
+
+def test_a_failed_lease_probe_of_an_uncapped_pin_still_works_it_first(
+    tmp_path, monkeypatch
+) -> None:
+    """With no cap the Pin binds first, and the Run works everything (#645).
+
+    It used to refuse the Pin for the Run, work #41 and #42, and end
+    ``preflight_failed`` over a Pin it never worked.
+    """
+    fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    _fail_lease_probes(monkeypatch, fake_git, 43, times=1)
+
+    exit_code = asyncio.run(loop_module.run(_pinned_config(43, max_iterations=0)))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(43, "pin"), (41, "order"), (42, "order")]
+    assert _lane_starts(events)[0] == 43
+    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [41, 42, 43]
+    run_ends = [e["outcome"] for e in events if e["type"] == "wrapper.run.end"]
+    assert "preflight_failed" not in run_ends
+    assert exit_code == 0
+
+
+def test_a_pin_whose_lease_probe_keeps_failing_is_retried_at_a_paced_rate(
+    tmp_path, monkeypatch
+) -> None:
+    """A Pin re-cached after an unread failure is probed at most once per poll (#645).
+
+    While its Lease probe keeps failing, no other candidate takes a Lane in its
+    place, and no retry follows another sooner than one idle poll interval.
+    """
+    interval = 0.05
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", interval)
+    failing = 4
+    probes = _fail_lease_probes(monkeypatch, fake_git, 43, times=failing)
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_pinned_config(43, max_iterations=0)), timeout=30
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    assert probes["left"] == 0
+    # The failing probes and the one that finally answered.
+    attempts = probes["at"][: failing + 1]
+    gaps = [later - earlier for earlier, later in itertools.pairwise(attempts)]
+    assert all(gap >= interval * 0.99 for gap in gaps), gaps
+    assert len(attempts) <= (attempts[-1] - attempts[0]) / interval + 1
+    assert _bindings(events)[0] == (43, "pin")
+    assert _lane_starts(events)[0] == 43
+
+
+def test_a_pin_another_run_holds_is_spent_on_the_lane_path(
+    tmp_path, monkeypatch
+) -> None:
+    """A rival's live Lease is an answer about the Pin, so it spends it (#645).
+
+    It is spent before any other Lane binds, so later walks hold no Lane for
+    it, and nothing names it ``pin`` again.
+    """
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    _rival_lease(fake_git, 43, repository="x/y")
+    spent = _record_pin_spends(monkeypatch)
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_pinned_config(43, max_iterations=0)), timeout=30
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    assert spent[:1] == [43]
+    assert _bindings(events) == [(41, "order"), (42, "order")]
+    skips = [
+        e["reason"]
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped" and e["issue"] == 43
+    ]
+    assert skips == ["held by another Run's live Lease"]
+
+
+def test_a_pin_routing_refuses_is_spent_on_the_lane_path(
+    tmp_path, monkeypatch
+) -> None:
+    """A ``task-type:`` label routing refuses is an answer about the Pin (#645)."""
+    _wire_parallel_safe_pin(tmp_path, monkeypatch, pin_labels=["task-type:bogus"])
+    spent = _record_pin_spends(monkeypatch)
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_pinned_config(43, max_iterations=0)), timeout=30
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    assert spent[:1] == [43]
+    assert _bindings(events) == [(41, "order"), (42, "order")]
+    skips = [
+        e["reason"]
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped" and e["issue"] == 43
+    ]
+    assert len(skips) == 1 and skips[0].startswith("routing refused:")
+
+
+def test_a_non_pin_whose_lease_probe_fails_is_still_refused_for_the_run(
+    tmp_path, monkeypatch
+) -> None:
+    """Only the Pin is re-cached: any other unread Lease still passes it over (#645)."""
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    probes = _fail_lease_probes(monkeypatch, fake_git, 41, times=1)
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_pinned_config(43, max_iterations=0)), timeout=30
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    assert probes["left"] == 0
+    assert _bindings(events) == [(43, "pin"), (42, "order")]
+    skips = [
+        e["reason"]
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped" and e["issue"] == 41
+    ]
+    assert skips == ["Lease could not be taken (remote unreadable)"]
+
+
+def test_a_serial_pins_lease_outage_costs_one_unit(tmp_path, monkeypatch) -> None:
+    """The Pin waits for the Lease remote on reads, not on spent Iterations (#645).
+
+    The tracker still shows the Pin while only the Lease remote is down, so a
+    wait that polled the tracker alone returned at once and each retry spent a
+    unit. Three failed probes now cost one: a cap of 2 still works the Pin.
+    """
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    probes = _fail_lease_probes(monkeypatch, fake_git, 44, times=3)
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
+
+    events = _logged_events(tmp_path)
+    assert probes["left"] == 0
+    assert _bindings(events) == [(44, "pin")]
+    iterations = [e for e in events if e["type"] == "wrapper.iteration.start"]
+    assert len(iterations) == 2
+
+
+def test_a_failed_preparation_read_of_a_parallel_safe_pin_keeps_its_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """A Dynamic route preparation read of the Pin that failed keeps its Lane (#645).
+
+    It used to refuse the Pin with ``dynamic route unavailable: current
+    candidate eligibility unavailable`` and bind #41 with the only unit.
+    """
+    fake_gh, _fake_git = _wire_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        gh_cls=_PreparationReadFailsGitHubClient,
+        unreadable=43,
+    )
+    _no_preparation_ahead(monkeypatch)
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    asyncio.run(
+        loop_module.run(_dynamic_parallel_config(issue_pin=43, max_iterations=1))
+    )
+
+    assert isinstance(fake_gh, _PreparationReadFailsGitHubClient)
+    assert fake_gh.refusals == 1
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(43, "pin")]
+
+
+def test_a_non_pin_whose_preparation_read_fails_is_still_refused_for_the_run(
+    tmp_path, monkeypatch
+) -> None:
+    """Only the Pin is re-cached after a failed preparation read (#645)."""
+    fake_gh, _fake_git = _wire_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        gh_cls=_PreparationReadFailsGitHubClient,
+        unreadable=41,
+    )
+    _no_preparation_ahead(monkeypatch)
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_dynamic_parallel_config(issue_pin=43, max_iterations=0)),
+            timeout=30,
+        )
+    )
+
+    assert isinstance(fake_gh, _PreparationReadFailsGitHubClient)
+    assert fake_gh.refusals == 1
+    events = _logged_events(tmp_path)
+    assert 41 not in [issue for issue, _reason in _bindings(events)]
+    skips = [
+        e["reason"]
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped" and e["issue"] == 41
+    ]
+    assert skips == [
+        "dynamic route unavailable: current candidate eligibility unavailable"
+    ]
+
+
 def test_each_lanes_final_dynamic_route_is_published_to_its_own_issue(
     tmp_path, monkeypatch
 ) -> None:
