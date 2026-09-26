@@ -1259,7 +1259,7 @@ class TestTakeReportsWhereInTheOrderItLooked:
 # --------------------------------------------------------------------------- #
 
 
-class TestRequeue:
+class TestRecache:
     def test_goes_back_at_the_head_quarantined(self) -> None:
         pool = _pool(ScriptedSource([_snapshot([7, 31, 12])]))
         pool.start()
@@ -1267,7 +1267,7 @@ class TestRequeue:
         item = pool.take().item
         assert item is not None and item.ref == 31
 
-        pool.requeue(item, retry_after=1.0)
+        pool.recache(item, retry_after=1.0)
 
         assert pool.candidate_refs == (31, 12)
         assert pool.unavailable_count == 1
@@ -1280,7 +1280,7 @@ class TestRequeue:
         pool.start()
         item = pool.take().item
         assert item is not None and item.ref == 7
-        pool.requeue(item, retry_after=1.0)
+        pool.recache(item, retry_after=1.0)
         source.pickup_calls.clear()
 
         waiting = pool.take()
@@ -1302,7 +1302,7 @@ class TestRequeue:
         pool.start()
         item = pool.take().item
         assert item is not None
-        pool.requeue(item, retry_after=1.0)
+        pool.recache(item, retry_after=1.0)
         first[0] = None
         clock.advance(1.0)
 
@@ -1317,7 +1317,7 @@ class TestRequeue:
         pool.start()
         item = pool.take().item
         assert item is not None
-        pool.requeue(item, retry_after=1.0)
+        pool.recache(item, retry_after=1.0)
 
         pool.confirm_terminal_outcome()
         source.pickup_calls.clear()
@@ -1328,12 +1328,12 @@ class TestRequeue:
         assert waiting.item is None
         assert source.pickup_calls == []
 
-    def test_a_requeued_candidate_keeps_a_quiescent_pool_from_ending(self) -> None:
+    def test_a_recached_candidate_keeps_a_quiescent_pool_from_ending(self) -> None:
         source = ScriptedSource([_snapshot([7])])
         pool = _pool(source, lane_first=lambda: 7)
         pool.start()
         item = pool.take().item
         assert item is not None
-        pool.requeue(item, retry_after=1.0)
+        pool.recache(item, retry_after=1.0)
 
         assert pool.confirm_terminal_outcome() is None

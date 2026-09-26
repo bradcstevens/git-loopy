@@ -131,7 +131,7 @@ class _CachedCandidate:
     quarantined: bool = False
     #: The :attr:`RollingPool.clock` reading before which :meth:`RollingPool.take`
     #: must not read this candidate again (#645). Set only by
-    #: :meth:`RollingPool.requeue`, and kept across a refresh, so a candidate
+    #: :meth:`RollingPool.recache`, and kept across a refresh, so a candidate
     #: put back after a read that did not happen is retried at a paced rate.
     not_before: float = 0.0
 
@@ -374,7 +374,7 @@ class RollingPool:
             self._entries.remove(entry)
         return PoolTake(item=None, position=None, considered=len(walked))
 
-    def requeue(self, item: AfkReadyItem, *, retry_after: float) -> None:
+    def recache(self, item: AfkReadyItem, *, retry_after: float) -> None:
         """Put a taken candidate back at the head of the cache (#645).
 
         :meth:`take` removes the candidate it validates, so a **Lane Pickup**
@@ -619,7 +619,7 @@ class RollingPool:
             if fresh is None:
                 continue
             # Still listed by an authoritative read: worth validating again,
-            # though no sooner than a requeue's pacing allows (#645).
+            # though no sooner than a recache's pacing allows (#645).
             survivors.append(
                 _CachedCandidate(
                     candidate=fresh, quarantined=False, not_before=entry.not_before

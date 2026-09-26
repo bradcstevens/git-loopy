@@ -567,7 +567,7 @@ class RollingScheduler:
 
         Until it binds, refill waits behind it: a setup step whose read did not
         happen puts the Pin back to take the next Lane
-        (:meth:`release` with ``requeue_after``), and a Lane filled behind it
+        (:meth:`release` with ``retry_after``), and a Lane filled behind it
         in the meantime could bind first.
         """
         return self.pool.lane_first() in self._in_setup
@@ -599,7 +599,7 @@ class RollingScheduler:
         return tuple(reservations)
 
     def release(
-        self, reservation: Reservation, *, requeue_after: float | None = None
+        self, reservation: Reservation, *, retry_after: float | None = None
     ) -> None:
         """Release a provisional reservation whose setup failed (#219 §3.3).
 
@@ -609,16 +609,16 @@ class RollingScheduler:
         complete membership refresh re-lists it, because it is still open and
         still carries both labels.
 
-        ``requeue_after`` puts the candidate straight back at the head of the
+        ``retry_after`` puts the candidate straight back at the head of the
         cache instead, to be read again no sooner than that many seconds
-        (:meth:`~git_loopy.rolling_pool.RollingPool.requeue`, #645). It is for
+        (:meth:`~git_loopy.rolling_pool.RollingPool.recache`, #645). It is for
         a ``parallel-safe`` **Pin** whose setup failed on a read that did not
         happen, which still owns the next Lane.
         """
         self._lanes_held.pop(reservation.lane_id, None)
         self._in_setup.discard(reservation.item.ref)
-        if requeue_after is not None:
-            self.pool.requeue(reservation.item, retry_after=requeue_after)
+        if retry_after is not None:
+            self.pool.recache(reservation.item, retry_after=retry_after)
 
     def start_session(
         self,

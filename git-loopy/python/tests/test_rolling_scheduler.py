@@ -1000,19 +1000,19 @@ def test_no_lane_fills_behind_the_pin_while_its_lane_is_in_setup() -> None:
     assert again == ()
 
 
-def test_releasing_the_pin_for_a_requeue_puts_it_back_first() -> None:
+def test_releasing_the_pin_for_a_recache_puts_it_back_first() -> None:
     scheduler, _source, clock = _scheduler_with_clock([13, 11, 12], lane_cap=3)
     scheduler.pool.lane_first = lambda: 13
     scheduler.start()
     (reservation,) = scheduler.reserve()
 
-    scheduler.release(reservation, requeue_after=1.0)
-    requeued = scheduler.pool.candidate_refs
+    scheduler.release(reservation, retry_after=1.0)
+    recached = scheduler.pool.candidate_refs
     waiting = scheduler.reserve()
     clock.advance(1.0)
     retried = scheduler.reserve()
 
-    assert requeued == (13, 11, 12)
+    assert recached == (13, 11, 12)
     assert waiting == ()
     assert [r.item.ref for r in retried] == [13]
 
