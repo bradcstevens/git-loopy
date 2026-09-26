@@ -1545,8 +1545,9 @@ def test_this_boundary_is_not_yet_a_way_to_publish_without_the_full_proof() -> N
     """A tripwire, not a feature: publication has no entry point of its own.
 
     ADR-0059 requires that a stable Release is published only behind the whole
-    pre-tag proof *and* a bounded real-host smoke, and that smoke does not exist
-    yet. A module-level CLI or a workflow step reaching in here before the
+    pre-tag proof *and* a bounded real-host smoke, and that smoke
+    (``git_loopy.release_smoke``) is not yet composed into the Promotion. A
+    module-level CLI or a workflow step reaching in here before the
     composed Promotion exists would be exactly the shortcut the ADR forbids, so
     the absence is asserted rather than left to intention. The composed slice
     replaces this test with its own wiring.

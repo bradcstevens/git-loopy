@@ -763,6 +763,21 @@ remote back rather than by retrying blindly
 _Avoid_: Promotion, tagging alone (a tag does not prove a complete publication),
 release, deploy, upload, push (the git operation).
 
+**Release smoke**:
+The bounded, release-only live check of one **Publication input**: install *its*
+proved archive into a clean installation, then drive the public operator commands —
+init cancelled and saved, `runs`, `attach` and **Detach**, the announced helper
+fallback, and the two-stage acknowledged **Stop** — against disposable work on the
+`local` and `github-actions` **Execution hosts**. It spends only an explicitly
+configured credential inside finite work, time and spend limits, uses only a sandbox
+repository marked disposable, and reclaims only what it provably owns. Its verdict is
+`passed`, `failed`, `blocked` or `inconclusive`, bound to the candidate's proof, so it
+cannot be reused for changed content. It reaches live services, so it is never an
+Integration **feedback loop**, and it replaces none of the offline fault matrix
+([ADR-0059](docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
+_Avoid_: smoke test (unqualified), live CI, e2e run, **Rehearsal** (which proves content,
+not the operator path).
+
 **Distribution mode**:
 The explicit promise one Release makes about what it carries. `source-only` publishes
 committed notes and source archives without launching helper-build, signing, attachment,
