@@ -508,6 +508,55 @@ class TestTerminalOutcome:
         assert pool.confirm_terminal_outcome() is None
         assert pool.candidate_refs == (31,)
 
+    def test_terminal_survivors_stay_in_membership_order_after_a_lane_refusal(
+        self,
+    ) -> None:
+        """A Lane refusal re-lists the candidate behind the cache (#643).
+
+        The terminal record still names survivors in the Membership read's
+        §3.2 order. A Blocked candidate the Lane never took keeps its place;
+        the refused candidate comes back as a newcomer and must not jump ahead
+        of it in ``terminal_survivors``.
+        """
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        refused: set[int] = set()
+        source = ScriptedSource(
+            [
+                MembershipSnapshot(
+                    candidates=(
+                        _candidate(42),
+                        _candidate(
+                            43,
+                            blocked_by=BlockedByRead(
+                                total_count=1,
+                                nodes=(BlockerNode(ref="x/y#7", state="open"),),
+                            ),
+                        ),
+                    ),
+                    complete=True,
+                )
+            ]
+        )
+        pool = _pool(
+            source,
+            eligible=lambda candidate: (
+                candidate.ref not in refused and is_lane_candidate(candidate)
+            ),
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+        taken = pool.take()
+
+        assert taken.item is not None and taken.item.ref == 42
+        refused.add(42)
+
+        assert pool.confirm_terminal_outcome() == "all_skipped"
+        assert [candidate.ref for candidate in pool.terminal_survivors] == [42, 43]
+        # The cache stays FIFO. Reordering it would move a Queue row under a Lane.
+        assert pool.candidate_refs == (43, 42)
+
 
 # --------------------------------------------------------------------------- #
 # Unmet-demand refresh triggering + backoff (#219 §2.2-2.7)                    #

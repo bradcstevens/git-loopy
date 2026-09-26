@@ -1223,9 +1223,26 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
     assert _EVENT_SCHEMA["contract_version"] == "2.12"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
+        "refusals",
+    ]
+    assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_entry_keys"] == [
         "issue",
         "reason",
     ]
+
+
+def test_the_production_run_end_projects_the_pinned_refusal_entry() -> None:
+    """``refusals`` is the optional field; each entry requires both keys.
+
+    Driven through the composer the Rolling terminal decision appends, the
+    same way the Run-start readback is projected, so a renamed key fails here
+    rather than in a notice that silently skips the entry.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]
+    entry = loop_module.run_end_refusal(42, "blocked_by_open_dependency: x/y#7")
+
+    assert contract["refusals_optional"] == ["refusals"]
+    assert list(entry) == contract["refusals_entry_keys"]
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -1527,7 +1544,8 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         # #643: the candidates a Rolling terminal decision refused, which the
         # Unbound-Run notice reads as the Pool. Optional, so the wire stays 1.2.
         "wrapper.run.end": {
-            "refusals_optional": ["issue", "reason"],
+            "refusals_optional": ["refusals"],
+            "refusals_entry_keys": ["issue", "reason"],
             "refusals_note": (
                 "Contract 2.12, #643. Rolling Pool-cache all_blocked and "
                 "all_skipped endings carry one refusal per surviving candidate, "
@@ -4280,6 +4298,24 @@ def test_the_contract_states_a_task_type_labels_origin_is_unobservable() -> None
 
     assert "origin" in section
     assert "Task-type classifier" in section
+
+
+def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> None:
+    """The fixture note and §14.4 state one fact about the two advanced fixtures.
+
+    ``routing-resolution.json`` stays declared at 2.10. Its sentence about
+    ``event-schema.json`` and ``dashboard-insights.json`` must name the same
+    later advances the contract names, or a bump leaves the notes disagreeing.
+    """
+    clause = (
+        "have since advanced to 2.11 with the Run-start issue source and "
+        "2.12 with Run-end refusals"
+    )
+    policy = " ".join(_ROUTING_RESOLUTION["static_route_notes"]["policy"].split())
+    written = " ".join(_written_contract_text().split())
+
+    assert clause in policy
+    assert clause in written
 
 
 @pytest.mark.parametrize(("fixture", "expected"), [

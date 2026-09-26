@@ -62,6 +62,19 @@ def _entry(term: str) -> str:
     raise AssertionError(f"CONTEXT.md has no glossary entry for **{term}**")
 
 
+def test_an_all_skipped_notice_counts_refusal_kinds_not_only_pickup_skips() -> None:
+    """A Rolling end's ``refusals`` count, including candidates that never reached Pickup.
+
+    **Pickup skip** is a candidate the runner walked past at Pickup. A Blocked
+    survivor recorded only on a Rolling Run end had no Pickup.
+    """
+    entry = _entry("Unbound-Run notice")
+
+    assert "counts each refusal kind" in entry
+    assert "`refusals`" in entry
+    assert "counts each **Pickup skip** kind" not in entry
+
+
 def test_the_glossary_names_the_terminal_owner() -> None:
     """ADR-0024's one component responsible for the terminal's mode state."""
     entry = _entry("Terminal owner")

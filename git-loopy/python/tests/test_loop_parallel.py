@@ -7182,50 +7182,82 @@ class _NoProgressFakeClient(_ParallelFakeClient):
     _session_cls = _NoProgressFakeSession
 
 
-@pytest.mark.parametrize("routing_refused", [False, True])
+@pytest.mark.parametrize(
+    ("routing_refused", "lane_refused_first"),
+    [(False, False), (True, False), (True, True)],
+    ids=["all_blocked", "lane_refused_last", "lane_refused_first"],
+)
 def test_rolling_terminal_end_records_ordered_refusals_and_notice(
-    tmp_path, monkeypatch, routing_refused
+    tmp_path, monkeypatch, routing_refused, lane_refused_first
 ) -> None:
     from git_loopy.unbound_run_notice import unbound_run_notice
 
     fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
-    fake_gh.seed_issue(_make_issue(
-        42,
-        labels=["ready-for-agent", "parallel-safe"],
-        blocked_by=BlockedByRead(
-            total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
-        ),
-    ))
-    fake_gh.seed_issue(_make_issue(
-        43,
-        labels=[
-            "ready-for-agent", "parallel-safe",
-            *(["task-type:bogus"] if routing_refused else []),
-        ],
-        blocked_by=(
-            BlockedByRead(total_count=0)
-            if routing_refused
-            else BlockedByRead(
-                total_count=2,
-                nodes=(
-                    BlockerNode(ref="other/repo#9", state="open"),
-                    BlockerNode(ref="x/y#42", state="open"),
-                ),
-            )
-        ),
-    ))
+    if lane_refused_first:
+        # The Lane-refused candidate is first in §3.2 order. A cache that
+        # appends it on release would record #43 ahead of #42.
+        fake_gh.seed_issue(_make_issue(
+            42,
+            labels=["ready-for-agent", "parallel-safe", "task-type:bogus"],
+            blocked_by=BlockedByRead(total_count=0),
+        ))
+        fake_gh.seed_issue(_make_issue(
+            43,
+            labels=["ready-for-agent", "parallel-safe"],
+            blocked_by=BlockedByRead(
+                total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+            ),
+        ))
+    else:
+        fake_gh.seed_issue(_make_issue(
+            42,
+            labels=["ready-for-agent", "parallel-safe"],
+            blocked_by=BlockedByRead(
+                total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+            ),
+        ))
+        fake_gh.seed_issue(_make_issue(
+            43,
+            labels=[
+                "ready-for-agent", "parallel-safe",
+                *(["task-type:bogus"] if routing_refused else []),
+            ],
+            blocked_by=(
+                BlockedByRead(total_count=0)
+                if routing_refused
+                else BlockedByRead(
+                    total_count=2,
+                    nodes=(
+                        BlockerNode(ref="other/repo#9", state="open"),
+                        BlockerNode(ref="x/y#42", state="open"),
+                    ),
+                )
+            ),
+        ))
     assert asyncio.run(asyncio.wait_for(loop_module.run(cfg), timeout=20)) == (
         loop_module.exit_code_for("all_skipped" if routing_refused else "all_blocked")
     )
     events = _logged_events(tmp_path)
     end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert end["outcome"] == ("all_skipped" if routing_refused else "all_blocked")
-    assert end["refusals"][0] == {
-        "issue": 42, "reason": "blocked_by_open_dependency: x/y#7"
-    }
     assert [entry["issue"] for entry in end["refusals"]] == [42, 43]
     skips = [e for e in events if e["type"] == "wrapper.pickup.skipped"]
-    if routing_refused:
+    if lane_refused_first:
+        assert len(skips) == 1 and skips[0]["issue"] == 42
+        assert skips[0]["reason"].startswith("routing refused:")
+        assert end["refusals"] == [
+            {"issue": 42, "reason": skips[0]["reason"]},
+            {"issue": 43, "reason": "blocked_by_open_dependency: x/y#7"},
+        ]
+        assert unbound_run_notice(events, repository="x/y") == [
+            "No workable issues: this Run bound nothing and ended all_skipped.",
+            "The Run ended because all 2 ready-for-agent issues were skipped: "
+            "blocked_by_open_dependency (1), routing refused (1).",
+        ]
+    elif routing_refused:
+        assert end["refusals"][0] == {
+            "issue": 42, "reason": "blocked_by_open_dependency: x/y#7"
+        }
         assert len(skips) == 1 and skips[0]["issue"] == 43
         assert skips[0]["reason"].startswith("routing refused:")
         assert end["refusals"][1]["reason"] == skips[0]["reason"]
@@ -7236,6 +7268,9 @@ def test_rolling_terminal_end_records_ordered_refusals_and_notice(
         ]
     else:
         assert skips == []
+        assert end["refusals"][0] == {
+            "issue": 42, "reason": "blocked_by_open_dependency: x/y#7"
+        }
         assert end["refusals"][1] == {
             "issue": 43,
             "reason": "blocked_by_open_dependency: other/repo#9, x/y#42",

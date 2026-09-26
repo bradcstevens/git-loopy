@@ -1214,7 +1214,7 @@ The few lines that tell an operator why an **Unbound Run** ended (#642). Each ou
 own reason. An empty Pool names the exclusions that emptied it; otherwise, for the github source it says
 nothing is labelled, and for any other source that the source offered nothing.
 An all-blocked Pool names the blockers outside the Pool. An all-skipped Pool counts each
-**Pickup skip** kind once per candidate. Telling a blocker inside the Pool from one outside it
+refusal kind (a **Pickup skip**, or an entry in a Rolling Run end's `refusals`) once per candidate. Telling a blocker inside the Pool from one outside it
 needs the Run's `owner/repo`. The client resolves it the way `gh` picks its default repository:
 in a fork clone that is the upstream, not `origin`. Without it, every blocker is named rather
 than risk dropping a real one. Its Pool is the `refusals` recorded on a Rolling Run's

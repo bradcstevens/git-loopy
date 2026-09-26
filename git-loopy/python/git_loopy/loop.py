@@ -4328,6 +4328,15 @@ work in flight, nothing currently refillable, no serial turn granted).
 """
 
 
+def run_end_refusal(issue: int | str, reason: str) -> dict[str, int | str]:
+    """One ``wrapper.run.end`` ``refusals`` entry (contract 2.12, #643).
+
+    Both keys are required. The field that carries the list is optional;
+    this entry is not a partial record.
+    """
+    return {"issue": issue, "reason": reason}
+
+
 def _serial_required(items: Sequence[AfkReadyItem]) -> list[AfkReadyItem]:
     """The **serial-required** items of a full-Pool peek, in Pool order.
 
@@ -5308,7 +5317,7 @@ class _ParallelLoop:
                             else:
                                 reason = self._rolling_refused[candidate.ref]
                             self._terminal_refusals.append(
-                                {"issue": candidate.ref, "reason": reason}
+                                run_end_refusal(candidate.ref, reason)
                             )
                     return (
                         terminal_outcome,

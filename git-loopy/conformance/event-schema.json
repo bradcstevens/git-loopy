@@ -135,7 +135,8 @@
   },
   "payload_contracts": {
     "wrapper.run.end": {
-      "refusals_optional": ["issue", "reason"],
+      "refusals_optional": ["refusals"],
+      "refusals_entry_keys": ["issue", "reason"],
       "refusals_note": "Contract 2.12, #643. Rolling Pool-cache all_blocked and all_skipped endings carry one refusal per surviving candidate, in selection order, with the wrapper.pickup.skipped reason vocabulary; no other ending carries it. It is not a Pool collection. A consumer ignores malformed entries without losing outcome, and an absent field preserves the old notice. Event schema compatibility stays 1.2."
     },
     "calibration.trial.start": {

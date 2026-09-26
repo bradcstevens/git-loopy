@@ -501,6 +501,11 @@ class RollingPool:
         nobody could bind work out of is entitled to report — the same
         discipline :func:`~git_loopy.sources.confirms_empty_pool` keeps for
         emptiness.
+
+        Survivors stored for a Rolling Run end are in the terminal Membership
+        read's §3.2 order, not cache order. A Lane refusal is re-listed behind
+        candidates the Lane never took; the refusal record must not inherit
+        that append (#643).
         """
         self._terminal_survivors = ()
         snapshot = self._refresh_now()
@@ -530,7 +535,21 @@ class RollingPool:
             for entry in self._entries
         ):
             return None
-        survivors = tuple(entry.candidate for entry in self._entries)
+        # Cache order is not §3.2 order once a Lane has released a candidate:
+        # the next refresh appends that newcomer behind whoever the Lane never
+        # took (#643). The refusal record names the read's selection order, so
+        # this list follows the snapshot. The cache itself stays FIFO — Lanes
+        # are still walking it.
+        selection = {
+            candidate.ref: index
+            for index, candidate in enumerate(snapshot.candidates)
+        }
+        survivors = tuple(
+            sorted(
+                (entry.candidate for entry in self._entries),
+                key=lambda candidate: selection.get(candidate.ref, len(selection)),
+            )
+        )
         unreadable = tuple(
             candidate.ref
             for candidate in survivors
