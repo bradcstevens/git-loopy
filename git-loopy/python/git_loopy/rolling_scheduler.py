@@ -561,11 +561,33 @@ class RollingScheduler:
         """Perform the Run-startup **Pool** refresh (#219 §2.1)."""
         self.pool.start()
 
+    @property
+    def lane_first_in_setup(self) -> bool:
+        """Whether the Lane the **Pin** owns is reserved and not yet bound (#645).
+
+        Until it binds, refill waits behind it: a setup step whose read did not
+        happen puts the Pin back to take the next Lane
+        (:meth:`release` with ``requeue_after``), and a Lane filled behind it
+        in the meantime could bind first.
+        """
+        return self.pool.lane_first() in self._in_setup
+
+    @property
+    def lane_first_awaited(self) -> bool:
+        """Whether the next Lane is held for the **Pin** until it binds (#645).
+
+        True while the Pin's Lane is in setup (:attr:`lane_first_in_setup`)
+        and while the Pin, put back after an unread setup step, waits for its
+        paced retry. Freeing its Lane leaves the pipeline quiescent in that
+        wait, so serial work latched then would take the turn the Pin is owed.
+        """
+        return self.lane_first_in_setup or self.pool.lane_first_paced()
+
     def reserve(self) -> tuple[Reservation, ...]:
         """Reserve every currently refillable **Lane** in one decision (#219 §1.3)."""
         self.pool.service(refillable=self.refillable)
         reservations: list[Reservation] = []
-        while self.refillable > 0:
+        while self.refillable > 0 and not self.lane_first_in_setup:
             take = self.pool.take()
             item = take.item
             if item is None:
@@ -587,7 +609,9 @@ class RollingScheduler:
             self._phase = PHASE_ROLLING
         return tuple(reservations)
 
-    def release(self, reservation: Reservation) -> None:
+    def release(
+        self, reservation: Reservation, *, requeue_after: float | None = None
+    ) -> None:
         """Release a provisional reservation whose setup failed (#219 §3.3).
 
         Frees the **Lane** and leaves no trace: no **Lane contribution**, no
@@ -595,9 +619,17 @@ class RollingScheduler:
         candidate stays eligible for a later validated pickup — the next
         complete membership refresh re-lists it, because it is still open and
         still carries both labels.
+
+        ``requeue_after`` puts the candidate straight back at the head of the
+        cache instead, to be read again no sooner than that many seconds
+        (:meth:`~git_loopy.rolling_pool.RollingPool.requeue`, #645). It is for
+        a ``parallel-safe`` **Pin** whose setup failed on a read that did not
+        happen, which still owns the next Lane.
         """
         self._lanes_held.pop(reservation.lane_id, None)
         self._in_setup.discard(reservation.item.ref)
+        if requeue_after is not None:
+            self.pool.requeue(reservation.item, retry_after=requeue_after)
 
     def start_session(
         self,

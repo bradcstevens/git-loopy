@@ -109,6 +109,32 @@ def test_an_unreadable_remote_denies_the_pickup_rather_than_ending_the_run(
     assert any("could not read" in warning for warning in warnings)
 
 
+def test_asking_whether_the_remote_answers_reads_and_claims_nothing(
+    tmp_path: Path,
+) -> None:
+    """A waiter asks the Lease remote without taking a Lease (#645)."""
+    git = FakeGitClient(tmp_path)
+    reachable = {"up": False}
+    real_probe = git.probe_remote_ref
+
+    def probe(remote: str, ref: str) -> str | None:
+        if not reachable["up"]:
+            raise GitError(["git", "ls-remote"], 128, "no route to host")
+        return real_probe(remote, ref)
+
+    git.probe_remote_ref = probe  # type: ignore[method-assign]
+    lifecycle, warnings, _ = build(tmp_path, git=git)
+
+    down = lifecycle.readable(390)
+    reachable["up"] = True
+    up = lifecycle.readable(390)
+
+    assert (down, up) == (False, True)
+    assert git.probe_remote_ref("origin", lease_ref(390)) is None
+    assert lifecycle.held() == ()
+    assert warnings == []
+
+
 def test_stealing_a_dead_runs_expired_lease_warns_and_proceeds(tmp_path: Path) -> None:
     git = FakeGitClient(tmp_path)
     dead = LeaseTransport(git, remote="origin", repository=REPOSITORY)
