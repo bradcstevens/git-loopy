@@ -266,6 +266,15 @@ mod live_terminal {
         }
     }
 
+    /// How long the harness keeps reading after the helper exits. The restore
+    /// is already written by then, so this only has to outlast PTY delivery
+    /// under load.
+    const RESTORE_DRAIN: Duration = Duration::from_secs(3);
+
+    fn left_the_alternate_screen(output: &[u8]) -> bool {
+        output.windows(8).any(|bytes| bytes == b"\x1b[?1049l")
+    }
+
     struct TerminalChild {
         child: Child,
         master: File,
@@ -347,7 +356,7 @@ mod live_terminal {
         }
 
         fn assert_interactions(&mut self, steps: &[(&str, &[u8])]) {
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut deadline = Instant::now() + Duration::from_secs(5);
             let mut output = Vec::new();
             let mut replies = 0;
             let mut next_step = 0;
@@ -397,8 +406,17 @@ mod live_terminal {
                         };
                     }
                 }
-                status = self.child.try_wait().expect("the helper is waitable");
-                if status.is_some() {
+                // An exit means the helper will write nothing more, not that
+                // the terminal has handed over everything it wrote: a Linux PTY
+                // can still hold the restore. Keep reading until it arrives or
+                // a bounded drain after the exit passes.
+                if status.is_none() {
+                    status = self.child.try_wait().expect("the helper is waitable");
+                    if status.is_some() {
+                        deadline = Instant::now() + RESTORE_DRAIN;
+                    }
+                }
+                if status.is_some() && left_the_alternate_screen(&output) {
                     break;
                 }
             }
@@ -421,8 +439,9 @@ mod live_terminal {
             assert_eq!(restored.c_lflag, self.original_mode.c_lflag);
             assert_eq!(restored.c_cc, self.original_mode.c_cc);
             assert!(
-                output.windows(8).any(|bytes| bytes == b"\x1b[?1049l"),
-                "the helper must leave the alternate screen"
+                left_the_alternate_screen(&output),
+                "the helper must leave the alternate screen within {RESTORE_DRAIN:?} of exiting: {:?}",
+                String::from_utf8_lossy(&output)
             );
         }
     }
@@ -493,5 +512,35 @@ mod live_terminal {
             .expect("the trace is written");
         terminal.assert_draws_and_accepts_quit();
         drop(trace_pipe);
+    }
+
+    /// A child that exits before its last terminal bytes are read, the way the
+    /// helper can on Linux: a grandchild writes the restore only after the
+    /// harness has already reaped the child. The hangup the session leader's
+    /// exit sends is ignored, and the grandchild reopens the terminal by path
+    /// because macOS revokes the session's open descriptors when its leader
+    /// exits.
+    fn exits_before_its_restore_is_read(restore: &str) -> Command {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!(
+                "trap '' HUP; t=$(tty <&2) || exit 1; (sleep 0.5; printf '{restore}' >\"$t\") & exit 0"
+            ))
+            .stdin(Stdio::null());
+        command
+    }
+
+    #[test]
+    fn the_harness_keeps_reading_the_terminal_after_the_helper_exits() {
+        TerminalChild::spawn(&mut exits_before_its_restore_is_read("\\033[?1049l"))
+            .assert_interactions(&[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "never-restored")]
+    fn the_harness_shows_the_terminal_when_the_restore_never_arrives() {
+        TerminalChild::spawn(&mut exits_before_its_restore_is_read("never-restored"))
+            .assert_interactions(&[]);
     }
 }
