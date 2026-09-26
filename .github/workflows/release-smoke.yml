@@ -27,7 +27,7 @@ name: Release smoke
 # Anything missing is a blocked verdict with evidence, not a skip. The evidence
 # is uploaded whatever the verdict, bound to the candidate's proof.
 #
-# Composition into the Promotion gate is #590; this workflow tags nothing.
+# The Promotion gate calls the same smoke. This workflow tags nothing.
 
 on:
   workflow_dispatch:

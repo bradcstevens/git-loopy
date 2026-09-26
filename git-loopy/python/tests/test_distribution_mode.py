@@ -236,8 +236,8 @@ class TestWorkflowJobGatingInSourceOnlyMode:
         run_text = "\n".join(
             step["run"] for step in steps if isinstance(step, dict) and "run" in step
         )
-        assert "gh release create" in run_text
-        assert "--notes-file" in run_text
+        assert "--ensure-release" in run_text
+        assert "gh release create" not in run_text
         assert "git_loopy.source_release" in run_text
 
     def test_release_promotion_operates_under_repository_distribution_mode(self) -> None:

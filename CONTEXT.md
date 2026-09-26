@@ -772,8 +772,11 @@ fallback, and the two-stage acknowledged **Stop** — against disposable work on
 configured credential inside finite work, time and spend limits, uses only a sandbox
 repository marked disposable, and reclaims only what it provably owns. Its verdict is
 `passed`, `failed`, `blocked` or `inconclusive`, bound to the candidate's proof, so it
-cannot be reused for changed content. It reaches live services, so it is never an
-Integration **feedback loop**, and it replaces none of the offline fault matrix
+cannot be reused for changed content. A **Promotion** reads that evidence
+through `confirm_smoke_evidence` and publishes nothing unless it passed for
+this publication input, on both Execution hosts. It reaches live services, so
+it is never an Integration **feedback loop**, and it replaces none of the
+offline fault matrix
 ([ADR-0059](docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
 _Avoid_: smoke test (unqualified), live CI, e2e run, **Rehearsal** (which proves content,
 not the operator path).

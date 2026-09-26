@@ -67,24 +67,18 @@ jobs:
           --archive-output "$RUNNER_TEMP/git-loopy-source.tar"
           --github-output "$GITHUB_OUTPUT"
 
-      - name: Publish stable GitHub Release
-        if: steps.release.outputs.prerelease == 'false'
+      # A Promotion already published this Release through the reconciliation
+      # boundary. Creating it again would fail a successful release. This
+      # reconciles: a match is a no-op, a mismatch refuses, an absent Release
+      # (a human prerelease tag) is created. It never pushes a tag.
+      - name: Reconcile the GitHub Release for this already-public tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "${{ steps.release.outputs.tag }}"
-          --verify-tag
-          --title "git-loopy ${{ steps.release.outputs.version }}"
-          --notes-file "${{ steps.release.outputs.notes_path }}"
-          --latest
-
-      - name: Publish prerelease GitHub Release
-        if: steps.release.outputs.prerelease == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "${{ steps.release.outputs.tag }}"
-          --verify-tag
-          --title "git-loopy ${{ steps.release.outputs.version }}"
-          --notes-file "${{ steps.release.outputs.notes_path }}"
-          --prerelease
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.source_release
+          --repository-root .
+          --tag-ref "$GITHUB_REF"
+          --distribution-mode "${{ needs.tag-preflight.outputs.distribution_mode }}"
+          --archive-output "$RUNNER_TEMP/git-loopy-source-reconcile.tar"
+          --ensure-release

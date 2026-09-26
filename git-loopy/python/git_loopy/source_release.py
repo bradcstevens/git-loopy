@@ -427,6 +427,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--distribution-mode",
         help="explicit publication distribution mode (e.g. 'source-only')",
     )
+    parser.add_argument(
+        "--ensure-release",
+        action="store_true",
+        help=(
+            "reconcile the GitHub Release for this already-public tag; "
+            "matching state is a no-op and this never pushes a tag"
+        ),
+    )
     return parser
 
 
@@ -434,6 +442,38 @@ def _release_payload(release: SourceRelease) -> dict[str, object]:
     payload = asdict(release)
     payload["notes_path"] = release.notes_path.as_posix()
     return payload
+
+
+def _ensure_release(repository_root: Path, release: SourceRelease) -> None:
+    """Reconcile the Release for a tag that is already public.
+
+    Lazy import: publication imports this module to generate archives, so a
+    module-level import back would be a cycle. This never pushes a tag.
+    """
+    from git_loopy.release_publication import (
+        ReleaseClaim,
+        ReleasePublicationError,
+        SubprocessReleaseService,
+        ensure_source_release,
+    )
+
+    shown = _run_git(
+        repository_root, "show", f"{release.commit}:{release.notes_path.as_posix()}"
+    )
+    assert isinstance(shown.stdout, str)
+    try:
+        ensure_source_release(
+            ReleaseClaim(
+                tag=release.tag,
+                version=release.version,
+                prerelease=release.prerelease,
+                notes_path=release.notes_path,
+            ),
+            shown.stdout.encode("utf-8"),
+            SubprocessReleaseService(repository_root),
+        )
+    except ReleasePublicationError as exc:
+        raise SourceReleaseError(str(exc)) from exc
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -464,6 +504,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SourceReleaseError as exc:
         print(f"source Release verification failed: {exc}", file=sys.stderr)
         return 1
+
+    if args.ensure_release:
+        try:
+            _ensure_release(args.repository_root, release)
+        except (SourceReleaseError, OSError) as exc:
+            print(f"source Release publication failed: {exc}", file=sys.stderr)
+            return 1
 
     payload = _release_payload(release)
     print(json.dumps(payload, sort_keys=True))

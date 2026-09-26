@@ -191,12 +191,13 @@ those edits are not made by the Release-version writer.
 A `vX.Y.Z` **GitHub milestone** is solely the **Promotion** trigger. Closing it
 starts the unattended Promotion: the matching line becomes stable from whatever
 stage it has reached, `release-promotion.yml` commits it as `chore(release):
-promote Release line to <VERSION>`, and its annotated `v<VERSION>` tag starts
-publication. It is the only way a stable value reaches `main`: a `major` is a
-prerelease like any other bump. On every push the workflow still tags every
-stable Release the trunk carries that no tag reaches yet, rather than whatever
-`VERSION` says at the head, so a stable commit whose tag failed to push is found
-again, even when the next issue's prerelease advance has already followed it.
+promote Release line to <VERSION>`, and `git_loopy.release_promotion` publishes
+that committed snapshot. It is the only way a stable value reaches `main`: a
+`major` is a prerelease like any other bump. On every push the same entry
+publishes every stable Release the trunk carries that no tag reaches yet,
+rather than whatever `VERSION` says at the head, so a stable commit whose
+publication failed is found again, even when the next issue's prerelease
+advance has already followed it.
 
 Promotion only accepts a milestone that exists. List them rather than inventing
 one:
@@ -215,16 +216,21 @@ taken deliberately — a closed milestone publishes without further review — a
 it is not to be re-added as an implementation detail. An agent's inferred label
 can no longer publish a stable Release on its own (ADR-0066).
 
-A Promotion needs one credential: **`RELEASE_PUBLICATION_TOKEN`**, a repository
-secret carrying `contents: write`. Publication is entered by pushing an annotated
-`v<VERSION>` tag, and a tag pushed with the workflow's own `GITHUB_TOKEN` starts
-no workflow run at all — the Release pipeline would simply never happen, with
-nothing red to say so. The Promotion is therefore refused before it commits or
-tags anything when that secret is absent, rather than leaving `main` claiming a
-stable version that was never published. It is not a signing or channel
-credential and lives outside the protected `release` environment described below,
-because a Promotion that waited on that environment's reviewers would be the
-human gate this design declined.
+A Promotion needs **`RELEASE_PUBLICATION_TOKEN`**, a repository secret carrying
+`contents: write`, and the release-smoke credential and limits
+(`RELEASE_SMOKE_TOKEN`, `RELEASE_SMOKE_REPOSITORY`, `RELEASE_SMOKE_MAX_RUNS`,
+`RELEASE_SMOKE_DEADLINE_SECONDS`, `RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS`).
+Publication pushes the proved annotated tag, and a tag pushed with the
+workflow's own `GITHUB_TOKEN` starts no workflow run at all — the Release
+pipeline would simply never happen, with nothing red to say so. A smoke whose
+credential or limits were invented is not proof. The Promotion is therefore
+refused before it commits or publishes anything when any of them is absent,
+rather than leaving `main` claiming a stable version that was never published.
+The publication token is not a signing or channel credential and lives outside
+the protected `release` environment described below, because a Promotion that
+waited on that environment's reviewers would be the human gate this design
+declined. The smoke token is the only credential the smoke spends; an ambient
+`GH_TOKEN` is never that authorization.
 
 Prereleases take no part in any of it. They consult no milestone, this workflow
 tags none, and none reaches a package channel.
@@ -273,19 +279,23 @@ uv run --project git-loopy/python --all-extras \
   --stable-commit --candidate-commit "$commit"
 ```
 
-`release-promotion.yml` runs exactly that per candidate before it creates a tag,
-and the step is `-eo pipefail`, so a refusal ends it with no tag created and
-nothing pushed. A rehearsal needs no publication credential and touches no
-tracker; it reads the trunk and writes only inside its own workspace.
+`release-promotion.yml` enters `git_loopy.release_promotion` for every untagged
+stable commit, which runs exactly that rehearsal before any tag exists. A
+refusal ends the step with no tag created and nothing pushed. A rehearsal needs
+no publication credential and touches no tracker; it reads the trunk and writes
+only inside its own workspace.
 
 Two boundaries this **does not** move. Proof is of content, so repairing a
 candidate makes a *new* candidate that has to be rehearsed again — that is what
 `confirm_publication_input` refuses on, and it is also why concurrent work on
 `main` cannot retarget a proof: the input binds a commit SHA, and a moved trunk
 is visible in `base_commit` rather than silently substituted. And the rehearsal
-is not a bypass: `source-release.yml` still gates the pushed tag, and the
-release-only real-host smoke ADR-0059 requires before a stable publication
-(below) is not yet a condition of the Promotion — composing the two is #590.
+is not a bypass: `source-release.yml` still reconciles the pushed tag, and the
+release-only real-host smoke ADR-0059 requires is a condition of the Promotion.
+`git_loopy.release_promotion` rehearses the exact commit, requires
+`confirm_smoke_evidence` to accept that proof, and only then calls
+`publish_release`. A failed, blocked, inconclusive, or borrowed smoke publishes
+nothing.
 
 ### The release smoke
 
@@ -442,12 +452,14 @@ was written about, and it is not precedent. Before a tag exists a candidate may
 instead be repaired and rehearsed again — that is the whole point of rehearsing
 first — but after it exists there is no third option.
 
-`publish_release` deliberately has no command line of its own yet, and no
-workflow calls it. ADR-0059 requires a stable publication to sit behind both the
-full pre-tag proof *and* a bounded real-host smoke, and that smoke is not yet
-composed into the Promotion; an entry point added before it is would be exactly
-the shortcut the ADR refuses. Wiring the two together is the composed Promotion's job, and until then
-`source-release.yml` remains what publishes the Release for a pushed tag.
+`publish_release` has no command line of its own. The only entry that may
+expose a tag is `python -m git_loopy.release_promotion`, and it calls
+`publish_release` only after the rehearsal and a passed smoke of that same
+proof. `source-release.yml` still runs when that tag is pushed. It reconciles
+the Release — a match is a no-op, a mismatch refuses, an absent Release for a
+human prerelease tag is created — and it never pushes a tag or attaches an
+artifact. A source-only tag does not launch helper-build, signing, attachment,
+or channel jobs; those stay gated on an artifact-bearing promise.
 
 ### Open boundary
 

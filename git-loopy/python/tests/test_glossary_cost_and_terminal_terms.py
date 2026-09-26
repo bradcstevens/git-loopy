@@ -1,8 +1,9 @@
 """Glossary terms agree with their accepted decisions (#336, ADR-0058/0059).
 
-The billed-Cost entries remain pinned to shipped code. The client/publication
-entries follow the human-confirmed next-release decisions, whose ADRs explicitly
-leave runtime acceptance outstanding; these prose checks are not that proof.
+The billed-Cost entries remain pinned to shipped code. The client entries
+follow ADR-0058, which still leaves runtime acceptance outstanding. ADR-0059's
+publication ordering is now the composed Promotion; these prose checks are not
+that proof.
 Reflowed prose keeps line wrapping from changing the asserted vocabulary.
 """
 
@@ -120,15 +121,23 @@ def test_publication_is_not_promotion_or_tagging_alone() -> None:
     assert "a tag does not prove a complete publication" in entry
 
 
-def test_the_new_decisions_do_not_claim_runtime_acceptance() -> None:
+def test_init_still_leaves_runtime_acceptance_outstanding() -> None:
     assert (
         "the next release must prove the behavior below, rather than treat this "
         "decision as evidence that it is already implemented"
     ) in _prose(ADR_0058)
+
+
+def test_publication_status_names_the_composed_promotion() -> None:
+    """ADR-0059's ordering is now the unattended Promotion, not a future claim."""
+    prose = _prose(ADR_0059)
+
+    assert "git_loopy.release_promotion" in prose
+    assert "passed release smoke" in prose
     assert (
         "publication automation must be brought into conformance before the next "
         "release claims this guarantee"
-    ) in _prose(ADR_0059)
+    ) not in prose
 
 
 def test_ai_credits_is_the_named_cost_unit() -> None:

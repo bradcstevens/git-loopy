@@ -58,9 +58,10 @@ def test_publication_verifies_archive_identity_and_uses_committed_authored_notes
 
     assert "git_loopy.source_release" in run_text
     assert "--archive-output" in run_text
-    assert "gh release create" in run_text
-    assert "--notes-file" in run_text
-    assert "--prerelease" in run_text
+    assert "--ensure-release" in run_text
+    # A bare create would fail the Release a Promotion already published.
+    assert "gh release create" not in run_text
+    assert "--notes-file" not in run_text
     assert "upload-artifact" not in WORKFLOW_PATH.read_text(encoding="utf-8")
     for excluded_channel in ("pypi", "homebrew", "winget", "scoop", "git-loopy-tui"):
         assert excluded_channel not in run_text.lower()
