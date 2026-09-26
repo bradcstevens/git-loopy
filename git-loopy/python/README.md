@@ -879,7 +879,9 @@ no issue work started. Its startup diagnostics follow
 
 On a TTY the loop runs as a **detached worker** the terminal client watches, so
 the client reports that worker's exit status and echoes the tail of its startup
-diagnostics rather than showing an empty Dashboard and exiting `0`. The handoff
+diagnostics rather than showing an empty Dashboard and exiting `0`. Closing that
+terminal, or killing the client, leaves the worker running. A later client
+attaches by following the same trace; there is no separate reconnect. The handoff
 uses ordinary scrollback — setup's wizard leaves the screen before the client
 takes it — so a blocked startup is readable after the fact instead of being
 erased by a screen restore.

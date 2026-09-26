@@ -3407,11 +3407,10 @@ def main(argv: list[str] | None = None) -> int:
     elif startup_state is SkillPolicyStartupState.LEGACY:
         _warn(_LEGACY_SKILL_POLICY_WARNING)
 
-    # Interactive path (issue #23, ADR-0001): launch the loop as a peer of a
-    # Textual app observing a LiveRunState. The driver module imports Textual,
-    # so it is reached only once `_should_run_interactive` has confirmed the
-    # interactive path. Every non-interactive condition keeps today's
-    # exact line-printer behavior (driver left as None).
+    # A terminal Run detaches its worker and attaches a client (ADR-0058).
+    # The picker, when requested, runs in this process before that detach.
+    # A non-terminal Run stays here as the line printer and never spawns a
+    # client.
     select_model = _should_select_model(args)
     if _should_run_interactive():
         return asyncio.run(

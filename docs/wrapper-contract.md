@@ -602,6 +602,10 @@ error (exit `2`).
 | `1`  | Stopped — operator   | The operator ended the Run deliberately (§10.1, contract 2.3).       |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
 
+Exit code `3` is retired. It used to mean a Run that continued past a Dashboard
+fault. The Run now outlives its client, so a client fault is not a Run outcome
+and the code must not be reused (`exit-codes.json` `retired`, #459).
+
 A Runner with a **Pickup** (§14.3) MUST distinguish the two exit-`1` aborts by reason, and MUST
 NOT report either as the exit-`0` empty queue: "there is nothing to do" and "I could not take any
 of what there is" are different facts about the repository, and only the first is a finished Run.
@@ -679,6 +683,9 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 Every Orchestrator MUST emit its structured record as JSONL using the shared **Event schema**
 (`git_loopy.events`), so the **TUI helper**, the `.git-loopy/logs/<iso>-<run_id>.jsonl` replay
 log, and any external consumer read one format regardless of which port produced it.
+A literal in `retired_event_types` MUST NOT be emitted by any member.
+`wrapper.dashboard.fault` is retired there: a Dashboard fault is a client failure,
+not a Run event (#459).
 The additive Event schema has compatibility `schema_version` **1**; changing the Wrapper contract
 does not implicitly change that version. Unknown event types and unknown payload fields remain
 additive and MUST be ignored by compatible consumers.

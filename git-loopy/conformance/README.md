@@ -214,8 +214,10 @@ This Python matrix observes raw Dashboard projection, not Rust rendering;
 neither matrix alone proves completed activation.
 
 `event-schema.json` pins the complete exported Event-type vocabulary for every
-Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
-from every port's vocabulary, not just the shared fixture and Python reference.
+Orchestrator. `retired_event_types` is the negative pin: a literal listed there,
+and the exit code it names, must be absent from every port's vocabulary and from
+the live exit-code matrix, not merely missing from the shared `event_types`
+map. `wrapper.dashboard.fault` and exit code 3 are retired that way (#459).
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. Fixture content is data only: do not add

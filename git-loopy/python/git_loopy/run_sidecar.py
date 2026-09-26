@@ -36,6 +36,8 @@ __all__ = [
     "encode_detached_run_spec",
     "decode_detached_run_spec",
     "spawn_detached_child",
+    "popen_detached",
+    "attach_to_run",
     "wait_for_run_control",
     "run_terminal_client",
 ]
@@ -317,6 +319,46 @@ def decode_detached_run_spec(payload: str) -> DetachedRunSpec:
     )
 
 
+#: CreateProcess flags that take a worker off the console that started it.
+#: ``DETACHED_PROCESS`` is what a console close does not reach; a new process
+#: group keeps a Ctrl-Break aimed at the client off the worker; breakaway is
+#: what lets the worker outlive a job that kills its members when the job
+#: closes. A job that forbids breakaway is not a reason to stay on the console.
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
+
+def popen_detached(argv: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
+    """Start ``argv`` so closing the terminal does not take it with the client.
+
+    POSIX leaves the worker in its own session, which is what keeps a SIGHUP
+    aimed at the client's process group from reaching it. Ignoring that signal
+    would hide a worker that never left the session. Windows has no session
+    to leave: the worker is created with no console and in a new process
+    group, and breaks out of the parent's job when the job allows it.
+    """
+    if os.name == "nt":
+        kwargs["start_new_session"] = False
+        base = int(kwargs.pop("creationflags", 0))
+        base |= _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP
+        try:
+            return subprocess.Popen(  # noqa: S603 - callers pass this Runner's own argv
+                argv,
+                creationflags=base | _CREATE_BREAKAWAY_FROM_JOB,
+                **kwargs,
+            )
+        except OSError:
+            return subprocess.Popen(  # noqa: S603 - same argv, without the refused flag
+                argv,
+                creationflags=base,
+                **kwargs,
+            )
+    kwargs.pop("creationflags", None)
+    kwargs["start_new_session"] = True
+    return subprocess.Popen(argv, **kwargs)  # noqa: S603 - callers pass this Runner's own argv
+
+
 def spawn_detached_child(
     spec: DetachedRunSpec,
     *,
@@ -327,7 +369,7 @@ def spawn_detached_child(
     diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
     stdout = diagnostics_path.open("a", encoding="utf-8")
     try:
-        process = subprocess.Popen(  # noqa: S603 - this Runner owns the child module
+        process = popen_detached(
             [
                 sys.executable,
                 "-m",
@@ -338,7 +380,6 @@ def spawn_detached_child(
             stdin=subprocess.DEVNULL,
             stdout=stdout,
             stderr=subprocess.STDOUT,
-            start_new_session=os.name == "posix",
         )
     except Exception:
         stdout.close()
@@ -444,6 +485,31 @@ class _WatchOutcome:
     #: Whether the trace said the Run itself ended, as opposed to this client
     #: merely stopping watching.
     run_ended: bool
+
+
+def attach_to_run(
+    trace_path: Path,
+    control_path: Path,
+    *,
+    config: RunConfig,
+    owner_alive: Callable[[], bool] | None = None,
+    poll_interval: float = 0.05,
+) -> _WatchOutcome:
+    """Attach to a Run, or attach again. There is no reconnect operation.
+
+    A client this process did not start uses the same call as one that did.
+    Watching ends when the trace carries ``wrapper.run.end`` or the control
+    lock releases, and never because the trace file had no further bytes.
+    The client writes nothing, so crashing it cannot change the Run's Events,
+    outcome, or exit code.
+    """
+    return _follow_trace_with_renderer(
+        trace_path,
+        control_path,
+        config=config,
+        owner_alive=owner_alive,
+        poll_interval=poll_interval,
+    )
 
 
 def _follow_trace_with_renderer(
@@ -644,7 +710,7 @@ def run_terminal_client(
                     f"git-loopy-tui exited {result.returncode}; "
                     "following the replay log with the line printer."
                 )
-    watched = _follow_trace_with_renderer(
+    watched = attach_to_run(
         trace_path,
         control_path,
         config=config,

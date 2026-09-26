@@ -583,6 +583,13 @@
     "duration_source": "monotonic clock",
     "duration_unit": "seconds"
   },
+  "retired_event_types": {
+    "WRAPPER_DASHBOARD_FAULT": {
+      "literal": "wrapper.dashboard.fault",
+      "exit_code": 3,
+      "reason": "The Run outlives its Dashboard (#459, ADR-0058). A client fault is not a Run event. Neither this literal nor exit code 3 may be reused."
+    }
+  },
   "event_types": {
     "CALIBRATION_TRIAL_START": "calibration.trial.start",
     "CALIBRATION_TRIAL_END": "calibration.trial.end",

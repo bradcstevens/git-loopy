@@ -1015,8 +1015,56 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 
 
 def test_wrapper_dashboard_fault_is_retired_and_unreusable() -> None:
+    """A Dashboard fault is not a Run event, and its name is never reused (#459).
+
+    The negative pin is the fixture, not the absence of a constant. A port that
+    grows a new ``wrapper.dashboard.fault`` — or exit code 3, which used to mean
+    "continued past a Dashboard fault" — has to delete the pin first, which is
+    the review the retirement exists to force. Conformance then asserts that
+    none of the three Orchestrators emit the pinned literal.
+    """
+    pin = _EVENT_SCHEMA["retired_event_types"]["WRAPPER_DASHBOARD_FAULT"]
+    literal = "wrapper.dashboard.fault"
+    retired_exit = 3
+
+    assert pin == {
+        "literal": literal,
+        "exit_code": retired_exit,
+        "reason": (
+            "The Run outlives its Dashboard (#459, ADR-0058). A client fault "
+            "is not a Run event. Neither this literal nor exit code 3 may be reused."
+        ),
+    }
+    assert literal not in _EVENT_SCHEMA["event_types"].values()
     assert "WRAPPER_DASHBOARD_FAULT" not in events_module.__all__
-    assert "wrapper.dashboard.fault" not in _EVENT_SCHEMA["event_types"].values()
+    assert all(case["exit_code"] != retired_exit for case in _EXIT_CODES["cases"])
+    assert _EXIT_CODES["retired"] == [
+        {
+            "id": "dashboard-fault-exit-is-retired",
+            "reason": "dashboard_fault",
+            "exit_code": retired_exit,
+            "event": literal,
+        }
+    ]
+    from git_loopy.wrapper import exit_code_for
+
+    for case in _EXIT_CODES["cases"]:
+        assert exit_code_for(case["reason"]) != retired_exit
+
+    repo = CONFORMANCE_DIR.parent
+    vocabularies = (
+        repo / "python" / "git_loopy" / "events.py",
+        repo / "shell" / "lib" / "events.sh",
+        repo / "powershell" / "GitLoopy.Events.psm1",
+    )
+    for path in vocabularies:
+        text = path.read_text(encoding="utf-8")
+        assert literal not in text, f"{path} still emits the retired Dashboard fault"
+    tui = repo / "tui" / "src"
+    for path in tui.rglob("*.rs"):
+        assert literal not in path.read_text(encoding="utf-8"), (
+            f"{path} still names the retired Dashboard fault"
+        )
 
 
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
