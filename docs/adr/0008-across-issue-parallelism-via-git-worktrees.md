@@ -2,6 +2,17 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md):**
+the worktree-isolation hazard and human `parallel-safe` assertion remain, but
+the sibling placement and retained-directory breadcrumb consequences below do
+not. Lane workspaces live under the clone's git directory; salvage preserves
+dirty work on a Checkpoint branch before reclaim, and Sweep handles dead-Run
+residue. The original decision compared sibling placement with a worktree
+inside the working tree, not with the git directory; adding that option changes
+the option set, not the judgement that Lanes need separate trees.
+The flags and environment variables described below are historical for the
+Python Runner; ADR-0067 retires its mode switches.
+
 ## Context
 
 The AFK runner works triaged issues **strictly one at a time, in place** on the base
