@@ -441,7 +441,7 @@ pub struct ReleaseAdvanced {
     /// The highest stable version this Release line targets.
     #[serde(default)]
     pub release_target: Option<String>,
-    /// The current prerelease version, including its `dev.N` counter.
+    /// The current prerelease version, including its stage and counter.
     #[serde(default)]
     pub release_version: Option<String>,
 }

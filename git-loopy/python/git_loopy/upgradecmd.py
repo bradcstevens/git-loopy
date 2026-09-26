@@ -27,7 +27,7 @@ INSTALL_SPEC = (
 
 
 #: Where published Releases announce themselves.  This list includes prereleases:
-#: ``X.Y.Z-dev.N`` is a published Release on this project's Release line, while
+#: ``X.Y.Z-alpha.N`` is a published Release on this project's Release line, while
 #: GitHub's ``releases/latest`` endpoint deliberately excludes it.
 _LATEST_RELEASE_URL = (
     "https://api.github.com/repos/bradcstevens/git-loopy/releases?per_page=100"
@@ -402,9 +402,10 @@ def _channel_move(channel: installation.InstallChannel) -> _ChannelMove:
     return _CHANNEL_MOVES.get(channel.name, _UNPROVEN_CHANNEL)
 
 
-_RELEASE_ORDER = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-dev\.(\d+))?")
+_PRERELEASE_STAGES = ("alpha", "beta", "rc")
+_RELEASE_ORDER = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?")
 #: A ref spelled the way this project spells its published Release tags.
-_RELEASE_REF = re.compile(r"v?(\d+\.\d+\.\d+(?:-dev\.\d+)?)")
+_RELEASE_REF = re.compile(r"v?(\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?)")
 _WINDOWS_COMMAND_CHARACTERS = frozenset("&|<>()%^!\"")
 _NEXT_RELEASE_PAGE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
@@ -447,19 +448,27 @@ def _resolve_target(
     return UpgradeTarget(ref=f"v{version}", release_version=version)
 
 
-def _ordering(version: str) -> tuple[int, int, int, int, int] | None:
+def _ordering(version: str) -> tuple[int, int, int, int, int, int] | None:
     """Rank one Release version, or decline a spelling this line never cuts.
 
-    ``X.Y.Z-dev.N`` precedes the stable ``X.Y.Z`` it is a prerelease of, which is
-    the ordering ADR-0052's Release line already advances along.
+    ``X.Y.Z-alpha.N`` precedes ``-beta.N``, which precedes ``-rc.N``, which
+    precedes the stable ``X.Y.Z`` they are prereleases of — the SemVer ordering
+    ADR-0066's Release line advances along. A retired ``-dev.N`` is declined.
     """
     match = _RELEASE_ORDER.fullmatch(version)
     if match is None:
         return None
-    major, minor, patch, counter = match.groups()
-    if counter is None:
-        return int(major), int(minor), int(patch), 1, 0
-    return int(major), int(minor), int(patch), 0, int(counter)
+    major, minor, patch, stage, counter = match.groups()
+    if stage is None:
+        return int(major), int(minor), int(patch), 1, 0, 0
+    return (
+        int(major),
+        int(minor),
+        int(patch),
+        0,
+        _PRERELEASE_STAGES.index(stage),
+        int(counter),
+    )
 
 
 def _is_forward(installed: str | None, target: str) -> bool | None:

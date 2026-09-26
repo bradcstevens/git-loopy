@@ -3,6 +3,10 @@
 **Status:** accepted; publication automation must be brought into conformance
 before the next release claims this guarantee.
 
+**Amended by [ADR-0066](0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md):**
+the major-bump exemption is withdrawn, so a closed milestone is the only
+Promotion trigger; the rehearsal's `--major-bump` trigger is now `--stable-commit`.
+
 Amends the publication ordering of
 [ADR-0052](0052-the-release-line-advances-per-issue.md), not its Release target,
 Bump class, or unattended Promotion policy. Closing an existing matching

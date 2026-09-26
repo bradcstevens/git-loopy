@@ -1849,9 +1849,17 @@ assert_contains "$close_comment" "gh issue reopen 41" \
 repo="$temp_dir/release-line"
 fake_bin="$temp_dir/release-line-bin"
 make_real_repo "$repo"
+# Seed the copies to a known stable value so the suite never depends on the
+# live Release line.
+live_root="$(cd "$port_dir/../.." && pwd)"
+live_version="$(cat "$live_root/VERSION")"
+live_python="$(jq -r '.expected_python_distribution_version' \
+  "$live_root/git-loopy/conformance/release-version.json")"
 for path in "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}"; do
   mkdir -p "$repo/$(dirname "$path")"
-  cp "$(cd "$port_dir/../.." && pwd)/$path" "$repo/$path"
+  LIVE="$live_version" LIVE_PY="$live_python" perl -pe '
+    s/\Q$ENV{LIVE}\E/1.2.3/g; s/\Q$ENV{LIVE_PY}\E/1.2.3/g
+  ' "$live_root/$path" >"$repo/$path"
 done
 git_loopy_write_repository_release_version "$repo" "1.2.3"
 git -C "$repo" add -A
@@ -1863,7 +1871,7 @@ cat >"$temp_dir/release-line-list.json" <<'EOF'
     "number": 41,
     "title": "Patch",
     "body": "## What to build\nShip it.\n\n## Acceptance criteria\n- Done.",
-    "labels": [{"name": "ready-for-agent"}, {"name": "semver:patch"}],
+    "labels": [{"name": "ready-for-agent"}, {"name": "v1.2.4"}],
     "state": "OPEN",
     "url": "https://example.invalid/issues/41"
   }
@@ -1890,7 +1898,7 @@ if ! run_turn_entrypoint \
   fail "release-line turn Run did not exit 0: $(<"$temp_dir/release-line.stderr")"
 fi
 unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
-assert_equal "1.2.4-dev.1" "$(git_loopy_read_release_version "$repo/VERSION")" \
+assert_equal "1.2.4-alpha.1" "$(git_loopy_read_release_version "$repo/VERSION")" \
   "a closed patch issue advances every Release metadata copy: $(<"$temp_dir/release-line.stderr")"
 jq -se '
   ([.[] | .type] | index("wrapper.auto_close"))
@@ -1904,7 +1912,7 @@ jq -se '
       bump_class: "patch",
       issue: 41,
       release_target: "1.2.4",
-      release_version: "1.2.4-dev.1"
+      release_version: "1.2.4-alpha.1"
     }])
 ' "$temp_dir/release-line.stdout" >/dev/null ||
   fail "the post-closure Release advance did not emit its pinned payload"

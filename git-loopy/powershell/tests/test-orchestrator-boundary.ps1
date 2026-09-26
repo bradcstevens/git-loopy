@@ -4977,6 +4977,19 @@ Start-Sleep -Seconds $Sleep
         $Destination = Join-Path $ReleaseRepo $RelativePath
         [IO.Directory]::CreateDirectory((Split-Path -Parent $Destination)) | Out-Null
         [IO.File]::Copy((Join-Path $RepositoryRoot $RelativePath), $Destination)
+        # The live Release line may be a retired -dev.N value; rewrite the copy
+        # textually to a known stable value before the seam validates it.
+        $Live = ([IO.File]::ReadAllText((Join-Path $RepositoryRoot "VERSION"))).Trim()
+        $LiveMatch = [regex]::Match($Live, '\A([0-9]+\.[0-9]+\.[0-9]+)-(dev|alpha|beta|rc)\.([0-9]+)\z')
+        if ($LiveMatch.Success) {
+            $Short = @{ dev = ".dev"; alpha = "a"; beta = "b"; rc = "rc" }[$LiveMatch.Groups[2].Value]
+            $LivePython = "$($LiveMatch.Groups[1].Value)$Short$($LiveMatch.Groups[3].Value)"
+            [IO.File]::WriteAllText(
+                $Destination,
+                ([IO.File]::ReadAllText($Destination)).Replace($Live, "0.0.1").Replace($LivePython, "0.0.1"),
+                [Text.UTF8Encoding]::new($false)
+            )
+        }
     }
     Import-Module (Join-Path $PortDir "GitLoopy.Release.psm1") -Force
     Set-GitLoopyRepositoryReleaseVersion -RepositoryRoot $ReleaseRepo -Version "1.2.3"
@@ -4992,7 +5005,7 @@ Start-Sleep -Seconds $Sleep
         body = "## What to build`nShip it.`n`n## Acceptance criteria`n- Done."
         labels = @(
             [ordered]@{ name = "ready-for-agent" },
-            [ordered]@{ name = "semver:patch" }
+            [ordered]@{ name = "v1.2.4" }
         )
         state = "OPEN"
         url = "https://example.invalid/issues/41"
@@ -5030,7 +5043,7 @@ Start-Sleep -Seconds $Sleep
             -StderrPath $ReleaseStderr `
             -Arguments @("1")
     ) "a closed patch advances the Release line"
-    Assert-Equal "1.2.4-dev.1" (
+    Assert-Equal "1.2.4-alpha.1" (
         Get-GitLoopyReleaseVersion -Path (Join-Path $ReleaseRepo "VERSION")
     ) (
         "the serial post-publication seam writes the next Release version: " +
@@ -5055,7 +5068,7 @@ Start-Sleep -Seconds $Sleep
     Assert-Equal "patch" $ReleaseAdvance[0]["bump_class"] "the Event pins the Bump class"
     Assert-Equal 41 $ReleaseAdvance[0]["issue"] "the Event names the closed issue"
     Assert-Equal "1.2.4" $ReleaseAdvance[0]["release_target"] "the Event pins the target"
-    Assert-Equal "1.2.4-dev.1" $ReleaseAdvance[0]["release_version"] "the Event pins dev.N"
+    Assert-Equal "1.2.4-alpha.1" $ReleaseAdvance[0]["release_version"] "the Event pins the alpha line"
 }
 finally {
     foreach ($Name in @(

@@ -1,14 +1,19 @@
 name: Promote Release line
 
-# The unattended **Promotion** (ADR-0052): cutting a stable Release version from
-# a Release line, with nobody awake.
+# The unattended **Promotion** (ADR-0052, ADR-0066): cutting a stable Release
+# version from a Release line, with nobody awake.
 #
-# Two events reach the same stable state. Closing a `vX.Y.Z` milestone promotes
-# the `dev.N` line that milestone named -- "whenever it makes sense" replaced by
-# a tracker event that already exists. A `major` Bump class is exempt from that
-# rule and reaches `main` already stable under a Run, so all this workflow owes
-# it is the tag. Prereleases consult no milestone and are tagged here at no
-# point, so they reach no package channel.
+# Closing a `vX.Y.Z` milestone promotes the `-alpha.N`, `-beta.N` or `-rc.N`
+# line that milestone named -- "whenever it makes sense" replaced by a tracker
+# event that already exists. It is the only way a stable value reaches `main`:
+# a `major` is a prerelease like any other bump (ADR-0066). Every push is still
+# inspected, so a stable commit whose tag failed to push is found again.
+# Prereleases consult no milestone and are tagged here at no point, so they
+# reach no package channel.
+#
+# `workflow_dispatch` is the operator's stage advance: it moves the current
+# prerelease line forward to `beta` or `rc`, restarting its counter at 1, and
+# commits that to `main`. It tags nothing; a prerelease tag stays a human act.
 #
 # Nothing here waits for a person: no protected environment, no review, no
 # approval. That is the decision ADR-0052 recorded as taken deliberately rather
@@ -33,6 +38,13 @@ on:
     types: [closed]
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Prerelease stage to advance the current Release line to
+        required: true
+        type: choice
+        options: [beta, rc]
 
 # Every write here travels on the publication token rather than on this one, so
 # the workflow's own token stays read-only.
@@ -45,7 +57,7 @@ concurrency:
 
 jobs:
   promote:
-    name: Cut the stable Release a milestone or a major bump promised
+    name: Cut the stable Release a milestone promised
     # A milestone that is not a Release promise -- `Backlog`, `Q3` -- promotes
     # nothing; every push to the trunk is inspected for an untagged stable value.
     if: >-
@@ -120,13 +132,13 @@ jobs:
       # first -- not the value at the head.
       #
       # A Run pushes once per Iteration and lands a Release-line commit per
-      # contribution, so a `major` Promotion is routinely followed by the next
-      # issue's `dev.N` advance inside the same push: reading `VERSION` alone
-      # would see a prerelease and drop the stable Release the exemption just
-      # cut, with nothing red to say so. Walking the commits instead also makes
-      # the step self-healing -- a tag this workflow failed to push is found
-      # again by the next push rather than lost -- and subsumes the milestone
-      # Promotion committed above, so both triggers publish by one mechanism.
+      # contribution, so a committed Promotion can be followed by the next
+      # issue's prerelease advance inside the same push: reading `VERSION` alone
+      # would see a prerelease and drop the stable Release, with nothing red to
+      # say so. Walking the commits instead also makes the step self-healing --
+      # a tag this workflow failed to push is found again by the next push
+      # rather than lost -- and subsumes the milestone Promotion committed
+      # above, so both events publish by one mechanism.
       #
       # Each candidate is *rehearsed* before its tag exists (ADR-0059). A green
       # development ancestor is not proof of the commit being published:
@@ -151,7 +163,7 @@ jobs:
               --workspace "$rehearsal/candidate" \
               --archive-output "$rehearsal/git-loopy-source.tar" \
               --distribution-mode source-only \
-              --major-bump \
+              --stable-commit \
               --candidate-commit "$commit" \
               > "$rehearsal.json"
             # Annotated, and on the commit that *declares* this version rather
@@ -166,3 +178,58 @@ jobs:
           fi
           printf 'publishing %s\n' "${tagged[@]}"
           git push origin "${tagged[@]}"
+
+  advance-stage:
+    name: Advance the prerelease line to the stage the operator chose
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the publication token the trunk push needs
+        shell: bash
+        env:
+          RELEASE_PUBLICATION_TOKEN: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+        run: |
+          if [[ -z "$RELEASE_PUBLICATION_TOKEN" ]]; then
+            echo "::error::RELEASE_PUBLICATION_TOKEN is unset: the stage advance" \
+              "cannot be pushed to the trunk. See docs/releases/README.md." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+
+      - name: Attribute the stage advance
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      # Refuses a stable line and any stage that is not strictly forward, before
+      # anything is written.
+      - name: Move the current prerelease line to the chosen stage
+        id: stage
+        env:
+          STAGE: ${{ inputs.stage }}
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.release_version
+          --repository-root .
+          --advance-stage "$STAGE"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Publish the stage advance to the trunk
+        if: steps.stage.outputs.advanced == 'true'
+        shell: bash
+        env:
+          SUBJECT: ${{ steps.stage.outputs.subject }}
+          FRAGMENT_PATH: ${{ steps.stage.outputs.fragment_path }}
+        run: |
+          git add -- "$FRAGMENT_PATH"
+          git commit -aqm "$SUBJECT"
+          git push origin HEAD:main

@@ -151,7 +151,7 @@ _Avoid_: round, pass, tick; session as a separate accounting unit.
 **Label vocabulary**:
 The labels a repository's tracker must carry before a Run can do anything: the five
 canonical triage roles a human triages with, plus **Parallel-safe**, **Priority**, and
-the seven closed **Task type** labels and four closed **Bump class** labels. `git-loopy init`
+the seven closed **Task type** labels. `git-loopy init`
 ensures it exists, creating only what is absent and never altering a label that is
 already there. The five roles take whatever strings the repository's documented
 triage-label mapping gives them; the rest take the one string the runner
@@ -663,27 +663,32 @@ _Avoid_: component version, protocol version, schema version.
 The stable **Release version** the current **Release line** is accumulating toward.
 Derived as a running maximum over the **Bump class** of every issue closed since the
 last **Promotion**, never assigned; it ratchets upward and never falls
-([ADR-0052](docs/adr/0052-the-release-line-advances-per-issue.md)).
-_Avoid_: version label, release label, planned version.
+([ADR-0052](docs/adr/0052-the-release-line-advances-per-issue.md)). An issue names the
+target it ships in with a `vX.Y.Z` label, which must be one of the last stable Release's
+three successors ([ADR-0066](docs/adr/0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md)).
+_Avoid_: release label, planned version.
 
 **Release line**:
-The sequence of `dev.N` prereleases accumulating toward one **Release target**, one
-per closed issue that carries a bump. The counter counts closures and the target
-ratchets, so neither depends on the order Lanes finish in.
+The sequence of Semantic Versioning prereleases — `X.Y.Z-alpha.N`, then `-beta.N`,
+then `-rc.N` — accumulating toward one **Release target**, one per closed issue that
+carries a bump. The counter counts closures and the target ratchets, so neither depends
+on the order Lanes finish in. A new or raised target is at `alpha`; only an operator
+moves a line forward to `beta` or `rc`, restarting its counter at 1. `-dev.N` is retired.
 _Avoid_: release train, dev branch, version series.
 
 **Bump class**:
 How much of the **Release version** one issue moves — `major`, `minor`, `patch`, or
-`none` — carried by a closed `semver:` label an agent infers at **Pickup** and writes
-back. A `none` advances nothing; an *absent* label is an unclassified issue, which is
-a fault rather than a fifth answer.
-_Avoid_: version label, severity, impact, semver level.
+`none`. An agent infers it at **Pickup** and writes it back as the issue's `vX.Y.Z`
+**Release target** label; the class is then derived from that label against the last
+stable Release. No label is `none`, which advances nothing
+([ADR-0066](docs/adr/0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md)).
+_Avoid_: severity, impact, semver level, `semver:` label.
 
 **Promotion**:
 Cutting a stable **Release version** from a **Release line**. Triggered by the
 `vX.Y.Z` **milestone** closing, which is what makes "when it makes sense" a tracker
-event rather than a judgement — except for a `major` **Bump class**, which is exempt
-and cuts on the label alone.
+event rather than a judgement. It promotes from any prerelease stage, and it is the only
+trigger: a `major` **Bump class** is a prerelease like any other.
 _Avoid_: release cut, graduation, publish.
 
 **Rehearsal**:

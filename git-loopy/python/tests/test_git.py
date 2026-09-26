@@ -202,7 +202,7 @@ def test_latest_release_version_uses_the_newest_merged_stable_tag(
 ) -> None:
     _init_repo(tmp_path)
     _commit(tmp_path, "init")
-    for tag in ("v1.2.3", "v1.3.0-dev.1", "v1.10.0"):
+    for tag in ("v1.2.3", "v1.3.0-alpha.1", "v1.10.0"):
         subprocess.run(
             ["git", "-C", str(tmp_path), "tag", tag],
             check=True,
@@ -1531,7 +1531,7 @@ def test_unstage_paths_leaves_base_mergeable_after_a_refused_commit(
     )
     _commit(tmp_path, "operator work", file_name="unrelated.txt")
     _reject_commits(tmp_path)
-    (tmp_path / "VERSION").write_text("1.2.4-dev.1\n")
+    (tmp_path / "VERSION").write_text("1.2.4-alpha.1\n")
     with pytest.raises(GitError):
         git.commit_paths("advance", ["VERSION"])
     with pytest.raises(GitError):
@@ -1549,7 +1549,7 @@ def test_unstage_paths_keeps_an_operator_s_unrelated_staged_work(
     _init_repo(tmp_path)
     _commit(tmp_path, "base", file_name="VERSION", content="1.2.3\n")
     git = SubprocessGitClient(tmp_path)
-    (tmp_path / "VERSION").write_text("1.2.4-dev.1\n")
+    (tmp_path / "VERSION").write_text("1.2.4-alpha.1\n")
     (tmp_path / "staged.txt").write_text("an operator's work in progress\n")
     subprocess.run(
         ["git", "-C", str(tmp_path), "add", "VERSION", "staged.txt"],
@@ -1560,7 +1560,7 @@ def test_unstage_paths_keeps_an_operator_s_unrelated_staged_work(
 
     assert _staged_paths(tmp_path) == {"staged.txt"}
     # Only the index was rewound; the tree is the caller's to restore.
-    assert (tmp_path / "VERSION").read_text() == "1.2.4-dev.1\n"
+    assert (tmp_path / "VERSION").read_text() == "1.2.4-alpha.1\n"
 
 
 def test_unstage_paths_tolerates_a_pathspec_matching_nothing(tmp_path: Path) -> None:
@@ -1568,7 +1568,7 @@ def test_unstage_paths_tolerates_a_pathspec_matching_nothing(tmp_path: Path) -> 
     _init_repo(tmp_path)
     _commit(tmp_path, "base", file_name="VERSION", content="1.2.3\n")
     git = SubprocessGitClient(tmp_path)
-    (tmp_path / "VERSION").write_text("1.2.4-dev.1\n")
+    (tmp_path / "VERSION").write_text("1.2.4-alpha.1\n")
     subprocess.run(
         ["git", "-C", str(tmp_path), "add", "VERSION"],
         check=True, capture_output=True, text=True,

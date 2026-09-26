@@ -51,8 +51,18 @@ RELEASE_VERSION_PATHS: tuple[Path, ...] = (
     _TUI_PROBE,
     LIVE_RELEASE_FIXTURE,
 )
-BUMP_CLASS_LABEL_PREFIX = "semver:"
 BUMP_CLASS_KEYS: tuple[str, ...] = ("major", "minor", "patch", "none")
+#: The prerelease stages a Release line moves through, in SemVer precedence order.
+PRERELEASE_STAGES: tuple[str, ...] = ("alpha", "beta", "rc")
+#: A label an issue carries to name its **Release target** (ADR-0066). Only a
+#: label that opens like a version is read as one, so ``vendor`` is not a claim.
+_TARGET_LABEL_CANDIDATE = re.compile(r"v[0-9]")
+_TARGET_LABEL = re.compile(r"v((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))")
+_STAGES = "|".join(PRERELEASE_STAGES)
+_PEP440_STAGES = {"alpha": "a", "beta": "b", "rc": "rc"}
+_RELEASE_LINE_VERSION = re.compile(
+    rf"(\d+\.\d+\.\d+)(?:-({_STAGES})\.([1-9][0-9]*))?"
+)
 
 
 class ReleaseVersionError(ValueError):
@@ -62,48 +72,71 @@ class ReleaseVersionError(ValueError):
 class BumpClassRefusal(Enum):
     """Why issue labels cannot resolve to one Release-version bump class."""
 
-    UNCLASSIFIED = "unclassified_bump_class"
-    UNKNOWN_KEY = "unknown_semver_key"
-    CONFLICTING_LABELS = "conflicting_semver_labels"
+    MALFORMED_LABEL = "malformed_release_target_label"
+    CONFLICTING_LABELS = "conflicting_release_target_labels"
+    UNREACHABLE_TARGET = "unreachable_release_target"
 
 
 class BumpClassError(ReleaseVersionError):
-    """An issue's ``semver:`` labels are absent, unknown, or conflicting."""
+    """An issue's Release-target labels are malformed, conflicting, or unreachable."""
 
     def __init__(
         self,
         reason: BumpClassRefusal,
         *,
-        key: str | None = None,
-        keys: Sequence[str] = (),
+        refused_label: str | None = None,
+        conflicting_labels: Sequence[str] = (),
+        last_stable_version: str | None = None,
     ) -> None:
         self.reason = reason
-        self.key = key
-        self.keys = tuple(keys)
-        if reason is BumpClassRefusal.UNCLASSIFIED:
-            message = "issue is unclassified: it carries no semver: label"
-        elif reason is BumpClassRefusal.UNKNOWN_KEY:
+        self.refused_label = refused_label
+        self.conflicting_labels = tuple(conflicting_labels)
+        if reason is BumpClassRefusal.MALFORMED_LABEL:
             message = (
-                f"unknown semver: key {key!r}; permitted keys: "
-                f"{', '.join(BUMP_CLASS_KEYS)}"
+                f"Release-target label {refused_label!r} is not a stable "
+                "vMAJOR.MINOR.PATCH version"
+            )
+        elif reason is BumpClassRefusal.CONFLICTING_LABELS:
+            message = (
+                "issue carries conflicting Release-target labels "
+                f"{', '.join(self.conflicting_labels)}"
             )
         else:
-            labels = ", ".join(f"{BUMP_CLASS_LABEL_PREFIX}{value}" for value in keys)
-            message = f"issue carries conflicting semver: labels {labels}"
+            message = (
+                f"Release-target label {refused_label!r} is not a next Release "
+                f"after {last_stable_version}"
+            )
+        super().__init__(message)
+
+
+class ReleaseStageRefusal(Enum):
+    """Why a Release line cannot move to a requested prerelease stage."""
+
+    UNKNOWN_STAGE = "unknown_prerelease_stage"
+    NO_PRERELEASE_LINE = "no_prerelease_line"
+    STAGE_NOT_FORWARD = "stage_not_forward"
+
+
+class ReleaseStageError(ReleaseVersionError):
+    """A requested prerelease stage is unknown, absent, or not forward."""
+
+    def __init__(self, reason: ReleaseStageRefusal, message: str) -> None:
+        self.reason = reason
         super().__init__(message)
 
 
 @dataclass(frozen=True)
 class ReleaseLine:
-    """The Release target and prerelease counter after one issue closes."""
+    """The Release target, prerelease stage, and counter after one issue closes."""
 
     target: str
     counter: int
+    stage: str = PRERELEASE_STAGES[0]
 
     @property
     def version(self) -> str:
         """Return the target's current prerelease, or the target before any bump."""
-        return f"{self.target}-dev.{self.counter}" if self.counter else self.target
+        return f"{self.target}-{self.stage}.{self.counter}" if self.counter else self.target
 
 
 @dataclass(frozen=True)
@@ -126,26 +159,84 @@ class ReleaseNotesWrite:
     snapshots: tuple[_ReleaseNoteSnapshot, ...]
 
 
-def resolve_bump_class(labels: Sequence[str]) -> str:
-    """Return an issue's one closed ``semver:`` bump class.
+def is_release_target_label(label: str) -> bool:
+    """Whether ``label`` claims to name a Release target, well-formed or not."""
+    return _TARGET_LABEL_CANDIDATE.match(label) is not None
 
-    A missing label is an unclassified fault, deliberately distinct from
-    ``semver:none``. Unknown and multiple ``semver:`` labels are refused before
-    returning a decision, so callers never silently choose a Release impact.
-    """
-    keys = tuple(
-        label[len(BUMP_CLASS_LABEL_PREFIX) :]
-        for label in labels
-        if label.startswith(BUMP_CLASS_LABEL_PREFIX)
+
+def release_target_label(target: str) -> str:
+    """Spell the tracker label that names ``target`` as an issue's Release."""
+    _release_target_parts(target, "Release target")
+    return f"v{target}"
+
+
+def successor_release_target(last_stable_version: str, bump_class: str) -> str:
+    """Return the Release ``bump_class`` makes of ``last_stable_version``."""
+    if bump_class not in BUMP_CLASS_KEYS:
+        raise ReleaseVersionError(f"unknown Release-line bump class {bump_class!r}")
+    major, minor, patch = _release_target_parts(
+        last_stable_version, "Last stable Release version"
     )
-    unknown = next((key for key in keys if key not in BUMP_CLASS_KEYS), None)
-    if unknown is not None:
-        raise BumpClassError(BumpClassRefusal.UNKNOWN_KEY, key=unknown)
-    if not keys:
-        raise BumpClassError(BumpClassRefusal.UNCLASSIFIED)
-    if len(keys) != 1:
-        raise BumpClassError(BumpClassRefusal.CONFLICTING_LABELS, keys=keys)
-    return keys[0]
+    candidate = {
+        "major": (major + 1, 0, 0),
+        "minor": (major, minor + 1, 0),
+        "patch": (major, minor, patch + 1),
+        "none": (major, minor, patch),
+    }[bump_class]
+    return ".".join(str(part) for part in candidate)
+
+
+def resolve_bump_class(labels: Sequence[str], last_stable_version: str) -> str:
+    """Return the Bump class an issue's ``vX.Y.Z`` Release-target label implies.
+
+    The label names the Release the issue ships in, so its Bump class is read
+    relative to the last stable Release. No label changes no version (ADR-0066).
+    Malformed, multiple, and unreachable labels are refused before returning a
+    decision, so callers never silently choose a Release impact.
+    """
+    candidates = tuple(label for label in labels if is_release_target_label(label))
+    malformed = next(
+        (label for label in candidates if _TARGET_LABEL.fullmatch(label) is None),
+        None,
+    )
+    if malformed is not None:
+        raise BumpClassError(BumpClassRefusal.MALFORMED_LABEL, refused_label=malformed)
+    if len(candidates) > 1:
+        raise BumpClassError(
+            BumpClassRefusal.CONFLICTING_LABELS, conflicting_labels=candidates
+        )
+    if not candidates:
+        return "none"
+    target = candidates[0][1:]
+    for bump_class in BUMP_CLASS_KEYS[:-1]:
+        if successor_release_target(last_stable_version, bump_class) == target:
+            return bump_class
+    raise BumpClassError(
+        BumpClassRefusal.UNREACHABLE_TARGET,
+        refused_label=candidates[0],
+        last_stable_version=last_stable_version,
+    )
+
+
+def pickup_release_target_label(
+    last_stable_version: str, current_line: ReleaseLine, bump_class: str
+) -> str | None:
+    """Return the label Pickup writes for an inferred Bump class, if any.
+
+    The label names the Release the issue will ship in: the larger of the line
+    already under way and the Release its own bump makes. ``none`` writes none.
+    """
+    if bump_class == "none":
+        successor_release_target(last_stable_version, bump_class)
+        return None
+    line = advance_release_line(
+        last_stable_version,
+        current_line.target,
+        current_line.counter,
+        bump_class,
+        current_stage=current_line.stage,
+    )
+    return release_target_label(line.target)
 
 
 def advance_release_line(
@@ -153,8 +244,15 @@ def advance_release_line(
     current_target: str,
     current_counter: int,
     bump_class: str,
+    *,
+    current_stage: str | None = None,
 ) -> ReleaseLine:
-    """Apply one closed issue to the Release target ratchet and `dev.N` counter."""
+    """Apply one closed issue to the Release target ratchet and prerelease counter.
+
+    The counter counts every advance and a target raise never resets it, so two
+    Integration orders land the same version. A new or raised target has not
+    been through any later stage, so its line (re)starts at ``alpha``.
+    """
     if bump_class not in BUMP_CLASS_KEYS:
         raise ReleaseVersionError(f"unknown Release-line bump class {bump_class!r}")
     if (
@@ -163,35 +261,56 @@ def advance_release_line(
         or current_counter < 0
     ):
         raise ReleaseVersionError("Release-line counter must be a non-negative integer")
+    stage = current_stage or PRERELEASE_STAGES[0]
+    if stage not in PRERELEASE_STAGES:
+        raise ReleaseVersionError(f"unknown Release-line prerelease stage {stage!r}")
 
-    stable = _release_target_parts(last_stable_version, "Last stable Release version")
     current = _release_target_parts(current_target, "Release target")
-    major, minor, patch = stable
-    candidate = {
-        "major": (major + 1, 0, 0),
-        "minor": (major, minor + 1, 0),
-        "patch": (major, minor, patch + 1),
-        "none": stable,
-    }[bump_class]
-    target = ".".join(str(part) for part in max(current, candidate))
-    counter = current_counter + (bump_class != "none")
-    return ReleaseLine(target=target, counter=counter)
+    candidate = _release_target_parts(
+        successor_release_target(last_stable_version, bump_class), "Release target"
+    )
+    if bump_class == "none":
+        return ReleaseLine(target=current_target, counter=current_counter, stage=stage)
+    target = max(current, candidate)
+    if current_counter == 0 or target > current:
+        stage = PRERELEASE_STAGES[0]
+    return ReleaseLine(
+        target=".".join(str(part) for part in target),
+        counter=current_counter + 1,
+        stage=stage,
+    )
 
 
-def promote_release_line(release_line: ReleaseLine, bump_class: str) -> ReleaseLine:
-    """Cut a stable Release from the one Bump class exempt from a milestone.
+def advance_release_stage(current_version: str, stage: str) -> ReleaseLine:
+    """Move a prerelease line forward to ``stage``, restarting its counter at 1.
 
-    A `major` publishes on the label alone; every other class stays on its
-    `dev.N` line until the `vX.Y.Z` milestone it promised closes
-    ([ADR-0052](../../../docs/adr/0052-the-release-line-advances-per-issue.md)).
-    Callers ask this rather than testing the class themselves, so *which* class
-    is exempt is one decision rather than one per call site.
+    An operator's decision (ADR-0066): alpha, beta, and rc only ever move
+    forward, and a stable Release has no stage to move.
     """
-    if bump_class not in BUMP_CLASS_KEYS:
-        raise ReleaseVersionError(f"unknown Release-line bump class {bump_class!r}")
-    if bump_class != "major":
-        return release_line
-    return ReleaseLine(target=release_line.target, counter=0)
+    if stage not in PRERELEASE_STAGES:
+        raise ReleaseStageError(
+            ReleaseStageRefusal.UNKNOWN_STAGE,
+            f"unknown prerelease stage {stage!r}; permitted stages: "
+            f"{', '.join(PRERELEASE_STAGES)}",
+        )
+    match = _RELEASE_LINE_VERSION.fullmatch(current_version)
+    if match is None:
+        raise ReleaseVersionError(
+            f"Release line {current_version!r} is not a stable or "
+            "-alpha.N/-beta.N/-rc.N Semantic Versioning value"
+        )
+    target, current_stage, _counter = match.groups()
+    if current_stage is None:
+        raise ReleaseStageError(
+            ReleaseStageRefusal.NO_PRERELEASE_LINE,
+            f"Release {current_version} is stable and has no prerelease stage to advance",
+        )
+    if PRERELEASE_STAGES.index(stage) <= PRERELEASE_STAGES.index(current_stage):
+        raise ReleaseStageError(
+            ReleaseStageRefusal.STAGE_NOT_FORWARD,
+            f"Release line {current_version} cannot move from {current_stage} to {stage}",
+        )
+    return ReleaseLine(target=target, counter=1, stage=stage)
 
 
 def release_line_commit_subject(version: str) -> str:
@@ -211,10 +330,14 @@ def promote_closed_milestone(
 
     Deliberately separate from :func:`advance_release_line`: a prerelease takes
     no milestone input at any point, while a milestone-close event may promote
-    only the exact `dev.N` target its own title names.
+    only the exact prerelease target its own title names, from any stage.
     """
-    match = re.fullmatch(r"(\d+\.\d+\.\d+)-dev\.(0|[1-9][0-9]*)", current_version)
-    if match is None or milestone_state.casefold() != "closed":
+    match = _RELEASE_LINE_VERSION.fullmatch(current_version)
+    if (
+        match is None
+        or match.group(2) is None
+        or milestone_state.casefold() != "closed"
+    ):
         return None
     target = match.group(1)
     return target if milestone_title == f"v{target}" else None
@@ -224,25 +347,33 @@ def release_line_from_version(
     version: str, *, last_stable_version: str | None = None
 ) -> tuple[str, ReleaseLine]:
     """Resolve persisted Release metadata into its stable base and current line."""
-    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-dev\.(0|[1-9][0-9]*))?", version)
-    if match is None:
-        raise ReleaseVersionError(
-            "Release line must be a stable or -dev.N Semantic Versioning value"
-        )
-    target, counter_text = match.groups()
-    _release_target_parts(target, "Release target")
-    if counter_text is None:
-        return target, ReleaseLine(target=target, counter=0)
+    line = _parse_release_line(version)
+    if line.counter == 0:
+        return line.target, line
     if last_stable_version is None:
         raise ReleaseVersionError(
             "a prerelease Release line requires its last stable Release version"
         )
     stable = _release_target_parts(last_stable_version, "Last stable Release version")
-    if tuple(int(part) for part in target.split(".")) < stable:
+    if _release_target_parts(line.target, "Release target") < stable:
         raise ReleaseVersionError(
             "Release target cannot precede its last stable Release version"
         )
-    return last_stable_version, ReleaseLine(target=target, counter=int(counter_text))
+    return last_stable_version, line
+
+
+def _parse_release_line(version: str) -> ReleaseLine:
+    match = _RELEASE_LINE_VERSION.fullmatch(version)
+    if match is None:
+        raise ReleaseVersionError(
+            "Release line must be a stable or -alpha.N/-beta.N/-rc.N Semantic "
+            "Versioning value"
+        )
+    target, stage, counter_text = match.groups()
+    _release_target_parts(target, "Release target")
+    if counter_text is None:
+        return ReleaseLine(target=target, counter=0)
+    return ReleaseLine(target=target, counter=int(counter_text), stage=stage)
 
 
 def _release_target_parts(value: str, label: str) -> tuple[int, int, int]:
@@ -407,9 +538,9 @@ def validate_repository_release_version(
 def write_repository_release_version(repository_root: Path, version: str) -> None:
     """Atomically advance every checked-in Release-version copy to ``version``.
 
-    The writer only accepts stable and ``-dev.N`` Release-line values because
-    those are the forms whose Python package metadata has an unambiguous PEP
-    440 representation. All targets are read and transformed before replacement
+    The writer only accepts stable and ``-alpha.N``/``-beta.N``/``-rc.N``
+    Release-line values because those are the forms whose Python package
+    metadata has an unambiguous PEP 440 representation. All targets are read and transformed before replacement
     begins, and each original is staged as a rollback file before its target
     changes.
     """
@@ -519,10 +650,11 @@ def write_repository_release_notes(
 ) -> ReleaseNotesWrite:
     """Write one development fragment and, on Promotion, a stable draft.
 
-    The caller supplies both lines because a `major` first advances to a
-    `dev.N` fragment and then promotes that same target to stable. The stable
-    draft composes every fragment for its target unless a human already wrote
-    the stable note, which remains publication input unchanged.
+    The caller supplies both lines because a milestone Promotion records the
+    prerelease it promoted from and then cuts that same target to stable. The
+    stable draft composes every fragment for its target, across every stage,
+    unless a human already wrote the stable note, which remains publication
+    input unchanged.
     """
     repository_root = repository_root.resolve()
     fragment_path = _release_notes_path(repository_root, advanced_line.version)
@@ -613,21 +745,23 @@ def _compose_stable_release_notes(
     pending_version: str,
     pending_content: str,
 ) -> str:
-    fragments: dict[str, tuple[int, str]] = {}
+    fragments: dict[str, tuple[tuple[int, int], str]] = {}
     pattern = re.compile(
-        rf"^v{re.escape(target)}-dev\.(0|[1-9][0-9]*)\.md$"
+        rf"^v{re.escape(target)}-(?:{_STAGES})\.[1-9][0-9]*\.md$"
     )
     release_directory = repository_root / _RELEASE_NOTES_DIRECTORY
     if release_directory.is_dir():
         for path in release_directory.iterdir():
-            match = pattern.fullmatch(path.name)
-            if match is not None and path.is_file():
-                fragments[path.stem.removeprefix("v")] = (
-                    int(match.group(1)),
+            if pattern.fullmatch(path.name) is not None and path.is_file():
+                version = path.stem.removeprefix("v")
+                fragments[version] = (
+                    _release_note_rank(version, target),
                     _read_metadata_text(path, "Release-note fragment"),
                 )
-    pending_counter = _release_note_counter(pending_version, target)
-    fragments[pending_version] = (pending_counter, pending_content)
+    fragments[pending_version] = (
+        _release_note_rank(pending_version, target),
+        pending_content,
+    )
 
     lines = [
         f"# git-loopy {stable_version}",
@@ -652,16 +786,17 @@ def _compose_stable_release_notes(
     return "\n".join([*lines, ""])
 
 
-def _release_note_counter(version: str, target: str) -> int:
+def _release_note_rank(version: str, target: str) -> tuple[int, int]:
+    """Order one prerelease fragment by stage precedence, then by counter."""
     match = re.fullmatch(
-        rf"{re.escape(target)}-dev\.(0|[1-9][0-9]*)",
+        rf"{re.escape(target)}-({_STAGES})\.([1-9][0-9]*)",
         version,
     )
     if match is None:
         raise ReleaseVersionError(
             f"development Release-note version {version!r} does not match target {target!r}"
         )
-    return int(match.group(1))
+    return PRERELEASE_STAGES.index(match.group(1)), int(match.group(2))
 
 
 def _release_note_body(content: str) -> str:
@@ -718,16 +853,18 @@ def python_distribution_version(version: str) -> str:
     The Python distribution metadata is the one Release-version copy that
     cannot carry the Semantic Versioning string verbatim, so every reader that
     has to recognise what the writer wrote asks here rather than re-deriving
-    ``-dev.N`` → ``.devN`` for itself.
+    ``-alpha.N`` → ``aN``, ``-beta.N`` → ``bN`` or ``-rc.N`` → ``rcN`` for itself.
     """
-    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-dev\.(\d+))?", version)
+    match = _RELEASE_LINE_VERSION.fullmatch(version)
     if match is None:
         raise ReleaseVersionError(
-            "Release version must be stable or a -dev.N prerelease to update "
-            "Python distribution metadata"
+            "Release version must be stable or an -alpha.N, -beta.N or -rc.N "
+            "prerelease to update Python distribution metadata"
         )
-    stable, counter = match.groups()
-    return f"{stable}.dev{counter}" if counter is not None else stable
+    stable, stage, counter = match.groups()
+    if stage is None:
+        return stable
+    return f"{stable}{_PEP440_STAGES[stage]}{counter}"
 
 
 def _replace_release_fixture(
@@ -964,6 +1101,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="state of --promote-milestone (default: CLOSED)",
     )
     parser.add_argument(
+        "--advance-stage",
+        choices=PRERELEASE_STAGES[1:],
+        help="move the current prerelease line forward to this stage (ADR-0066)",
+    )
+    parser.add_argument(
         "--github-output",
         type=Path,
         help="optional GitHub Actions output file for the Promotion result",
@@ -972,7 +1114,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _write_promotion_output(
-    path: Path, promoted: str | None, fragment_path: Path | None
+    path: Path,
+    promoted: str | None,
+    fragment_path: Path | None,
+    *,
+    decision: str = "promoted",
 ) -> None:
     """Append one Promotion decision to a GitHub Actions step output file.
 
@@ -982,7 +1128,7 @@ def _write_promotion_output(
     The commit subject travels with the decision so the workflow commits a
     Promotion in exactly the words a Runner does.
     """
-    lines = [f"promoted={'true' if promoted is not None else 'false'}"]
+    lines = [f"{decision}={'true' if promoted is not None else 'false'}"]
     if promoted is not None:
         lines += [
             f"version={promoted}",
@@ -999,15 +1145,48 @@ def _write_promotion_output(
         ) from exc
 
 
+def _advance_repository_stage(repository_root: Path, current_version: str, stage: str) -> Path:
+    """Write the next stage's first prerelease and its fragment; return the fragment."""
+    staged_line = advance_release_stage(current_version, stage)
+    write_repository_release_version(repository_root, staged_line.version)
+    try:
+        notes_write = write_repository_release_notes(
+            repository_root, staged_line, staged_line
+        )
+    except ReleaseVersionError:
+        write_repository_release_version(repository_root, current_version)
+        raise
+    return notes_write.commit_paths[0]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Validate repository metadata or promote a matching closed milestone."""
+    """Validate repository metadata, advance a stage, or promote a closed milestone."""
     args = _build_parser().parse_args(argv)
+    if args.advance_stage is not None and args.promote_milestone is not None:
+        print(
+            "release version validation failed: pass --advance-stage or "
+            "--promote-milestone, not both",
+            file=sys.stderr,
+        )
+        return 2
     try:
         fragment_path: Path | None = None
         current_version = validate_repository_release_version(
             args.repository_root,
             publication_version=args.publication_version,
         )
+        if args.advance_stage is not None:
+            fragment_path = _advance_repository_stage(
+                args.repository_root, current_version, args.advance_stage
+            )
+            if args.github_output is not None:
+                _write_promotion_output(
+                    args.github_output,
+                    read_release_version(args.repository_root / "VERSION"),
+                    fragment_path,
+                    decision="advanced",
+                )
+            return 0
         promoted = (
             promote_closed_milestone(
                 current_version,
@@ -1018,10 +1197,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None
         )
         if promoted is not None:
-            current_line = ReleaseLine(
-                target=promoted,
-                counter=_release_note_counter(current_version, promoted),
-            )
+            current_line = _parse_release_line(current_version)
             write_repository_release_version(args.repository_root, promoted)
             try:
                 notes_write = write_repository_release_notes(

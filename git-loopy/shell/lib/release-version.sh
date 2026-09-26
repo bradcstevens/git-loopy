@@ -75,6 +75,7 @@ fi
 : "${GIT_LOOPY_RELEASE_LINE_INITIALIZED:=false}"
 : "${GIT_LOOPY_RELEASE_LAST_STABLE:=}"
 : "${GIT_LOOPY_RELEASE_TARGET:=}"
+: "${GIT_LOOPY_RELEASE_STAGE:=}"
 : "${GIT_LOOPY_RELEASE_COUNTER:=0}"
 : "${GIT_LOOPY_RELEASE_ADVANCE_JSON:=null}"
 if ! declare -p GIT_LOOPY_RELEASE_NOTE_PATHS >/dev/null 2>&1; then
@@ -85,38 +86,68 @@ if ! declare -p GIT_LOOPY_RELEASE_NOTE_PATHS >/dev/null 2>&1; then
 fi
 : "${GIT_LOOPY_RELEASE_NOTES_DIRECTORY:=docs/releases}"
 
+_git_loopy_release_stage_index() {
+  case "${1-}" in
+    alpha) printf '0\n' ;;
+    beta) printf '1\n' ;;
+    rc) printf '2\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+# A label names the Release it targets (`vX.Y.Z`); the Bump class is derived from
+# that target relative to the last stable Release. An issue with no candidate
+# target label changes no version.
 git_loopy_resolve_bump_class() {
   local labels_json="${1:?issue labels JSON is required}"
+  local last_stable="${2:?last stable Release version is required}"
   jq -e 'type == "array" and all(.[]; type == "string")' \
     <<<"$labels_json" >/dev/null || {
     printf 'git-loopy: Release-line Bump class: invalid_labels\n' >&2
     return 1
   }
-
-  local -a keys=()
-  mapfile -t keys < <(
-    jq -r '.[] | select(startswith("semver:")) | ltrimstr("semver:")' \
-      <<<"$labels_json"
+  local -a stable_parts
+  mapfile -t stable_parts < <(
+    _git_loopy_release_target_parts "$last_stable" "Last stable Release version"
   )
-  local key
-  for key in "${keys[@]}"; do
-    case "$key" in
-      major | minor | patch | none) ;;
-      *)
-        printf 'git-loopy: Release-line Bump class: unknown_semver_key\n' >&2
-        return 1
-        ;;
-    esac
+  ((${#stable_parts[@]} == 1)) || return 1
+  local stable_major stable_minor stable_patch
+  read -r stable_major stable_minor stable_patch <<<"${stable_parts[0]}"
+
+  local -a candidates=()
+  mapfile -t candidates < <(jq -r '.[] | select(test("^v[0-9]"))' <<<"$labels_json")
+  local candidate
+  local well_formed='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+  for candidate in "${candidates[@]}"; do
+    if [[ ! "$candidate" =~ $well_formed ]]; then
+      printf 'git-loopy: Release-line Bump class: malformed_release_target_label\n' >&2
+      printf 'git-loopy: refused label: %s\n' "$candidate" >&2
+      return 1
+    fi
   done
-  if ((${#keys[@]} == 0)); then
-    printf 'git-loopy: Release-line Bump class: unclassified_bump_class\n' >&2
+  if ((${#candidates[@]} > 1)); then
+    printf 'git-loopy: Release-line Bump class: conflicting_release_target_labels\n' >&2
+    printf 'git-loopy: conflicting labels: %s\n' "$(IFS=,; printf '%s' "${candidates[*]}")" >&2
     return 1
   fi
-  if ((${#keys[@]} != 1)); then
-    printf 'git-loopy: Release-line Bump class: conflicting_semver_labels\n' >&2
+  if ((${#candidates[@]} == 0)); then
+    printf 'none\n'
+    return 0
+  fi
+  [[ "${candidates[0]}" =~ $well_formed ]]
+  local major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]}
+  local sm=$((10#$stable_major)) sn=$((10#$stable_minor)) sp=$((10#$stable_patch))
+  if ((major == sm + 1 && minor == 0 && patch == 0)); then
+    printf 'major\n'
+  elif ((major == sm && minor == sn + 1 && patch == 0)); then
+    printf 'minor\n'
+  elif ((major == sm && minor == sn && patch == sp + 1)); then
+    printf 'patch\n'
+  else
+    printf 'git-loopy: Release-line Bump class: unreachable_release_target\n' >&2
+    printf 'git-loopy: refused label: %s\n' "${candidates[0]}" >&2
     return 1
   fi
-  printf '%s\n' "${keys[0]}"
 }
 
 _git_loopy_release_target_parts() {
@@ -133,13 +164,37 @@ _git_loopy_release_target_parts() {
     "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
 }
 
+_git_loopy_release_line_json() {
+  local target="$1" stage="$2" counter="$3"
+  local version="$target"
+  ((counter == 0)) || version+="-$stage.$counter"
+  jq -cn \
+    --arg target "$target" \
+    --arg stage "$stage" \
+    --argjson counter "$counter" \
+    --arg version "$version" \
+    '{target: $target, stage: (if $counter == 0 then null else $stage end),
+      counter: $counter, version: $version}'
+}
+
+# Advance(S, target, stage, counter, bump): the target ratchets to the highest
+# successor asked for, the counter counts every advance (so the outcome is
+# independent of Integration order), and the stage restarts at alpha whenever a
+# line starts or its target rises. No Bump class promotes to stable on its own.
 git_loopy_advance_release_line() {
   local last_stable="${1:?last stable Release version is required}"
   local current_target="${2:?current Release target is required}"
-  local current_counter="${3:?current Release counter is required}"
-  local bump_class="${4:?Bump class is required}"
+  local current_stage="${3-}"
+  local current_counter="${4:?current Release counter is required}"
+  local bump_class="${5:?Bump class is required}"
+  [[ "$current_stage" != "null" ]] || current_stage=""
   if [[ ! "$current_counter" =~ ^(0|[1-9][0-9]*)$ ]]; then
     printf 'git-loopy: Release-line counter must be a non-negative integer\n' >&2
+    return 1
+  fi
+  if ((current_counter != 0)) &&
+    ! _git_loopy_release_stage_index "$current_stage" >/dev/null; then
+    printf 'git-loopy: Release-line stage must be alpha, beta, or rc\n' >&2
     return 1
   fi
 
@@ -155,7 +210,7 @@ git_loopy_advance_release_line() {
   ((${#current_parts[@]} == 1)) || return 1
   read -r current_major current_minor current_patch <<<"${current_parts[0]}"
 
-  local candidate_major candidate_minor candidate_patch increments=1
+  local candidate_major candidate_minor candidate_patch
   case "$bump_class" in
     major)
       candidate_major=$((10#$stable_major + 1))
@@ -173,10 +228,9 @@ git_loopy_advance_release_line() {
       candidate_patch=$((10#$stable_patch + 1))
       ;;
     none)
-      candidate_major=$((10#$stable_major))
-      candidate_minor=$((10#$stable_minor))
-      candidate_patch=$((10#$stable_patch))
-      increments=0
+      _git_loopy_release_line_json "$current_target" "$current_stage" \
+        "$((10#$current_counter))"
+      return
       ;;
     *)
       printf 'git-loopy: unknown Release-line Bump class %s\n' "$bump_class" >&2
@@ -190,6 +244,7 @@ git_loopy_advance_release_line() {
   local target_major="$current_major_number"
   local target_minor="$current_minor_number"
   local target_patch="$current_patch_number"
+  local raised=false
   if ((candidate_major > current_major_number)) ||
     ((candidate_major == current_major_number && candidate_minor > current_minor_number)) ||
     ((candidate_major == current_major_number && candidate_minor == current_minor_number &&
@@ -197,41 +252,38 @@ git_loopy_advance_release_line() {
     target_major="$candidate_major"
     target_minor="$candidate_minor"
     target_patch="$candidate_patch"
+    raised=true
   fi
 
-  local counter=$((10#$current_counter + increments))
-  local target="${target_major}.${target_minor}.${target_patch}"
-  local version="$target"
-  ((counter == 0)) || version+="-dev.$counter"
-  jq -cn \
-    --arg target "$target" \
-    --argjson counter "$counter" \
-    --arg version "$version" \
-    '{target: $target, counter: $counter, version: $version}'
+  local stage="$current_stage"
+  if ((10#$current_counter == 0)) || [[ "$raised" == true ]]; then
+    stage="alpha"
+  fi
+  _git_loopy_release_line_json "${target_major}.${target_minor}.${target_patch}" \
+    "$stage" "$((10#$current_counter + 1))"
 }
 
-git_loopy_promote_release_line() {
-  local release_line="${1:?Release line is required}"
-  local bump_class="${2:?Bump class is required}"
-  local target
-  # A `major` publishes on the label alone; every other Bump class stays on its
-  # `dev.N` line until the `vX.Y.Z` milestone it promised closes (ADR-0052).
-  # Callers ask this rather than testing the class themselves, so *which* class
-  # is exempt is one decision rather than one per call site.
-  case "$bump_class" in
-    major) ;;
-    minor | patch | none)
-      printf '%s\n' "$release_line"
-      return 0
-      ;;
-    *)
-      printf 'git-loopy: unknown Release-line Bump class %s\n' "$bump_class" >&2
-      return 1
-      ;;
-  esac
-  target="$(jq -er '.target' <<<"$release_line")" || return 1
-  jq -cn --arg target "$target" \
-    '{target: $target, counter: 0, version: $target}'
+# Stage advance (an operator action): move a prerelease line forward to a later
+# stage, restarting its counter at 1.
+git_loopy_advance_release_stage() {
+  local version="${1:?Release version is required}"
+  local stage="${2-}"
+  local stage_index current_index
+  if ! stage_index="$(_git_loopy_release_stage_index "$stage")"; then
+    printf 'git-loopy: Release-line stage: unknown_prerelease_stage\n' >&2
+    return 1
+  fi
+  if [[ ! "$version" =~ ^((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-(alpha|beta|rc)\.([1-9][0-9]*)$ ]]; then
+    printf 'git-loopy: Release-line stage: no_prerelease_line\n' >&2
+    return 1
+  fi
+  local target="${BASH_REMATCH[1]}"
+  current_index="$(_git_loopy_release_stage_index "${BASH_REMATCH[5]}")"
+  if ((stage_index <= current_index)); then
+    printf 'git-loopy: Release-line stage: stage_not_forward\n' >&2
+    return 1
+  fi
+  printf '%s-%s.1\n' "$target" "$stage"
 }
 
 git_loopy_release_line_commit_subject() {
@@ -249,7 +301,7 @@ git_loopy_promote_closed_milestone() {
   local milestone_state="${3:?milestone state is required}"
   local target
   if [[ "${milestone_state,,}" != "closed" ]] ||
-    [[ ! "$current_version" =~ ^((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-dev\.(0|[1-9][0-9]*)$ ]]; then
+    [[ ! "$current_version" =~ ^((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-(alpha|beta|rc)\.([1-9][0-9]*)$ ]]; then
     jq -cn null
     return 0
   fi
@@ -261,21 +313,25 @@ git_loopy_promote_closed_milestone() {
   jq -cn --arg version "$target" '$version'
 }
 
+GIT_LOOPY_RELEASE_LINE_PATTERN='^((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))(-(alpha|beta|rc)\.([1-9][0-9]*))?$'
+
 _git_loopy_release_line_from_version() {
   local repository_root="${1:?repository root is required}"
   local version="${2:?Release version is required}"
   local stable_tag=""
-  if [[ "$version" =~ ^((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))(-dev\.(0|[1-9][0-9]*))?$ ]]; then
+  if [[ "$version" =~ $GIT_LOOPY_RELEASE_LINE_PATTERN ]]; then
     GIT_LOOPY_RELEASE_TARGET="${BASH_REMATCH[1]}"
-    GIT_LOOPY_RELEASE_COUNTER="${BASH_REMATCH[6]:-0}"
+    GIT_LOOPY_RELEASE_STAGE="${BASH_REMATCH[6]}"
+    GIT_LOOPY_RELEASE_COUNTER="${BASH_REMATCH[7]:-0}"
   else
-    printf 'git-loopy: Release line must be a stable or -dev.N Semantic Versioning value\n' >&2
+    printf 'git-loopy: Release line must be a stable or -alpha.N/-beta.N/-rc.N Semantic Versioning value\n' >&2
     return 1
   fi
 
   if [[ "$GIT_LOOPY_RELEASE_COUNTER" == "0" ]]; then
     GIT_LOOPY_RELEASE_LAST_STABLE="$GIT_LOOPY_RELEASE_TARGET"
   else
+    GIT_LOOPY_RELEASE_LAST_STABLE=""
     while IFS= read -r stable_tag; do
       if [[ "$stable_tag" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
         GIT_LOOPY_RELEASE_LAST_STABLE="${BASH_REMATCH[1]}"
@@ -294,23 +350,24 @@ _git_loopy_release_line_from_version() {
 
 _git_loopy_validate_release_line_version() {
   local version="${1:?Release version is required}"
-  if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.(0|[1-9][0-9]*))?$ ]]; then
-    printf 'git-loopy: Release line must be a stable or -dev.N Semantic Versioning value\n' >&2
+  if [[ ! "$version" =~ $GIT_LOOPY_RELEASE_LINE_PATTERN ]]; then
+    printf 'git-loopy: Release line must be a stable or -alpha.N/-beta.N/-rc.N Semantic Versioning value\n' >&2
     return 1
   fi
 }
 
 _git_loopy_python_distribution_version() {
   local version="${1:?Release version is required}"
-  if [[ "$version" =~ ^((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))(-dev\.(0|[1-9][0-9]*))?$ ]]; then
-    if [[ -n "${BASH_REMATCH[6]}" ]]; then
-      printf '%s.dev%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[6]}"
-    else
-      printf '%s\n' "${BASH_REMATCH[1]}"
-    fi
+  if [[ "$version" =~ $GIT_LOOPY_RELEASE_LINE_PATTERN ]]; then
+    case "${BASH_REMATCH[6]}" in
+      alpha) printf '%sa%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[7]}" ;;
+      beta) printf '%sb%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[7]}" ;;
+      rc) printf '%src%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[7]}" ;;
+      *) printf '%s\n' "${BASH_REMATCH[1]}" ;;
+    esac
     return 0
   fi
-  printf 'git-loopy: Release version must be stable or a -dev.N prerelease\n' >&2
+  printf 'git-loopy: Release version must be stable or an -alpha.N/-beta.N/-rc.N prerelease\n' >&2
   return 1
 }
 
@@ -589,25 +646,28 @@ _git_loopy_compose_stable_release_notes() {
   local fragment_stage="${5:?staged development fragment is required}"
   local destination="${6:?stable Release-note destination is required}"
   local release_directory="$repository_root/$GIT_LOOPY_RELEASE_NOTES_DIRECTORY"
-  local path name counter version body
+  local path name stage_index counter version body
   local -a fragments=()
 
   shopt -s nullglob
-  for path in "$release_directory"/v"$target"-dev.*.md; do
+  local fragment_pattern='^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.([1-9][0-9]*)\.md$'
+  for path in "$release_directory"/v"$target"-{alpha,beta,rc}.*.md; do
     name="${path##*/}"
-    if [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.(0|[1-9][0-9]*)\.md$ ]]; then
+    if [[ "$name" =~ $fragment_pattern ]]; then
       version="${name#v}"
       version="${version%.md}"
-      fragments+=("${BASH_REMATCH[1]}"$'\t'"$version"$'\t'"$path")
+      stage_index="$(_git_loopy_release_stage_index "${BASH_REMATCH[1]}")"
+      fragments+=("$stage_index"$'\t'"${BASH_REMATCH[2]}"$'\t'"$version"$'\t'"$path")
     fi
   done
   shopt -u nullglob
   name="${fragment_path##*/}"
-  [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.(0|[1-9][0-9]*)\.md$ ]] || return 1
+  [[ "$name" =~ $fragment_pattern ]] || return 1
   if [[ ! -f "$fragment_path" ]]; then
     version="${name#v}"
     version="${version%.md}"
-    fragments+=("${BASH_REMATCH[1]}"$'\t'"$version"$'\t'"$fragment_stage")
+    stage_index="$(_git_loopy_release_stage_index "${BASH_REMATCH[1]}")"
+    fragments+=("$stage_index"$'\t'"${BASH_REMATCH[2]}"$'\t'"$version"$'\t'"$fragment_stage")
   fi
 
   {
@@ -618,7 +678,7 @@ _git_loopy_compose_stable_release_notes() {
       printf '\nNo development fragments were available when this stable draft was composed.\n'
     else
       printf '\n## Development fragments\n'
-      while IFS=$'\t' read -r counter version path; do
+      while IFS=$'\t' read -r stage_index counter version path; do
         printf '\n### %s\n\n' "$version"
         body="$(
           awk '
@@ -632,7 +692,7 @@ _git_loopy_compose_stable_release_notes() {
         else
           printf 'No additional notes were recorded in this fragment.\n'
         fi
-      done < <(printf '%s\n' "${fragments[@]}" | sort -n -k1,1)
+      done < <(printf '%s\n' "${fragments[@]}" | sort -t $'\t' -n -k1,1 -k2,2)
     fi
   } >"$destination"
 }
@@ -759,38 +819,41 @@ _git_loopy_restore_repository_release_notes() {
 git_loopy_advance_repository_release_line() {
   local repository_root="${1:?repository root is required}"
   local labels_json="${2:?issue labels JSON is required}"
-  local bump_class
-  bump_class="$(git_loopy_resolve_bump_class "$labels_json")" || return 1
-  if [[ "$bump_class" == "none" ]]; then
-    GIT_LOOPY_RELEASE_ADVANCE_JSON="null"
-    printf '%s\n' "$GIT_LOOPY_RELEASE_ADVANCE_JSON"
-    return 0
-  fi
-
+  # The Bump class is derived from the target label relative to the last stable
+  # Release, so the current line is read first.
   if [[ "$GIT_LOOPY_RELEASE_LINE_INITIALIZED" != true ]]; then
     local current_version
     current_version="$(git_loopy_read_release_version "$repository_root/VERSION")" ||
       return 1
     _git_loopy_release_line_from_version "$repository_root" "$current_version" || return 1
   fi
+  local bump_class
+  bump_class="$(
+    git_loopy_resolve_bump_class "$labels_json" "$GIT_LOOPY_RELEASE_LAST_STABLE"
+  )" || return 1
+  if [[ "$bump_class" == "none" ]]; then
+    GIT_LOOPY_RELEASE_ADVANCE_JSON="null"
+    printf '%s\n' "$GIT_LOOPY_RELEASE_ADVANCE_JSON"
+    return 0
+  fi
 
-  local advanced_line next_line
-  advanced_line="$(
+  local next_line
+  next_line="$(
     git_loopy_advance_release_line \
       "$GIT_LOOPY_RELEASE_LAST_STABLE" \
       "$GIT_LOOPY_RELEASE_TARGET" \
+      "$GIT_LOOPY_RELEASE_STAGE" \
       "$GIT_LOOPY_RELEASE_COUNTER" \
       "$bump_class"
   )" || return 1
-  next_line="$(git_loopy_promote_release_line "$advanced_line" "$bump_class")" || return 1
+  local previous_version="$GIT_LOOPY_RELEASE_TARGET"
+  ((GIT_LOOPY_RELEASE_COUNTER == 0)) ||
+    previous_version+="-$GIT_LOOPY_RELEASE_STAGE.$GIT_LOOPY_RELEASE_COUNTER"
   local next_version
   next_version="$(jq -r '.version' <<<"$next_line")" || return 1
   git_loopy_write_repository_release_version "$repository_root" "$next_version" || return 1
   if ! git_loopy_write_repository_release_notes \
-    "$repository_root" "$advanced_line" "$next_line"; then
-    local previous_version="$GIT_LOOPY_RELEASE_TARGET"
-    ((GIT_LOOPY_RELEASE_COUNTER == 0)) ||
-      previous_version+="-dev.$GIT_LOOPY_RELEASE_COUNTER"
+    "$repository_root" "$next_line" "$next_line"; then
     git_loopy_write_repository_release_version "$repository_root" "$previous_version" ||
       printf 'git-loopy: Release metadata could not be restored after a refused note write\n' >&2
     return 1
@@ -805,9 +868,6 @@ git_loopy_advance_repository_release_line() {
       -- "${commit_paths[@]}" >/dev/null; then
     git -C "$repository_root" reset -- "${commit_paths[@]}" ||
       printf 'git-loopy: Release metadata could not be unstaged after a refused commit\n' >&2
-    local previous_version="$GIT_LOOPY_RELEASE_TARGET"
-    ((GIT_LOOPY_RELEASE_COUNTER == 0)) ||
-      previous_version+="-dev.$GIT_LOOPY_RELEASE_COUNTER"
     git_loopy_write_repository_release_version \
       "$repository_root" \
       "$previous_version" ||
@@ -818,11 +878,8 @@ git_loopy_advance_repository_release_line() {
   _git_loopy_discard_repository_release_note_backups
 
   GIT_LOOPY_RELEASE_TARGET="$(jq -r '.target' <<<"$next_line")"
+  GIT_LOOPY_RELEASE_STAGE="$(jq -r '.stage // ""' <<<"$next_line")"
   GIT_LOOPY_RELEASE_COUNTER="$(jq -r '.counter' <<<"$next_line")"
-  # A Promotion is the new stable base the next issue ratchets from, and its
-  # `dev.N` counter has already restarted at zero.
-  ((GIT_LOOPY_RELEASE_COUNTER != 0)) ||
-    GIT_LOOPY_RELEASE_LAST_STABLE="$GIT_LOOPY_RELEASE_TARGET"
   GIT_LOOPY_RELEASE_ADVANCE_JSON="$(jq -cn \
     --argjson line "$next_line" --arg bump_class "$bump_class" \
     '$line + {bump_class: $bump_class}'

@@ -1085,11 +1085,6 @@ def _bootstrap_tracker_labels(
             f"reachable. Missing labels: "
             f"{', '.join(_missing(vocabulary, result))}."
         )
-    for actual, expected in result.noncanonical_semver:
-        warn(
-            f"tracker carries noncanonical semver label {actual!r} "
-            f"(expected {expected!r}); the Bump class decision refuses it."
-        )
 
 
 def _plural(word: str, count: int) -> str:
@@ -1101,9 +1096,5 @@ def _missing(
     vocabulary: Sequence[labels.LabelSpec], result: labels.LabelBootstrap
 ) -> list[str]:
     """Names the bootstrap neither found nor created, in vocabulary order."""
-    accounted = {
-        *result.created,
-        *result.existing,
-        *(expected for _, expected in result.noncanonical_semver),
-    }
+    accounted = {*result.created, *result.existing}
     return [spec.name for spec in vocabulary if spec.name not in accounted]

@@ -1545,10 +1545,6 @@ def test_run_init_bootstraps_the_tracker_label_vocabulary(tmp_path: Path) -> Non
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
-        "semver:major",
-        "semver:minor",
-        "semver:patch",
-        "semver:none",
         "wayfinder:map",
         "wayfinder:research",
         "wayfinder:prototype",
@@ -1638,63 +1634,6 @@ def test_run_init_skips_label_bootstrap_when_the_tracker_is_unreachable(
     assert (tmp_path / "git-loopy" / "PROMPT.md").exists()
     assert any("HTTP 401 Bad credentials" in w for w in warnings)
     assert any("label" in w.lower() for w in warnings)
-
-
-def test_run_init_reports_a_noncanonical_bump_class_label_without_an_unavailable_tracker(
-    tmp_path: Path,
-) -> None:
-    """A reachable tracker carrying ``semver:Minor`` needs a distinct diagnosis."""
-    client = _FakeLabelClient("semver:Minor")
-    warnings: list[str] = []
-
-    rc = init_module.run_init(
-        scope="project",
-        assume_yes=True,
-        repo_root=tmp_path,
-        env=_env(tmp_path),
-        fetch_choices=lambda: [],
-        warn=warnings.append,
-        label_client=client,
-        **_packaged(tmp_path),
-    )
-
-    assert rc == 0
-    assert "semver:minor" not in client.created
-    assert warnings == [
-        "tracker carries noncanonical semver label 'semver:Minor' "
-        "(expected 'semver:minor'); the Bump class decision refuses it."
-    ]
-
-
-def test_run_init_retains_a_noncanonical_bump_class_fault_after_a_create_failure(
-    tmp_path: Path,
-) -> None:
-    """A partial bootstrap does not turn an exact-name fault into a missing label."""
-
-    class _ReadOnlyLabelClient(_FakeLabelClient):
-        def label_create(self, spec: Any) -> None:
-            raise RuntimeError("gh: HTTP 403 Resource not accessible by integration")
-
-    client = _ReadOnlyLabelClient("semver:Minor")
-    warnings: list[str] = []
-
-    rc = init_module.run_init(
-        scope="project",
-        assume_yes=True,
-        repo_root=tmp_path,
-        env=_env(tmp_path),
-        fetch_choices=lambda: [],
-        warn=warnings.append,
-        label_client=client,
-        **_packaged(tmp_path),
-    )
-
-    assert rc == 0
-    assert "semver:minor" not in warnings[0]
-    assert warnings[1] == (
-        "tracker carries noncanonical semver label 'semver:Minor' "
-        "(expected 'semver:minor'); the Bump class decision refuses it."
-    )
 
 
 def test_run_init_follows_the_documented_mapping_when_bootstrapping(

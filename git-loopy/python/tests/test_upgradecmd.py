@@ -122,7 +122,7 @@ def test_newest_published_release_includes_a_prerelease(
             json.dumps(
                 [
                     {"tag_name": "v1.3.0", "draft": False, "prerelease": False},
-                    {"tag_name": "v1.4.0-dev.1", "draft": False, "prerelease": True},
+                    {"tag_name": "v1.4.0-alpha.1", "draft": False, "prerelease": True},
                     {"tag_name": "v9.0.0", "draft": True, "prerelease": False},
                 ]
             ).encode("utf-8")
@@ -130,7 +130,7 @@ def test_newest_published_release_includes_a_prerelease(
 
     monkeypatch.setattr(upgradecmd, "urlopen", _fake_urlopen)
 
-    assert upgradecmd.resolve_published_release(None) == "1.4.0-dev.1"
+    assert upgradecmd.resolve_published_release(None) == "1.4.0-alpha.1"
 
 
 def test_newest_published_release_considers_every_release_page(
@@ -159,7 +159,7 @@ def test_newest_published_release_considers_every_release_page(
             "?per_page=100&page=2"
         ): _Response(
             json.dumps(
-                [{"tag_name": "v1.4.0-dev.1", "draft": False, "prerelease": True}]
+                [{"tag_name": "v1.4.0-alpha.1", "draft": False, "prerelease": True}]
             ).encode("utf-8")
         ),
     }
@@ -170,7 +170,7 @@ def test_newest_published_release_considers_every_release_page(
 
     monkeypatch.setattr(upgradecmd, "urlopen", _fake_urlopen)
 
-    assert upgradecmd.resolve_published_release(None) == "1.4.0-dev.1"
+    assert upgradecmd.resolve_published_release(None) == "1.4.0-alpha.1"
     assert pages == {}
 
 
@@ -914,3 +914,24 @@ def test_the_artifact_moved_is_the_one_upgrade_is_running_from(
     assert result == 0
     assert launched and "uv" in launched[0][-1]
     assert "uv-tool channel" in "\n".join(output)
+
+
+@pytest.mark.parametrize(
+    ("installed", "target", "forward"),
+    [
+        ("1.4.0-alpha.9", "1.4.0-beta.1", True),
+        ("1.4.0-beta.2", "1.4.0-rc.1", True),
+        ("1.4.0-rc.3", "1.4.0", True),
+        ("1.4.0-alpha.10", "1.4.0-alpha.2", False),
+        ("1.4.0", "1.4.1-alpha.1", True),
+        ("1.4.0-rc.1", "1.4.0-beta.5", False),
+        ("0.11.0-dev.8", "0.11.0-alpha.1", None),
+    ],
+)
+def test_release_order_follows_the_prerelease_stages(
+    installed: str, target: str, forward: bool | None
+) -> None:
+    """alpha < beta < rc < stable; a retired `-dev.N` cannot be ranked (ADR-0066)."""
+    from git_loopy import upgradecmd
+
+    assert upgradecmd._is_forward(installed, target) is forward

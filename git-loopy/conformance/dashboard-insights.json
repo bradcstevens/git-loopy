@@ -7948,7 +7948,7 @@
           "bump_class": "patch",
           "issue": 42,
           "release_target": "1.2.4",
-          "release_version": "1.2.4-dev.1"
+          "release_version": "1.2.4-alpha.1"
         },
         {
           "ts": "2026-05-16T00:00:02.000Z",
@@ -7959,7 +7959,7 @@
           "bump_class": "minor",
           "issue": 43,
           "release_target": "1.3.0",
-          "release_version": "1.3.0-dev.2"
+          "release_version": "1.3.0-alpha.2"
         }
       ],
       "snapshots": [
@@ -8098,7 +8098,7 @@
                   "effective_ceiling_tokens": null
                 },
                 "release_target": "1.3.0",
-                "release_version": "1.3.0-dev.2",
+                "release_version": "1.3.0-alpha.2",
                 "cost": {
                   "availability": "available"
                 },

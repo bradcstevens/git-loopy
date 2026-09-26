@@ -542,7 +542,7 @@ def _wire_release_distribution(root: Path, version: str = "1.2.3") -> None:
             (
                 "[[package]]",
                 'name = "git-loopy"',
-                f'version = "{version.replace("-dev.", ".dev")}"',
+                f'version = "{version.replace("-alpha.", "a")}"',
                 'source = { editable = "." }',
                 "",
             )
@@ -568,7 +568,7 @@ def _wire_release_distribution(root: Path, version: str = "1.2.3") -> None:
     (conformance_dir / "release-version.json").write_text(
         json.dumps({
             "expected_release_version": version,
-            "expected_python_distribution_version": version.replace("-dev.", ".dev"),
+            "expected_python_distribution_version": version.replace("-alpha.", "a"),
         }) + "\n",
         encoding="utf-8",
     )
@@ -2939,28 +2939,28 @@ def test_parallel_integration_lands_and_closes_both_lanes(
 
 
 @pytest.mark.parametrize(
-    ("bump_class", "expected_version", "expected_commit", "expected_note_paths"),
+    ("bump_class", "labels", "expected_version", "expected_commit", "expected_note_paths"),
     (
         (
             "patch",
-            "1.2.4-dev.1",
-            "chore(release): advance Release line to 1.2.4-dev.1",
-            ("docs/releases/v1.2.4-dev.1.md",),
+            ["v1.2.4"],
+            "1.2.4-alpha.1",
+            "chore(release): advance Release line to 1.2.4-alpha.1",
+            ("docs/releases/v1.2.4-alpha.1.md",),
         ),
         (
             "major",
-            "2.0.0",
-            "chore(release): promote Release line to 2.0.0",
-            (
-                "docs/releases/v2.0.0-dev.1.md",
-                "docs/releases/v2.0.0.md",
-            ),
+            ["v2.0.0"],
+            "2.0.0-alpha.1",
+            "chore(release): advance Release line to 2.0.0-alpha.1",
+            ("docs/releases/v2.0.0-alpha.1.md",),
         ),
-        ("none", "1.2.3", None, ()),
+        ("none", [], "1.2.3", None, ()),
     ),
 )
 def test_parallel_integration_applies_only_bumped_release_lines_after_publication(
     bump_class: str,
+    labels: list[str],
     expected_version: str,
     expected_commit: str | None,
     expected_note_paths: tuple[str, ...],
@@ -2975,7 +2975,7 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
         issues=[
             _make_issue(
                 42,
-                labels=["ready-for-agent", "parallel-safe", f"semver:{bump_class}"],
+                labels=["ready-for-agent", "parallel-safe", *labels],
             )
         ],
     )
@@ -3033,20 +3033,11 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
         ]
         fragment_path = tmp_path / expected_note_paths[0]
         assert fragment_path.read_text(encoding="utf-8") == (
-            f"# git-loopy {expected_version if bump_class == 'patch' else '2.0.0-dev.1'}\n\n"
+            f"# git-loopy {expected_version}\n\n"
             "This development fragment advances the Release line to "
-            f"`{expected_version if bump_class == 'patch' else '2.0.0-dev.1'}` "
+            f"`{expected_version}` "
             f"on the way to stable `{expected_version.split('-', 1)[0]}`.\n"
         )
-        if bump_class == "major":
-            assert (tmp_path / expected_note_paths[1]).read_text(encoding="utf-8") == (
-                "# git-loopy 2.0.0\n\n"
-                "git-loopy 2.0.0 was promoted from the committed development fragments below.\n\n"
-                "## Development fragments\n\n"
-                "### 2.0.0-dev.1\n\n"
-                "This development fragment advances the Release line to "
-                "`2.0.0-dev.1` on the way to stable `2.0.0`.\n"
-            )
         assert len(release_advanced) == 1
         assert {
             key: release_advanced[0][key]
@@ -3066,17 +3057,14 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
     assert fake_gh.issue_view(42).state == "CLOSED"
 
 
-def test_parallel_integration_preserves_a_human_stable_release_note(
+def test_parallel_integration_never_promotes_a_major_to_stable(
     tmp_path, monkeypatch
 ) -> None:
-    """A stable note a human already wrote survives the Promotion that ships it.
+    """A `major` starts an alpha line; only a closed milestone cuts stable (ADR-0066).
 
-    The generated draft is a floor, not a replacement (ADR-0052). A `major`
-    reaches stable under the Run itself, so the Promotion that would compose a
-    draft runs while the human's essay is already sitting at the conventional
-    location -- and overwriting it there would destroy prose nothing else holds
-    a copy of. The preserved note is still committed, because publication reads
-    what the tag carries rather than what the worktree happens to hold.
+    The exemption that once let an agent's inferred label publish a breaking
+    Release unattended is gone, so a stable note a human already wrote is
+    neither composed over nor committed by the Run.
     """
     fake_git = _wire_repo(tmp_path)
     _wire_release_distribution(tmp_path)
@@ -3088,7 +3076,7 @@ def test_parallel_integration_preserves_a_human_stable_release_note(
     fake_gh = FakeGitHubClient(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[
-            _make_issue(42, labels=["ready-for-agent", "parallel-safe", "semver:major"])
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe", "v2.0.0"])
         ],
     )
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
@@ -3115,15 +3103,12 @@ def test_parallel_integration_preserves_a_human_stable_release_note(
         )
     ) == 0
 
-    assert validate_repository_release_version(tmp_path) == "2.0.0"
+    assert validate_repository_release_version(tmp_path) == "2.0.0-alpha.1"
     assert stable_note.read_text(encoding="utf-8") == essay
     committed_paths = [paths for _message, paths in fake_git.commit_paths_calls]
     assert len(committed_paths) == 1
-    assert "docs/releases/v2.0.0.md" in committed_paths[0]
-    # The advance still authors its own fragment: the human wrote the stable
-    # note, not the development one the next Promotion composes from.
-    assert (tmp_path / "docs/releases/v2.0.0-dev.1.md").exists()
-    assert "docs/releases/v2.0.0-dev.1.md" in committed_paths[0]
+    assert "docs/releases/v2.0.0.md" not in committed_paths[0]
+    assert "docs/releases/v2.0.0-alpha.1.md" in committed_paths[0]
 
 
 def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
@@ -3138,7 +3123,7 @@ def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
         issues=[
             _make_issue(
                 42,
-                labels=["ready-for-agent", "parallel-safe", "semver:patch"],
+                labels=["ready-for-agent", "parallel-safe", "v1.2.4"],
             )
         ],
     )
@@ -3181,10 +3166,10 @@ def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
     assert fake_git.unstage_paths_calls == [
         (
             *(str(path) for path in RELEASE_VERSION_PATHS),
-            "docs/releases/v1.2.4-dev.1.md",
+            "docs/releases/v1.2.4-alpha.1.md",
         )
     ]
-    assert not (tmp_path / "docs/releases/v1.2.4-dev.1.md").exists()
+    assert not (tmp_path / "docs/releases/v1.2.4-alpha.1.md").exists()
     # The publication already happened and cannot be retracted; a Release line
     # that would not move is a diagnostic, never a veto on a landed issue.
     assert fake_gh.issue_view(42).state == "CLOSED"
@@ -3196,20 +3181,20 @@ def test_parallel_integration_survives_a_release_tag_read_that_fails(
 ) -> None:
     """A git failure reading the last stable Release never strands a landing.
 
-    The stable base behind a ``dev.N`` line comes from a ``git tag`` read, which
+    The stable base behind a prerelease line comes from a ``git tag`` read, which
     raises :class:`~git_loopy.git.GitError` rather than a Release error. Left
     uncaught it would escape a *published* merge before the contribution is
     finalized, crashing the Run with the issue open and the Lane branch alive.
     """
     fake_git = _wire_repo(tmp_path)
-    _wire_release_distribution(tmp_path, version="1.3.0-dev.7")
+    _wire_release_distribution(tmp_path, version="1.3.0-alpha.7")
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
     fake_gh = FakeGitHubClient(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[
             _make_issue(
                 42,
-                labels=["ready-for-agent", "parallel-safe", "semver:patch"],
+                labels=["ready-for-agent", "parallel-safe", "v1.2.4"],
             )
         ],
     )
@@ -3242,7 +3227,7 @@ def test_parallel_integration_survives_a_release_tag_read_that_fails(
         )
     ) == 0
 
-    assert validate_repository_release_version(tmp_path) == "1.3.0-dev.7"
+    assert validate_repository_release_version(tmp_path) == "1.3.0-alpha.7"
     assert fake_git.commit_paths_calls == []
     assert fake_gh.issue_view(42).state == "CLOSED"
     assert len(_lane_branch_deletes(fake_git)) == 1
@@ -3253,14 +3238,14 @@ def test_parallel_integration_continues_a_prerelease_release_line(
 ) -> None:
     """A new Run retains a persisted dev counter and its stable Release base."""
     fake_git = _wire_repo(tmp_path, release_versions=("1.2.3",))
-    _wire_release_distribution(tmp_path, version="1.3.0-dev.7")
+    _wire_release_distribution(tmp_path, version="1.3.0-alpha.7")
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
     fake_gh = FakeGitHubClient(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[
             _make_issue(
                 42,
-                labels=["ready-for-agent", "parallel-safe", "semver:patch"],
+                labels=["ready-for-agent", "parallel-safe", "v1.2.4"],
             )
         ],
     )
@@ -3288,7 +3273,7 @@ def test_parallel_integration_continues_a_prerelease_release_line(
         )
     ) == 0
 
-    assert validate_repository_release_version(tmp_path) == "1.3.0-dev.8"
+    assert validate_repository_release_version(tmp_path) == "1.3.0-alpha.8"
     assert fake_gh.issue_view(42).state == "CLOSED"
 
 
@@ -3308,7 +3293,7 @@ def test_parallel_integration_advances_the_release_line_holding_the_integration_
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[
             _make_issue(
-                42, labels=["ready-for-agent", "parallel-safe", "semver:patch"]
+                42, labels=["ready-for-agent", "parallel-safe", "v1.2.4"]
             )
         ],
     )
@@ -3348,7 +3333,7 @@ def test_parallel_integration_advances_the_release_line_holding_the_integration_
     ) == 0
 
     assert held == [True]
-    assert validate_repository_release_version(tmp_path) == "1.2.4-dev.1"
+    assert validate_repository_release_version(tmp_path) == "1.2.4-alpha.1"
 
 
 def test_parallel_no_lane_contribution_carries_a_release_version_change(
@@ -3359,7 +3344,7 @@ def test_parallel_no_lane_contribution_carries_a_release_version_change(
     Bumping inside a Lane's contribution would have every Lane touch the same
     version-bearing files, conflicting on every Integration on hunks whose
     conflict carries no meaning and spending the bounded auto-resolution budget
-    reconciling version numbers (ADR-0052). The `dev.N` notes fragment each
+    reconciling version numbers (ADR-0052). The prerelease notes fragment each
     advance authors rides in that same Release commit and inherits the rule: a
     Lane that wrote its own fragment would collide with every sibling Lane the
     same way, and the fragment names a Release version a Lane cannot know.
@@ -3371,10 +3356,10 @@ def test_parallel_no_lane_contribution_carries_a_release_version_change(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[
             _make_issue(
-                42, labels=["ready-for-agent", "parallel-safe", "semver:minor"]
+                42, labels=["ready-for-agent", "parallel-safe", "v1.3.0"]
             ),
             _make_issue(
-                43, labels=["ready-for-agent", "parallel-safe", "semver:patch"]
+                43, labels=["ready-for-agent", "parallel-safe", "v1.2.4"]
             ),
         ],
     )
@@ -3429,14 +3414,18 @@ def test_parallel_no_lane_contribution_carries_a_release_version_change(
     ]
     assert lane_side_writes == []
     # Base did, twice -- one per bumped contribution, each carrying the version
-    # copies and the one `dev.N` fragment that advance authored.
+    # copies and the one prerelease fragment that advance authored.
     assert [paths for _message, paths in fake_git.commit_paths_calls] == [
         (
             *(str(path) for path in RELEASE_VERSION_PATHS),
             f"docs/releases/v{version}.md",
         )
-        for version in ("1.3.0-dev.1", "1.3.0-dev.2")
+        for version in ("1.3.0-alpha.1", "1.3.0-alpha.2")
     ]
+
+
+#: The Release-target label each Bump class names from the fixture's stable 1.2.3.
+_TARGET_LABELS = {"major": "v2.0.0", "minor": "v1.3.0", "patch": "v1.2.4"}
 
 
 def _release_line_after_run(
@@ -3462,7 +3451,7 @@ def _release_line_after_run(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[
             _make_issue(
-                ref, labels=["ready-for-agent", "parallel-safe", f"semver:{key}"]
+                ref, labels=["ready-for-agent", "parallel-safe", _TARGET_LABELS[key]]
             )
             for ref, key in bump_classes.items()
         ],
@@ -3521,24 +3510,24 @@ def test_parallel_integration_order_does_not_change_the_resulting_release_line(
         bump_classes={42: "patch", 43: "minor"},
     )
 
-    assert minor_first == patch_first == "1.3.0-dev.2"
-    assert minor_first_commits[0].endswith("1.3.0-dev.1")
-    assert patch_first_commits[0].endswith("1.2.4-dev.1")
+    assert minor_first == patch_first == "1.3.0-alpha.2"
+    assert minor_first_commits[0].endswith("1.3.0-alpha.1")
+    assert patch_first_commits[0].endswith("1.2.4-alpha.1")
 
 
-def test_parallel_major_promotion_restarts_the_next_release_line(
+def test_parallel_major_stays_on_its_alpha_line_rather_than_promoting(
     tmp_path, monkeypatch
 ) -> None:
-    """A major stable Release becomes the next line's fresh stable base."""
+    """A major is a prerelease like any other bump; a later patch joins it (ADR-0066)."""
     version, commits = _release_line_after_run(
         tmp_path / "major-then-patch",
         monkeypatch,
         bump_classes={42: "major", 43: "patch"},
     )
 
-    assert version == "2.0.1-dev.1"
-    assert commits[0].endswith("2.0.0")
-    assert commits[1].endswith("2.0.1-dev.1")
+    assert version == "2.0.0-alpha.2"
+    assert commits[0].endswith("2.0.0-alpha.1")
+    assert commits[1].endswith("2.0.0-alpha.2")
 
 
 def test_git_loopy_version_reports_the_line_a_run_advanced(
@@ -3552,7 +3541,7 @@ def test_git_loopy_version_reports_the_line_a_run_advanced(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[
             _make_issue(
-                42, labels=["ready-for-agent", "parallel-safe", "semver:minor"]
+                42, labels=["ready-for-agent", "parallel-safe", "v1.3.0"]
             )
         ],
     )
@@ -3592,7 +3581,7 @@ def test_git_loopy_version_reports_the_line_a_run_advanced(
     )
 
     assert cli_module.main(["--version"]) == 0
-    assert capsys.readouterr().out == "git-loopy 1.3.0-dev.1\n"
+    assert capsys.readouterr().out == "git-loopy 1.3.0-alpha.1\n"
 
 
 class _BaseWatchingGateRunner(FakeGateRunner):
@@ -10952,7 +10941,7 @@ def test_a_lane_whose_issue_another_run_holds_opens_no_session(
     (§8.2), so the Run carries on rather than failing.
 
     "Cheap" includes writing nothing on the issue. The Lease is taken *before*
-    ``_classify_at_pickup``, which applies ``task-type:`` and ``semver:``
+    ``_classify_at_pickup``, which applies ``task-type:`` and ``vX.Y.Z``
     labels and buys a classifier session to decide them — irreversible tracker
     writes onto an issue that belongs, right now, to somebody else.
     """

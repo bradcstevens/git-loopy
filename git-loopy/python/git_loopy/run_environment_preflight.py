@@ -175,7 +175,7 @@ def _label_vocabulary_check(
     (ADR-0055). It asks
     :func:`~git_loopy.labels.read_run_required_vocabulary` rather than the whole
     vocabulary — that function's docstring carries the reasons, which are not
-    one reason: the ``task-type:`` and ``semver:`` taxonomies are created on the
+    one reason: the ``task-type:`` and ``vX.Y.Z`` labels are created on the
     way in, while no Run needs a ``wayfinder:`` label to pre-exist — the one it
     reads, ``wayfinder:map``, only excludes a map from the **Pool**. And
     it fails on absence alone: a Run reads and writes Labels

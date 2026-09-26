@@ -295,7 +295,7 @@ before committing a trace to it:
 ```json
 {
   "name": "git-loopy-tui",
-  "version": "0.11.0-dev.8",
+  "version": "0.11.0-alpha.1",
   "min_event_schema_version": 1,
   "max_event_schema_version": 1,
   "wrapper_contract_version": "2.12"

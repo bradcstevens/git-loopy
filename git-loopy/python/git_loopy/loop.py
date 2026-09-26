@@ -234,7 +234,6 @@ from git_loopy.release_version import (
     ReleaseVersionError,
     advance_release_line,
     is_prerelease,
-    promote_release_line,
     read_release_version,
     read_runtime_release_version,
     release_line_commit_subject,
@@ -337,6 +336,19 @@ def _build_telemetry_config() -> dict[str, Any] | None:
         SDK reads them during subprocess setup.
     """
     return telemetry.build_sdk_telemetry_config()
+
+
+def read_repository_release_line(
+    repo_root: Path, git: git_module.GitClient
+) -> tuple[str, ReleaseLine]:
+    """Return the repository's last stable Release version and its current line.
+
+    A prerelease line's own target is where the ratchet has already reached, so
+    the stable base it ratchets *from* is the newest published stable Release.
+    """
+    current_version = read_release_version(repo_root / "VERSION")
+    last_stable = git.latest_release_version() if is_prerelease(current_version) else None
+    return release_line_from_version(current_version, last_stable_version=last_stable)
 
 
 def _make_client() -> CopilotClient:
@@ -1505,6 +1517,7 @@ class _Loop:
                 if task_type_client is not None
                 else _make_task_type_label_client()
             ),
+            release_line=lambda: read_repository_release_line(git.root, self._git),
             diag=self._diag,
         )
         # The one scrub-and-fan-out seam (issue #43): compose -> scrub once ->
@@ -5805,7 +5818,7 @@ class _ParallelLoop:
         #
         # Ordering it after classification would break the fence's whole
         # point. `_classify_at_pickup` is not a read: it applies `task-type:`
-        # and `semver:` labels to the issue, and spends a classifier session
+        # and `vX.Y.Z` labels to the issue, and spends a classifier session
         # doing it. A Lane that classified first would write twice onto an
         # issue a rival Run holds a live Lease on, and buy an AI session for
         # work it is about to be refused.
@@ -7195,9 +7208,10 @@ class _ParallelLoop:
         Integration, on hunks whose conflict carries no meaning, spending the
         bounded auto-resolution budget reconciling version numbers.
 
-        The **Release target** ratchets and the ``dev.N`` counter counts, so two
-        contributions integrating in either order land the same version. A
-        ``semver:none`` issue advances nothing.
+        The **Release target** ratchets and the prerelease counter counts, so
+        two contributions integrating in either order land the same version. An
+        issue with no ``vX.Y.Z`` Release-target label advances nothing
+        (ADR-0066).
 
         Every failure here is a diagnostic and never a veto: the contribution is
         already published on base, and a line that would not move cannot retract
@@ -7207,10 +7221,13 @@ class _ParallelLoop:
         partially advanced one.
         """
         try:
-            bump_class = resolve_bump_class(item.labels)
-        except ReleaseVersionError as exc:
-            # Pickup already named this classification fault, and ADR-0052 keeps
-            # absence distinct from `semver:none`: an unclassified issue must not
+            # The label names a Release relative to the last stable one, so the
+            # line is read first. `git_module.GitError` reaches here from the tag
+            # read behind `_read_release_line`.
+            last_stable, current_line = self._read_release_line()
+            bump_class = resolve_bump_class(item.labels, last_stable)
+        except (ReleaseVersionError, git_module.GitError) as exc:
+            # Pickup already named a label fault; a refused label must not
             # silently advance the line either way.
             self._diag.warning(
                 "integration #%s: cannot resolve Bump class for Release line: %s",
@@ -7223,18 +7240,17 @@ class _ParallelLoop:
 
         version_written = False
         try:
-            last_stable, current_line = self._read_release_line()
-            advanced_line = advance_release_line(
+            next_line = advance_release_line(
                 last_stable,
                 current_line.target,
                 current_line.counter,
                 bump_class,
+                current_stage=current_line.stage,
             )
-            next_line = promote_release_line(advanced_line, bump_class)
             write_repository_release_version(self._repo_root, next_line.version)
             version_written = True
             notes_write = write_repository_release_notes(
-                self._repo_root, advanced_line, next_line
+                self._repo_root, next_line, next_line
             )
         except (ReleaseVersionError, git_module.GitError) as exc:
             if version_written:
@@ -7249,10 +7265,9 @@ class _ParallelLoop:
                         item.ref,
                         rollback_exc,
                     )
-            # `git_module.GitError` reaches here from the tag read behind
-            # `_read_release_line`. It is caught for the same reason every other
-            # fault here is: the merge is already published, so nothing this
-            # method learns may escape and strand a landed contribution.
+            # Caught for the same reason every other fault here is: the merge is
+            # already published, so nothing this method learns may escape and
+            # strand a landed contribution.
             self._diag.warning(
                 "integration #%s: Release line did not advance: %s", item.ref, exc
             )
@@ -7268,10 +7283,6 @@ class _ParallelLoop:
             return None
 
         self._release_line = next_line
-        if not is_prerelease(next_line.version):
-            # A Promotion is the new stable base the next issue ratchets from,
-            # and its `dev.N` counter has already restarted at zero.
-            self._last_stable_release_version = next_line.target
         return next_line, bump_class
 
     def _read_release_line(self) -> tuple[str, ReleaseLine]:
@@ -7284,20 +7295,10 @@ class _ParallelLoop:
         if self._release_line is not None:
             assert self._last_stable_release_version is not None
             return self._last_stable_release_version, self._release_line
-        current_version = read_release_version(self._repo_root / "VERSION")
-        # A `dev.N` line's own target is where the ratchet has already reached,
-        # so the stable base it ratchets *from* is the newest published Release.
-        last_stable = (
-            self._git.latest_release_version()
-            if is_prerelease(current_version)
-            else None
-        )
         (
             self._last_stable_release_version,
             self._release_line,
-        ) = release_line_from_version(
-            current_version, last_stable_version=last_stable
-        )
+        ) = read_repository_release_line(self._repo_root, self._git)
         return self._last_stable_release_version, self._release_line
 
     def _restore_release_line(

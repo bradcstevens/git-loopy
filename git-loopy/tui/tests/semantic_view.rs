@@ -268,8 +268,8 @@ fn a_release_line_advance_replaces_the_headers_placeholder_with_its_latest_value
 
     let advanced = reduce_jsonl(
         &[
-            r#"{"type":"wrapper.release.advanced","bump_class":"patch","issue":42,"release_target":"1.2.4","release_version":"1.2.4-dev.1"}"#,
-            r#"{"type":"wrapper.release.advanced","bump_class":"minor","issue":43,"release_target":"1.3.0","release_version":"1.3.0-dev.2"}"#,
+            r#"{"type":"wrapper.release.advanced","bump_class":"patch","issue":42,"release_target":"1.2.4","release_version":"1.2.4-alpha.1"}"#,
+            r#"{"type":"wrapper.release.advanced","bump_class":"minor","issue":43,"release_target":"1.3.0","release_version":"1.3.0-alpha.2"}"#,
         ],
         IssueRef::number(42),
     );
@@ -279,7 +279,7 @@ fn a_release_line_advance_replaces_the_headers_placeholder_with_its_latest_value
     );
     assert_eq!(
         advanced["dashboard"]["header"]["release_version"],
-        serde_json::json!("1.3.0-dev.2")
+        serde_json::json!("1.3.0-alpha.2")
     );
 }
 

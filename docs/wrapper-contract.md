@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.12 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.13 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -2340,23 +2340,33 @@ cross-release compatibility.
 
 ## 16. Release-line advancement (MUST)
 
+**Release-target labels and prerelease stages (contract 2.13, ADR-0066).** The
+`semver:` labels, `-dev.N` counter and `major` Promotion exemption of 2.12 are
+replaced as below; `release-line.json` declares this at 2.13.
+
 Every **Orchestrator** MUST advance the **Release line** for a closed issue
-with a Bump class other than `semver:none`, after its Integration has published
+that carries a `vX.Y.Z` Release-target label, after its Integration has published
 the issue and while holding the `_integration_lock` that serializes Integration
 ([ADR-0009](adr/0009-runner-driven-integration-and-auto-resolution.md)). The
-advance derives its Release target by ratcheting the closed Bump-class labels
-and increments that target's `dev.N` counter; it MUST NOT be performed in a
-Lane contribution. The resulting Release-line commit is therefore a
+label MUST be one of the last stable Release's three successors, from which the
+Bump class is derived; a malformed, conflicting or unreachable label MUST be
+refused, and an issue with no such label advances nothing. The advance derives
+its Release target by ratcheting, increments the prerelease counter, and
+restarts the stage at `alpha` when the line starts or its target rises
+([ADR-0066](adr/0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md));
+it MUST NOT be performed in a Lane contribution. The resulting Release-line commit is therefore a
 post-Integration fact, not work a Lane proposes.
 
 After a successful Release-line commit, the Orchestrator MUST emit
 `wrapper.release.advanced` with the closed `issue`, its `bump_class`, the
-ratcheted `release_target`, and the committed `release_version`. A
-`semver:none` issue and a failed advance emit no such Event. A closed
-`vX.Y.Z` milestone may **Promote** the current development line to stable, but
-does not select the target; `semver:major` is deliberately exempt from that
-milestone trigger and may Promote unattended. [ADR-0052](adr/0052-the-release-line-advances-per-issue.md)
-records both the ratchet and that unattended-major consequence as deliberate.
+ratcheted `release_target`, and the committed `release_version`. An issue with
+no Release-target label and a failed advance emit no such Event. A closed
+`vX.Y.Z` milestone may **Promote** the current prerelease line to stable from
+any stage, but does not select the target, and it is the only Promotion
+trigger: no Bump class Promotes unattended. Moving a line to `beta` or `rc` is
+an operator's act outside a Run. [ADR-0052](adr/0052-the-release-line-advances-per-issue.md)
+records the ratchet; [ADR-0066](adr/0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md)
+records the label, the stages and the withdrawn `major` exemption.
 
 What happens when a human closes a milestone-bearing issue outside a **Run** is
 open: this contract does not say whether that closure advances the Release

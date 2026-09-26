@@ -21,7 +21,7 @@ import pytest
 
 from git_loopy import labels as labels_module
 from git_loopy.issue_order import LABEL_PRIORITY
-from git_loopy.release_version import BUMP_CLASS_KEYS, BUMP_CLASS_LABEL_PREFIX
+from git_loopy.release_version import is_release_target_label
 from git_loopy.skill_source import (
     ACQUIRE_COMMAND,
     DEFAULT_CHECKOUT,
@@ -74,10 +74,6 @@ def test_vocabulary_includes_the_canonical_task_type_labels(tmp_path: Path) -> N
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
-        "semver:major",
-        "semver:minor",
-        "semver:patch",
-        "semver:none",
         "wayfinder:map",
         "wayfinder:research",
         "wayfinder:prototype",
@@ -86,15 +82,23 @@ def test_vocabulary_includes_the_canonical_task_type_labels(tmp_path: Path) -> N
     ]
 
 
-def test_vocabulary_includes_the_closed_bump_class_labels(tmp_path: Path) -> None:
-    """Every accepted release impact is provisioned before a Run can infer it."""
+def test_vocabulary_provisions_no_release_target_label(tmp_path: Path) -> None:
+    """``vX.Y.Z`` labels are an open set Pickup mints, never provisioned (ADR-0066)."""
     vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
 
-    assert [
-        spec.name
-        for spec in vocabulary
-        if spec.name.startswith(BUMP_CLASS_LABEL_PREFIX)
-    ] == [f"{BUMP_CLASS_LABEL_PREFIX}{key}" for key in BUMP_CLASS_KEYS]
+    assert not [
+        spec.name for spec in vocabulary if is_release_target_label(spec.name)
+    ]
+    assert not [spec.name for spec in vocabulary if spec.name.startswith("semver:")]
+
+
+def test_a_release_target_label_names_the_release_it_ships_in() -> None:
+    spec = labels_module.release_target_label_spec("0.11.0")
+
+    assert spec.name == spec.role == "v0.11.0"
+    assert spec.color == labels_module.RELEASE_TARGET_LABEL_COLOR
+    assert spec.description == "Ships in the v0.11.0 Release."
+    assert len(spec.description) <= labels_module.MAX_DESCRIPTION_LENGTH
 
 
 def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
@@ -129,10 +133,6 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
-        "semver:major",
-        "semver:minor",
-        "semver:patch",
-        "semver:none",
         "wayfinder:map",
         "wayfinder:research",
         "wayfinder:prototype",
@@ -154,10 +154,6 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
-        "semver:major",
-        "semver:minor",
-        "semver:patch",
-        "semver:none",
         "wayfinder:map",
         "wayfinder:research",
         "wayfinder:prototype",
@@ -287,10 +283,6 @@ def test_this_repository_s_own_documented_mapping_parses() -> None:
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
-        "semver:major",
-        "semver:minor",
-        "semver:patch",
-        "semver:none",
         "wayfinder:map",
         "wayfinder:research",
         "wayfinder:prototype",
@@ -382,7 +374,7 @@ def test_the_wayfinder_labels_share_one_colour_like_every_closed_taxonomy(
 ) -> None:
     """A closed taxonomy reads as one family, and this one owns its colour alone.
 
-    ``task-type:`` shares one blue and ``semver:`` one yellow; ``wayfinder:``
+    ``task-type:`` shares one blue and ``vX.Y.Z`` one yellow; ``wayfinder:``
     shares one teal for the same reason. The five reached this tracker ad hoc
     before a vocabulary existed to consult, so they landed on four colours
     already spoken for — and two read *backwards*: ``wayfinder:task`` wore
@@ -426,7 +418,7 @@ def test_the_run_required_vocabulary_is_the_vocabulary_minus_the_taxonomies(
 ) -> None:
     """Every exclusion is derived, so a new key cannot become a Run precondition.
 
-    ``task-type:`` and ``semver:`` are minted on the way in and ``wayfinder:``
+    ``task-type:`` is minted on the way in and ``wayfinder:``
     is never read by a Run; what is left is exactly the labels a human triages
     with plus the two assertions selection reads.
     """
@@ -436,7 +428,7 @@ def test_the_run_required_vocabulary_is_the_vocabulary_minus_the_taxonomies(
     assert [spec.name for spec in required] == [
         spec.name
         for spec in vocabulary
-        if not spec.name.startswith(("task-type:", "semver:", "wayfinder:"))
+        if not spec.name.startswith(("task-type:", "wayfinder:"))
     ]
 
 
@@ -485,10 +477,6 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
-        "semver:major",
-        "semver:minor",
-        "semver:patch",
-        "semver:none",
         "wayfinder:map",
         "wayfinder:research",
         "wayfinder:prototype",
@@ -508,10 +496,6 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
-        "semver:major",
-        "semver:minor",
-        "semver:patch",
-        "semver:none",
         "wayfinder:map",
         "wayfinder:research",
         "wayfinder:prototype",
@@ -572,21 +556,6 @@ def test_bootstrap_matches_an_existing_label_case_insensitively(tmp_path: Path) 
 
     assert "wontfix" not in [spec.name for spec in client.created]
     assert result.existing == ("wontfix",)
-
-
-def test_bootstrap_reports_a_recased_bump_class_label(tmp_path: Path) -> None:
-    """Exact bump-class matching cannot treat ``semver:Minor`` as provisioned."""
-    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
-    client = _FakeLabelClient("semver:Minor")
-
-    result = labels_module.bootstrap_labels(vocabulary, client)
-
-    assert "semver:minor" not in result.created
-    assert "semver:minor" not in result.existing
-    assert result.unavailable is None
-    assert result.noncanonical_semver == (
-        ("semver:Minor", "semver:minor"),
-    )
 
 
 def test_bootstrap_reports_an_unreachable_tracker_without_raising(
@@ -791,10 +760,6 @@ def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
-        "semver:major",
-        "semver:minor",
-        "semver:patch",
-        "semver:none",
         "wayfinder:map",
         "wayfinder:research",
         "wayfinder:prototype",
@@ -1100,45 +1065,6 @@ def test_reconcile_updates_a_case_differing_label_where_it_actually_is(
     )
 
 
-def test_reconcile_reports_a_recased_bump_class_label_as_noncanonical(
-    tmp_path: Path,
-) -> None:
-    """Exact bump-class matching cannot silently accept ``semver:Minor``."""
-    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
-    minor = next(spec for spec in vocabulary if spec.name == "semver:minor")
-    client = _FakeReconcileClient(
-        labels_module.TrackerLabel("semver:Minor", minor.color, "Outdated description"),
-        *_carrying(*(spec for spec in vocabulary if spec is not minor)),
-    )
-
-    result = labels_module.reconcile_labels(vocabulary, client)
-
-    assert [(difference.spec.name, difference.differs) for difference in result.drifted] == [
-        ("semver:minor", ("name", "description"))
-    ]
-
-
-def test_reconcile_does_not_reapply_an_unfixable_bump_class_name_mismatch(
-    tmp_path: Path,
-) -> None:
-    """Reconciling cannot rename a tracker label that differs only by case."""
-    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
-    minor = next(spec for spec in vocabulary if spec.name == "semver:minor")
-    client = _FakeReconcileClient(
-        labels_module.TrackerLabel("semver:Minor", minor.color, "Outdated description"),
-        *_carrying(*(spec for spec in vocabulary if spec is not minor)),
-    )
-
-    result = labels_module.reconcile_labels(vocabulary, client, apply=True)
-
-    assert client.created == []
-    assert client.updated == []
-    assert result.applied == ()
-    assert [(difference.spec.name, difference.differs) for difference in result.drifted] == [
-        ("semver:minor", ("name", "description"))
-    ]
-
-
 def test_subprocess_label_client_reads_colour_and_description(monkeypatch) -> None:
     """Reconciling needs more than names, and a null description is not drift."""
     from git_loopy import gh
@@ -1393,7 +1319,7 @@ def test_the_declared_wayfinder_taxonomy_matches_the_skill_that_writes_it() -> N
     """``WAYFINDER_LABELS`` follows the Skill, and only this test keeps it honest.
 
     Every other closed taxonomy here is pinned to its authority by construction
-    (``TASK_TYPE_KEYS``, ``BUMP_CLASS_KEYS``). This one cannot be: the four
+    (``TASK_TYPE_KEYS``). This one cannot be: the four
     ticket types have no reader in git-loopy — the Skill reads them, upstream —
     so deriving them would mean inventing a reader, which is the mirror
     ADR-0019 forbids. The map key does have a reader, the Pool's

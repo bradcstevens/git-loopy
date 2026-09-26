@@ -4422,6 +4422,8 @@ def _wire_classifier_run(
 ) -> tuple[_ClassifyingCopilotClient, _RecordingTaskTypeLabelClient]:
     """One unlabelled issue, one scriptable harness, one watchable tracker write."""
     _write_runnable_feedback_loop(tmp_path)
+    # A stable Release line: Pickup labels a Release relative to it (ADR-0066).
+    (tmp_path / "VERSION").write_text("0.10.0\n", encoding="utf-8")
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     monkeypatch.setattr(
@@ -4479,7 +4481,7 @@ def test_an_unlabelled_issue_is_classified_and_labelled_at_pickup(
     )
 
     assert exit_code == 0
-    assert tracker.applied == [(7, "task-type:bugfix"), (7, "semver:none")]
+    assert tracker.applied == [(7, "task-type:bugfix")]
     assert [
         (e["task_type_keys"], e["model"], e["effort"], e["routing_source"])
         for e in _bound_pickups(tmp_path)
@@ -4501,7 +4503,7 @@ def test_an_unclassified_bump_class_is_inferred_and_written_at_pickup(
     )
 
     assert exit_code == 0
-    assert (7, "semver:minor") in tracker.applied
+    assert (7, "v0.11.0") in tracker.applied
     assert fake_client.models.count("gpt-5-mini") == 2
 
 
@@ -4545,7 +4547,7 @@ def test_an_already_labelled_issue_spends_nothing_at_pickup(
     fake_client, tracker = _wire_classifier_run(
         tmp_path,
         monkeypatch,
-        labels=["ready-for-agent", "task-type:bugfix", "semver:none"],
+        labels=["ready-for-agent", "task-type:bugfix", "v0.10.1"],
     )
 
     asyncio.run(loop_module.run(_classifier_config(), staircase=_cheap_staircase()))
@@ -4699,7 +4701,7 @@ def test_a_configured_classifier_pair_needs_no_staircase(tmp_path, monkeypatch) 
         )
     )
 
-    assert tracker.applied == [(7, "task-type:bugfix"), (7, "semver:none")]
+    assert tracker.applied == [(7, "task-type:bugfix")]
     assert fake_client.models == [
         "gemini-3.5-flash",
         "gemini-3.5-flash",
@@ -6109,8 +6111,8 @@ def test_queued_eligibility_is_reread_before_any_preparation_spend(
     _, _, spied, exit_code = _dynamic_pool_run(
         tmp_path, monkeypatch,
         issues=[
-            _make_issue(42, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
-            _make_issue(43, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(42, labels=["ready-for-agent", "task-type:implementation"]),
+            _make_issue(43, labels=["ready-for-agent", "task-type:implementation"]),
             _make_issue(44, labels=["ready-for-agent"]),
         ],
         classifier_model="gpt-5.6-terra",
@@ -6217,14 +6219,14 @@ def test_a_static_route_is_prepared_without_asking_the_selector(
     monkeypatch.setattr(
         loop_module, "_make_task_type_label_client", _RecordingTaskTypeLabelClient
     )
-    labels = ["ready-for-agent", "semver:none"]
+    labels = ["ready-for-agent"]
     if already_labelled:
         labels.append("task-type:docs")
     fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
         tmp_path,
         monkeypatch,
         issues=[
-            _make_issue(42, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(42, labels=["ready-for-agent", "task-type:implementation"]),
             _make_issue(43, labels=labels),
         ],
         routing={"docs": ("gpt-5.6-terra", "low")},
@@ -6402,7 +6404,7 @@ def test_preparation_cannot_buy_classification_after_routing_allowance_exhaustio
         tmp_path,
         monkeypatch,
         issues=[
-            _make_issue(42, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(42, labels=["ready-for-agent", "task-type:implementation"]),
             _make_issue(43, labels=["ready-for-agent"]),
         ],
         classifier_model="gpt-5.6-terra",
@@ -6845,7 +6847,7 @@ def test_saved_dynamic_work_without_access_starts_no_classifier_or_fallback(
     ]
     if static_work:
         issues.append(_make_issue(43, labels=[
-            "ready-for-agent", "task-type:implementation", "semver:none",
+            "ready-for-agent", "task-type:implementation",
             *(["parallel-safe"] if mode == "lane" else []),
         ]))
     tracker = FakeGitHubClient(
@@ -6936,11 +6938,11 @@ def test_saved_routing_deadline_includes_retained_static_validation(
     client, git = _wire_single_issue_github(tmp_path, monkeypatch)
     lane_labels = ["parallel-safe"] if mode == "lane" else []
     issues = [_make_issue(42, labels=[
-        "ready-for-agent", "semver:none", *case["task_type_labels"], *lane_labels,
+        "ready-for-agent", *case["task_type_labels"], *lane_labels,
     ])]
     if static_work:
         issues.append(_make_issue(43, labels=[
-            "ready-for-agent", "semver:none", "task-type:implementation", *lane_labels,
+            "ready-for-agent", "task-type:implementation", *lane_labels,
         ]))
     tracker = FakeGitHubClient(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"), issues=issues,
@@ -7103,7 +7105,7 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
     expected = case["expected"]
     client, git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=[
-            "ready-for-agent", "task-type:implementation", "semver:none",
+            "ready-for-agent", "task-type:implementation",
             *(["parallel-safe"] if mode == "lane" else []),
         ],
     )
@@ -7301,7 +7303,7 @@ def test_first_setup_readiness_recovers_into_the_actual_routed_session(
     assert case["choice"] in {"keep", "migrate"}
     client, git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=[
-            "ready-for-agent", "task-type:implementation", "semver:none",
+            "ready-for-agent", "task-type:implementation",
             *(["parallel-safe"] if mode == "lane" else []),
         ],
     )
@@ -7548,7 +7550,7 @@ def test_fresh_setup_records_dynamic_and_the_run_uses_that_session(
 
     client, git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=[
-            "ready-for-agent", "task-type:implementation", "semver:none",
+            "ready-for-agent", "task-type:implementation",
             *(["parallel-safe"] if mode == "lane" else []),
         ],
     )
@@ -7748,7 +7750,7 @@ def test_no_config_local_run_refuses_before_a_legacy_session(
 
     client, _git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=[
-            "ready-for-agent", "task-type:implementation", "semver:none",
+            "ready-for-agent", "task-type:implementation",
             *(["parallel-safe"] if mode == "lane" else []),
         ],
     )
@@ -7831,7 +7833,7 @@ def test_explicit_static_on_no_config_needs_no_leaderboard(
 
     client, git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=[
-            "ready-for-agent", "task-type:implementation", "semver:none",
+            "ready-for-agent", "task-type:implementation",
             *(["parallel-safe"] if mode == "lane" else []),
         ],
     )
@@ -8179,7 +8181,7 @@ def test_saved_setup_attributes_classification_and_selection_to_run_consumption(
 
     if mode == "serial":
         _wire_single_issue_github(
-            tmp_path, monkeypatch, labels=["ready-for-agent", "semver:none"]
+            tmp_path, monkeypatch, labels=["ready-for-agent"]
         )
         client = FakeCopilotClient([_billed_routing_usage("gpt-5.6-terra", "0.10")])
     else:
@@ -8190,7 +8192,7 @@ def test_saved_setup_attributes_classification_and_selection_to_run_consumption(
         monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
         tracker = FakeGitHubClient(
             repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-            issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe", "semver:none"])],
+            issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
         )
         monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
         monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
@@ -9061,7 +9063,7 @@ def test_recorded_routing_reuse_preserves_publication_recovery_bounds(
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
         monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
     labels = [
-        "ready-for-agent", "task-type:implementation", "semver:none", "operator-owned",
+        "ready-for-agent", "task-type:implementation", "operator-owned",
         *(["parallel-safe"] if mode == "lane" else []),
     ]
     attempts = {"comment": 0, "label": 0}

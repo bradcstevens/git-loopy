@@ -40,12 +40,37 @@ def _run_text(workflow: dict[Any, Any]) -> str:
 def test_a_closed_milestone_and_a_stable_trunk_are_the_two_promotion_triggers(
     workflow: dict[Any, Any],
 ) -> None:
-    """`on: milestone` is the tracker event; `on: push` carries the exemption."""
+    """`on: milestone` promotes; `on: push` retags; dispatch only moves a stage."""
     # PyYAML resolves the unquoted key `on` to the boolean True.
-    assert workflow.get("on", workflow.get(True)) == {
+    triggers = workflow.get("on", workflow.get(True))
+    assert {key: triggers[key] for key in ("milestone", "push")} == {
         "milestone": {"types": ["closed"]},
         "push": {"branches": ["main"]},
     }
+    assert set(triggers) == {"milestone", "push", "workflow_dispatch"}
+    assert "workflow_dispatch" not in workflow["jobs"]["promote"]["if"]
+
+
+def test_the_operator_stage_advance_commits_a_forward_stage_and_tags_nothing(
+    workflow: dict[Any, Any],
+) -> None:
+    """alpha -> beta -> rc is an operator's decision; a prerelease tag stays human."""
+    triggers = workflow.get("on", workflow.get(True))
+    stage_input = triggers["workflow_dispatch"]["inputs"]["stage"]
+    assert stage_input["type"] == "choice"
+    assert stage_input["options"] == ["beta", "rc"]
+
+    job = workflow["jobs"]["advance-stage"]
+    assert job["if"] == "github.event_name == 'workflow_dispatch'"
+    assert "environment" not in job and "permissions" not in job
+    run_text = "\n".join(step["run"] for step in job["steps"] if "run" in step)
+    assert "--advance-stage \"$STAGE\"" in run_text
+    assert 'git commit -aqm "$SUBJECT"' in run_text
+    assert "git push origin HEAD:main" in run_text
+    assert "git tag" not in run_text
+    assert "steps.stage.outputs.advanced == 'true'" in [
+        step.get("if") for step in job["steps"]
+    ]
 
 
 def test_a_promotion_waits_for_no_person(workflow: dict[Any, Any]) -> None:
@@ -92,8 +117,9 @@ def test_a_promotion_commits_and_tags_with_a_committer_git_will_accept(
     """A GitHub runner configures no identity, and both `git` verbs refuse then.
 
     The identity is set before the first step that writes an object rather than
-    beside one of them, because a `major` exemption tags without committing and
-    would otherwise reach `git tag -a` with none.
+    beside one of them, because a push that carries an already-committed stable
+    Release tags without committing and would otherwise reach `git tag -a` with
+    none.
     """
     steps = _steps(workflow)
     identity = next(
@@ -156,7 +182,7 @@ def test_a_stable_release_is_tagged_from_either_trigger_and_a_prerelease_never_i
 
     assert "python -m git_loopy.release_version" in run_text.replace("\n", " ")
     assert "--promote-milestone" in run_text
-    # Only a stable `major.minor.patch` is tagged: a `dev.N` value matches this
+    # Only a stable `major.minor.patch` is tagged: a prerelease value matches this
     # test under neither trigger and so reaches no channel.
     assert r"^[0-9]+\.[0-9]+\.[0-9]+$" in tag["run"]
     assert 'git tag -a "v$version"' in tag["run"]
@@ -169,9 +195,9 @@ def test_every_stable_release_the_trunk_carries_is_tagged_not_just_its_head(
 ) -> None:
     """A Run pushes once per Iteration and lands a Release commit per issue.
 
-    So the value at the pushed head is routinely the `dev.N` advance that
-    *followed* a `major` Promotion, and a workflow reading `VERSION` alone would
-    drop the stable Release the exemption cut — silently, because finding
+    So the value at the pushed head can be the prerelease advance that
+    *followed* a committed Promotion, and a workflow reading `VERSION` alone
+    would drop that stable Release — silently, because finding
     nothing to tag is indistinguishable from there being nothing to do. The
     commits that touched `VERSION` and that no `v*` tag reaches are the
     candidates instead, which also retries a tag an earlier run failed to push.

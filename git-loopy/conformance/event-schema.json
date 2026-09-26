@@ -385,7 +385,7 @@
         "release_version"
       ],
       "bump_class_values": ["major", "minor", "patch"],
-      "emitted": "After a successful Release-line commit for a closed Bump-class issue. semver:none and failed advances emit nothing."
+      "emitted": "After a successful Release-line commit for a closed issue carrying a vX.Y.Z Release-target label. An issue with no such label and failed advances emit nothing."
     },
     "wrapper.contribution.end": {
       "required_when_present": [
@@ -1689,7 +1689,7 @@
           "bump_class": "patch",
           "issue": 42,
           "release_target": "1.2.4",
-          "release_version": "1.2.4-dev.1"
+          "release_version": "1.2.4-alpha.1"
         },
         {
           "ts": "2026-05-16T00:00:18.000Z",
@@ -1917,7 +1917,7 @@
         "{\"ts\": \"2026-05-16T00:00:15.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 1, \"host_state\": \"healthy\", \"pressure\": \"integration_backlog\", \"rate_limit_state\": \"healthy\"}\n",
         "{\"ts\": \"2026-05-16T00:00:16.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:17.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.auto_close\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"issue_ref\": 42, \"lane_id\": \"lane-1\", \"outcome\": \"closed\"}\n",
-        "{\"ts\": \"2026-05-16T00:00:17.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-dev.1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:17.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-alpha.1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:18.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
         "{\"ts\": \"2026-05-16T00:00:19.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.admitted\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:20.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
@@ -2004,9 +2004,9 @@
         "bump_class": "patch",
         "issue": 42,
         "release_target": "1.2.4",
-        "release_version": "1.2.4-dev.1"
+        "release_version": "1.2.4-alpha.1"
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000RA\", \"iter\": 3, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-dev.1\"}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000RA\", \"iter\": 3, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-alpha.1\"}\n"
     },
     {
       "id": "envelope-before-sorted-payload",

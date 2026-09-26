@@ -52,7 +52,7 @@ def test_saved_authority_revalidates_prepared_work_at_pickup(
     _, git = _wire_single_issue_github(tmp_path, monkeypatch)
     git.remote_urls = {"origin": "git@github.com:x/y.git"}
     base_labels = [
-        "ready-for-agent", "semver:none", *(["parallel-safe"] if mode == "lane" else []),
+        "ready-for-agent", *(["parallel-safe"] if mode == "lane" else []),
     ]
     labels = [*base_labels, "task-type:implementation"]
     tracker = FakeGitHubClient(
@@ -413,7 +413,7 @@ def test_saved_authority_prepares_the_next_pickup_before_other_candidates(
     _, git = _wire_single_issue_github(tmp_path, monkeypatch)
     git.remote_urls = {"origin": "git@github.com:x/y.git"}
     base_labels = [
-        "ready-for-agent", "semver:none", "task-type:implementation",
+        "ready-for-agent", "task-type:implementation",
         *(["parallel-safe"] if mode == "lane" else []),
     ]
     tracker = FakeGitHubClient(

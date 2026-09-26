@@ -94,10 +94,10 @@
       "rust": {"kind": "waived_out_of_scope", "reason": "Strike accounting belongs to an Orchestrator; the Dashboard displays emitted progress without calculating it."}
     },
     "release-line.json": {
-      "python": {"kind": "claimed", "reason": "python/tests/test_release_line_conformance.py drives fixture Bump-class decisions, refusals, target ratchets, counters, Promotions, and Integration-order outcomes through production release-version seams."},
-      "shell": {"kind": "claimed", "reason": "shell/tests/test_release_line_conformance.sh drives fixture Bump-class decisions, refusals, target ratchets, counters, Promotions, and Integration-order outcomes through production release-version seams."},
-      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-release-line-conformance.ps1 drives fixture Bump-class decisions, refusals, target ratchets, counters, Promotions, and Integration-order outcomes through production Release seams."},
-      "rust": {"kind": "waived_out_of_scope", "reason": "Bump class is resolved from an issue's semver: labels at Pickup; the Dashboard never reads issue labels and only projects an emitted Release line."}
+      "python": {"kind": "claimed", "reason": "python/tests/test_release_line_conformance.py drives fixture Release-target label decisions, refusals, target ratchets, stages, counters, stage advances, Promotions, and Integration-order outcomes through production release-version seams."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test_release_line_conformance.sh drives fixture Release-target label decisions, refusals, target ratchets, stages, counters, stage advances, Promotions, and Integration-order outcomes through production release-version seams."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-release-line-conformance.ps1 drives fixture Release-target label decisions, refusals, target ratchets, stages, counters, stage advances, Promotions, and Integration-order outcomes through production Release seams."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Bump class is resolved from an issue's vX.Y.Z Release-target label; the Dashboard never reads issue labels and only projects an emitted Release line."}
     },
     "release-trust.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_release_trust.py and python/tests/test_distribution_mode.py drive fixture publication cases and distribution mode through production trust verification."},

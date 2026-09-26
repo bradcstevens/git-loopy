@@ -43,7 +43,7 @@ def test_saved_authority_requires_durable_provenance_and_pickup(
 ):
     shared = _ROUTING_CONFORMANCE["migration_recovery"]
     labels = [
-        "ready-for-agent", "task-type:implementation", "semver:none", "operator-owned",
+        "ready-for-agent", "task-type:implementation", "operator-owned",
         *(["parallel-safe"] if mode == "lane" else []),
     ]
     _, git = _wire_single_issue_github(

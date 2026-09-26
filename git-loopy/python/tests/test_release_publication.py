@@ -33,7 +33,7 @@ from git_loopy.release_publication import (
 from git_loopy.release_rehearsal import (
     SOURCE_ONLY,
     VerifiedPublicationInput,
-    major_bump_promotion,
+    stable_commit_promotion,
     rehearse_promotion,
 )
 from git_loopy.source_release import write_source_archive
@@ -67,7 +67,7 @@ def proved(tmp_path_factory: pytest.TempPathFactory) -> Proved:
     trunk = trunk_repository(root / "trunk", VERSION)
     publication_input = rehearse_promotion(
         trunk,
-        major_bump_promotion(),
+        stable_commit_promotion(),
         workspace=root / "candidate",
         archive_output=root / "git-loopy-source.tar",
         gate_runner=GATE_RUNNER,
@@ -821,9 +821,9 @@ def test_a_trunk_that_moved_on_does_not_change_what_gets_published(
 ) -> None:
     """The next Iteration's Release-line advance is not a later candidate."""
     remote, checkout = _remote_checkout(proved, tmp_path)
-    write_release_metadata(checkout, "0.12.0-dev.1")
-    (checkout / "docs/releases/v0.12.0-dev.1.md").write_text(
-        "# git-loopy 0.12.0-dev.1\n\nThe line moved on.\n", encoding="utf-8"
+    write_release_metadata(checkout, "0.12.0-alpha.1")
+    (checkout / "docs/releases/v0.12.0-alpha.1.md").write_text(
+        "# git-loopy 0.12.0-alpha.1\n\nThe line moved on.\n", encoding="utf-8"
     )
     git(checkout, "add", ".")
     git(checkout, "commit", "-qm", "chore(release): advance Release line")

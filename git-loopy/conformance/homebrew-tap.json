@@ -88,7 +88,7 @@
     },
     {
       "id": "a-development-release-never-reaches-the-tap",
-      "version": "1.2.3-dev.0",
+      "version": "1.2.3-alpha.1",
       "marked_prerelease": true,
       "published": false,
       "error": "is a prerelease and is published through the GitHub Release alone"

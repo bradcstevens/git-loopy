@@ -27,6 +27,8 @@ $script:ReleaseLastStable = $null
 $script:ReleaseTarget = $null
 $script:ReleaseCounter = [bigint]0
 $script:BumpClassKeys = [string[]]@("major", "minor", "patch", "none")
+$script:PrereleaseStages = [string[]]@("alpha", "beta", "rc")
+$script:ReleaseStage = $null
 $script:ReleaseNotesDirectory = "docs/releases"
 
 function Get-GitLoopyReleaseVersion {
@@ -77,31 +79,106 @@ function Get-GitLoopyReleaseVersion {
     return $Value
 }
 
+function New-GitLoopyReleaseRefusal {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message,
+        [hashtable]$Data = @{}
+    )
+
+    $Exception = [InvalidOperationException]::new($Message)
+    foreach ($Key in $Data.Keys) {
+        $Exception.Data[$Key] = $Data[$Key]
+    }
+    return $Exception
+}
+
 function Resolve-GitLoopyBumpClass {
+    <#
+    .SYNOPSIS
+    Derive an issue's Bump class from its Release-target label.
+
+    .DESCRIPTION
+    A Release-target label is `vX.Y.Z`. Its Bump class is derived relative to
+    the last stable Release: the major, minor, or patch successor of it. No
+    target label is `none`. A refusal carries the refused label in the
+    exception's `Data["refused_label"]`, or every candidate in
+    `Data["conflicting_labels"]`.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [string[]]$Labels
+        [AllowEmptyCollection()]
+        [string[]]$Labels,
+        [Parameter(Mandatory)]
+        [string]$LastStableVersion
     )
 
-    $Keys = @(
-        foreach ($Label in $Labels) {
-            if ($Label.StartsWith("semver:", [StringComparison]::Ordinal)) {
-                $Label.Substring("semver:".Length)
-            }
+    $Stable = Get-GitLoopyReleaseTargetParts `
+        -Value $LastStableVersion -Label "Last stable Release version"
+    $Candidates = @($Labels | Where-Object { $_ -cmatch '\Av[0-9]' })
+    foreach ($Candidate in $Candidates) {
+        if ($Candidate -cnotmatch '\Av(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z') {
+            throw (New-GitLoopyReleaseRefusal `
+                -Message "Release-line Bump class: malformed_release_target_label" `
+                -Data @{ refused_label = $Candidate })
         }
+    }
+    if ($Candidates.Count -gt 1) {
+        throw (New-GitLoopyReleaseRefusal `
+            -Message "Release-line Bump class: conflicting_release_target_labels" `
+            -Data @{ conflicting_labels = [string[]]$Candidates })
+    }
+    if ($Candidates.Count -eq 0) {
+        return "none"
+    }
+    $Target = Get-GitLoopyReleaseTargetParts `
+        -Value $Candidates[0].Substring(1) -Label "Release target"
+    foreach ($BumpClass in @("major", "minor", "patch")) {
+        $Successor = Get-GitLoopyReleaseSuccessor -Stable $Stable -BumpClass $BumpClass
+        if (
+            $Successor.Major -eq $Target.Major -and
+            $Successor.Minor -eq $Target.Minor -and
+            $Successor.Patch -eq $Target.Patch
+        ) {
+            return $BumpClass
+        }
+    }
+    throw (New-GitLoopyReleaseRefusal `
+        -Message "Release-line Bump class: unreachable_release_target" `
+        -Data @{ refused_label = $Candidates[0] })
+}
+
+function Get-GitLoopyReleaseSuccessor {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Stable,
+        [Parameter(Mandatory)]
+        [string]$BumpClass
     )
-    $Unknown = @($Keys | Where-Object { $_ -cnotin $script:BumpClassKeys })
-    if ($Unknown.Count -gt 0) {
-        throw "Release-line Bump class: unknown_semver_key"
+
+    switch ($BumpClass) {
+        "major" { return [pscustomobject]@{ Major = $Stable.Major + 1; Minor = [bigint]0; Patch = [bigint]0 } }
+        "minor" { return [pscustomobject]@{ Major = $Stable.Major; Minor = $Stable.Minor + 1; Patch = [bigint]0 } }
+        "patch" { return [pscustomobject]@{ Major = $Stable.Major; Minor = $Stable.Minor; Patch = $Stable.Patch + 1 } }
+        default { return $Stable }
     }
-    if ($Keys.Count -eq 0) {
-        throw "Release-line Bump class: unclassified_bump_class"
+}
+
+function Format-GitLoopyReleaseLineVersion {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Target,
+        [AllowNull()]
+        [string]$Stage,
+        [Parameter(Mandatory)]
+        [object]$Counter
+    )
+
+    if ($Counter -eq 0 -or [string]::IsNullOrEmpty($Stage)) {
+        return $Target
     }
-    if ($Keys.Count -ne 1) {
-        throw "Release-line Bump class: conflicting_semver_labels"
-    }
-    return $Keys[0]
+    return "$Target-$Stage.$Counter"
 }
 
 function Get-GitLoopyReleaseTargetParts {
@@ -134,6 +211,9 @@ function Invoke-GitLoopyReleaseLineAdvance {
         [string]$LastStableVersion,
         [Parameter(Mandatory)]
         [string]$CurrentTarget,
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$CurrentStage,
         [Parameter(Mandatory)]
         [object]$CurrentCounter,
         [Parameter(Mandatory)]
@@ -150,66 +230,75 @@ function Invoke-GitLoopyReleaseLineAdvance {
     ) {
         throw "Release-line counter must be a non-negative integer"
     }
+    [bigint]$Counter = [bigint]$CurrentCounter
+    $Stage = if ($Counter -eq 0 -or [string]::IsNullOrEmpty($CurrentStage)) { $null } else { $CurrentStage }
+    if ($null -ne $Stage -and $Stage -cnotin $script:PrereleaseStages) {
+        throw "unknown Release-line stage '$Stage'"
+    }
 
     $Stable = Get-GitLoopyReleaseTargetParts `
         -Value $LastStableVersion -Label "Last stable Release version"
     $Current = Get-GitLoopyReleaseTargetParts `
         -Value $CurrentTarget -Label "Release target"
-    $Candidate = switch ($BumpClass) {
-        "major" { [pscustomobject]@{ Major = $Stable.Major + 1; Minor = [bigint]0; Patch = [bigint]0 } }
-        "minor" { [pscustomobject]@{ Major = $Stable.Major; Minor = $Stable.Minor + 1; Patch = [bigint]0 } }
-        "patch" { [pscustomobject]@{ Major = $Stable.Major; Minor = $Stable.Minor; Patch = $Stable.Patch + 1 } }
-        "none" { $Stable }
+    if ($BumpClass -ceq "none") {
+        return [pscustomobject]@{
+            Target = $CurrentTarget
+            Stage = $Stage
+            Counter = $Counter
+            Version = Format-GitLoopyReleaseLineVersion -Target $CurrentTarget -Stage $Stage -Counter $Counter
+        }
     }
-    $UseCandidate = (
+    $Candidate = Get-GitLoopyReleaseSuccessor -Stable $Stable -BumpClass $BumpClass
+    $Raises = (
         $Candidate.Major -gt $Current.Major -or
         ($Candidate.Major -eq $Current.Major -and $Candidate.Minor -gt $Current.Minor) -or
         ($Candidate.Major -eq $Current.Major -and $Candidate.Minor -eq $Current.Minor -and
             $Candidate.Patch -gt $Current.Patch)
     )
-    $TargetParts = if ($UseCandidate) { $Candidate } else { $Current }
-    [bigint]$Counter = [bigint]$CurrentCounter
-    if ($BumpClass -cne "none") {
-        $Counter += 1
+    $TargetParts = if ($Raises) { $Candidate } else { $Current }
+    if ($Counter -eq 0 -or $Raises) {
+        $Stage = "alpha"
     }
+    # The counter keeps counting across a target raise, so the resulting line
+    # does not depend on the order issues integrate in.
+    $Counter += 1
     $Target = "$($TargetParts.Major).$($TargetParts.Minor).$($TargetParts.Patch)"
     return [pscustomobject]@{
         Target = $Target
+        Stage = $Stage
         Counter = $Counter
-        Version = if ($Counter -eq 0) { $Target } else { "$Target-dev.$Counter" }
+        Version = Format-GitLoopyReleaseLineVersion -Target $Target -Stage $Stage -Counter $Counter
     }
 }
 
-function Invoke-GitLoopyReleaseLinePromotion {
+function Step-GitLoopyReleaseStage {
     <#
     .SYNOPSIS
-    Cut a stable Release from the one Bump class exempt from a milestone.
+    Move a prerelease Release line forward to a later stage.
 
     .DESCRIPTION
-    A `major` publishes on the label alone; every other class stays on its
-    `dev.N` line until the `vX.Y.Z` milestone it promised closes (ADR-0052).
-    Callers ask this rather than testing the class themselves, so *which* class
-    is exempt is one decision rather than one per call site.
+    An operator action: alpha -> beta -> rc, never backwards, restarting the
+    counter at 1. Refusals are thrown as `Release-line stage: <reason>`.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [object]$ReleaseLine,
+        [string]$CurrentVersion,
         [Parameter(Mandatory)]
-        [string]$BumpClass
+        [string]$Stage
     )
 
-    if ($script:BumpClassKeys -cnotcontains $BumpClass) {
-        throw "unknown Release-line Bump class '$BumpClass'"
+    if ($Stage -cnotin $script:PrereleaseStages) {
+        throw "Release-line stage: unknown_prerelease_stage"
     }
-    if ($BumpClass -cne "major") {
-        return $ReleaseLine
+    $Line = ConvertFrom-GitLoopyReleaseLineVersion -Version $CurrentVersion
+    if ($Line.Counter -eq 0) {
+        throw "Release-line stage: no_prerelease_line"
     }
-    return [pscustomobject]@{
-        Target = $ReleaseLine.Target
-        Counter = [bigint]0
-        Version = $ReleaseLine.Target
+    if ([array]::IndexOf($script:PrereleaseStages, $Stage) -le [array]::IndexOf($script:PrereleaseStages, $Line.Stage)) {
+        throw "Release-line stage: stage_not_forward"
     }
+    return "$($Line.Target)-$Stage.1"
 }
 
 function Get-GitLoopyReleaseLineCommitSubject {
@@ -239,7 +328,7 @@ function Get-GitLoopyClosedMilestonePromotion {
     .DESCRIPTION
     Deliberately separate from the per-issue advance: a prerelease takes no
     milestone input at any point, while a milestone-close event may promote only
-    the exact `dev.N` target its own title names.
+    the exact alpha, beta, or rc target its own title names.
     #>
     [CmdletBinding()]
     param(
@@ -253,7 +342,7 @@ function Get-GitLoopyClosedMilestonePromotion {
 
     $Match = [regex]::Match(
         $CurrentVersion,
-        "\A((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-dev\.(?:0|[1-9][0-9]*)\z",
+        "\A((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-(?:alpha|beta|rc)\.[1-9][0-9]*\z",
         [Text.RegularExpressions.RegexOptions]::CultureInvariant
     )
     if (
@@ -266,15 +355,38 @@ function Get-GitLoopyClosedMilestonePromotion {
     return $Match.Groups[1].Value
 }
 
+function ConvertFrom-GitLoopyReleaseLineVersion {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Version
+    )
+
+    $Match = [regex]::Match(
+        $Version,
+        '\A((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))(?:-(alpha|beta|rc)\.([1-9][0-9]*))?\z',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )
+    if (-not $Match.Success) {
+        throw "Release line must be a stable or -alpha.N, -beta.N, or -rc.N Semantic Versioning value"
+    }
+    if (-not $Match.Groups[2].Success) {
+        return [pscustomobject]@{ Target = $Match.Groups[1].Value; Stage = $null; Counter = [bigint]0; Version = $Version }
+    }
+    return [pscustomobject]@{
+        Target = $Match.Groups[1].Value
+        Stage = $Match.Groups[2].Value
+        Counter = [bigint]::Parse($Match.Groups[3].Value, [Globalization.CultureInfo]::InvariantCulture)
+        Version = $Version
+    }
+}
+
 function Assert-GitLoopyReleaseLineVersion {
     param(
         [Parameter(Mandatory)]
         [string]$Version
     )
 
-    if ($Version -cnotmatch "\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-dev\.(?:0|[1-9][0-9]*))?\z") {
-        throw "Release line must be a stable or -dev.N Semantic Versioning value"
-    }
+    ConvertFrom-GitLoopyReleaseLineVersion -Version $Version | Out-Null
 }
 
 function Get-GitLoopyUtf8FileContent {
@@ -301,18 +413,12 @@ function Get-GitLoopyPythonDistributionVersion {
         [string]$Version
     )
 
-    $Match = [regex]::Match(
-        $Version,
-        "\A((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))(?:-dev\.(0|[1-9][0-9]*))?\z",
-        [Text.RegularExpressions.RegexOptions]::CultureInvariant
-    )
-    if (-not $Match.Success) {
-        throw "Release version must be stable or a -dev.N prerelease"
+    $Line = ConvertFrom-GitLoopyReleaseLineVersion -Version $Version
+    if ($Line.Counter -eq 0) {
+        return $Line.Target
     }
-    if ($Match.Groups[2].Success) {
-        return "$($Match.Groups[1].Value).dev$($Match.Groups[2].Value)"
-    }
-    return $Match.Groups[1].Value
+    $Spelling = @{ alpha = "a"; beta = "b"; rc = "rc" }[$Line.Stage]
+    return "$($Line.Target)$Spelling$($Line.Counter)"
 }
 
 function Set-GitLoopyAtomicFileUpdates {
@@ -704,7 +810,7 @@ function Get-GitLoopyReleaseTargetFragments {
 
     $Fragments = @{}
     $ReleaseDir = Join-Path $RepositoryRoot $script:ReleaseNotesDirectory
-    $Pattern = '\Av' + [regex]::Escape($StableVersion) + '-dev\.(0|[1-9][0-9]*)\.md\z'
+    $Pattern = '\Av' + [regex]::Escape($StableVersion) + '-(alpha|beta|rc)\.([1-9][0-9]*)\.md\z'
     if ([IO.Directory]::Exists($ReleaseDir)) {
         foreach ($Entry in Get-ChildItem -LiteralPath $ReleaseDir -File) {
             $Match = [regex]::Match(
@@ -719,8 +825,9 @@ function Get-GitLoopyReleaseTargetFragments {
             $Fragments[$Entry.Name] = [pscustomobject]@{
                 Name = $Entry.Name
                 Version = $Version
+                StageIndex = [array]::IndexOf($script:PrereleaseStages, $Match.Groups[1].Value)
                 Counter = [bigint]::Parse(
-                    $Match.Groups[1].Value,
+                    $Match.Groups[2].Value,
                     [Globalization.CultureInfo]::InvariantCulture
                 )
                 Content = Get-GitLoopyUtf8FileContent `
@@ -742,8 +849,9 @@ function Get-GitLoopyReleaseTargetFragments {
         $Fragments[$Name] = [pscustomobject]@{
             Name = $Name
             Version = $Fragment.Version
+            StageIndex = [array]::IndexOf($script:PrereleaseStages, $Match.Groups[1].Value)
             Counter = [bigint]::Parse(
-                $Match.Groups[1].Value,
+                $Match.Groups[2].Value,
                 [Globalization.CultureInfo]::InvariantCulture
             )
             Content = $Fragment.Content
@@ -751,7 +859,7 @@ function Get-GitLoopyReleaseTargetFragments {
     }
     return @(
         $Fragments.Values |
-            Sort-Object -Property @{ Expression = { $_.Counter } }, @{ Expression = { $_.Version } }
+            Sort-Object -Property @{ Expression = { $_.StageIndex } }, @{ Expression = { $_.Counter } }, @{ Expression = { $_.Version } }
     )
 }
 
@@ -938,21 +1046,10 @@ function Initialize-GitLoopyReleaseLine {
         return
     }
     $CurrentVersion = Get-GitLoopyReleaseVersion -Path (Join-Path $RepositoryRoot "VERSION")
-    $Match = [regex]::Match(
-        $CurrentVersion,
-        '\A((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))(?:-dev\.(0|[1-9][0-9]*))?\z',
-        [Text.RegularExpressions.RegexOptions]::CultureInvariant
-    )
-    if (-not $Match.Success) {
-        throw "Release line must be a stable or -dev.N Semantic Versioning value"
-    }
-    $script:ReleaseTarget = $Match.Groups[1].Value
-    $script:ReleaseCounter = if ($Match.Groups[2].Success) {
-        [bigint]::Parse($Match.Groups[2].Value, [Globalization.CultureInfo]::InvariantCulture)
-    }
-    else {
-        [bigint]0
-    }
+    $Line = ConvertFrom-GitLoopyReleaseLineVersion -Version $CurrentVersion
+    $script:ReleaseTarget = $Line.Target
+    $script:ReleaseStage = $Line.Stage
+    $script:ReleaseCounter = $Line.Counter
     if ($script:ReleaseCounter -eq 0) {
         $script:ReleaseLastStable = $script:ReleaseTarget
     }
@@ -977,28 +1074,30 @@ function Invoke-GitLoopyRepositoryReleaseLineAdvance {
         [Parameter(Mandatory)]
         [string]$RepositoryRoot,
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [string[]]$Labels
     )
 
-    $BumpClass = Resolve-GitLoopyBumpClass -Labels $Labels
+    # The target label is only meaningful relative to the last stable Release,
+    # so the current line is read before the label is resolved.
+    Initialize-GitLoopyReleaseLine -RepositoryRoot $RepositoryRoot
+    $BumpClass = Resolve-GitLoopyBumpClass `
+        -Labels $Labels `
+        -LastStableVersion $script:ReleaseLastStable
     if ($BumpClass -ceq "none") {
         return $null
     }
-    Initialize-GitLoopyReleaseLine -RepositoryRoot $RepositoryRoot
-    $AdvancedLine = Invoke-GitLoopyReleaseLineAdvance `
+    $NextLine = Invoke-GitLoopyReleaseLineAdvance `
         -LastStableVersion $script:ReleaseLastStable `
         -CurrentTarget $script:ReleaseTarget `
+        -CurrentStage $script:ReleaseStage `
         -CurrentCounter $script:ReleaseCounter `
         -BumpClass $BumpClass
-    $NextLine = Invoke-GitLoopyReleaseLinePromotion `
-        -ReleaseLine $AdvancedLine `
-        -BumpClass $BumpClass
-    $PreviousVersion = if ($script:ReleaseCounter -eq 0) {
-        $script:ReleaseTarget
-    }
-    else {
-        "$($script:ReleaseTarget)-dev.$($script:ReleaseCounter)"
-    }
+    $AdvancedLine = $NextLine
+    $PreviousVersion = Format-GitLoopyReleaseLineVersion `
+        -Target $script:ReleaseTarget `
+        -Stage $script:ReleaseStage `
+        -Counter $script:ReleaseCounter
     $NoteUpdate = Get-GitLoopyRepositoryReleaseNotesUpdate `
         -RepositoryRoot $RepositoryRoot `
         -AdvancedLine $AdvancedLine `
@@ -1016,15 +1115,12 @@ function Invoke-GitLoopyRepositoryReleaseLineAdvance {
         ) -- $CommitPaths | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $script:ReleaseTarget = $NextLine.Target
+            $script:ReleaseStage = $NextLine.Stage
             $script:ReleaseCounter = $NextLine.Counter
-            if ($NextLine.Counter -eq 0) {
-                # A Promotion is the new stable base the next issue ratchets
-                # from, and its `dev.N` counter has already restarted at zero.
-                $script:ReleaseLastStable = $NextLine.Target
-            }
             return [pscustomobject]@{
                 BumpClass = $BumpClass
                 Target = $NextLine.Target
+                Stage = $NextLine.Stage
                 Counter = $NextLine.Counter
                 Version = $NextLine.Version
             }
@@ -1053,7 +1149,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyReleaseVersion",
     "Resolve-GitLoopyBumpClass",
     "Invoke-GitLoopyReleaseLineAdvance",
-    "Invoke-GitLoopyReleaseLinePromotion",
+    "Step-GitLoopyReleaseStage",
     "Get-GitLoopyReleaseLineCommitSubject",
     "Get-GitLoopyClosedMilestonePromotion",
     "Set-GitLoopyRepositoryReleaseVersion",

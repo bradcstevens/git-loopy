@@ -1,6 +1,6 @@
 # Source Release notes
 
-Each Release-line advance writes an agent-authored `dev.N` fragment at
+Each Release-line advance writes an agent-authored prerelease fragment at
 `docs/releases/v<VERSION>.md`. A **Promotion** composes the fragments for its
 target into the stable draft at the same conventional location; a stable note a
 human already wrote there is preserved rather than overwritten, because the
@@ -17,10 +17,14 @@ cannot have (ADR-0052). A human may still replace any draft before its
 Promotion, and should when the Release deserves an essay; publication simply
 never waits for one.
 
-A `vX.Y.Z-dev.N` version is the current **development prerelease** on the path
-to stable `vX.Y.Z`: `N` counts Release-line advances against that target. It
-is published for source identity and release-note history, but is not on any
-package channel. Only a stable Promotion can update those channels.
+A `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N` or `vX.Y.Z-rc.N` version is the current
+**prerelease** on the path to stable `vX.Y.Z`, spelled the Semantic Versioning
+2.0.0 way ([ADR-0066](../adr/0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md)):
+`N` counts Release-line advances within the current stage. It is published for
+source identity and release-note history, but is not on any package channel.
+Only a stable Promotion can update those channels. The earlier `-dev.N`
+prereleases are retired; their tags and GitHub Releases were removed and the
+`0.11.0` ones are folded into `v0.11.0-alpha.1.md`.
 
 The source-only path relies on GitHub's automatic source archives. It does not
 publish package-channel metadata, signed platform artifacts, or a TUI helper.
@@ -42,9 +46,11 @@ as the single authority:
   It dispatches all helper builds; artifact trust gates refuse publication
   rather than silently downgrading to source-only.
 
-This repository currently declares **`artifact-bearing`**. Releases from
-`v0.11.0-dev.7` onward publish the helper baseline described below; every earlier
-tag was source-only and is left exactly as published.
+This repository currently declares **`artifact-bearing`**. The artifact-bearing
+`v0.11.0-dev.7` and `-dev.8` prereleases were removed with the retired `-dev.N`
+line (ADR-0066), so no published Release carries the helper baseline described
+below until an artifact-bearing prerelease is tagged again. Every earlier tag was
+source-only and is left exactly as published.
 
 The contract is strictly enforced:
 - **Single authority**: Neither secret presence nor runner presence alters the contract.
@@ -64,9 +70,10 @@ invalid UTF-8, are publication refusals, not implicit defaults.
 
 ### The downloadable helper baseline
 
-`v0.11.0-dev.7` is the first artifact-bearing Release, and therefore the first
-downloadable helper baseline. It publishes `git-loopy-tui` for all seven declared
-targets, each with its checksum and trust receipt:
+An artifact-bearing Release is a downloadable helper baseline. It publishes
+`git-loopy-tui` for all seven declared targets, each with its checksum and trust
+receipt. `v0.11.0-dev.7` was the first; it was removed with the retired `-dev.N`
+line, so the next artifact-bearing prerelease re-establishes the baseline:
 
 | Platform | Triple |
 | --- | --- |
@@ -148,10 +155,30 @@ and an already-published batch is a no-op.
 
 ### Advancing the target
 
-A closed issue's **Bump class** label advances the Release line after
-Integration. The Release target is the ratchet across those labels, while the
-`dev.N` counter records each advance; see [ADR-0052](../adr/0052-the-release-line-advances-per-issue.md).
+A closed issue's `vX.Y.Z` **Release-target** label advances the Release line
+after Integration. The label must be one of the last stable Release's three
+successors — after `0.10.0`, only `v0.10.1`, `v0.11.0` or `v1.0.0` — and an issue
+with no such label changes no version. Pickup infers the **Bump class** and
+writes the label, creating it on the tracker; `git-loopy init` provisions none.
+The Release target is the ratchet across those labels, while the prerelease
+counter records each advance; see
+[ADR-0052](../adr/0052-the-release-line-advances-per-issue.md) and
+[ADR-0066](../adr/0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md).
 An issue's milestone neither selects nor records that target.
+
+A line that starts from stable, or whose target a larger label raises, is at
+`alpha`. Moving it to `beta` or `rc` is an operator's decision: it only goes
+forward, restarts the counter at 1, and writes that prerelease's fragment.
+Run the **Promote Release line** workflow by hand (`workflow_dispatch`, choosing
+`beta` or `rc`), which commits the advance to `main`, or do the same locally and
+commit the result:
+
+```sh
+uv run --project git-loopy/python --all-extras \
+  python -m git_loopy.release_version --repository-root . --advance-stage beta
+```
+
+Either way the prerelease tag stays a human act, like every prerelease tag.
 
 Each member's Release writer advances the two live version expectations in
 `git-loopy/conformance/release-version.json` in the same atomic write as the
@@ -162,15 +189,14 @@ fixtures, such as the roster's CLI provenance stamp when the SDK pin changes;
 those edits are not made by the Release-version writer.
 
 A `vX.Y.Z` **GitHub milestone** is solely the **Promotion** trigger. Closing it
-starts the unattended Promotion: the matching `dev.N` line becomes stable,
-`release-promotion.yml` commits it as `chore(release): promote Release line to
-<VERSION>`, and its annotated `v<VERSION>` tag starts publication. A `major`
-**Bump class** is exempt from the milestone and reaches that same stable state
-under a Run, so for it the workflow only tags. Either way it tags every stable
-Release the trunk carries that no tag reaches yet, rather than whatever `VERSION`
-says at the head: a Run lands a Release-line commit per closed issue and pushes
-once per Iteration, so a stable cut is routinely followed into the same push by
-the next issue's `dev.N`.
+starts the unattended Promotion: the matching line becomes stable from whatever
+stage it has reached, `release-promotion.yml` commits it as `chore(release):
+promote Release line to <VERSION>`, and its annotated `v<VERSION>` tag starts
+publication. It is the only way a stable value reaches `main`: a `major` is a
+prerelease like any other bump. On every push the workflow still tags every
+stable Release the trunk carries that no tag reaches yet, rather than whatever
+`VERSION` says at the head, so a stable commit whose tag failed to push is found
+again, even when the next issue's prerelease advance has already followed it.
 
 Promotion only accepts a milestone that exists. List them rather than inventing
 one:
@@ -185,9 +211,9 @@ gh issue edit <number> --milestone "vX.Y.Z"
 `release-promotion.yml` is what turns that closure into a Release, and nobody
 approves it: no protected environment, no review, no waiting. That is recorded in
 [ADR-0052](../adr/0052-the-release-line-advances-per-issue.md) as a consequence
-taken deliberately — an agent's inferred `semver:major` label can publish a
-breaking Release unattended — and it is not to be re-added as an implementation
-detail.
+taken deliberately — a closed milestone publishes without further review — and
+it is not to be re-added as an implementation detail. An agent's inferred label
+can no longer publish a stable Release on its own (ADR-0066).
 
 A Promotion needs one credential: **`RELEASE_PUBLICATION_TOKEN`**, a repository
 secret carrying `contents: write`. Publication is entered by pushing an annotated
@@ -244,7 +270,7 @@ uv run --project git-loopy/python --all-extras \
   --workspace "$RUNNER_TEMP/candidate" \
   --archive-output "$RUNNER_TEMP/git-loopy-source.tar" \
   --distribution-mode source-only \
-  --major-bump --candidate-commit "$commit"
+  --stable-commit --candidate-commit "$commit"
 ```
 
 `release-promotion.yml` runs exactly that per candidate before it creates a tag,
@@ -337,7 +363,7 @@ gate here reads the artifact rather than the pipeline.
 | Channel | macOS | Windows | Linux |
 | --- | --- | --- | --- |
 | Stable (`vX.Y.Z`) | Developer ID signature, hardened runtime, accepted notary verdict, checksum | Hardware-backed signature, readable publisher, checksum | Checksum |
-| Prerelease (`vX.Y.Z-rc.1`, `-dev.0`, …) | Checksum | Checksum — an **unsigned** Windows artifact is permitted here and nowhere else | Checksum |
+| Prerelease (`vX.Y.Z-alpha.1`, `-beta.1`, `-rc.1`, …) | Checksum | Checksum — an **unsigned** Windows artifact is permitted here and nowhere else | Checksum |
 
 A stable Release additionally requires a build-provenance attestation. Any
 missing artifact, signature, notary verdict, publisher, checksum, or attestation
