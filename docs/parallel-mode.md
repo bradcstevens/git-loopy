@@ -19,7 +19,7 @@ Parallel mode is a **scheduling** capability, and not every member of the
   "rolling_dispatch": true,
   "integration_backlog": true,
   "adaptive_lane_limit": true,
-  "contribution_events": false
+  "contribution_events": true
 }
 ```
 
@@ -40,11 +40,13 @@ That refusal is deliberate. A silently serial Run looks exactly like a Parallel
 Run that found no eligible work, so accepting the flag and ignoring it would
 leave you unable to tell an unimplemented feature from an unlabelled backlog.
 
-`contribution_events: false` means the same kind of honesty about the record: the
-**Lane contribution** lifecycle Events are reserved in the contract but have no
-producer yet, so a Parallel Run still writes legacy **Wave**-shaped rows. Nothing
-about how the Run *behaves* depends on that key — it tells you what a replay log
-will contain.
+`contribution_events: true` is the same kind of honesty about the record: a
+Parallel Run writes the **Lane contribution** lifecycle stream, and the Python
+suite proves it by driving faked Parallel Runs and reading their Event logs
+(ADR-0065). A lifecycle type whose producer has not landed yet is waived there
+against the ticket that owns it, so until those tickets land a replay log can
+lack those types. Nothing about how the Run *behaves* depends on that key — it
+tells you what a replay log will contain.
 
 ## Starting a Run
 

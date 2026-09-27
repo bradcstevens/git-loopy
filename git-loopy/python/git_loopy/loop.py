@@ -7339,7 +7339,7 @@ class _ParallelLoop:
     ) -> None:
         """Finish a green landing: advance the line, close the issue, reap the branch."""
         advanced = self._advance_release_line(lane_work.item)
-        self._close_landed(lane_work.item, pre_base)
+        self._close_landed(contribution, lane_work.item, pre_base)
         if advanced is not None:
             next_line, bump_class = advanced
             self._serial._emit(
@@ -7499,7 +7499,12 @@ class _ParallelLoop:
             cause,
         )
 
-    def _close_landed(self, item: AfkReadyItem, pre_base: str) -> None:
+    def _close_landed(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        item: AfkReadyItem,
+        pre_base: str,
+    ) -> None:
         """Close a landed issue via the serial closure path + emit ``auto_close``.
 
         Reads the commits the landing added to base (``pre_base`` -> current
@@ -7507,6 +7512,10 @@ class _ParallelLoop:
         (``source.handle_completions`` -> ``gh issue close`` + the ``Closes #N``
         backstop), emitting one ``wrapper.auto_close`` per closure. Shared by the
         happy-path landing and a successful auto-resolution landing.
+
+        The closure is stamped with the landing contribution's identity, as
+        ``contribution_identity.stamped_types`` requires, so a replay reads it
+        inside that contribution's lifecycle rather than as a Run-level record.
         """
         try:
             post_base = self._git.head_sha()
@@ -7520,10 +7529,9 @@ class _ParallelLoop:
         for completion in self._serial._handle_completions_safely(
             [item], landed, leased_pool=True
         ):
-            self._serial._emit(
+            self._emit_contribution_event(
+                contribution,
                 events_module.WRAPPER_AUTO_CLOSE,
-                iter_num=None,
-                issue=completion.ref,
                 sha=completion.sha,
                 shas=list(completion.shas),
                 lane_issue=completion.ref,

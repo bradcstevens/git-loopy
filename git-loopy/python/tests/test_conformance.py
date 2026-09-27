@@ -1227,10 +1227,14 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
 
     2.14 retires ``wrapper.pipeline.quiescent`` (ADR-0065). Nothing read it,
     so, as with ADR-0046's removal, the wire axis stays at 1.2.
+
+    2.15 makes a ``contribution_events: true`` declaration an obligation proved
+    by emitted behaviour (ADR-0065). No record changes shape, so the wire axis
+    stays at 1.2.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.14"
+    assert _EVENT_SCHEMA["contract_version"] == "2.15"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1724,6 +1728,9 @@ def _parallel_capability_producers() -> dict[str, bool]:
 
     Read from the package source rather than declared, so the manifest cannot
     stay optimistic after a producer is removed or stay stale after one lands.
+    ``contribution_events`` is deliberately absent: a source grep is a mention,
+    not a claim (ADR-0049), so that declaration is proved by what faked Parallel
+    Runs emit in ``test_contribution_events_gate.py`` (ADR-0065).
     """
     package = Path(events_module.__file__).parent
     sources = "\n".join(
@@ -1731,20 +1738,11 @@ def _parallel_capability_producers() -> dict[str, bool]:
         for path in sorted(package.rglob("*.py"))
         if path.name != "events.py"
     )
-    lifecycle_constants = [
-        name
-        for name in events_module.__all__
-        if isinstance(value := getattr(events_module, name), str)
-        and value in events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
-    ]
     return {
         "parallel_mode": (package / "rolling_scheduler.py").exists(),
         "rolling_dispatch": "RollingScheduler" in sources,
         "integration_backlog": "integration_backlog" in sources,
         "adaptive_lane_limit": "ConcurrencyController" in sources,
-        "contribution_events": any(
-            re.search(rf"\b{constant}\b", sources) for constant in lifecycle_constants
-        ),
     }
 
 
@@ -1878,15 +1876,13 @@ def test_event_fixture_pins_run_start_host_disclosures() -> None:
 def test_python_parallel_manifest_matches_the_producers_it_has() -> None:
     """A declared capability is a claim about this distribution's own code.
 
-    ``contribution_events`` is the one that matters today: the Lane-contribution
-    lifecycle literals are reserved in :mod:`git_loopy.events` but no module
-    emits them, so declaring them available would advertise a stream no replay
-    will ever contain. Derived from the source, this fails the moment the
-    declaration and the producers disagree in either direction.
+    Derived from the source, this fails the moment a structural declaration and
+    its producer disagree in either direction. ``contribution_events`` is held
+    to behaviour instead, by ``test_contribution_events_gate.py`` (ADR-0065).
     """
-    assert events_module.PYTHON_PARALLEL_CAPABILITIES == (
-        _parallel_capability_producers()
-    )
+    declared = dict(events_module.PYTHON_PARALLEL_CAPABILITIES)
+    declared.pop("contribution_events")
+    assert declared == _parallel_capability_producers()
 
 
 _ROLLING_SCHEDULER_SCOPED = tuple(

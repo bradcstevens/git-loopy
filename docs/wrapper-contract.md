@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.14 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.15 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -907,7 +907,7 @@ boolean keys:
   "rolling_dispatch": true,
   "integration_backlog": true,
   "adaptive_lane_limit": true,
-  "contribution_events": false
+  "contribution_events": true
 }
 ```
 
@@ -918,10 +918,34 @@ fill more than one **Lane** at a time, `rolling_dispatch` whether it refills the
 toward the **Lane cap** rather than behind a barrier, `integration_backlog` whether it admits
 finished Lane branches to the bounded backlog described below, `adaptive_lane_limit` whether its
 **Effective Lane limit** reacts to **Pressure signals**, and `contribution_events` whether it emits
-the **Lane contribution** lifecycle stream. Python declares `contribution_events: false` today
-because those literals are reserved and have no producer: a Parallel Run still records legacy
-**Wave**-shaped rows, and advertising a stream no replay contains would be the same lie as reporting
-an unavailable counter as `0`.
+the **Lane contribution** lifecycle stream.
+
+**`contribution_events: true` is an obligation proved by behaviour (contract 2.15, ADR-0065).** A
+member that declares it MUST be shown — by faked Parallel **Runs** driven through its production
+loop and observed only through the Event logs they write — to emit every type in the Event-schema
+fixture's `contribution_identity.lifecycle_types` and `scheduler_scoped_types`, minus waivers. A
+waiver names the ticket that owns the missing producer; a waived type that any scenario emits fails
+the proof, so each producer ticket deletes its own waiver. A source grep is a mention, not a claim
+(ADR-0049), and is never that proof. Each contribution's emitted lifecycle, filtered to non-waived
+types, MUST also follow this order:
+
+```
+contribution.start
+  ( work_finished
+      ( end[unchanged_branch]
+      | [parked] admitted started branch_observed recovery_started{0..3}
+          ( published auto_close [release.advanced] end[published]
+          | end[serial_fallback] ) )
+  | end[checkpoint_failed | unchanged_branch | operator_stop] )
+```
+
+The order covers lifecycle types only, so stamped assistant, tool, usage, commit and Checkpoint
+records interleave freely. Run-exit reclamation may end any open contribution at any point with
+`operator_stop` or `unchanged_branch`. `wrapper.auto_close` is stamped with the landing
+contribution's triple; `wrapper.release.advanced` is Run-scoped on the wire and belongs to the open
+contribution whose issue it names. The Python Runner declares `true` and is held to it by
+`git-loopy/python/tests/test_contribution_events_gate.py`; the shell and PowerShell Orchestrators
+declare `false` and owe nothing here.
 
 `parallel_mode: false` is not one `false` among five. Refill, the backlog, adaptation, and the
 contribution stream all presuppose Parallel mode, so an Orchestrator that declares `parallel_mode`
@@ -1898,7 +1922,8 @@ migration and capacity refresh (§14.5). `routing-resolution.json` declares
 that provenance at 2.10; `event-schema.json` and `dashboard-insights.json`
 carried it at 2.10 and have since advanced to 2.11 with the Run-start issue
 source, 2.12 with Run-end refusals and 2.14 with the retirement of
-`wrapper.pipeline.quiescent` (§12). Contract 2.13 (ADR-0066) edited both
+`wrapper.pipeline.quiescent` (§12); both have since advanced to 2.15 with the behavioural
+`contribution_events` obligation (§12, ADR-0065). Contract 2.13 (ADR-0066) edited both
 fixtures' content, moving every `release_version` example from `-dev.N` to
 `-alpha.N` and rewording `event-schema.json`'s `wrapper.release.advanced`
 `emitted` rule, but left both version pins at 2.12 while the contract header
