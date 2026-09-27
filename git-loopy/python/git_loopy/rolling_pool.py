@@ -43,8 +43,9 @@ Design notes:
   later complete refresh still lists it, and blocks an empty claim while it
   remains unresolved. The one exception is :attr:`RollingPool.lane_first`, an
   unspent **Pin** that takes the first Lane (#430).
-* **stdlib + ``git_loopy.sources`` only.** Same constraint the sources seam
-  carries: no SDK, no Rich, no peer-of-loop imports.
+* **stdlib + ``git_loopy.sources`` only**, plus the Pin-read vocabulary of the
+  pure :mod:`git_loopy.issue_pin`. Same constraint the sources seam carries: no
+  SDK, no Rich, no peer-of-loop imports.
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Callable
 
+from git_loopy.issue_pin import PIN_READ_REFUSED, PIN_READ_UNREAD
 from git_loopy.sources import (
     AfkReadyItem,
     LABEL_PARALLEL_SAFE,
@@ -96,6 +98,12 @@ def _no_lane_first() -> int | str | None:
     return None
 
 
+def _ignore_lane_first_read(
+    *, listed: bool, complete: bool, read: str | None
+) -> None:
+    """Default for callers with no **Pin**: nobody tracks its lifetime."""
+
+
 def _never_read_refused(_candidate: PoolCandidate) -> bool:
     """Default for callers whose **Pickup** performs no read beyond Readiness."""
     return False
@@ -129,6 +137,11 @@ class _CachedCandidate:
 
     candidate: PoolCandidate
     quarantined: bool = False
+    #: The :attr:`RollingPool.clock` reading before which :meth:`RollingPool.take`
+    #: must not read this candidate again (#645). Set only by
+    #: :meth:`RollingPool.requeue`, and kept across a refresh, so a candidate
+    #: put back after a read that did not happen is retried at a paced rate.
+    not_before: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -216,6 +229,12 @@ class RollingPool:
     #: the next candidate, and the candidate is retried on the next walk even
     #: while quarantined — the one exception to §2.11's head-of-line rule.
     lane_first: Callable[[], int | str | None] = _no_lane_first
+    #: Told what this cache read of :attr:`lane_first` (#644), with the keyword
+    #: arguments of :func:`git_loopy.issue_pin.pin_live_after`: a walk that
+    #: passed it over as Blocked or stale, or could not read it, and a complete
+    #: Membership read that no longer lists it. The caller decides whether that
+    #: spends the Pin.
+    lane_first_read: Callable[..., None] = _ignore_lane_first_read
 
     _entries: list[_CachedCandidate] = field(default_factory=list, init=False)
     _refreshing: bool = field(default=False, init=False)
@@ -339,9 +358,28 @@ class RollingPool:
         """
         walked = list(self._entries)
         first = self.lane_first()
+        now = self.clock()
         for position, entry in enumerate(walked, start=1):
             held = first is not None and entry.candidate.ref == first
+            if held and not self.eligible(entry.candidate):
+                # The walk passes the Pin over (#644): a proven open blocker is
+                # an answer about it, an unread one is not.
+                if has_proven_open_blocker(entry.candidate):
+                    self.lane_first_read(
+                        listed=True, complete=True, read=PIN_READ_REFUSED
+                    )
+                elif has_unresolved_readiness(entry.candidate):
+                    self.lane_first_read(
+                        listed=True, complete=True, read=PIN_READ_UNREAD
+                    )
+                continue
             if (entry.quarantined and not held) or not self.eligible(entry.candidate):
+                continue
+            if now < entry.not_before:
+                # Put back after a read that did not happen (#645): not due
+                # yet. The held candidate keeps the next Lane while it waits.
+                if held:
+                    return PoolTake(item=None, position=None, considered=len(walked))
                 continue
             pickup = self.source.pickup(entry.candidate.ref)
             if pickup.outcome == PICKUP_VALIDATED and pickup.item is not None:
@@ -357,10 +395,69 @@ class RollingPool:
                     entry.candidate.ref,
                 )
                 if held:
+                    self.lane_first_read(
+                        listed=True, complete=True, read=PIN_READ_UNREAD
+                    )
                     return PoolTake(item=None, position=None, considered=len(walked))
                 continue
             self._entries.remove(entry)
+            if held:
+                # Stale at its authoritative read: no longer eligible (#644).
+                self.lane_first_read(
+                    listed=True, complete=True, read=PIN_READ_REFUSED
+                )
         return PoolTake(item=None, position=None, considered=len(walked))
+
+    def requeue(self, item: AfkReadyItem, *, retry_after: float) -> None:
+        """Put a taken candidate back at the head of the cache (#645).
+
+        :meth:`take` removes the candidate it validates, so a **Lane Pickup**
+        whose later step fails because a read did not happen — the **Lease**
+        probe, a **Dynamic route** preparation read, the base revision, the
+        worktree — would otherwise leave the candidate out until a refresh
+        re-lists it, or out for good once the Run refuses it. That is right for
+        an ordinary candidate and wrong for :attr:`lane_first`, whose failure
+        said nothing about it: the next Lane is still its.
+
+        The candidate goes back first and **quarantined**: only
+        :attr:`lane_first` retries a quarantined candidate, so if the candidate
+        stops being the one the next Lane must go to, it waits for a refresh
+        that still lists it like any other. It is not read again until
+        ``retry_after`` seconds of :attr:`clock` have passed, so a read that
+        keeps failing costs one round trip per interval rather than a hot loop.
+        """
+        self._entries = [
+            entry for entry in self._entries if entry.candidate.ref != item.ref
+        ]
+        self._entries.insert(
+            0,
+            _CachedCandidate(
+                candidate=PoolCandidate(
+                    ref=item.ref,
+                    title=item.title,
+                    labels=item.labels,
+                    created_at=item.created_at,
+                    blocked_by=item.blocked_by,
+                ),
+                quarantined=True,
+                not_before=self.clock() + retry_after,
+            ),
+        )
+
+    def lane_first_paced(self) -> bool:
+        """Whether :attr:`lane_first` is back in the cache and not yet due (#645).
+
+        Only :meth:`requeue` makes a candidate wait, so this is the Pin whose
+        Lane step went unread, holding the next Lane until its paced retry.
+        """
+        first = self.lane_first()
+        if first is None:
+            return False
+        now = self.clock()
+        return any(
+            entry.candidate.ref == first and now < entry.not_before
+            for entry in self._entries
+        )
 
     # -- termination -------------------------------------------------------- #
 
@@ -404,6 +501,11 @@ class RollingPool:
         nobody could bind work out of is entitled to report — the same
         discipline :func:`~git_loopy.sources.confirms_empty_pool` keeps for
         emptiness.
+
+        Survivors stored for a Rolling Run end are in the terminal Membership
+        read's §3.2 order, not cache order. A Lane refusal is re-listed behind
+        candidates the Lane never took; the refusal record must not inherit
+        that append (#643).
         """
         self._terminal_survivors = ()
         snapshot = self._refresh_now()
@@ -433,7 +535,21 @@ class RollingPool:
             for entry in self._entries
         ):
             return None
-        survivors = tuple(entry.candidate for entry in self._entries)
+        # Cache order is not §3.2 order once a Lane has released a candidate:
+        # the next refresh appends that newcomer behind whoever the Lane never
+        # took (#643). The refusal record names the read's selection order, so
+        # this list follows the snapshot. The cache itself stays FIFO — Lanes
+        # are still walking it.
+        selection = {
+            candidate.ref: index
+            for index, candidate in enumerate(snapshot.candidates)
+        }
+        survivors = tuple(
+            sorted(
+                (entry.candidate for entry in self._entries),
+                key=lambda candidate: selection.get(candidate.ref, len(selection)),
+            )
+        )
         unreadable = tuple(
             candidate.ref
             for candidate in survivors
@@ -565,13 +681,22 @@ class RollingPool:
         break the position guarantee this method exists to hold.
         """
         observed = {c.ref: c for c in snapshot.candidates if self.cacheable(c)}
+        first = self.lane_first()
+        if first is not None and first not in observed:
+            # A complete Membership read that no longer lists the Pin (#644).
+            self.lane_first_read(listed=False, complete=True, read=None)
         survivors: list[_CachedCandidate] = []
         for entry in self._entries:
             fresh = observed.pop(entry.candidate.ref, None)
             if fresh is None:
                 continue
-            # Still listed by an authoritative read: worth validating again.
-            survivors.append(_CachedCandidate(candidate=fresh, quarantined=False))
+            # Still listed by an authoritative read: worth validating again,
+            # though no sooner than a requeue's pacing allows (#645).
+            survivors.append(
+                _CachedCandidate(
+                    candidate=fresh, quarantined=False, not_before=entry.not_before
+                )
+            )
         survivors.extend(
             _CachedCandidate(candidate=c)
             for c in snapshot.candidates

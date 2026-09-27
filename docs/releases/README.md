@@ -92,12 +92,13 @@ channel does not claim. A supported installation consumes the baseline through
 `git-loopy update` — including the `update` chained by `git-loopy upgrade` — with
 no Rust toolchain and no source checkout.
 
-**Known gap.** The Windows archive is built, verified, and published like every
-other target, but the helper does not yet implement the Runner's
-attachment/control protocol on Windows, so a Windows operator cannot yet attach
-the Dashboard to a Run. That is the outstanding obligation of
-[#459](https://github.com/bradcstevens/git-loopy/issues/459); no declared target
-was dropped to conceal it.
+The helper implements the Runner's attachment/control protocol on every
+declared target, including Windows. A Windows client probes the control
+artifact with a non-blocking shared `LockFileEx` of the first byte — the same
+range the Runner holds exclusively — and leaves when that lock releases or the
+trace records `wrapper.run.end`. No declared target was dropped. Native
+Windows proof is the family gate's Windows job; a non-Windows host does not
+execute that binary.
 
 ### Consuming an older helper from a source-only Runner Release
 
@@ -191,12 +192,13 @@ those edits are not made by the Release-version writer.
 A `vX.Y.Z` **GitHub milestone** is solely the **Promotion** trigger. Closing it
 starts the unattended Promotion: the matching line becomes stable from whatever
 stage it has reached, `release-promotion.yml` commits it as `chore(release):
-promote Release line to <VERSION>`, and its annotated `v<VERSION>` tag starts
-publication. It is the only way a stable value reaches `main`: a `major` is a
-prerelease like any other bump. On every push the workflow still tags every
-stable Release the trunk carries that no tag reaches yet, rather than whatever
-`VERSION` says at the head, so a stable commit whose tag failed to push is found
-again, even when the next issue's prerelease advance has already followed it.
+promote Release line to <VERSION>`, and `git_loopy.release_promotion` publishes
+that committed snapshot. It is the only way a stable value reaches `main`: a
+`major` is a prerelease like any other bump. On every push the same entry
+publishes every stable Release the trunk carries that no tag reaches yet,
+rather than whatever `VERSION` says at the head, so a stable commit whose
+publication failed is found again, even when the next issue's prerelease
+advance has already followed it.
 
 Promotion only accepts a milestone that exists. List them rather than inventing
 one:
@@ -215,16 +217,21 @@ taken deliberately — a closed milestone publishes without further review — a
 it is not to be re-added as an implementation detail. An agent's inferred label
 can no longer publish a stable Release on its own (ADR-0066).
 
-A Promotion needs one credential: **`RELEASE_PUBLICATION_TOKEN`**, a repository
-secret carrying `contents: write`. Publication is entered by pushing an annotated
-`v<VERSION>` tag, and a tag pushed with the workflow's own `GITHUB_TOKEN` starts
-no workflow run at all — the Release pipeline would simply never happen, with
-nothing red to say so. The Promotion is therefore refused before it commits or
-tags anything when that secret is absent, rather than leaving `main` claiming a
-stable version that was never published. It is not a signing or channel
-credential and lives outside the protected `release` environment described below,
-because a Promotion that waited on that environment's reviewers would be the
-human gate this design declined.
+A Promotion needs **`RELEASE_PUBLICATION_TOKEN`**, a repository secret carrying
+`contents: write`, and the release-smoke credential and limits
+(`RELEASE_SMOKE_TOKEN`, `RELEASE_SMOKE_REPOSITORY`, `RELEASE_SMOKE_MAX_RUNS`,
+`RELEASE_SMOKE_DEADLINE_SECONDS`, `RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS`).
+Publication pushes the proved annotated tag, and a tag pushed with the
+workflow's own `GITHUB_TOKEN` starts no workflow run at all — the Release
+pipeline would simply never happen, with nothing red to say so. A smoke whose
+credential or limits were invented is not proof. The Promotion is therefore
+refused before it commits or publishes anything when any of them is absent,
+rather than leaving `main` claiming a stable version that was never published.
+The publication token is not a signing or channel credential and lives outside
+the protected `release` environment described below, because a Promotion that
+waited on that environment's reviewers would be the human gate this design
+declined. The smoke token is the only credential the smoke spends; an ambient
+`GH_TOKEN` is never that authorization.
 
 Prereleases take no part in any of it. They consult no milestone, this workflow
 tags none, and none reaches a package channel.
@@ -273,19 +280,128 @@ uv run --project git-loopy/python --all-extras \
   --stable-commit --candidate-commit "$commit"
 ```
 
-`release-promotion.yml` runs exactly that per candidate before it creates a tag,
-and the step is `-eo pipefail`, so a refusal ends it with no tag created and
-nothing pushed. A rehearsal needs no publication credential and touches no
-tracker; it reads the trunk and writes only inside its own workspace.
+`release-promotion.yml` enters `git_loopy.release_promotion` for every untagged
+stable commit, which runs exactly that rehearsal before any tag exists. A
+refusal ends the step with no tag created and nothing pushed. A rehearsal needs
+no publication credential and touches no tracker; it reads the trunk and writes
+only inside its own workspace.
 
 Two boundaries this **does not** move. Proof is of content, so repairing a
 candidate makes a *new* candidate that has to be rehearsed again — that is what
 `confirm_publication_input` refuses on, and it is also why concurrent work on
 `main` cannot retarget a proof: the input binds a commit SHA, and a moved trunk
 is visible in `base_commit` rather than silently substituted. And the rehearsal
-is not a bypass: `source-release.yml` still gates the pushed tag, and the
-release-only real-host smoke ADR-0059 requires before a stable publication is
-not wired up yet.
+is not a bypass: `source-release.yml` still reconciles the pushed tag, and the
+release-only real-host smoke ADR-0059 requires is a condition of the Promotion.
+`git_loopy.release_promotion` rehearses the exact commit, requires
+`confirm_smoke_evidence` to accept that proof, and only then calls
+`publish_release`. A failed, blocked, inconclusive, or borrowed smoke publishes
+nothing.
+
+### The release smoke
+
+A rehearsal proves content. The **release smoke** proves the operator path of
+that exact content on real hosts: `git_loopy.release_smoke` takes the
+**publication input** a rehearsal returned, recomputes its proof, re-digests
+its archive, and installs *that archive* into a clean `uv tool` installation
+under a private tool directory. An existing local installation, the current
+`main`, and a published Release are never what it runs — the operator
+environment it builds has a fresh `HOME` and config home, no ambient Copilot
+or GitHub credential, and no other `git-loopy` or `git-loopy-tui` on `PATH`.
+
+Through the installed candidate's public commands it then proves, against
+disposable work:
+
+- `git-loopy init` cancelled in a real terminal writes no Config, and a saved
+  `init --yes` does;
+- per Execution host (`local`, then `github-actions`), one Run of one
+  disposable issue is listed by `git-loopy runs` by its explicit identity,
+  announces that host in its trace, starts its work, accepts an independent
+  `git-loopy attach <run-id>` that announces the helper fallback and detaches
+  with the Run still going, acknowledges `git-loopy stop <run-id>` at drain and
+  then at cancel, records its end, and leaves its work on a recoverable
+  `git-loopy/<run>/issue-<N>` branch.
+
+The deterministic offline matrix stays responsible for every fault scenario —
+native Windows liveness, several clients, timeout, redelivery, temporary EOF,
+terminal restoration. The smoke proves the composed path once per candidate and
+replaces none of it. Its own admission, verdict, evidence and cleanup logic is
+covered offline through the same entry point by `tests/test_release_smoke.py`.
+
+**Authorization and limits are explicit.** Nothing is guessed and nothing is
+unbounded; a missing value blocks the smoke before any service is touched.
+
+| Setting | Flag | Environment | Workflow source |
+| --- | --- | --- | --- |
+| The one credential the smoke spends | — | `GIT_LOOPY_SMOKE_TOKEN` | secret `RELEASE_SMOKE_TOKEN` |
+| Disposable sandbox repository | `--sandbox-repository` | `GIT_LOOPY_SMOKE_REPOSITORY` | variable `RELEASE_SMOKE_REPOSITORY` |
+| Work limit (Runs started) | `--max-runs` | `GIT_LOOPY_SMOKE_MAX_RUNS` | variable `RELEASE_SMOKE_MAX_RUNS` |
+| Time limit, seconds | `--deadline-seconds` | `GIT_LOOPY_SMOKE_DEADLINE_SECONDS` | variable `RELEASE_SMOKE_DEADLINE_SECONDS` |
+| Spend limit, premium requests | `--spend-limit-premium-requests` | `GIT_LOOPY_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS` | variable `RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS` |
+
+An ambient `GH_TOKEN`, `GITHUB_TOKEN` or stored `gh` login is never
+authorization. The token needs repository contents, issues and Actions write on
+the sandbox and Copilot requests for the Agent. The sandbox must be a
+repository that carries the **`git-loopy-release-smoke`** topic, is not
+archived, and is never `bradcstevens/git-loopy`: every smoke force-pushes the
+candidate's tree to its default branch (so the GitHub Actions host dispatches
+the candidate's own `lane-contribution.yml`) and opens its issues there, marked
+with the smoke's `smoke-id`. Production issues are never smoke input.
+
+A Run is admitted only while the work limit, the deadline and the known spend
+all allow it. Spend is read from the Run's own billing records; spend that
+cannot be proved admits nothing further. A Run still live at the deadline — or
+a GitHub Actions contribution a stage-two Stop did not cancel — is in-flight
+uncertainty, never a pass.
+
+**Verdicts and exit codes.** The evidence is JSON
+(`git-loopy.release-smoke/1`) naming the smoke id, the candidate's proof,
+commit, tag and archive digest, the host platform and interpreter, the
+Execution hosts, the limits and what the ledger spent, every observation, the
+residue, and a content digest.
+
+| Verdict | Exit | Meaning |
+| --- | --- | --- |
+| `passed` | 0 | every required observation was made on every requested host |
+| `failed` | 1 | the candidate did the wrong thing, or is not the proved candidate |
+| `blocked` | 2 | authorization, a limit, the sandbox or a service was missing, unmarked, exhausted or unavailable |
+| `inconclusive` | 3 | an outcome could not be proved — a missing observation, an unprovable spend, a Run that ended too early |
+
+`confirm_smoke_evidence` is what a Promotion reads it through: it refuses
+evidence that did not pass, was edited after it was recorded, proves a
+different candidate's proof, or skipped an Execution host — so evidence can
+never be reused for changed content.
+
+**Cleanup touches only what the smoke provably owns.** It closes the issues
+that carry its own `smoke-id` and deletes the `git-loopy/<run>/…` branches of
+Runs it started and saw end. Everything else — another smoke's issue, a branch
+it cannot attribute, anything of a Run that may still be live — is left in
+place and listed as residue in the evidence. A Run whose trace shows a
+contribution that never ended, whose GitHub Actions dispatch is still running,
+or that could not be identified, counts as possibly live. A workspace whose Run
+may still be live is kept too. A smoke interrupted by `SIGTERM` or `SIGINT` is
+`blocked`, and still reclaims and writes its evidence.
+
+```sh
+GIT_LOOPY_SMOKE_TOKEN=… GIT_LOOPY_SMOKE_REPOSITORY=owner/git-loopy-smoke \
+uv run --project git-loopy/python --all-extras \
+  python -m git_loopy.release_smoke \
+  --publication-input "$RUNNER_TEMP/publication-input.json" \
+  --workspace "$RUNNER_TEMP/smoke" \
+  --evidence-output "$RUNNER_TEMP/release-smoke-evidence.json" \
+  --max-runs 2 --deadline-seconds 3600 --spend-limit-premium-requests 20
+```
+
+`release-smoke.yml` runs the rehearsal and then this, by `workflow_dispatch`
+(`candidate_commit` or `promote_milestone`) or as a reusable `workflow_call`,
+and uploads the evidence whatever the verdict. It has no protected environment
+and waits for no approval, so once the secret and variables are configured it
+runs unattended. The workflow refuses a deadline above 6000 seconds, which leaves
+the smoke step (110 minutes) time to reclaim its work. It is
+source-only: it installs from the proved source archive and needs `uv`, `git`,
+`gh` and the Copilot CLI on the host, none of which a published helper supplies.
+It is not an Integration feedback loop — it reaches GitHub, Copilot and the
+package index — and it tags and publishes nothing.
 
 ### Publishing a proved input, and retrying one
 
@@ -337,12 +453,14 @@ was written about, and it is not precedent. Before a tag exists a candidate may
 instead be repaired and rehearsed again — that is the whole point of rehearsing
 first — but after it exists there is no third option.
 
-`publish_release` deliberately has no command line of its own yet, and no
-workflow calls it. ADR-0059 requires a stable publication to sit behind both the
-full pre-tag proof *and* a bounded real-host smoke, and that smoke does not
-exist; an entry point added before it would be exactly the shortcut the ADR
-refuses. Wiring the two together is the composed Promotion's job, and until then
-`source-release.yml` remains what publishes the Release for a pushed tag.
+`publish_release` has no command line of its own. The only entry that may
+expose a tag is `python -m git_loopy.release_promotion`, and it calls
+`publish_release` only after the rehearsal and a passed smoke of that same
+proof. `source-release.yml` still runs when that tag is pushed. It reconciles
+the Release — a match is a no-op, a mismatch refuses, an absent Release for a
+human prerelease tag is created — and it never pushes a tag or attaches an
+artifact. A source-only tag does not launch helper-build, signing, attachment,
+or channel jobs; those stay gated on an artifact-bearing promise.
 
 ### Open boundary
 
@@ -388,12 +506,14 @@ look like an oversight.
 
 ### Downloadable baseline and completion proof
 
-**No verified downloadable helper baseline is named yet.** On 2026-09-20,
-public Release readback still showed no attached helper assets, including for
-`v0.11.0-dev.4`. #592 remains open until an explicitly artifact-bearing
-prerelease delivers the full set. A successful build or source Release is not
-that baseline, and existing public tags and source-only promises must not be
-rewritten to create one.
+**No verified downloadable helper baseline is named yet.** `v0.11.0-dev.7` was
+the first artifact-bearing Release and was removed with the retired `-dev.N`
+line. Public readback on 2026-09-26 still shows helper assets on no Release;
+the latest is source-only `v0.10.0`. #592 remains open until a human tags an
+explicitly artifact-bearing prerelease and canonical readback verifies the
+full set. A prerelease tag stays a human act. A successful build or source
+Release is not that baseline, and existing public tags and source-only
+promises must not be rewritten to create one.
 
 The supported set comes from
 [`tui-artifacts.json`](../../git-loopy/conformance/tui-artifacts.json):

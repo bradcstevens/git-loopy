@@ -222,6 +222,46 @@ class PublicationOutcome:
         return not (self.tag_created or self.release_created)
 
 
+@dataclass(frozen=True)
+class ReleaseClaim:
+    """The identity a source-only Release is reconciled against.
+
+    A tag-triggered follower uses this when the tag is already public. It is
+    not a second publication input and it never pushes a tag.
+    """
+
+    tag: str
+    version: str
+    prerelease: bool
+    notes_path: Path
+
+
+def ensure_source_release(
+    claim: ReleaseClaim,
+    notes: bytes,
+    release_service: ReleaseService,
+) -> bool:
+    """Create the Release for an already-public tag, or accept one that matches.
+
+    Returns whether this call created the Release. A matching Release is a
+    no-op. A disagreeing one is a refusal that writes nothing. A create whose
+    response was lost is resolved by reading the host back.
+    """
+    existing = _read_release(release_service, claim.tag)
+    if existing is not None:
+        _reconcile_release(existing, claim, notes)
+        return False
+    _create_release(release_service, claim, notes)
+    published = _read_release(release_service, claim.tag)
+    if published is None:
+        raise ReleasePublicationError(
+            f"{claim.tag} has no Release after publishing it, so nothing here "
+            "may report it published"
+        )
+    _reconcile_release(published, claim, notes)
+    return True
+
+
 def release_title(version: str) -> str:
     """The Release name one git-loopy Release version is published under."""
     return f"git-loopy {version}"

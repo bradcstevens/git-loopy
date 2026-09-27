@@ -38,6 +38,10 @@ from dataclasses import dataclass
 from typing import Final
 
 __all__ = [
+    "PIN_READ_BOUND",
+    "PIN_READ_REFUSED",
+    "PIN_READ_UNREAD",
+    "PIN_READS",
     "PIN_REFUSAL_UNREADABLE",
     "PIN_REFUSAL_CLOSED",
     "PIN_REFUSAL_NOT_READY_FOR_AGENT",
@@ -45,6 +49,7 @@ __all__ = [
     "PIN_REFUSALS",
     "PinnedIssue",
     "PinRefusal",
+    "pin_live_after",
     "refuse_pin",
 ]
 
@@ -202,3 +207,53 @@ def refuse_pin(
             detail=afk_exclusion,
         )
     return None
+
+
+#: A Pickup bound the Pin.
+PIN_READ_BOUND: Final[str] = "bound"
+
+#: A Pickup passed the Pin over for an answer about the Pin itself: an open
+#: blocker, a Lease held elsewhere, a refused Task type, or an authoritative
+#: read that found it no longer eligible.
+PIN_READ_REFUSED: Final[str] = "refused"
+
+#: A Pickup reached the Pin but one of its admission reads did not happen:
+#: unprovable Readiness, or a failed Lease, Dynamic-route or validation read.
+PIN_READ_UNREAD: Final[str] = "unread"
+
+PIN_READS: Final[frozenset[str]] = frozenset(
+    {PIN_READ_BOUND, PIN_READ_REFUSED, PIN_READ_UNREAD}
+)
+
+
+def pin_live_after(
+    live: bool, *, listed: bool, complete: bool, read: str | None = None
+) -> bool:
+    """Whether the **Pin** is still live after one Pickup (Wrapper contract §3.2, #644).
+
+    The first Pickup that reads the Pin spends it. A Pickup reads the Pin when
+    it binds it, passes it over for an answer about it, or completes a Pool or
+    Membership read that does not list it. A Pickup that could not read it —
+    an incomplete read without it, or an unresolved admission read — leaves it
+    live, and the next Pickup promotes it again. Once spent it stays spent.
+
+    Every Pickup path, serial or Lane, in every Runner member asks this one
+    question, and ``pin-duration.json`` pins its answers.
+
+    Args:
+        live: Whether the Pin was live before this Pickup.
+        listed: Whether this Pickup's Pool or Membership read listed the Pin.
+        complete: Whether that read was complete (§2.1).
+        read: What the Pickup did with a listed Pin — one of
+            :data:`PIN_READS` — or ``None`` when it never reached it.
+
+    Raises:
+        ValueError: If ``read`` is not in :data:`PIN_READS`.
+    """
+    if read is not None and read not in PIN_READS:
+        raise ValueError(f"unknown Pin read: {read!r}")
+    if not live:
+        return False
+    if not listed:
+        return not complete
+    return read is None or read == PIN_READ_UNREAD

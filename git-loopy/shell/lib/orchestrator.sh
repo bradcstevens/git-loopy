@@ -59,6 +59,14 @@ GIT_LOOPY_INTERACTIVE_FLAG=""
 # the pin as a label (ADR-0032). A flag is the only surface whose lifetime
 # matches the thing being expressed.
 GIT_LOOPY_ISSUE_PIN=""
+# Wrapper contract §3.2 (contract 2.14, #644) — whether the Pin is still live.
+# The first Pickup that reads the Pin spends it; one that could not read it
+# leaves it live. `git_loopy_pin_live_after` alone decides, and only a live Pin
+# is promoted or reported as `pin`.
+GIT_LOOPY_PIN_LIVE=1
+# Whether this Iteration's `gh issue view` of the Pin failed. The listing saw
+# the Pin, so a Pool without it is a read that did not happen, not an answer.
+_GIT_LOOPY_PIN_VIEW_FAILED=0
 
 git_loopy_usage() {
   cat <<'EOF'
@@ -74,6 +82,8 @@ Options:
                                 else -- a pinned issue that is closed, missing,
                                 unreadable, lacks ready-for-agent, or fails the
                                 AFK-ready discriminator fails the invocation.
+                                Spent by the first Pickup that reads it; the
+                                issue then rejoins the order like any other.
   --max-nmt-strikes N
   --deny-tool TOOL              Repeatable; unioned with GIT_LOOPY_DENY_TOOLS.
   --deny-skill SKILL            Repeatable; unioned with GIT_LOOPY_DENY_SKILLS.
@@ -560,6 +570,53 @@ git_loopy_resolve_config() {
   GIT_LOOPY_SEND_TIMEOUT_SECONDS="$send_timeout"
   GIT_LOOPY_INTERACTIVE_FLAG="$interactive_flag"
   GIT_LOOPY_ISSUE_PIN="$issue_pin"
+  GIT_LOOPY_PIN_LIVE=1
+}
+
+# Wrapper contract §3.2 (contract 2.14, #644) — the Pin spend decision, and the
+# Conformance seam `pin-duration.json` drives. Arguments: whether the Pin was
+# live before this Pickup, whether its Pool read listed the Pin, whether that
+# read was complete (all `1`/`0`), and what the Pickup did with a listed Pin
+# (`bound`, `refused`, `unread`, or empty when it never reached it). Prints `1`
+# when the Pin is still live afterwards, else `0`.
+#
+# The first Pickup that reads the Pin spends it: it binds it, passes it over
+# for an answer about it, or completes a read that does not list it. A Pickup
+# that could not read it leaves it live.
+git_loopy_pin_live_after() {
+  local live="$1" listed="$2" complete="$3" read="${4:-}"
+  case "$read" in
+    "" | bound | refused | unread) ;;
+    *)
+      printf 'git-loopy: unknown Pin read: %s\n' "$read" >&2
+      return 2
+      ;;
+  esac
+  if [[ "$live" != "1" ]]; then
+    printf '0\n'
+  elif [[ "$listed" != "1" ]]; then
+    if [[ "$complete" == "1" ]]; then printf '0\n'; else printf '1\n'; fi
+  elif [[ -z "$read" || "$read" == "unread" ]]; then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+# The Pin a Pickup still promotes and names, or nothing once it is spent.
+git_loopy_live_pin() {
+  if [[ -n "$GIT_LOOPY_ISSUE_PIN" && "$GIT_LOOPY_PIN_LIVE" == "1" ]]; then
+    printf '%s' "$GIT_LOOPY_ISSUE_PIN"
+  fi
+}
+
+# Apply one Pickup's read of the Pin to its lifetime.
+_git_loopy_observe_pin_read() {
+  local listed="$1" complete="$2" read="${3:-}"
+  [[ -n "$GIT_LOOPY_ISSUE_PIN" ]] || return 0
+  GIT_LOOPY_PIN_LIVE="$(
+    git_loopy_pin_live_after "$GIT_LOOPY_PIN_LIVE" "$listed" "$complete" "$read"
+  )"
 }
 
 git_loopy_is_afk_ready() {
@@ -1585,7 +1642,7 @@ _git_loopy_order_candidates() {
         }
     ]' <<<"$candidates"
   )" || return 1
-  ordering="$(git_loopy_order_issues "$normalized" "$GIT_LOOPY_ISSUE_PIN")" ||
+  ordering="$(git_loopy_order_issues "$normalized" "$(git_loopy_live_pin)")" ||
     return 1
   order_json="$(jq -c '.order' <<<"$ordering")" || return 1
   undated_json="$(jq -c '.undated' <<<"$ordering")" || return 1
@@ -1618,6 +1675,7 @@ _git_loopy_order_candidates() {
 git_loopy_collect_github_pool() {
   local candidates status=0
   GIT_LOOPY_POOL_COMPLETE=1
+  _GIT_LOOPY_PIN_VIEW_FAILED=0
   _git_loopy_gh_issue_list_to_completion || status=$?
   if ((status != 0)); then
     if ((status == 2)); then
@@ -1677,11 +1735,13 @@ git_loopy_collect_github_pool() {
     )"; then
       printf 'git-loopy: gh issue view #%s failed; skipping this Iteration.\n' \
         "$number" >&2
+      [[ "$number" != "$GIT_LOOPY_ISSUE_PIN" ]] || _GIT_LOOPY_PIN_VIEW_FAILED=1
       continue
     fi
     body="$(jq -r '.body // ""' <<<"$full" 2>/dev/null)" || {
       printf 'git-loopy: gh issue view #%s returned malformed JSON; skipping.\n' \
         "$number" >&2
+      [[ "$number" != "$GIT_LOOPY_ISSUE_PIN" ]] || _GIT_LOOPY_PIN_VIEW_FAILED=1
       continue
     }
     title="$(jq -r '.title // ""' <<<"$full")" || return 1
@@ -1702,6 +1762,7 @@ git_loopy_collect_github_pool() {
     normalized="$(_git_loopy_normalize_issue <<<"$full")" || {
       printf 'git-loopy: gh issue view #%s returned malformed fields; skipping.\n' \
         "$number" >&2
+      [[ "$number" != "$GIT_LOOPY_ISSUE_PIN" ]] || _GIT_LOOPY_PIN_VIEW_FAILED=1
       continue
     }
     pool_items+=("$normalized")
@@ -1800,12 +1861,30 @@ git_loopy_collect_prds_pool() {
 git_loopy_collect_pool() {
   case "$GIT_LOOPY_ISSUE_SOURCE" in
     github)
-      git_loopy_collect_github_pool
+      git_loopy_collect_github_pool || return 1
+      _git_loopy_observe_pin_in_pool
       ;;
     prds)
       git_loopy_collect_prds_pool "$GIT_LOOPY_REPO_ROOT"
       ;;
   esac
+}
+
+# Wrapper contract §3.2 (#644) — a complete Pool read that does not list the
+# live Pin spends it. One that stopped short, failed, or failed to view the Pin
+# could not read it, so the Pin stays live. A listed Pin is read by the Pickup.
+_git_loopy_observe_pin_in_pool() {
+  local pin complete
+  pin="$(git_loopy_live_pin)"
+  [[ -n "$pin" ]] || return 0
+  if jq -e --argjson pin "$pin" \
+    'any(.[]?; (.number // .ref) == $pin)' <<<"$GIT_LOOPY_POOL_JSON" \
+    >/dev/null; then
+    return 0
+  fi
+  complete="$GIT_LOOPY_POOL_COMPLETE"
+  ((_GIT_LOOPY_PIN_VIEW_FAILED == 0)) || complete=0
+  _git_loopy_observe_pin_read 0 "$complete"
 }
 
 git_loopy_head_sha() {
@@ -2050,7 +2129,8 @@ git_loopy_pick_serial() {
   local iteration="$1"
   local head ref observed_at readiness reason blockers event_reason label
   local considered=0 position=0 refused=0 waiting=0 unresolved=0
-  local unresolved_refs=""
+  local unresolved_refs="" live_pin pin_selected=0 emit_status=0
+  live_pin="$(git_loopy_live_pin)"
   GIT_LOOPY_PICKUP_JSON='[]'
   _GIT_LOOPY_PICKUP_REF=""
   _GIT_LOOPY_PICKUP_AT=""
@@ -2090,6 +2170,16 @@ git_loopy_pick_serial() {
           unresolved_refs="${unresolved_refs:+$unresolved_refs, }$label"
           ;;
       esac
+      if [[ -n "$live_pin" && "$ref" == "$live_pin" ]]; then
+        # §3.2 (#644): an open blocker is an answer about the Pin and spends
+        # it; an unprovable read is not, and the Pin stays live. Either way
+        # the walk moves on (§3.3).
+        if [[ "$reason" == "readiness_unprovable" ]]; then
+          _git_loopy_observe_pin_read 1 1 unread
+        else
+          _git_loopy_observe_pin_read 1 1 refused
+        fi
+      fi
       blockers="$(jq -r '.blockers | join(", ")' <<<"$readiness")" ||
         return "$GIT_LOOPY_PICKUP_UNBOUND"
       event_reason="$reason"
@@ -2113,6 +2203,9 @@ git_loopy_pick_serial() {
       return "$GIT_LOOPY_PICKUP_UNBOUND"
     label="$ref"
     [[ "$ref" =~ ^[0-9]+$ ]] && label="#$ref"
+    if [[ -n "$live_pin" && "$ref" == "$live_pin" ]]; then
+      pin_selected=1
+    fi
     if ! _git_loopy_publish_active_binding \
       "$iteration" "$ref" "serial_pickup" "$observed_at"; then
       # The selection stands; the binding does not. Leaving the ref set would seed
@@ -2121,12 +2214,20 @@ git_loopy_pick_serial() {
       # the agent's own Working marker.
       printf 'git-loopy: serial Pickup selected %s but could not publish its binding; the Iteration works that issue unbound.\n' \
         "$label" >&2
+      if ((pin_selected)); then
+        _git_loopy_observe_pin_read 1 1 bound
+      fi
       return "$GIT_LOOPY_PICKUP_UNBOUND"
     fi
     _GIT_LOOPY_PICKUP_REF="$ref"
     _GIT_LOOPY_PICKUP_AT="$observed_at"
+    # The record names the Pin while it is still live; the binding spends it.
     _git_loopy_emit_pickup_bound "$iteration" "$ref" "$head" "$position" \
-      "$considered" "$observed_at" || return "$GIT_LOOPY_PICKUP_UNBOUND"
+      "$considered" "$observed_at" || emit_status=$?
+    if ((pin_selected)); then
+      _git_loopy_observe_pin_read 1 1 bound
+    fi
+    ((emit_status == 0)) || return "$GIT_LOOPY_PICKUP_UNBOUND"
     printf 'git-loopy: serial Pickup bound %s (position %s of %s)\n' \
       "$label" "$position" "$considered" >&2
     return 0
@@ -2150,6 +2251,25 @@ git_loopy_pick_serial() {
   return "$GIT_LOOPY_PICKUP_ALL_SKIPPED"
 }
 
+# Why a Pickup bound `head` (a candidate record), given the live Pin or empty.
+# `pin` outranks `priority`, which outranks `order`. A pinned issue reached
+# the head because an operator named it (#396) whatever its labels said, so
+# crediting the label would make "did my Priority label do anything?"
+# unanswerable on exactly the Runs where someone overrode it. Only the *live*
+# Pin is named (contract 2.14, #644): a spent Pin is ordered like any other.
+# `priority` in turn is a human assertion read off the issue, never inferred;
+# every other head is the head because the order put it there.
+git_loopy_pickup_reason() {
+  local head="$1" pin="${2:-}"
+  jq -r --arg pin "$pin" '
+    if ($pin != "" and ((.number // .ref) | tostring) == $pin)
+    then "pin"
+    elif ((.labels // []) | map(if type == "object" then .name else . end)
+         | index("priority"))
+    then "priority" else "order" end
+  ' <<<"$head"
+}
+
 # One **Pickup** binding as an Event (#397): which issue, why it was chosen, and
 # where it sat in the order. Emitted after the binding is published, because a
 # Pickup record for a binding no `wrapper.issue.activated` announced would
@@ -2168,21 +2288,8 @@ _git_loopy_emit_pickup_bound() {
   else
     issue_arg="$(jq -cn --arg ref "$ref" '$ref')" || return 1
   fi
-  # `pin` outranks `priority`, which outranks `order`. A pinned issue reached
-  # the head because an operator named it (#396) whatever its labels said, so
-  # crediting the label would make "did my Priority label do anything?"
-  # unanswerable on exactly the Runs where someone overrode it. `priority` in
-  # turn is a human assertion read off the issue, never inferred; every other
-  # head is the head because the order put it there.
-  reason="$(
-    jq -r --arg pin "${GIT_LOOPY_ISSUE_PIN:-}" '
-      if ($pin != "" and ((.number // .ref) | tostring) == $pin)
-      then "pin"
-      elif ((.labels // []) | map(if type == "object" then .name else . end)
-           | index("priority"))
-      then "priority" else "order" end
-    ' <<<"$head"
-  )" || return 1
+  reason="$(git_loopy_pickup_reason "$head" "$(git_loopy_live_pin)")" ||
+    return 1
   payload="$(
     jq -cn \
       --argjson issue "$issue_arg" \

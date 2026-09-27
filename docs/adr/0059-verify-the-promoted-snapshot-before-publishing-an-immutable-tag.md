@@ -1,7 +1,9 @@
 # Verify the promoted snapshot before publishing an immutable tag
 
-**Status:** accepted; publication automation must be brought into conformance
-before the next release claims this guarantee.
+**Status:** accepted. The unattended Promotion enters
+`git_loopy.release_promotion`, which proves the exact snapshot, requires a
+passed release smoke of that proof, and publishes through the reconciliation
+boundary before any public tag exists.
 
 **Amended by [ADR-0066](0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md):**
 the major-bump exemption is withdrawn, so a closed milestone is the only

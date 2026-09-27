@@ -15,7 +15,7 @@ from typing import Callable, Mapping, Sequence
 from urllib.request import urlopen
 
 from git_loopy import installation, settings
-from git_loopy.release_version import read_runtime_release_version
+from git_loopy.release_version import PRERELEASE_STAGES, read_runtime_release_version
 from git_loopy.routing_migration import choose_migration
 
 #: The published source location every documented install command names. An
@@ -402,10 +402,10 @@ def _channel_move(channel: installation.InstallChannel) -> _ChannelMove:
     return _CHANNEL_MOVES.get(channel.name, _UNPROVEN_CHANNEL)
 
 
-_PRERELEASE_STAGES = ("alpha", "beta", "rc")
-_RELEASE_ORDER = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?")
+_STAGE_PATTERN = "|".join(PRERELEASE_STAGES)
+_RELEASE_ORDER = re.compile(rf"(\d+)\.(\d+)\.(\d+)(?:-({_STAGE_PATTERN})\.(\d+))?")
 #: A ref spelled the way this project spells its published Release tags.
-_RELEASE_REF = re.compile(r"v?(\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?)")
+_RELEASE_REF = re.compile(rf"v?(\d+\.\d+\.\d+(?:-(?:{_STAGE_PATTERN})\.\d+)?)")
 _WINDOWS_COMMAND_CHARACTERS = frozenset("&|<>()%^!\"")
 _NEXT_RELEASE_PAGE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
@@ -466,7 +466,7 @@ def _ordering(version: str) -> tuple[int, int, int, int, int, int] | None:
         int(minor),
         int(patch),
         0,
-        _PRERELEASE_STAGES.index(stage),
+        PRERELEASE_STAGES.index(stage),
         int(counter),
     )
 

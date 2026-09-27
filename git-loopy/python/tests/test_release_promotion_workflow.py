@@ -99,7 +99,13 @@ def test_a_promotion_is_refused_before_it_mutates_anything_without_its_token(
     preflight, checkout = _steps(workflow)[:2]
 
     assert PUBLICATION_TOKEN in yaml.safe_dump(preflight)
+    assert "secrets.RELEASE_SMOKE_TOKEN" in yaml.safe_dump(preflight)
+    assert "vars.RELEASE_SMOKE_REPOSITORY" in yaml.safe_dump(preflight)
+    assert "vars.RELEASE_SMOKE_MAX_RUNS" in yaml.safe_dump(preflight)
+    assert "vars.RELEASE_SMOKE_DEADLINE_SECONDS" in yaml.safe_dump(preflight)
+    assert "vars.RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS" in yaml.safe_dump(preflight)
     assert "exit 1" in preflight["run"]
+    assert "6000" in preflight["run"]
     assert checkout["uses"].startswith("actions/checkout@")
     # Publication rides the same token: the checkout's remote is what every
     # later `git push` in this job authenticates as.
@@ -149,11 +155,15 @@ def test_only_the_milestone_event_reads_a_milestone(workflow: dict[Any, Any]) ->
     assert readers, "no step reads the closed milestone that triggered a Promotion"
     for step in readers:
         assert step["if"] == "github.event_name == 'milestone'"
-    # The tagging step reaches its own decision from the trunk and the tags, so
-    # it runs under either trigger and asks no tracker anything.
-    tag = next(step for step in _steps(workflow) if "git tag" in step.get("run", ""))
-    assert "if" not in tag
-    assert "milestone" not in tag["run"]
+    # The publication step reaches its own decision from the trunk and the tags,
+    # so it runs under either trigger and asks no tracker anything.
+    publish = next(
+        step
+        for step in _steps(workflow)
+        if "git_loopy.release_promotion" in step.get("run", "")
+    )
+    assert "if" not in publish
+    assert "milestone" not in publish["run"]
 
 
 def test_a_promoted_line_is_committed_in_the_words_the_runner_uses(
@@ -174,63 +184,70 @@ def test_a_promoted_line_is_committed_in_the_words_the_runner_uses(
     )
 
 
-def test_a_stable_release_is_tagged_from_either_trigger_and_a_prerelease_never_is(
+def test_a_stable_release_is_published_from_either_trigger_and_a_prerelease_never_is(
     workflow: dict[Any, Any],
 ) -> None:
     run_text = _run_text(workflow)
-    tag = next(step for step in _steps(workflow) if "git tag" in step.get("run", ""))
+    publish = next(
+        step
+        for step in _steps(workflow)
+        if "git_loopy.release_promotion" in step.get("run", "")
+    )
 
     assert "python -m git_loopy.release_version" in run_text.replace("\n", " ")
     assert "--promote-milestone" in run_text
-    # Only a stable `major.minor.patch` is tagged: a prerelease value matches this
-    # test under neither trigger and so reaches no channel.
-    assert r"^[0-9]+\.[0-9]+\.[0-9]+$" in tag["run"]
-    assert 'git tag -a "v$version"' in tag["run"]
+    assert "--publish-untagged-stable" in publish["run"]
+    assert "--distribution-mode source-only" in publish["run"]
+    # The workflow does not compose a second tag. Publication pushes the proved
+    # object, and only a stable commit the entry itself selects.
+    assert "git tag" not in publish["run"]
+    assert "git push origin" not in publish["run"]
     assert "git push origin HEAD:main" in run_text
-    assert 'git push origin "${tagged[@]}"' in tag["run"]
 
 
-def test_every_stable_release_the_trunk_carries_is_tagged_not_just_its_head(
+def test_every_stable_release_the_trunk_carries_is_published_not_just_its_head(
     workflow: dict[Any, Any],
 ) -> None:
     """A Run pushes once per Iteration and lands a Release commit per issue.
 
     So the value at the pushed head can be the prerelease advance that
     *followed* a committed Promotion, and a workflow reading `VERSION` alone
-    would drop that stable Release — silently, because finding
-    nothing to tag is indistinguishable from there being nothing to do. The
-    commits that touched `VERSION` and that no `v*` tag reaches are the
-    candidates instead, which also retries a tag an earlier run failed to push.
+    would drop that stable Release. The composed entry walks the untagged
+    stable commits itself; the workflow does not reimplement that walk.
     """
-    tag = next(step for step in _steps(workflow) if "git tag" in step.get("run", ""))
+    publish = next(
+        step
+        for step in _steps(workflow)
+        if "git_loopy.release_promotion" in step.get("run", "")
+    )
 
-    assert "--not --tags='v*'" in tag["run"]
-    assert "-- VERSION" in tag["run"]
-    # Read per candidate commit, and tagged on that commit: `source-release.yml`
-    # refuses a tag whose tree declares a different Release version.
-    assert 'git show "$commit:VERSION"' in tag["run"]
-    assert 'git tag -a "v$version" -m "Release $version" "$commit"' in tag["run"]
+    assert "--publish-untagged-stable" in publish["run"]
     assert "tr -d '\\r\\n' < VERSION" not in _run_text(workflow)
+    assert "git show" not in publish["run"]
 
 
-def test_no_tag_becomes_public_until_a_rehearsal_proved_that_exact_commit(
+def test_no_tag_becomes_public_until_the_smoke_has_proved_that_exact_commit(
     workflow: dict[Any, Any],
 ) -> None:
-    """Supplementary to `test_release_rehearsal.py`, which is the actual proof.
+    """The workflow enters the composed entry. It does not tag around it.
 
-    All this pins is that the Promotion *asks* for it, on the candidate commit
-    rather than the head, and before the tag exists rather than after. A green
-    development ancestor is not proof of the commit being published
+    Proof, smoke, and publication are one command, so a step cannot rehearse
+    and then push a tag the smoke never saw
     ([ADR-0059](https://github.com/bradcstevens/git-loopy/blob/9d33e78b8aba97ae16ee5a133aae1fca78905ed0/docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
     """
-    tag = next(step for step in _steps(workflow) if "git tag" in step.get("run", ""))
-    run = tag["run"]
+    publish = next(
+        step
+        for step in _steps(workflow)
+        if "git_loopy.release_promotion" in step.get("run", "")
+    )
+    run = publish["run"]
 
-    assert "python -m git_loopy.release_rehearsal" in run
-    assert '--candidate-commit "$commit"' in run
-    # The promise is stated, never inferred from what happens to be configured.
+    assert "python -m git_loopy.release_promotion" in run
     assert "--distribution-mode source-only" in run
-    assert run.index("release_rehearsal") < run.index('git tag -a "v$version"')
-    # `shell: bash` is `-eo pipefail`, so a refused rehearsal ends the step
-    # before the tag it would have proved is created.
-    assert tag["shell"] == "bash"
+    assert "--publish-untagged-stable" in run
+    assert "git_loopy.release_rehearsal" not in run
+    assert "git tag" not in run
+    assert publish["shell"] == "bash"
+    assert publish["env"]["GH_TOKEN"] == "${{ secrets.RELEASE_PUBLICATION_TOKEN }}"
+    assert publish["env"]["GIT_LOOPY_SMOKE_TOKEN"] == "${{ secrets.RELEASE_SMOKE_TOKEN }}"
+    assert "environment" not in workflow["jobs"]["promote"]

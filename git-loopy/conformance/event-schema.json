@@ -135,7 +135,8 @@
   },
   "payload_contracts": {
     "wrapper.run.end": {
-      "refusals_optional": ["issue", "reason"],
+      "refusals_optional": ["refusals"],
+      "refusals_entry_keys": ["issue", "reason"],
       "refusals_note": "Contract 2.12, #643. Rolling Pool-cache all_blocked and all_skipped endings carry one refusal per surviving candidate, in selection order, with the wrapper.pickup.skipped reason vocabulary; no other ending carries it. It is not a Pool collection. A consumer ignores malformed entries without losing outcome, and an absent field preserves the old notice. Event schema compatibility stays 1.2."
     },
     "calibration.trial.start": {
@@ -572,6 +573,13 @@
     "timestamp_format": "RFC3339 UTC with trailing Z",
     "duration_source": "monotonic clock",
     "duration_unit": "seconds"
+  },
+  "retired_event_types": {
+    "WRAPPER_DASHBOARD_FAULT": {
+      "literal": "wrapper.dashboard.fault",
+      "exit_code": 3,
+      "reason": "The Run outlives its Dashboard (#459, ADR-0058). A client fault is not a Run event. Neither this literal nor exit code 3 may be reused."
+    }
   },
   "event_types": {
     "CALIBRATION_TRIAL_START": "calibration.trial.start",

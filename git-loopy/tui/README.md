@@ -127,7 +127,21 @@ did name rather than reporting nothing.
 | Scroll the Queue or open Log by a page | `PageUp`, `PageDown` |
 | Scroll the Activity tail without changing focus | `Ctrl-PageUp`, `Ctrl-PageDown` |
 | Resume following the Log and Activity tails | `f` |
+| Stop the attached Run | `s` (again to escalate; not Quit) |
 | Quit | `q`, `Ctrl-C`, `Ctrl-D` |
+
+`s` writes a Stop request beside the attached Run's control artifact and leaves
+this client attached, so the Wind-down is visible here. It does not Stop a
+Dashboard that is not attached. `q` is **Detach**: it hands this terminal back
+and leaves the Run and every other client unchanged. It is not **Stop**.
+
+`git-loopy attach <run-id>` is the public entry that starts this helper against
+a Run the operator did not launch. A missing helper is diagnosed, and that
+client stays attached through the line printer. This helper exiting non-zero
+is a **Dashboard fault**: the terminal is restored and that client stays
+attached through the same line printer. The helper is not restarted. Neither
+case is **Detach** or **Stop**. Navigation in this helper writes nothing the
+Run or another client can see.
 
 The cursor holds an **issue, not a row**. The Queue groups active before queued
 before history, so a row moves the moment an issue is activated, and a

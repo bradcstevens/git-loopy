@@ -533,8 +533,15 @@ switch -CaseSensitive ($Command) {
             ($Count -gt [int]$env:FAKE_GH_EMPTY_AFTER)) {
             Write-Output "[]"
         } else {
+            # An opt-in per-read listing: `<list>.<count>` answers the read
+            # numbered `<count>`, so a scenario can change one issue's
+            # Readiness between Pickups. Every other read answers `<list>`.
+            $ListPath = $env:FAKE_GH_LIST_JSON
+            if ([IO.File]::Exists("$ListPath.$Count")) {
+                $ListPath = "$ListPath.$Count"
+            }
             Write-Output (Complete-FakeIssueJson -Text (
-                [IO.File]::ReadAllText($env:FAKE_GH_LIST_JSON)
+                [IO.File]::ReadAllText($ListPath)
             ))
         }
         Complete-FakeCommand 0
@@ -4507,6 +4514,140 @@ Start-Sleep -Seconds $Sleep
     Assert-Contains ([IO.File]::ReadAllText($env:FAKE_COPILOT_PROMPT)) "=== Issue #72:" (
         "the agent was handed the pinned issue"
     )
+
+    # Wrapper contract §3.2 (contract 2.14, #644) — the first Pickup that reads
+    # the Pin spends it. The pinned issue stays open through a no-progress
+    # agent, yet only the first Pickup promotes it; every later one orders it
+    # by §3.2 like any other issue.
+    $PinOpenBlocker = [ordered]@{
+        totalCount = 1
+        nodes = @([ordered]@{
+                id = "blocker-50"
+                number = 50
+                state = "OPEN"
+                title = "Dependency"
+                url = "https://github.com/example/repo/issues/50"
+            })
+    }
+    $PinUnprovable = [ordered]@{ totalCount = 1; nodes = @() }
+    # Pool read `Nth` lists each issue in `Blocked` with those blockers.
+    function Write-PinPickupList {
+        param(
+            [Parameter(Mandatory)][int]$Nth,
+            [Parameter(Mandatory)][Collections.IDictionary]$Blocked
+        )
+
+        $Rows = foreach ($Row in @($PinTurnRows)) {
+            $Copy = [ordered]@{}
+            foreach ($Key in $Row.Keys) { $Copy[$Key] = $Row[$Key] }
+            if ($Blocked.Contains([int]$Row["number"])) {
+                $Copy["blockedBy"] = $Blocked[[int]$Row["number"]]
+            }
+            $Copy
+        }
+        [IO.File]::WriteAllText(
+            "$PinTurnList.$Nth",
+            (@($Rows) | ConvertTo-Json -Depth 10 -AsArray)
+        )
+    }
+    function Clear-PinPickupLists {
+        foreach ($Path in [IO.Directory]::GetFiles($TempDir)) {
+            if ($Path.StartsWith("$PinTurnList.", [StringComparison]::Ordinal)) {
+                [IO.File]::Delete($Path)
+            }
+        }
+    }
+    function Invoke-PinLifetime {
+        param(
+            [Parameter(Mandatory)][string]$Label,
+            [Parameter(Mandatory)][string]$Cap
+        )
+
+        $env:FAKE_GH_LOG = Join-Path $TempDir "pin-$Label-gh.log"
+        $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "pin-$Label-list.count"
+        Set-CopilotEnv -Prefix "pin-$Label"
+        $env:FAKE_COPILOT_COMMITS = "0"
+        $Stdout = Join-Path $TempDir "pin-$Label.stdout"
+        $Stderr = Join-Path $TempDir "pin-$Label.stderr"
+        $null = Invoke-Entrypoint `
+            -Repo $PinTurnRepo `
+            -FakeBin $PinTurnBin `
+            -StdoutPath $Stdout `
+            -StderrPath $Stderr `
+            -Arguments @($Cap, "--issue", "72")
+        $env:FAKE_COPILOT_COMMITS = $null
+        $Calls = if ([IO.File]::Exists($env:FAKE_COPILOT_CALLS)) {
+            [IO.File]::ReadAllText($env:FAKE_COPILOT_CALLS)
+        }
+        else {
+            "0"
+        }
+        Assert-Equal $Cap $Calls (
+            "the $Label Pin Run did not work $Cap Iterations: " +
+            [IO.File]::ReadAllText($Stderr)
+        )
+        $Events = @(
+            [IO.File]::ReadAllLines($Stdout) |
+                Where-Object { $_.Trim().Length -gt 0 } |
+                ForEach-Object { $_ | ConvertFrom-Json -AsHashtable -DateKind String }
+        )
+        return [pscustomobject]@{
+            Bound = [string]::Join(";", @($Events |
+                        Where-Object { $_["type"] -ceq "wrapper.pickup.bound" } |
+                        ForEach-Object { "$($_["issue"]):$($_["reason"])" }))
+            Skipped = [string]::Join(";", @($Events |
+                        Where-Object { $_["type"] -ceq "wrapper.pickup.skipped" } |
+                        ForEach-Object { "$($_["issue"]):$($_["reason"])" }))
+            Collected = [string]::Join(";", @($Events |
+                        Where-Object { $_["type"] -ceq "wrapper.afk_ready.collected" } |
+                        ForEach-Object { [string]::Join(",", @($_["issues"])) }))
+        }
+    }
+
+    Clear-PinPickupLists
+    $PinSpent = Invoke-PinLifetime -Label "spent" -Cap "3"
+    Assert-Equal "72:pin;70:order;70:order" $PinSpent.Bound (
+        "a Pin bound once was promoted again while it stayed open"
+    )
+    Assert-Equal "72,70,71;70,71,72;70,71,72" $PinSpent.Collected (
+        "a spent Pin kept the head of later Pools"
+    )
+
+    # A Pin skipped as Blocked was read — the open blocker is an answer about
+    # it — so it is spent, and stays spent after it unblocks. Its later binding
+    # is the order's, not the Pin's.
+    Clear-PinPickupLists
+    Write-PinPickupList -Nth 1 -Blocked @{ 72 = $PinOpenBlocker }
+    Write-PinPickupList -Nth 2 -Blocked @{ 70 = $PinOpenBlocker; 71 = $PinOpenBlocker }
+    $PinBlocked = Invoke-PinLifetime -Label "blocked" -Cap "2"
+    Assert-Equal (
+        "72:blocked_by_open_dependency: example/repo#50;" +
+        "70:blocked_by_open_dependency: example/repo#50;" +
+        "71:blocked_by_open_dependency: example/repo#50"
+    ) $PinBlocked.Skipped "the Blocked-Pin Run skipped what it should"
+    Assert-Equal "70:order;72:order" $PinBlocked.Bound (
+        "a Pin skipped as Blocked was named as the Pin after it unblocked"
+    )
+    Assert-Equal "72,70,71;70,71,72" $PinBlocked.Collected (
+        "a Pin skipped as Blocked was promoted again after it unblocked"
+    )
+
+    # A Pin whose Readiness could not be read was not read: the Pickup walks on
+    # and binds the next candidate (§3.3), and the Pin stays live — promoted
+    # again at the next Pickup, where it binds as `pin` once its Readiness reads.
+    Clear-PinPickupLists
+    Write-PinPickupList -Nth 1 -Blocked @{ 72 = $PinUnprovable }
+    $PinUnread = Invoke-PinLifetime -Label "unread" -Cap "2"
+    Assert-Equal "72:readiness_unprovable" $PinUnread.Skipped (
+        "the unread Pin was not skipped as unprovable"
+    )
+    Assert-Equal "70:order;72:pin" $PinUnread.Bound (
+        "a Pin the Pickup could not read was spent"
+    )
+    Assert-Equal "72,70,71;72,70,71" $PinUnread.Collected (
+        "a Pin the Pickup could not read lost its promotion"
+    )
+    Clear-PinPickupLists
 
     # The readiness capability gate, driven over `gh` versions that are not
     # installed. Both halves are pure, so the whole refusal is exercisable from

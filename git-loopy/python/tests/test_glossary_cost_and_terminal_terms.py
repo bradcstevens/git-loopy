@@ -1,8 +1,9 @@
 """Glossary terms agree with their accepted decisions (#336, ADR-0058/0059).
 
-The billed-Cost entries remain pinned to shipped code. The client/publication
-entries follow the human-confirmed next-release decisions, whose ADRs explicitly
-leave runtime acceptance outstanding; these prose checks are not that proof.
+The billed-Cost entries remain pinned to shipped code. The client entries
+follow ADR-0058, which still leaves runtime acceptance outstanding. ADR-0059's
+publication ordering is now the composed Promotion; these prose checks are not
+that proof.
 Reflowed prose keeps line wrapping from changing the asserted vocabulary.
 """
 
@@ -61,6 +62,19 @@ def _entry(term: str) -> str:
     raise AssertionError(f"CONTEXT.md has no glossary entry for **{term}**")
 
 
+def test_an_all_skipped_notice_counts_refusal_kinds_not_only_pickup_skips() -> None:
+    """A Rolling end's ``refusals`` count, including candidates that never reached Pickup.
+
+    **Pickup skip** is a candidate the runner walked past at Pickup. A Blocked
+    survivor recorded only on a Rolling Run end had no Pickup.
+    """
+    entry = _entry("Unbound-Run notice")
+
+    assert "counts each refusal kind" in entry
+    assert "`refusals`" in entry
+    assert "counts each **Pickup skip** kind" not in entry
+
+
 def test_the_glossary_names_the_terminal_owner() -> None:
     """ADR-0024's one component responsible for the terminal's mode state."""
     entry = _entry("Terminal owner")
@@ -106,6 +120,7 @@ def test_attach_observes_existing_work_without_owning_it() -> None:
 
     assert "existing **Run**" in entry
     assert "without starting or taking ownership of its work" in entry
+    assert "`git-loopy attach <run-id>`" in entry
     assert "repeated or concurrent" in entry
     assert "only an explicit **Stop** request" in entry
 
@@ -119,15 +134,23 @@ def test_publication_is_not_promotion_or_tagging_alone() -> None:
     assert "a tag does not prove a complete publication" in entry
 
 
-def test_the_new_decisions_do_not_claim_runtime_acceptance() -> None:
+def test_init_still_leaves_runtime_acceptance_outstanding() -> None:
     assert (
         "the next release must prove the behavior below, rather than treat this "
         "decision as evidence that it is already implemented"
     ) in _prose(ADR_0058)
+
+
+def test_publication_status_names_the_composed_promotion() -> None:
+    """ADR-0059's ordering is now the unattended Promotion, not a future claim."""
+    prose = _prose(ADR_0059)
+
+    assert "git_loopy.release_promotion" in prose
+    assert "passed release smoke" in prose
     assert (
         "publication automation must be brought into conformance before the next "
         "release claims this guarantee"
-    ) in _prose(ADR_0059)
+    ) not in prose
 
 
 def test_ai_credits_is_the_named_cost_unit() -> None:

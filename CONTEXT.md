@@ -52,6 +52,21 @@ One invocation of the git-loopy loop, identified by a `run_id`, spanning serial
 **Iterations** and/or parallel **Lane contributions** until its authorized work is
 exhausted, an **Automation stop** occurs, or the strike limit is reached.
 
+**Execution host**:
+Where one **Lane contribution** executes. A Run selects one host; each contribution
+binds to it and returns an outcome for the Run's own **Integration**. The host declares
+placement, capacity, and **Isolation grade**; it does not schedule work or publish
+the integrated result. A serial **Iteration** binds no host, and running the
+Orchestrator inside Actions does not itself change the host's placement.
+_Avoid_: Run host, Orchestrator deployment, Dashboard host.
+
+**Isolation grade**:
+The Execution host's declared isolation boundary: **workspace separation only**
+(separate worktrees with the operator's authority) or **machine boundary** (a
+separate machine for the contribution). These are two categories, not a
+scale; placement alone never proves either.
+_Avoid_: Sandbox, security score, host placement.
+
 **Agent**:
 One live harness session doing work in a **Run**, bound to a single **Routed pair** for
 its lifetime: a serial **Iteration**'s session, a **Lane**'s session, or a
@@ -354,10 +369,15 @@ falling back to the order, because silently working a different issue than the o
 named is worse than stopping. Under **Rolling dispatch** the pin also goes ahead of
 every **Lane**: a **Serial-required** pin is the run's first serial **Iteration**, and no
 Lane is reserved until it ends; a `parallel-safe` pin takes the first Lane. Lacking
-`parallel-safe` decides how a pin is worked, never whether. In the Python Runner a pin is
-spent by its first binding, or by the end of the serial Iteration latched for it unless that
-Iteration could not read it; an issue still open after that rejoins the order like any
-other (ADR-0032 records where the other Runner members still differ). It lasts at most
+`parallel-safe` decides how a pin is worked, never whether. The first **Pickup** that
+reads a pin spends it, in every Runner member: it binds it, passes it over for an answer
+about the pin itself (an open blocker, a **Lease** held elsewhere, a refused task type, or
+an authoritative read that finds it stale), or completes a Pool or **Membership read**
+that no longer lists it. A **Serial-required** pin is also spent by the end of the serial
+Iteration latched for it. A Pickup that could not read the pin — an incomplete read, or
+**Readiness** it could not prove — leaves it live, so the next Pickup promotes it again.
+Once spent, an issue still open rejoins the order like any other, so an invocation binds
+at most one issue as `pin`. It lasts at most
 one invocation, which is why it is neither a label nor an environment variable — both are
 global, and would point every concurrent run at the same issue.
 _Avoid_: lock, claim, assignment, selection, priority.
@@ -398,11 +418,18 @@ _Avoid_: active time, waiting time.
 ### Leaving a run
 
 **Stop**:
-Ending a Run deliberately in two stages. The first Stop immediately latches a
+Ending a Run deliberately in two stages. Any attached client may request it; the
+request is a durable record beside the Run's control artifact, so a client that dies
+after writing it does not withdraw the Stop, and resending one request does not
+escalate. `git-loopy stop <run-id>` is that request without a Dashboard: success is
+the Run's acknowledgment of the asked stage, not a finished Run, and a wait that
+elapses is unconfirmed. A second invocation is a deliberate further Stop; repeating
+the printed request id is redelivery and does not escalate. It does not resume
+workers. The first distinct request immediately latches a
 wind-down — no new Iteration, Lane reservation, or refill starts, while every started
-contribution and Integration operation finishes. The second Stop cancels only active
+contribution and Integration operation finishes. A later distinct request cancels only active
 agent sessions at their round boundaries after salvage; it never interrupts a publish
-transaction. A stopped contribution remains visible in the **Summary** and is
+transaction. The Run alone announces the latch. Navigation never requests a Stop. A stopped contribution remains visible in the **Summary** and is
 blameless. A third gesture does nothing: cancellation is requested rather than
 awaited, the operating system supplies the only harder stop, and **Salvage** is what
 makes that one safe. The Run exits with the decided non-zero `operator_stop` outcome.
@@ -487,8 +514,13 @@ _Avoid_: startup offset, stored timezone, execution timezone.
 
 **Attach**:
 Observing an existing **Run** through a client without starting or taking ownership
-of its work. Attach may be repeated or concurrent: navigation belongs to each client,
+of its work. `git-loopy attach <run-id>` is that observation when this process did
+not start the Run: it names one Run through the same resolution as **Stop** and
+never guesses the newest. Attach may be repeated or concurrent: navigation belongs to each client,
 while only an explicit **Stop** request crosses into the Run's lifecycle (ADR-0058).
+That request lives beside the control artifact, not in it: the artifact's lock stays
+the liveness oracle, and the Run — never the client — announces the Wind-down it
+latches.
 _Avoid_: reconnect (as a separate operation), resume (the Run did not stop).
 
 **Dashboard**:
@@ -730,6 +762,24 @@ remote back rather than by retrying blindly
 ([ADR-0059](docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
 _Avoid_: Promotion, tagging alone (a tag does not prove a complete publication),
 release, deploy, upload, push (the git operation).
+
+**Release smoke**:
+The bounded, release-only live check of one **Publication input**: install *its*
+proved archive into a clean installation, then drive the public operator commands —
+init cancelled and saved, `runs`, `attach` and **Detach**, the announced helper
+fallback, and the two-stage acknowledged **Stop** — against disposable work on the
+`local` and `github-actions` **Execution hosts**. It spends only an explicitly
+configured credential inside finite work, time and spend limits, uses only a sandbox
+repository marked disposable, and reclaims only what it provably owns. Its verdict is
+`passed`, `failed`, `blocked` or `inconclusive`, bound to the candidate's proof, so it
+cannot be reused for changed content. A **Promotion** reads that evidence
+through `confirm_smoke_evidence` and publishes nothing unless it passed for
+this publication input, on both Execution hosts. It reaches live services, so
+it is never an Integration **feedback loop**, and it replaces none of the
+offline fault matrix
+([ADR-0059](docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
+_Avoid_: smoke test (unqualified), live CI, e2e run, **Rehearsal** (which proves content,
+not the operator path).
 
 **Distribution mode**:
 The explicit promise one Release makes about what it carries. `source-only` publishes
@@ -1164,7 +1214,7 @@ The few lines that tell an operator why an **Unbound Run** ended (#642). Each ou
 own reason. An empty Pool names the exclusions that emptied it; otherwise, for the github source it says
 nothing is labelled, and for any other source that the source offered nothing.
 An all-blocked Pool names the blockers outside the Pool. An all-skipped Pool counts each
-**Pickup skip** kind once per candidate. Telling a blocker inside the Pool from one outside it
+refusal kind (a **Pickup skip**, or an entry in a Rolling Run end's `refusals`) once per candidate. Telling a blocker inside the Pool from one outside it
 needs the Run's `owner/repo`. The client resolves it the way `gh` picks its default repository:
 in a fork clone that is the upstream, not `origin`. Without it, every blocker is named rather
 than risk dropping a real one. Its Pool is the `refusals` recorded on a Rolling Run's
@@ -1404,10 +1454,14 @@ failure, TODO, backlog entry.
 ### Parallel execution
 
 **Parallel mode**:
-The opt-in execution mode in which the runner works several independent issues at once,
-each isolated in its own worktree, instead of one at a time. Off by default — the serial,
-one-issue-at-a-time loop is the default.
-_Avoid_: concurrent mode, multi mode.
+The execution mode in which the runner works several independent issues at once,
+each isolated in its own worktree. The Python Runner is always in it: a bare
+`git-loopy` uses **Rolling dispatch**, and the serial loop is an **Iteration
+driver** for a Run with no Lane work, announced only by the degraded and
+serial-fallback Events. Shell and PowerShell declare `parallel_mode`
+unsupported and keep an operator-selected Lane cap they refuse above 1
+([ADR-0067](docs/adr/0067-python-retires-the-mode-switches.md)).
+_Avoid_: concurrent mode, multi mode, opt-in mode.
 
 **Rolling dispatch**:
 The **Parallel mode** scheduling model that continuously refills reusable **Lanes**
@@ -1442,8 +1496,10 @@ the existing message and trailer verbatim, so close-keyword-free — before the 
 reclaimed. It is what lets reclamation carry no retention policy: nothing is destroyed, so a
 workspace is preserved on exactly one condition, salvage itself failing, which is the one
 case where reclaiming would lose work. Salvage emits no **Event**, not even a Checkpoint
-one, because a Run that was interrupted never worked that issue and a **Queue** row for it
-would trace work that did not happen. It makes cancelled work *recoverable, not resumable*:
+one, because reclamation is not issue work and a **Queue** row for it would trace
+work that did not happen. Both a live Run reclaiming its own workspaces at
+Stop/exit and a later **Sweep** reclaiming a dead Run's residue perform Salvage.
+It makes cancelled work *recoverable, not resumable*:
 a later Run mints a new Lane branch for the issue rather than continuing the salvaged one,
 which is what lets a Stop cancel safely without pretending the work will be picked up.
 _Avoid_: stash, rescue, auto-commit, recovery, resume.
@@ -1555,13 +1611,20 @@ _Avoid_: auto-resolution, resolution session, retry, rescue.
 
 **Recovery handoff**:
 How an exhausted **Recovery** ends: the **Lane contribution** finishes unpublished, its
-Lane branch is kept as a breadcrumb, and the Run latches serial demand for the issue,
+Lane branch is kept as a **Breadcrumb**, and the Run latches serial demand for the issue,
 which may never take a second **Lane** in the same Run. It is not a **Serial fallback**,
 which is a serial **Iteration** worked because no **Parallel-safe** candidate was eligible.
 The wire nevertheless carries it as the `serial_fallback` reason of
 `wrapper.contribution.end` and `wrapper.serial.requested`, a literal kept for
 compatibility.
 _Avoid_: serial fallback, fallback (for this step), demotion.
+
+**Breadcrumb**:
+A preserved reference to unfinished issue work, such as an unpublished Lane branch
+after a **Recovery handoff** or a **Salvage** Checkpoint. It lets an operator recover
+work by hand; it is not a retained Lane workspace and does not cause a later Run to
+resume that contribution.
+_Avoid_: retained directory, automatic resume, published result.
 
 **Parallel-safe**:
 A `ready-for-agent` issue a human has additionally asserted is independent and
@@ -1584,8 +1647,8 @@ _Avoid_: plain work, non-parallel work, leftover.
 **Serial fallback**:
 A serial **Iteration** a **Parallel mode** Run works because **Rolling dispatch** found
 no eligible **Parallel-safe** candidate. Because eligibility is a human assertion, the
-usual cause is that nothing carries the label — indistinguishable, from the operator's
-seat, from the flag being broken. So every fallback is named to the operator and carried
+usual cause is that nothing carries the label. So every fallback is named to the
+operator and carried
 as a `wrapper.parallel.serial_fallback` **Event** with the eligible count and a reason
 that separates "nothing carries `parallel-safe`", "this Run already worked them all",
 and "the ones there are could not be read". A serial Iteration running *alongside*
@@ -1755,9 +1818,6 @@ _Avoid_: model pin, routing input.
   ADR-0005 had retained "Ralph loop" as the name of the *technique*;
   [ADR-0031](docs/adr/0031-encoded-workflows-retire-the-loop-name.md) retires that last use too, so `ralph`
   now survives only in the point-in-time records that narrate the renames.
-- `sandbox per issue` (from the feature request) implied a fresh isolation unit keyed
-  to an issue — resolved: the **Sandbox** is scoped to an **Iteration**, which subsumes
-  per-issue because every issue boundary is also an **Iteration** boundary.
 - `the runner` / `the bash port` / `the script` were used loosely once a second and third
   language port arrived — resolved: the whole is the **Runner family**; a single member is a
   named **Orchestrator** (the Python, shell, PowerShell, or Rust Orchestrator); the shared

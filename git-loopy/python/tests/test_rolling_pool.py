@@ -508,6 +508,55 @@ class TestTerminalOutcome:
         assert pool.confirm_terminal_outcome() is None
         assert pool.candidate_refs == (31,)
 
+    def test_terminal_survivors_stay_in_membership_order_after_a_lane_refusal(
+        self,
+    ) -> None:
+        """A Lane refusal re-lists the candidate behind the cache (#643).
+
+        The terminal record still names survivors in the Membership read's
+        §3.2 order. A Blocked candidate the Lane never took keeps its place;
+        the refused candidate comes back as a newcomer and must not jump ahead
+        of it in ``terminal_survivors``.
+        """
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        refused: set[int] = set()
+        source = ScriptedSource(
+            [
+                MembershipSnapshot(
+                    candidates=(
+                        _candidate(42),
+                        _candidate(
+                            43,
+                            blocked_by=BlockedByRead(
+                                total_count=1,
+                                nodes=(BlockerNode(ref="x/y#7", state="open"),),
+                            ),
+                        ),
+                    ),
+                    complete=True,
+                )
+            ]
+        )
+        pool = _pool(
+            source,
+            eligible=lambda candidate: (
+                candidate.ref not in refused and is_lane_candidate(candidate)
+            ),
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+        taken = pool.take()
+
+        assert taken.item is not None and taken.item.ref == 42
+        refused.add(42)
+
+        assert pool.confirm_terminal_outcome() == "all_skipped"
+        assert [candidate.ref for candidate in pool.terminal_survivors] == [42, 43]
+        # The cache stays FIFO. Reordering it would move a Queue row under a Lane.
+        assert pool.candidate_refs == (43, 42)
+
 
 # --------------------------------------------------------------------------- #
 # Unmet-demand refresh triggering + backoff (#219 §2.2-2.7)                    #
@@ -893,7 +942,9 @@ class TestModuleStructure:
         The cache sits on the source seam and below the scheduler. Reaching for
         ``loop``/``events``/``ui`` would invert that and make the scheduler
         untestable without a Run; reaching for ``gh`` would bypass the seam that
-        exists so the shallow/authoritative split can be substituted.
+        exists so the shallow/authoritative split can be substituted. The one
+        addition is ``git_loopy.issue_pin``, pure and stdlib-only, for the Pin
+        read vocabulary the cache reports in (#644).
         """
         import ast
         from pathlib import Path
@@ -901,7 +952,7 @@ class TestModuleStructure:
         from git_loopy import rolling_pool as module
 
         tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
-        allowed = {"sources"}
+        allowed = {"sources", "issue_pin"}
         offenders: list[str] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -1252,3 +1303,203 @@ class TestTakeReportsWhereInTheOrderItLooked:
         take = pool.take()
 
         assert (take.item, take.position, take.considered) == (None, None, 0)
+
+
+# --------------------------------------------------------------------------- #
+# A taken candidate put back after a read that did not happen (#645)           #
+# --------------------------------------------------------------------------- #
+
+
+class TestRequeue:
+    def test_goes_back_at_the_head_quarantined(self) -> None:
+        pool = _pool(ScriptedSource([_snapshot([7, 31, 12])]))
+        pool.start()
+        pool.take()
+        item = pool.take().item
+        assert item is not None and item.ref == 31
+
+        pool.requeue(item, retry_after=1.0)
+
+        assert pool.candidate_refs == (31, 12)
+        assert pool.unavailable_count == 1
+        assert pool.candidate(31).labels == item.labels
+
+    def test_the_held_candidate_keeps_the_next_lane_until_it_is_due(self) -> None:
+        clock = FakeClock()
+        source = ScriptedSource([_snapshot([7, 31])])
+        pool = _pool(source, clock=clock, lane_first=lambda: 7)
+        pool.start()
+        item = pool.take().item
+        assert item is not None and item.ref == 7
+        pool.requeue(item, retry_after=1.0)
+        source.pickup_calls.clear()
+
+        waiting = pool.take()
+        clock.advance(1.0)
+        due = pool.take()
+
+        assert waiting.item is None
+        assert due.item is not None and due.item.ref == 7
+        # Not read while it waited, and nothing took its Lane.
+        assert source.pickup_calls == [7]
+
+    def test_says_when_the_held_candidate_is_waiting_to_be_due(self) -> None:
+        clock = FakeClock()
+        first: list[int | None] = [7]
+        pool = _pool(
+            ScriptedSource([_snapshot([7, 31])]),
+            clock=clock,
+            lane_first=lambda: first[0],
+        )
+        pool.start()
+        assert not pool.lane_first_paced()
+        item = pool.take().item
+        assert item is not None
+        pool.requeue(item, retry_after=1.0)
+
+        waiting = pool.lane_first_paced()
+        first[0] = None
+        released = pool.lane_first_paced()
+        first[0] = 7
+        clock.advance(1.0)
+        due = pool.lane_first_paced()
+
+        assert (waiting, released, due) == (True, False, False)
+
+    def test_a_candidate_no_longer_held_waits_for_a_refresh_like_any_other(
+        self,
+    ) -> None:
+        clock = FakeClock()
+        first: list[int | None] = [7]
+        source = ScriptedSource([_snapshot([7, 31])])
+        pool = _pool(source, clock=clock, lane_first=lambda: first[0])
+        pool.start()
+        item = pool.take().item
+        assert item is not None
+        pool.requeue(item, retry_after=1.0)
+        first[0] = None
+        clock.advance(1.0)
+
+        taken = pool.take()
+
+        assert taken.item is not None and taken.item.ref == 31
+
+    def test_a_refresh_keeps_its_place_and_its_pacing(self) -> None:
+        clock = FakeClock()
+        source = ScriptedSource([_snapshot([7, 31]), _snapshot([31, 7])])
+        pool = _pool(source, clock=clock, lane_first=lambda: 7)
+        pool.start()
+        item = pool.take().item
+        assert item is not None
+        pool.requeue(item, retry_after=1.0)
+
+        pool.confirm_terminal_outcome()
+        source.pickup_calls.clear()
+        waiting = pool.take()
+
+        assert pool.candidate_refs == (7, 31)
+        assert pool.unavailable_count == 0
+        assert waiting.item is None
+        assert source.pickup_calls == []
+
+    def test_a_requeued_candidate_keeps_a_quiescent_pool_from_ending(self) -> None:
+        source = ScriptedSource([_snapshot([7])])
+        pool = _pool(source, lane_first=lambda: 7)
+        pool.start()
+        item = pool.take().item
+        assert item is not None
+        pool.requeue(item, retry_after=1.0)
+
+        assert pool.confirm_terminal_outcome() is None
+
+
+# --------------------------------------------------------------------------- #
+# What the cache reads of the Pin (#644)                                       #
+# --------------------------------------------------------------------------- #
+
+
+class TestLaneFirstRead:
+    """The walk and the Membership read report the Pin's reads; they spend nothing."""
+
+    @staticmethod
+    def _recording_pool(source, **kw):
+        reads: list[tuple[bool, bool, str | None]] = []
+
+        def record(*, listed: bool, complete: bool, read: str | None) -> None:
+            reads.append((listed, complete, read))
+
+        pool = _pool(source, lane_first=lambda: 7, lane_first_read=record, **kw)
+        return pool, reads
+
+    def test_a_walk_passing_a_blocked_pin_over_reports_it_refused(self) -> None:
+        from git_loopy.sources import is_lane_candidate
+
+        blocked = BlockedByRead(
+            total_count=1, nodes=(BlockerNode(ref="o/r#1", state="open"),)
+        )
+        source = ScriptedSource([
+            MembershipSnapshot(
+                candidates=(_candidate(7, blocked_by=blocked), _candidate(31)),
+                complete=True,
+            )
+        ])
+        pool, reads = self._recording_pool(source, eligible=is_lane_candidate)
+        pool.start()
+
+        taken = pool.take()
+
+        assert taken.item is not None and taken.item.ref == 31
+        assert reads == [(True, True, "refused")]
+
+    def test_a_walk_passing_an_unread_pin_over_reports_it_unread(self) -> None:
+        from git_loopy.sources import is_lane_candidate
+
+        source = ScriptedSource([
+            MembershipSnapshot(
+                candidates=(
+                    _candidate(7, blocked_by=BlockedByRead.unprovable()),
+                    _candidate(31),
+                ),
+                complete=True,
+            )
+        ])
+        pool, reads = self._recording_pool(source, eligible=is_lane_candidate)
+        pool.start()
+
+        pool.take()
+
+        assert reads == [(True, True, "unread")]
+
+    def test_a_stale_pin_is_reported_refused(self) -> None:
+        source = ScriptedSource([_snapshot([7, 31])], pickups={7: PICKUP_STALE})
+        pool, reads = self._recording_pool(source)
+        pool.start()
+
+        pool.take()
+
+        assert reads == [(True, True, "refused")]
+
+    def test_an_unavailable_pin_is_reported_unread(self) -> None:
+        source = ScriptedSource([_snapshot([7, 31])], pickups={7: PICKUP_UNAVAILABLE})
+        pool, reads = self._recording_pool(source)
+        pool.start()
+
+        pool.take()
+
+        assert reads == [(True, True, "unread")]
+
+    def test_a_complete_read_without_the_pin_reports_it_absent(self) -> None:
+        source = ScriptedSource([_snapshot([31])])
+        pool, reads = self._recording_pool(source)
+
+        pool.start()
+
+        assert reads == [(False, True, None)]
+
+    def test_an_incomplete_read_reports_nothing(self) -> None:
+        source = ScriptedSource([_snapshot([31], complete=False)])
+        pool, reads = self._recording_pool(source)
+
+        pool.start()
+
+        assert reads == []

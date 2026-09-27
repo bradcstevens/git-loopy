@@ -140,6 +140,7 @@ from git_loopy.issue_lease import lease_ref
 from git_loopy.readiness import BlockedByRead, BlockerNode
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
+    ReleaseLine,
     read_runtime_release_version,
     validate_repository_release_version,
 )
@@ -6514,6 +6515,183 @@ def test_a_parallel_safe_pin_with_a_cap_of_one_works_only_the_pin(
 
 
 # ---------------------------------------------------------------------------
+# The first Pickup that reads a Pin spends it (#644)
+# ---------------------------------------------------------------------------
+
+
+class _TrackerChangesOnceGitHubClient(FakeGitHubClient):
+    """A tracker that changes once, right after the ``nth`` view of ``trigger``.
+
+    ``change`` replaces issues in the store. ``hidden`` is left out of every
+    listing until then: the shape of an issue closed after preflight and
+    reopened later.
+    """
+
+    def __init__(
+        self,
+        *,
+        trigger: int,
+        nth: int = 1,
+        change: Sequence[gh_module.Issue] = (),
+        hidden: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._trigger = trigger
+        self._nth = nth
+        self._views = 0
+        self._change = tuple(change)
+        self._hidden = hidden
+        self.changed = False
+
+    def issue_view(self, number: int) -> gh_module.Issue:
+        issue = super().issue_view(number)
+        if number == self._trigger:
+            self._views += 1
+        if self._views >= self._nth and not self.changed:
+            self.changed = True
+            for replacement in self._change:
+                self.seed_issue(replacement)
+        return issue
+
+    def issue_list(self, label: str, state: str = "open") -> gh_module.IssueListPage:
+        page = super().issue_list(label, state)
+        if self._hidden is None or self.changed:
+            return page
+        return dataclass_replace(
+            page,
+            issues=tuple(i for i in page.issues if i.number != self._hidden),
+        )
+
+
+_OPEN_BLOCKER = BlockedByRead(
+    total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+)
+_PARALLEL_SAFE = ["ready-for-agent", "parallel-safe"]
+
+
+def _run_parallel_safe_pin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    first_43: gh_module.Issue,
+    hidden: int | None = None,
+) -> list[tuple[int, str]]:
+    """``--issue 43`` over parallel-safe #41-#43; #43 reads normally once #41 is viewed."""
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=_PARALLEL_SAFE),
+            _make_issue(42, labels=_PARALLEL_SAFE),
+            first_43,
+        ],
+        client_cls=_NoProgressFakeClient,
+        gh_cls=_TrackerChangesOnceGitHubClient,
+        trigger=41,
+        change=[_make_issue(43, labels=_PARALLEL_SAFE)],
+        hidden=hidden,
+    )
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(
+                _pinned_config(43, max_iterations=4, max_nmt_strikes=10)
+            ),
+            timeout=30,
+        )
+    )
+    return _bindings(_logged_events(tmp_path))
+
+
+def test_a_parallel_safe_pin_the_lane_walk_passes_over_as_blocked_is_spent(
+    tmp_path, monkeypatch
+) -> None:
+    """A Blocked Pin the walk passes over is spent; unblocked later it binds `order` (#644)."""
+    bindings = _run_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        first_43=_make_issue(43, labels=_PARALLEL_SAFE, blocked_by=_OPEN_BLOCKER),
+    )
+
+    assert (43, "order") in bindings
+    assert (43, "pin") not in bindings
+
+
+def test_a_parallel_safe_pin_absent_from_a_complete_read_is_spent(
+    tmp_path, monkeypatch
+) -> None:
+    """A Pin closed after preflight and reopened later binds `order` (#644)."""
+    bindings = _run_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        first_43=_make_issue(43, labels=_PARALLEL_SAFE),
+        hidden=43,
+    )
+
+    assert (43, "order") in bindings
+    assert (43, "pin") not in bindings
+
+
+def test_a_parallel_safe_pin_whose_readiness_was_unread_stays_live(
+    tmp_path, monkeypatch
+) -> None:
+    """A Pin whose Readiness could not be read first still binds `pin` (#644)."""
+    bindings = _run_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        first_43=_make_issue(
+            43, labels=_PARALLEL_SAFE, blocked_by=BlockedByRead.unprovable()
+        ),
+    )
+
+    assert (43, "pin") in bindings
+    assert [reason for _issue, reason in bindings].count("pin") == 1
+
+
+def test_a_serial_pickup_that_skips_a_blocked_parallel_safe_pin_spends_it(
+    tmp_path, monkeypatch
+) -> None:
+    """The serial Pickup for #44 skips Blocked #43, and that skip spends the Pin (#644)."""
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(43, labels=_PARALLEL_SAFE, blocked_by=_OPEN_BLOCKER),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+        client_cls=_NoProgressFakeClient,
+        gh_cls=_TrackerChangesOnceGitHubClient,
+        # #44's first view is the startup peek; its second, the serial Pickup's.
+        trigger=44,
+        nth=2,
+        change=[_make_issue(43, labels=_PARALLEL_SAFE)],
+    )
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(
+                _pinned_config(43, max_iterations=3, max_nmt_strikes=10)
+            ),
+            timeout=30,
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    skips = [
+        (e["issue"], e["reason"])
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skips[0][0] == 43
+    assert skips[0][1].startswith("blocked_by_open_dependency")
+    bindings = _bindings(events)
+    assert bindings[0] == (44, "order")
+    assert (43, "order") in bindings
+    assert [reason for _issue, reason in bindings].count("pin") == 0
+
+
+# ---------------------------------------------------------------------------
 # Truthful termination (#308)
 # ---------------------------------------------------------------------------
 
@@ -7005,50 +7183,82 @@ class _NoProgressFakeClient(_ParallelFakeClient):
     _session_cls = _NoProgressFakeSession
 
 
-@pytest.mark.parametrize("routing_refused", [False, True])
+@pytest.mark.parametrize(
+    ("routing_refused", "lane_refused_first"),
+    [(False, False), (True, False), (True, True)],
+    ids=["all_blocked", "lane_refused_last", "lane_refused_first"],
+)
 def test_rolling_terminal_end_records_ordered_refusals_and_notice(
-    tmp_path, monkeypatch, routing_refused
+    tmp_path, monkeypatch, routing_refused, lane_refused_first
 ) -> None:
     from git_loopy.unbound_run_notice import unbound_run_notice
 
     fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
-    fake_gh.seed_issue(_make_issue(
-        42,
-        labels=["ready-for-agent", "parallel-safe"],
-        blocked_by=BlockedByRead(
-            total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
-        ),
-    ))
-    fake_gh.seed_issue(_make_issue(
-        43,
-        labels=[
-            "ready-for-agent", "parallel-safe",
-            *(["task-type:bogus"] if routing_refused else []),
-        ],
-        blocked_by=(
-            BlockedByRead(total_count=0)
-            if routing_refused
-            else BlockedByRead(
-                total_count=2,
-                nodes=(
-                    BlockerNode(ref="other/repo#9", state="open"),
-                    BlockerNode(ref="x/y#42", state="open"),
-                ),
-            )
-        ),
-    ))
+    if lane_refused_first:
+        # The Lane-refused candidate is first in §3.2 order. A cache that
+        # appends it on release would record #43 ahead of #42.
+        fake_gh.seed_issue(_make_issue(
+            42,
+            labels=["ready-for-agent", "parallel-safe", "task-type:bogus"],
+            blocked_by=BlockedByRead(total_count=0),
+        ))
+        fake_gh.seed_issue(_make_issue(
+            43,
+            labels=["ready-for-agent", "parallel-safe"],
+            blocked_by=BlockedByRead(
+                total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+            ),
+        ))
+    else:
+        fake_gh.seed_issue(_make_issue(
+            42,
+            labels=["ready-for-agent", "parallel-safe"],
+            blocked_by=BlockedByRead(
+                total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+            ),
+        ))
+        fake_gh.seed_issue(_make_issue(
+            43,
+            labels=[
+                "ready-for-agent", "parallel-safe",
+                *(["task-type:bogus"] if routing_refused else []),
+            ],
+            blocked_by=(
+                BlockedByRead(total_count=0)
+                if routing_refused
+                else BlockedByRead(
+                    total_count=2,
+                    nodes=(
+                        BlockerNode(ref="other/repo#9", state="open"),
+                        BlockerNode(ref="x/y#42", state="open"),
+                    ),
+                )
+            ),
+        ))
     assert asyncio.run(asyncio.wait_for(loop_module.run(cfg), timeout=20)) == (
         loop_module.exit_code_for("all_skipped" if routing_refused else "all_blocked")
     )
     events = _logged_events(tmp_path)
     end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert end["outcome"] == ("all_skipped" if routing_refused else "all_blocked")
-    assert end["refusals"][0] == {
-        "issue": 42, "reason": "blocked_by_open_dependency: x/y#7"
-    }
     assert [entry["issue"] for entry in end["refusals"]] == [42, 43]
     skips = [e for e in events if e["type"] == "wrapper.pickup.skipped"]
-    if routing_refused:
+    if lane_refused_first:
+        assert len(skips) == 1 and skips[0]["issue"] == 42
+        assert skips[0]["reason"].startswith("routing refused:")
+        assert end["refusals"] == [
+            {"issue": 42, "reason": skips[0]["reason"]},
+            {"issue": 43, "reason": "blocked_by_open_dependency: x/y#7"},
+        ]
+        assert unbound_run_notice(events, repository="x/y") == [
+            "No workable issues: this Run bound nothing and ended all_skipped.",
+            "The Run ended because all 2 ready-for-agent issues were skipped: "
+            "blocked_by_open_dependency (1), routing refused (1).",
+        ]
+    elif routing_refused:
+        assert end["refusals"][0] == {
+            "issue": 42, "reason": "blocked_by_open_dependency: x/y#7"
+        }
         assert len(skips) == 1 and skips[0]["issue"] == 43
         assert skips[0]["reason"].startswith("routing refused:")
         assert end["refusals"][1]["reason"] == skips[0]["reason"]
@@ -7059,6 +7269,9 @@ def test_rolling_terminal_end_records_ordered_refusals_and_notice(
         ]
     else:
         assert skips == []
+        assert end["refusals"][0] == {
+            "issue": 42, "reason": "blocked_by_open_dependency: x/y#7"
+        }
         assert end["refusals"][1] == {
             "issue": 43,
             "reason": "blocked_by_open_dependency: other/repo#9, x/y#42",
@@ -8126,15 +8339,22 @@ class _ClassifyingLaneSession(_ParallelFakeSession):
 class _ClassifyingLaneClient(_ParallelFakeClient):
     """A harness that answers the classifier's prompt and works otherwise."""
 
-    def __init__(self, *, classifier_model: str, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        classifier_model: str,
+        classifier_session: type[_ParallelFakeSession] = _ClassifyingLaneSession,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._classifier_model = classifier_model
+        self._classifier_session = classifier_session
 
     async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
         classifying = kwargs.get("model") == self._classifier_model
         previous = type(self)._session_cls
         self._session_cls = (  # type: ignore[misc]
-            _ClassifyingLaneSession if classifying else previous
+            self._classifier_session if classifying else previous
         )
         try:
             return await super().create_session(**kwargs)
@@ -8216,6 +8436,91 @@ def test_a_lane_classifies_its_unlabelled_issue_before_it_routes(
     assert [(e["issue"], e["model"], e["routing_source"]) for e in bound] == [
         (42, "claude-opus-4.7", "routed")
     ]
+
+
+class _BumpClassifyingLaneSession(_ClassifyingLaneSession):
+    """A classifying session that also answers the Bump class."""
+
+    async def send_and_wait(
+        self, prompt: str, *, timeout: float = 60.0, **_extra: Any
+    ) -> SessionEvent | None:
+        if "Bump class" not in prompt:
+            return await super().send_and_wait(prompt, timeout=timeout, **_extra)
+        self.send_and_wait_calls.append((prompt, timeout))
+        event = SessionEvent(
+            data=AssistantMessageData(
+                content="<bump-class>patch</bump-class>", message_id="b1"
+            ),
+            id=uuid4(),
+            timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+            type=SessionEventType.ASSISTANT_MESSAGE,
+        )
+        if self._on_event is not None:
+            self._on_event(event)
+        return event
+
+
+def test_a_lane_pickup_labels_against_the_baseline_integration_advances_from(
+    tmp_path, monkeypatch
+) -> None:
+    """Pickup and Integration read one Release line, never two (ADR-0066).
+
+    Integration caches the last stable Release the Run started from, because a
+    committed but untagged Promotion is invisible to a tag read once the next
+    advance makes ``VERSION`` a prerelease again. A Pickup that re-read the
+    repository instead would label against the older tagged Release, so a
+    `minor` could be written as that Release's patch successor.
+    """
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+        ),
+    )
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ClassifyingLaneClient(
+            classifier_model="gpt-5-mini",
+            classifier_session=_BumpClassifyingLaneSession,
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.7")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    tracker = _RecordingTaskTypeLabelClient()
+    monkeypatch.setattr(loop_module, "_make_task_type_label_client", lambda: tracker)
+    monkeypatch.setattr(
+        loop_module._ParallelLoop,
+        "_read_release_line",
+        lambda self: ("1.9.9", ReleaseLine(target="1.9.9", counter=0)),
+    )
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                routing={"bugfix": ("claude-opus-4.7", "high")},
+            ),
+            staircase=PriceStaircase(
+                candidates=(
+                    Candidate(model="gpt-5-mini", effort=None, multiplier=0.33),
+                    Candidate(model="claude-opus-5", effort="max", multiplier=10.0),
+                )
+            ),
+        )
+    ) == 0
+
+    assert (42, "v1.9.10") in tracker.applied
 
 
 # ---------------------------------------------------------------------------
@@ -10025,6 +10330,437 @@ def test_a_transient_selector_failure_on_the_pin_binds_nothing(
     events = _logged_events(tmp_path)
     assert failures["left"] == 0
     assert _bindings(events) == [(44, "pin")]
+
+
+# ---------------------------------------------------------------------------
+# A parallel-safe Pin keeps the next Lane through a failure that is not an
+# answer about it (#645)
+# ---------------------------------------------------------------------------
+
+
+def _wire_parallel_safe_pin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pin_labels: Sequence[str] = (),
+    gh_cls: type[FakeGitHubClient] = FakeGitHubClient,
+    **gh_kwargs: Any,
+) -> tuple[FakeGitHubClient, FakeGitClient]:
+    """#41-#43 all ``parallel-safe``, with Leases in force; #43 is the Pin."""
+    fake_gh = _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(
+                43, labels=["ready-for-agent", "parallel-safe", *pin_labels]
+            ),
+        ],
+        gh_cls=gh_cls,
+        **gh_kwargs,
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    return fake_gh, fake_git
+
+
+def _fail_lease_probes(
+    monkeypatch: pytest.MonkeyPatch, fake_git: FakeGitClient, issue: int, *, times: int
+) -> dict[str, Any]:
+    """Make the first ``times`` probes of ``issue``'s **Lease** remote fail.
+
+    Returns a record of the failures still to come and when each probe ran.
+    """
+    real_probe = fake_git.probe_remote_ref
+    record: dict[str, Any] = {"left": times, "at": []}
+
+    def probe(remote: str, ref: str) -> str | None:
+        if ref == lease_ref(issue):
+            record["at"].append(time.monotonic())
+            if record["left"]:
+                record["left"] -= 1
+                raise git_module.GitError(
+                    ["git", "ls-remote", remote, ref], 128, "no route to host"
+                )
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
+    return record
+
+
+class _PreparationReadFailsGitHubClient(FakeGitHubClient):
+    """A tracker whose **Dynamic route** preparation read of one issue fails once.
+
+    Only the read ``refresh_for_preparation`` makes fails, so the failure lands
+    at the same step whatever order the driver and the Lane threads read in.
+    Pair it with :func:`_no_preparation_ahead`, so that read is the Lane
+    Pickup's own.
+    """
+
+    def __init__(self, *, unreadable: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._unreadable = unreadable
+        self.refusals = 0
+
+    def issue_view(self, number: int) -> gh_module.Issue:
+        preparing = any(
+            frame.function == "refresh_for_preparation"
+            for frame in inspect.stack(context=0)
+        )
+        if number == self._unreadable and preparing and not self.refusals:
+            self.refusals += 1
+            raise gh_module.GhError(
+                ["gh", "issue", "view", str(number)], 1, "HTTP 502"
+            )
+        return super().issue_view(number)
+
+
+def _no_preparation_ahead(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prepare no route ahead of a Lane, so each preparation read is a Pickup's."""
+    monkeypatch.setattr(
+        loop_module._ParallelLoop, "_prepare_rolling_pool_ahead", lambda self: None
+    )
+
+
+def _record_pin_spends(monkeypatch: pytest.MonkeyPatch) -> list[int | None]:
+    """Record the Pin each :meth:`spend_pin` call spends, in order."""
+    spent: list[int | None] = []
+    real_spend = loop_module._Loop.spend_pin
+
+    def spend(self: Any) -> None:
+        spent.append(self.live_pin)
+        real_spend(self)
+
+    monkeypatch.setattr(loop_module._Loop, "spend_pin", spend)
+    return spent
+
+
+def _lane_starts(events: list[dict[str, Any]]) -> list[int]:
+    return [e["issue"] for e in events if e["type"] == "wrapper.contribution.start"]
+
+
+def test_a_failed_lease_probe_of_a_parallel_safe_pin_keeps_its_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """An unread Lease is not an answer about the Pin, so it keeps the Lane (#645).
+
+    The walk had already taken the Pin out of the Rolling cache when its Lease
+    probe failed, and that used to refuse it for the Run: ``--issue 43 1``
+    spent its only unit on #41.
+    """
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    probes = _fail_lease_probes(monkeypatch, fake_git, 43, times=1)
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    assert probes["left"] == 0
+    assert _bindings(_logged_events(tmp_path)) == [(43, "pin")]
+
+
+def test_serial_work_waits_while_a_parallel_safe_pin_is_paced(
+    tmp_path, monkeypatch
+) -> None:
+    """Serial-required work does not take the turn a paced Pin is waiting for (#645).
+
+    Putting the Pin back frees its Lane, which leaves the pipeline quiescent
+    until the paced retry. A serial Iteration latched in that gap would spend
+    ``--issue 43 1``'s only unit before the Pin gets its Lane.
+    """
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.05)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    probes = _fail_lease_probes(monkeypatch, fake_git, 43, times=2)
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    events = _logged_events(tmp_path)
+    assert probes["left"] == 0
+    assert _bindings(events) == [(43, "pin")]
+    assert _lane_starts(events) == [43]
+
+
+def test_a_failed_worktree_add_for_a_parallel_safe_pin_keeps_its_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """A worktree that could not be cut says nothing about the Pin (#645)."""
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    real_add = fake_git.add_worktree
+    failures = {"left": 1}
+
+    def add_once_failing(path: Path, *, branch: str, base: str):
+        if Path(path).name == "issue-43" and failures["left"]:
+            failures["left"] -= 1
+            raise git_module.GitError(["git", "worktree", "add"], 128, "disk full")
+        return real_add(path, branch=branch, base=base)
+
+    monkeypatch.setattr(fake_git, "add_worktree", add_once_failing)
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    assert failures["left"] == 0
+    assert _bindings(_logged_events(tmp_path)) == [(43, "pin")]
+
+
+def test_a_failed_base_revision_read_for_a_parallel_safe_pin_keeps_its_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """A base revision that could not be read says nothing about the Pin (#645)."""
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    real_head = fake_git.head_sha
+    failures = {"left": 1}
+
+    def head_once_failing_for_a_lane() -> str:
+        caller = inspect.currentframe().f_back.f_code.co_name
+        if caller == "_drive_lane_lifecycle" and failures["left"]:
+            failures["left"] -= 1
+            raise git_module.GitError(["git", "rev-parse", "HEAD"], 128, "busy")
+        return real_head()
+
+    monkeypatch.setattr(fake_git, "head_sha", head_once_failing_for_a_lane)
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    assert failures["left"] == 0
+    assert _bindings(_logged_events(tmp_path)) == [(43, "pin")]
+
+
+def test_a_failed_lease_probe_of_an_uncapped_pin_still_works_it_first(
+    tmp_path, monkeypatch
+) -> None:
+    """With no cap the Pin binds first, and the Run works everything (#645).
+
+    It used to refuse the Pin for the Run, work #41 and #42, and end
+    ``preflight_failed`` over a Pin it never worked.
+    """
+    fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    _fail_lease_probes(monkeypatch, fake_git, 43, times=1)
+
+    exit_code = asyncio.run(loop_module.run(_pinned_config(43, max_iterations=0)))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(43, "pin"), (41, "order"), (42, "order")]
+    assert _lane_starts(events)[0] == 43
+    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [41, 42, 43]
+    run_ends = [e["outcome"] for e in events if e["type"] == "wrapper.run.end"]
+    assert "preflight_failed" not in run_ends
+    assert exit_code == 0
+
+
+def test_a_pin_whose_lease_probe_keeps_failing_is_retried_at_a_paced_rate(
+    tmp_path, monkeypatch
+) -> None:
+    """A Pin re-cached after an unread failure is probed at most once per poll (#645).
+
+    While its Lease probe keeps failing, no other candidate takes a Lane in its
+    place, and no retry follows another sooner than one idle poll interval.
+    """
+    interval = 0.05
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", interval)
+    failing = 4
+    probes = _fail_lease_probes(monkeypatch, fake_git, 43, times=failing)
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_pinned_config(43, max_iterations=0)), timeout=30
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    assert probes["left"] == 0
+    # The failing probes and the one that finally answered.
+    attempts = probes["at"][: failing + 1]
+    gaps = [later - earlier for earlier, later in itertools.pairwise(attempts)]
+    assert all(gap >= interval * 0.99 for gap in gaps), gaps
+    assert len(attempts) <= (attempts[-1] - attempts[0]) / interval + 1
+    assert _bindings(events)[0] == (43, "pin")
+    assert _lane_starts(events)[0] == 43
+
+
+def test_a_pin_another_run_holds_is_spent_on_the_lane_path(
+    tmp_path, monkeypatch
+) -> None:
+    """A rival's live Lease is an answer about the Pin, so it spends it (#645).
+
+    It is spent before any other Lane binds, so later walks hold no Lane for
+    it, and nothing names it ``pin`` again.
+    """
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    _rival_lease(fake_git, 43, repository="x/y")
+    spent = _record_pin_spends(monkeypatch)
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_pinned_config(43, max_iterations=0)), timeout=30
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    assert spent[:1] == [43]
+    assert _bindings(events) == [(41, "order"), (42, "order")]
+    skips = [
+        e["reason"]
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped" and e["issue"] == 43
+    ]
+    assert skips == ["held by another Run's live Lease"]
+
+
+def test_a_pin_routing_refuses_is_spent_on_the_lane_path(
+    tmp_path, monkeypatch
+) -> None:
+    """A ``task-type:`` label routing refuses is an answer about the Pin (#645)."""
+    _wire_parallel_safe_pin(tmp_path, monkeypatch, pin_labels=["task-type:bogus"])
+    spent = _record_pin_spends(monkeypatch)
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_pinned_config(43, max_iterations=0)), timeout=30
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    assert spent[:1] == [43]
+    assert _bindings(events) == [(41, "order"), (42, "order")]
+    skips = [
+        e["reason"]
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped" and e["issue"] == 43
+    ]
+    assert len(skips) == 1 and skips[0].startswith("routing refused:")
+
+
+def test_a_non_pin_whose_lease_probe_fails_is_still_refused_for_the_run(
+    tmp_path, monkeypatch
+) -> None:
+    """Only the Pin is re-cached: any other unread Lease still passes it over (#645)."""
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    probes = _fail_lease_probes(monkeypatch, fake_git, 41, times=1)
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_pinned_config(43, max_iterations=0)), timeout=30
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    assert probes["left"] == 0
+    assert _bindings(events) == [(43, "pin"), (42, "order")]
+    skips = [
+        e["reason"]
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped" and e["issue"] == 41
+    ]
+    assert skips == ["Lease could not be taken (remote unreadable)"]
+
+
+def test_a_serial_pins_lease_outage_costs_one_unit(tmp_path, monkeypatch) -> None:
+    """The Pin waits for the Lease remote on reads, not on spent Iterations (#645).
+
+    The tracker still shows the Pin while only the Lease remote is down, so a
+    wait that polled the tracker alone returned at once and each retry spent a
+    unit. Three failed probes now cost one: a cap of 2 still works the Pin.
+    """
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    probes = _fail_lease_probes(monkeypatch, fake_git, 44, times=3)
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
+
+    events = _logged_events(tmp_path)
+    assert probes["left"] == 0
+    assert _bindings(events) == [(44, "pin")]
+    iterations = [e for e in events if e["type"] == "wrapper.iteration.start"]
+    assert len(iterations) == 2
+
+
+def test_a_failed_preparation_read_of_a_parallel_safe_pin_keeps_its_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """A Dynamic route preparation read of the Pin that failed keeps its Lane (#645).
+
+    It used to refuse the Pin with ``dynamic route unavailable: current
+    candidate eligibility unavailable`` and bind #41 with the only unit.
+    """
+    fake_gh, _fake_git = _wire_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        gh_cls=_PreparationReadFailsGitHubClient,
+        unreadable=43,
+    )
+    _no_preparation_ahead(monkeypatch)
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    asyncio.run(
+        loop_module.run(_dynamic_parallel_config(issue_pin=43, max_iterations=1))
+    )
+
+    assert isinstance(fake_gh, _PreparationReadFailsGitHubClient)
+    assert fake_gh.refusals == 1
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(43, "pin")]
+
+
+def test_a_non_pin_whose_preparation_read_fails_is_still_refused_for_the_run(
+    tmp_path, monkeypatch
+) -> None:
+    """Only the Pin is re-cached after a failed preparation read (#645)."""
+    fake_gh, _fake_git = _wire_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        gh_cls=_PreparationReadFailsGitHubClient,
+        unreadable=41,
+    )
+    _no_preparation_ahead(monkeypatch)
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_dynamic_parallel_config(issue_pin=43, max_iterations=0)),
+            timeout=30,
+        )
+    )
+
+    assert isinstance(fake_gh, _PreparationReadFailsGitHubClient)
+    assert fake_gh.refusals == 1
+    events = _logged_events(tmp_path)
+    assert 41 not in [issue for issue, _reason in _bindings(events)]
+    skips = [
+        e["reason"]
+        for e in events
+        if e["type"] == "wrapper.pickup.skipped" and e["issue"] == 41
+    ]
+    assert skips == [
+        "dynamic route unavailable: current candidate eligibility unavailable"
+    ]
 
 
 def test_each_lanes_final_dynamic_route_is_published_to_its_own_issue(

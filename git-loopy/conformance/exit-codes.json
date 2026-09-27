@@ -112,5 +112,13 @@
       "unresolved": 0,
       "outcome": "all_skipped"
     }
+  ],
+  "retired": [
+    {
+      "id": "dashboard-fault-exit-is-retired",
+      "reason": "dashboard_fault",
+      "exit_code": 3,
+      "event": "wrapper.dashboard.fault"
+    }
   ]
 }

@@ -19,19 +19,18 @@ name: Promote Release line
 # approval. That is the decision ADR-0052 recorded as taken deliberately rather
 # than overlooked, and it is not to be re-added as an implementation detail.
 #
-# The tag is the whole point of the workflow. `source-release.yml` is
-# deliberately tag-only, so a Promotion that commits a stable `VERSION` and
-# pushes no tag publishes nothing -- and a tag pushed with the default
-# `GITHUB_TOKEN` creates no workflow run at all, which is worse: a stable tag
-# with no Release behind it and no red job to say so. The Promotion is therefore
-# refused before it mutates anything when no publication token is configured,
-# rather than half happening.
+# The tag is the whole point of the workflow, and it is not created here.
+# `git_loopy.release_promotion` rehearses the exact commit, requires a passed
+# release smoke of that proof, and publishes the proved tag object through the
+# reconciliation boundary. A tag pushed with the default `GITHUB_TOKEN` creates
+# no workflow run at all, and a smoke whose credential or limits were invented
+# is not proof, so the Promotion is refused before it mutates anything when
+# either is missing, rather than half happening.
 #
-# A tag is also immutable once it is public, so every candidate is **rehearsed**
-# before one exists for it (ADR-0059): the exact commit, its candidate tag and
-# its generated source archive are proved in a throwaway clone that has no
-# remote, and a refusal leaves no tag rather than a public identity nothing
-# verified.
+# A tag is immutable once it is public (ADR-0059). A refusal leaves no tag
+# rather than a public identity nothing verified. `source-release.yml` still
+# runs when the proved tag is pushed; it reconciles the Release and does not
+# create a second one.
 
 on:
   milestone:
@@ -64,20 +63,55 @@ jobs:
       github.event_name == 'push' ||
       startsWith(github.event.milestone.title, 'v')
     runs-on: ubuntu-latest
+    # Rehearsal runs the family gate, then the smoke's own deadline (at most
+    # 6000s) reclaims its work. The step timeout has to outlast both.
+    timeout-minutes: 360
     steps:
       # First, before the checkout: a Promotion is all-or-nothing. Committing a
-      # stable version to the trunk and then discovering there is no token to
-      # publish it with would leave `main` claiming a Release that does not
-      # exist.
-      - name: Require the publication token a Promotion cannot finish without
+      # stable version to the trunk and then discovering there is no token, no
+      # smoke credential, or no finite limit to publish it with would leave
+      # `main` claiming a Release that does not exist. Nothing here is invented.
+      - name: Require the publication token and smoke limits a Promotion cannot finish without
         shell: bash
         env:
           RELEASE_PUBLICATION_TOKEN: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+          RELEASE_SMOKE_TOKEN: ${{ secrets.RELEASE_SMOKE_TOKEN }}
+          RELEASE_SMOKE_REPOSITORY: ${{ vars.RELEASE_SMOKE_REPOSITORY }}
+          RELEASE_SMOKE_MAX_RUNS: ${{ vars.RELEASE_SMOKE_MAX_RUNS }}
+          RELEASE_SMOKE_DEADLINE_SECONDS: ${{ vars.RELEASE_SMOKE_DEADLINE_SECONDS }}
+          RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS: ${{ vars.RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS }}
         run: |
-          if [[ -z "$RELEASE_PUBLICATION_TOKEN" ]]; then
-            echo "::error::RELEASE_PUBLICATION_TOKEN is unset: a v* tag pushed" \
-              "with GITHUB_TOKEN starts no publication run, so this Promotion" \
-              "would publish nothing. See docs/releases/README.md." >&2
+          missing=()
+          [[ -n "$RELEASE_PUBLICATION_TOKEN" ]] || missing+=("RELEASE_PUBLICATION_TOKEN")
+          [[ -n "$RELEASE_SMOKE_TOKEN" ]] || missing+=("RELEASE_SMOKE_TOKEN")
+          [[ -n "$RELEASE_SMOKE_REPOSITORY" ]] || missing+=("RELEASE_SMOKE_REPOSITORY")
+          [[ -n "$RELEASE_SMOKE_MAX_RUNS" ]] || missing+=("RELEASE_SMOKE_MAX_RUNS")
+          [[ -n "$RELEASE_SMOKE_DEADLINE_SECONDS" ]] || missing+=("RELEASE_SMOKE_DEADLINE_SECONDS")
+          [[ -n "$RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS" ]] || missing+=("RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS")
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "::error::a Promotion cannot finish without ${missing[*]}." \
+              "A v* tag pushed with GITHUB_TOKEN starts no publication run," \
+              "and a smoke whose credential or limits were invented would not" \
+              "be proof. See docs/releases/README.md." >&2
+            exit 1
+          fi
+          if ! [[ "$RELEASE_SMOKE_MAX_RUNS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::RELEASE_SMOKE_MAX_RUNS must be a positive integer," \
+              "got '$RELEASE_SMOKE_MAX_RUNS'. See docs/releases/README.md." >&2
+            exit 1
+          fi
+          if ! [[ "$RELEASE_SMOKE_DEADLINE_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+             awk -v d="$RELEASE_SMOKE_DEADLINE_SECONDS" 'BEGIN { exit !(d > 0 && d <= 6000) }'; then
+            echo "::error::RELEASE_SMOKE_DEADLINE_SECONDS must be finite, positive," \
+              "and at most 6000 so the smoke can reclaim its work, got" \
+              "'$RELEASE_SMOKE_DEADLINE_SECONDS'. See docs/releases/README.md." >&2
+            exit 1
+          fi
+          if ! [[ "$RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+             awk -v s="$RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS" 'BEGIN { exit !(s > 0) }'; then
+            echo "::error::RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS must be a" \
+              "positive number, got '$RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS'." \
+              "See docs/releases/README.md." >&2
             exit 1
           fi
 
@@ -87,8 +121,8 @@ jobs:
           ref: ${{ github.event_name == 'push' && github.sha || github.event.repository.default_branch }}
           token: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
 
-      # `git tag -a` and `git commit` both refuse without one, and a GitHub
-      # runner configures none.
+      # `git commit` refuses without one, and a GitHub runner configures none.
+      # The proved tag is created inside the rehearsal, which sets its own.
       - name: Attribute the Promotion
         shell: bash
         run: |
@@ -129,55 +163,45 @@ jobs:
           git push origin HEAD:main
 
       # Every stable Release the trunk carries that no tag reaches yet, oldest
-      # first -- not the value at the head.
+      # first -- not the value at the head. Both triggers enter this one entry.
       #
       # A Run pushes once per Iteration and lands a Release-line commit per
       # contribution, so a committed Promotion can be followed by the next
       # issue's prerelease advance inside the same push: reading `VERSION` alone
       # would see a prerelease and drop the stable Release, with nothing red to
-      # say so. Walking the commits instead also makes the step self-healing --
-      # a tag this workflow failed to push is found again by the next push
-      # rather than lost -- and subsumes the milestone Promotion committed
-      # above, so both events publish by one mechanism.
-      #
-      # Each candidate is *rehearsed* before its tag exists (ADR-0059). A green
-      # development ancestor is not proof of the commit being published:
-      # Promotion changes the tree the family gate has to judge, and the v0.10.0
-      # recovery had to move an already-public tag because nothing proved the
-      # promoted snapshot first. `shell: bash` is `-eo pipefail`, so a refusal
-      # ends the step with no tag created and nothing pushed.
-      - name: Tag every untagged stable Release and start its publication
+      # say so. The entry walks those commits itself. It rehearses each exact
+      # commit, requires a passed release smoke of that proof, and publishes
+      # the proved tag object. It does not compose a second tag, and a refusal
+      # leaves no new public tag.
+      - name: Publish every untagged stable Release the trunk already carries
+        timeout-minutes: 300
         shell: bash
-        run: |
-          tagged=()
-          while IFS= read -r commit; do
-            version="$(git show "$commit:VERSION" | tr -d '\r\n')" || continue
-            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
-            if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-              continue
-            fi
-            rehearsal="$RUNNER_TEMP/rehearsal-v$version"
-            uv run --project git-loopy/python --all-extras \
-              python -m git_loopy.release_rehearsal \
-              --repository-root . \
-              --workspace "$rehearsal/candidate" \
-              --archive-output "$rehearsal/git-loopy-source.tar" \
-              --distribution-mode source-only \
-              --stable-commit \
-              --candidate-commit "$commit" \
-              > "$rehearsal.json"
-            # Annotated, and on the commit that *declares* this version rather
-            # than on the head: `source-release.yml` verifies the tag object and
-            # refuses a tag whose tree disagrees with it.
-            git tag -a "v$version" -m "Release $version" "$commit"
-            tagged+=("refs/tags/v$version")
-          done < <(git log --format=%H --reverse HEAD --not --tags='v*' -- VERSION)
-          if [[ "${#tagged[@]}" -eq 0 ]]; then
-            echo "no untagged stable Release on the trunk; nothing to publish"
-            exit 0
-          fi
-          printf 'publishing %s\n' "${tagged[@]}"
-          git push origin "${tagged[@]}"
+        env:
+          # `gh` creates the Release with this token. The smoke strips it from
+          # the operator environment and spends only GIT_LOOPY_SMOKE_TOKEN.
+          GH_TOKEN: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+          GIT_LOOPY_SMOKE_TOKEN: ${{ secrets.RELEASE_SMOKE_TOKEN }}
+          GIT_LOOPY_SMOKE_REPOSITORY: ${{ vars.RELEASE_SMOKE_REPOSITORY }}
+          GIT_LOOPY_SMOKE_MAX_RUNS: ${{ vars.RELEASE_SMOKE_MAX_RUNS }}
+          GIT_LOOPY_SMOKE_DEADLINE_SECONDS: ${{ vars.RELEASE_SMOKE_DEADLINE_SECONDS }}
+          GIT_LOOPY_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS: ${{ vars.RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS }}
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.release_promotion
+          --repository-root .
+          --workspace "$RUNNER_TEMP/promotion"
+          --archive-output "$RUNNER_TEMP/git-loopy-source.tar"
+          --evidence-output "$RUNNER_TEMP/release-smoke-evidence.json"
+          --distribution-mode source-only
+          --publish-untagged-stable
+
+      - name: Upload the release-smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-promotion-smoke-evidence
+          path: ${{ runner.temp }}/promotion
+          if-no-files-found: warn
 
   advance-stage:
     name: Advance the prerelease line to the stage the operator chose

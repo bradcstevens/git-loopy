@@ -48,7 +48,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_Time"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Time"] }
 
 [target.'cfg(unix)'.dependencies]
 # Stdin carries the trace or /dev/null, not terminal replies and keyboard events.

@@ -244,6 +244,7 @@ from git_loopy.release_version import (
     write_repository_release_version,
 )
 from git_loopy.run_control import RunControlArtifact
+from git_loopy import stop_request
 from git_loopy.run_environment_preflight import resolve_run_environment_preflight
 from git_loopy.static_route import (
     HarnessCapabilities,
@@ -260,6 +261,12 @@ from git_loopy.rolling_pool import RollingPool, is_parallel_safe
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.run_readback import run_start_payload
 from git_loopy.run_start_disclosures import run_start_disclosures
+from git_loopy.issue_pin import (
+    PIN_READ_BOUND,
+    PIN_READ_REFUSED,
+    PIN_READ_UNREAD,
+    pin_live_after,
+)
 from git_loopy.serial_pickup import (
     AdmissionRefusal,
     SerialPickup,
@@ -1363,6 +1370,7 @@ class _Loop:
         lease: LeaseLifecycle | None = None,
         static_capabilities: HarnessCapabilities | None = None,
         host_capabilities: HarnessCapabilities | None = None,
+        release_line_reader: Callable[[], tuple[str, ReleaseLine]] | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1386,6 +1394,7 @@ class _Loop:
         #: every later read.
         self._live_pin: int | None = config.issue_pin
         self._pin_unread = False
+        self._pin_lease_unread = False
         #: This Run's **Lease**s, or ``None`` when Leases are not in force —
         #: the PRDs backend has no remote to contend on, and a clone with no
         #: resolvable GitHub repository cannot address a Lease ref. ``None``
@@ -1517,7 +1526,14 @@ class _Loop:
                 if task_type_client is not None
                 else _make_task_type_label_client()
             ),
-            release_line=lambda: read_repository_release_line(git.root, self._git),
+            # A Parallel Run passes Integration's cached reader, so Pickup labels
+            # against the baseline the line advances from even once an untagged
+            # Promotion has been followed by a prerelease advance.
+            release_line=(
+                release_line_reader
+                if release_line_reader is not None
+                else lambda: read_repository_release_line(git.root, self._git)
+            ),
             diag=self._diag,
         )
         # The one scrub-and-fan-out seam (issue #43): compose -> scrub once ->
@@ -2089,11 +2105,16 @@ class _Loop:
                 collection = self._source.collect_pool()
             pool = list(collection.items)
             pool_refs: list[int | str] = [item.ref for item in pool]
+            if self._live_pin is not None and self._live_pin not in pool_refs:
+                # A complete read without the Pin spends it; an incomplete one
+                # could not read it (#644).
+                self.observe_pin_read(listed=False, complete=collection.complete)
             self._pin_unread = (
                 self._live_pin is not None
                 and self._live_pin not in pool_refs
                 and not collection.complete
             )
+            self._pin_lease_unread = False
             # Late-bind the iteration span's `issue` / `issues` attributes
             # now that we know the pool. `set_attribute` is no-op-safe so
             # this works whether OTel is enabled or not.
@@ -3414,12 +3435,14 @@ class _Loop:
                 # A Readiness or Lease read of the Pin that did not happen is
                 # the Pin unread, not the Pin refused, so the Iteration latched
                 # for it binds nothing rather than the next candidate (#430).
+                self._pin_lease_unread = refusal.reason == _LEASE_UNREADABLE
                 raise _PinUnreadAtPickup
             return refusal
 
         unbound = SerialPickup(
             item=None, position=None, reason=None, skipped=(), considered=tuple(pool)
         )
+        pin_route_unread = False
         while True:
             try:
                 pickup = pick_serial(
@@ -3448,6 +3471,13 @@ class _Loop:
                     self._release_lease(pickup.item.ref)
                     self._pin_unread = True
                     return unbound
+                if (
+                    isinstance(exc, _CandidateUnread)
+                    and pickup.item.ref == self._live_pin
+                ):
+                    # The walk moves on (§3.3), but the Pin was not read, so
+                    # it stays live (#644).
+                    pin_route_unread = True
                 # Refuse this candidate once, not the useful Static work
                 # behind it. The ordered walk remains the only dispatcher.
                 routing_refusals[pickup.item.ref] = f"dynamic route unavailable: {exc}"
@@ -3486,8 +3516,27 @@ class _Loop:
                 considered=considered,
                 resolution=resolution,
             )
-            self.spend_pin_if_bound(bound.ref)
+        self._observe_pin_at_serial_pickup(pickup, route_unread=pin_route_unread)
         return pickup
+
+    def _observe_pin_at_serial_pickup(
+        self, pickup: SerialPickup, *, route_unread: bool
+    ) -> None:
+        """Report what this serial Pickup read of the live Pin, if it reached it (#644)."""
+        pin = self._live_pin
+        if pin is None:
+            return
+        if pickup.item is not None and pickup.item.ref == pin:
+            self.observe_pin_read(listed=True, read=PIN_READ_BOUND)
+            return
+        for skip in pickup.skipped:
+            if skip.ref == pin:
+                unread = skip.unresolved or route_unread
+                self.observe_pin_read(
+                    listed=True,
+                    read=PIN_READ_UNREAD if unread else PIN_READ_REFUSED,
+                )
+                return
 
     @property
     def live_pin(self) -> int | None:
@@ -3507,17 +3556,45 @@ class _Loop:
         """
         return self._pin_unread
 
-    def spend_pin_if_bound(self, ref: int | str) -> None:
-        """Spend the Pin if a Pickup, serial or Lane, just bound it (#430)."""
-        if ref == self._live_pin:
+    @property
+    def pin_lease_unread(self) -> bool:
+        """Whether the Pin went unread because its **Lease** probe failed (#645).
+
+        The tracker still shows such a Pin, so waiting on a Pool read that
+        shows it would return at once and spend a unit per retry.
+        """
+        return self._pin_lease_unread
+
+    def pin_lease_readable(self) -> bool:
+        """Whether the Lease remote answers for the live Pin now (#645)."""
+        pin = self._live_pin
+        if self._lease is None or not isinstance(pin, int):
+            return True
+        return self._lease.readable(pin)
+
+    def observe_pin_read(
+        self, *, listed: bool, complete: bool = True, read: str | None = None
+    ) -> None:
+        """Apply one Pickup's read of the Pin to its lifetime (Wrapper contract §3.2, #644).
+
+        Every Pickup path, serial or Lane, reports here, and
+        :func:`~git_loopy.issue_pin.pin_live_after` alone decides: the first
+        Pickup that reads the Pin spends it, and one that could not read it
+        leaves it live.
+        """
+        live = self._live_pin is not None
+        if live and not pin_live_after(
+            live, listed=listed, complete=complete, read=read
+        ):
             self.spend_pin()
 
     def spend_pin(self) -> None:
         """Spend the Pin: later Pickups neither promote nor name it (#430).
 
-        A Pin is spent by the first Pickup that binds it, or by the end of the
-        serial Iteration latched for it, unless that Iteration could not read
-        it (:attr:`pin_unread`).
+        A Pin is spent by the first Pickup that reads it
+        (:meth:`observe_pin_read`, #644), or by the end of the serial Iteration
+        latched for it, unless that Iteration could not read it
+        (:attr:`pin_unread`).
         """
         self._live_pin = None
         if isinstance(self._source, sources_module.PinnedSource):
@@ -3561,10 +3638,7 @@ class _Loop:
         # candidate this way, and a terminal outcome that called that
         # `all_skipped` would report a fact about the Pool that nobody ever
         # established.
-        return AdmissionRefusal(
-            reason="Lease could not be taken (remote unreadable)",
-            unresolved=True,
-        )
+        return AdmissionRefusal(reason=_LEASE_UNREADABLE, unresolved=True)
 
     def _release_lease(self, ref: int | str) -> None:
         """Give back one issue's **Lease**, if this Run holds it.
@@ -4262,6 +4336,15 @@ work in flight, nothing currently refillable, no serial turn granted).
 """
 
 
+def run_end_refusal(issue: int | str, reason: str) -> dict[str, int | str]:
+    """One ``wrapper.run.end`` ``refusals`` entry (contract 2.12, #643).
+
+    Both keys are required. The field that carries the list is optional;
+    this entry is not a partial record.
+    """
+    return {"issue": issue, "reason": reason}
+
+
 def _serial_required(items: Sequence[AfkReadyItem]) -> list[AfkReadyItem]:
     """The **serial-required** items of a full-Pool peek, in Pool order.
 
@@ -4469,6 +4552,7 @@ class _ParallelLoop:
                 on_membership_read=self._emit_membership_read,
                 read_refused=self._lane_lease_unreadable,
                 lane_first=self._lane_first_pin,
+                lane_first_read=self._lane_first_read,
             )
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
@@ -4577,6 +4661,7 @@ class _ParallelLoop:
             lease=lease,
             static_capabilities=static_capabilities,
             host_capabilities=host_capabilities,
+            release_line_reader=self._read_release_line,
         )
 
     def request_stop_drain(self) -> None:
@@ -5030,7 +5115,16 @@ class _ParallelLoop:
 
                 self._prepare_rolling_pool_ahead()
 
-                serial_pool_seen = self._service_serial_required_work()
+                # While the Pin's Lane is in setup, or the Pin waits for its
+                # paced retry after an unread setup step, refill waits behind
+                # it (#645), so the serial peek waits too: latching serial
+                # demand now would stop the refill the Pin's binding releases,
+                # or, with the Pin's Lane freed, take the turn it is owed.
+                serial_pool_seen = (
+                    False
+                    if scheduler.lane_first_awaited
+                    else self._service_serial_required_work()
+                )
 
                 # `serial_turn()` itself has neither `max_iterations` nor abort
                 # awareness (it only gates on the serial latch + full
@@ -5232,7 +5326,7 @@ class _ParallelLoop:
                             else:
                                 reason = self._rolling_refused[candidate.ref]
                             self._terminal_refusals.append(
-                                {"issue": candidate.ref, "reason": reason}
+                                run_end_refusal(candidate.ref, reason)
                             )
                     return (
                         terminal_outcome,
@@ -5425,6 +5519,12 @@ class _ParallelLoop:
         """The unspent Pin, if it is ``parallel-safe``: the next Lane is its."""
         return self._serial.live_pin if self._pin_parallel_safe() else None
 
+    def _lane_first_read(
+        self, *, listed: bool, complete: bool, read: str | None
+    ) -> None:
+        """What the Rolling cache read of the ``parallel-safe`` Pin (#644)."""
+        self._serial.observe_pin_read(listed=listed, complete=complete, read=read)
+
     async def _await_pin_readable(self) -> None:
         """Poll until a Pool read shows the Pin or proves it gone (#430).
 
@@ -5435,12 +5535,25 @@ class _ParallelLoop:
         asks about the Pin alone, so another issue the tracker keeps refusing
         cannot hold it; a complete read without the Pin ends it too, and the
         next Iteration spends the departed Pin. An operator Stop ends it.
+
+        When the read that failed was the Pin's **Lease** probe, the tracker
+        still shows the Pin, so a Pool read would end the wait at once. That
+        wait lasts until the Lease remote answers for the Pin instead, or a
+        complete Pool read proves the Pin gone (#645).
         """
         pin = self._serial.live_pin
+        lease_unread = self._serial.pin_lease_unread
         while not self._serial._stop_drain_requested:
             await asyncio.sleep(_ROLLING_EMPTY_POLL_INTERVAL)
+            if lease_unread and self._serial.pin_lease_readable():
+                return
             collection = self._collect_pool_safely()
-            if collection.complete or any(i.ref == pin for i in collection.items):
+            shown = any(i.ref == pin for i in collection.items)
+            if lease_unread:
+                if collection.complete and not shown:
+                    return
+                continue
+            if collection.complete or shown:
                 return
 
     def _latch_serial_demand(
@@ -5771,6 +5884,29 @@ class _ParallelLoop:
                 considered=reservation.considered,
             )
 
+        # An unspent `parallel-safe` Pin owns the next Lane (#430), and until a
+        # Lane binds it each failure below is one of two things (#645): a read
+        # or setup step that did not happen, which puts the Pin back to take
+        # the next Lane (`pin_unread`), or an answer about the Pin, which
+        # spends it after today's refusal handling (`pin_refused`). Any other
+        # candidate keeps exactly today's handling.
+        is_pin = ref == self._lane_first_pin()
+
+        def pin_unread(what: str) -> None:
+            self._diag.warning(
+                "lane #%s: the Pin was not read (%s); it keeps the next Lane",
+                ref,
+                what,
+            )
+            self._release_lane_lease(ref)
+            scheduler.release(
+                reservation, requeue_after=_ROLLING_EMPTY_POLL_INTERVAL
+            )
+
+        def pin_refused() -> None:
+            if is_pin:
+                self._serial.observe_pin_read(listed=True, read=PIN_READ_REFUSED)
+
         if not isinstance(ref, int):
             # Rolling-eligible candidates are always int refs
             # (`is_parallel_safe` requires it); this only defends a future
@@ -5804,6 +5940,7 @@ class _ParallelLoop:
             reason = f"routing refused: {exc}"
             passed_over(reason)
             self._rolling_refused[ref] = reason
+            pin_refused()
             scheduler.release(reservation)
             return
 
@@ -5823,6 +5960,9 @@ class _ParallelLoop:
         # issue a rival Run holds a live Lease on, and buy an AI session for
         # work it is about to be refused.
         refusal = self._take_lane_lease(item)
+        if refusal == _LEASE_UNREADABLE and is_pin:
+            pin_unread(refusal)
+            return
         if refusal is not None:
             # Refused *candidacy* for the rest of this Run, not merely this
             # reservation. A bare release would hand the candidate straight
@@ -5839,6 +5979,7 @@ class _ParallelLoop:
                 # Bounding the candidate is still right — see above — but the
                 # Run must not then report it as work it was *refused*.
                 self._lease_unreadable.add(ref)
+            pin_refused()
             scheduler.release(reservation)
             return
 
@@ -5852,6 +5993,9 @@ class _ParallelLoop:
                 item, routed=resolution, parallel_required=True
             )
         except DynamicRouteUnavailable as exc:
+            if is_pin and isinstance(exc, _CandidateUnread):
+                pin_unread(f"dynamic route unavailable: {exc}")
+                return
             # The Lane half of AC11's explicit unavailable decision, and it
             # takes the candidate out of this Run's rolling pool exactly as the
             # routing refusal above does. Leaving it eligible looks kinder and
@@ -5874,6 +6018,7 @@ class _ParallelLoop:
             reason = f"dynamic route unavailable: {exc}"
             passed_over(reason)
             self._rolling_refused[ref] = reason
+            pin_refused()
             scheduler.release(reservation)
             return
         if scheduler.stop_latched or scheduler.abort_latched:
@@ -5890,6 +6035,9 @@ class _ParallelLoop:
                 ref,
                 exc,
             )
+            if is_pin:
+                pin_unread(f"base revision failed: {exc}")
+                return
             passed_over(f"base revision failed: {exc}")
             scheduler.release(reservation)
             return
@@ -5902,6 +6050,9 @@ class _ParallelLoop:
                 "worktree add for issue #%s failed: %s; releasing reservation",
                 ref, exc,
             )
+            if is_pin:
+                pin_unread(f"worktree setup failed: {exc}")
+                return
             passed_over(f"worktree setup failed: {exc}")
             scheduler.release(reservation)
             return
@@ -5948,7 +6099,11 @@ class _ParallelLoop:
             on_execution_host=True,
         )
         lane_binding.bind(ref, source="lane_pickup", at=datetime.now(timezone.utc))
-        self._serial.spend_pin_if_bound(ref)
+        if ref == self._serial.live_pin:
+            self._serial.observe_pin_read(listed=True, read=PIN_READ_BOUND)
+        if is_pin:
+            # Refill was held while the Pin's Lane was in setup (#645).
+            self._capacity_freed.set()
 
         try:
             recent = self._git.recent_commits(5)
@@ -8228,13 +8383,28 @@ async def run(
                 # module docstring for the propagation contract.
                 with telemetry.span("git_loopy.run"):
                     try:
-                        if driver is None:
-                            exit_code = await loop.drive()
-                        else:
-                            # ADR-0001: the app and the loop run as peer
-                            # asyncio tasks; the driver owns the peering and
-                            # Stop-cancels the loop task.
-                            exit_code = await driver.run(loop.drive)
+                        # Any attached client Stops through the same two entry
+                        # points the launching terminal uses. The watcher does
+                        # not emit; the Run does, once per latched stage.
+                        watcher = asyncio.create_task(
+                            stop_request.watch_client_stops(
+                                loop, control.path, diag
+                            )
+                        )
+                        try:
+                            if driver is None:
+                                exit_code = await loop.drive()
+                            else:
+                                # ADR-0001: the app and the loop run as peer
+                                # asyncio tasks; the driver owns the peering and
+                                # Stop-cancels the loop task.
+                                exit_code = await driver.run(loop.drive)
+                        finally:
+                            watcher.cancel()
+                            try:
+                                await watcher
+                            except asyncio.CancelledError:
+                                pass
                     except Exception as exc:
                         diag.error(
                             "git-loopy loop crashed: %s: %s",

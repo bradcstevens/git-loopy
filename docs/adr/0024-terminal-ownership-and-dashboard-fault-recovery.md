@@ -1,6 +1,9 @@
 # The terminal has one owner, and a Dashboard fault is an involuntary Detach
 
-**Status:** accepted
+**Status:** superseded in full by
+[ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md).
+The terminal-restoration invariant survives there as a client obligation;
+the in-process lifetime, sink-swap, and fault-exit mechanisms below are historical.
 
 **Amended by [ADR-0058](0058-init-precedes-the-run-and-clients-do-not-own-its-lifetime.md):**
 the detached-client model supersedes the in-process lifetime and sink-swap
