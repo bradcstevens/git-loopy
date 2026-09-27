@@ -82,10 +82,10 @@ reason to refuse a pin.
 
 The pin is spent by its first binding, or by the end of that first serial Iteration unless
 that Iteration could not read it — a failed Pool, Readiness, **Dynamic route** or **Lease**
-read of the pin. An Iteration that could not read the pin leaves it unspent, and the pin
-keeps serial ownership for the next Iteration. The Python Runner does this in serial Pickups
-as well. Under **Rolling dispatch** a Lane's **Pickup skip** of a `parallel-safe` pin also
-spends it (#645): its **Lease** held by another Run, a `task-type:` label routing refuses, or
+read of the pin. The Python Runner spends the pin this way in serial Pickups as well.
+Under **Rolling dispatch**, an Iteration that could not read the pin leaves it unspent,
+and the pin keeps serial ownership for the next Iteration. A Lane's **Pickup skip** of a
+`parallel-safe` pin also spends it (#645): its **Lease** held by another Run, a `task-type:` label routing refuses, or
 a **Dynamic route** refusal that is not a read that failed. Once the pin is spent, by any of
 these, the oldest-first order applies — including to the pinned issue if it is still open.
 
