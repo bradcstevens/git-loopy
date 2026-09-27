@@ -81,11 +81,13 @@ until the tracker answers rather than hand that Lane to the next candidate. Lack
 reason to refuse a pin.
 
 The pin is spent by its first binding, or by the end of that first serial Iteration unless
-that Iteration could not read it — a failed Pool, Readiness, Dynamic-route or **Lease** read of
-the pin (the pin then keeps serial ownership for the next Iteration), or by a Lane Pickup whose
-answer is about the pin — its **Lease** held by another Run, a `task-type:` label routing
-refuses, or a Dynamic-route refusal that is not a read that failed (#645) — and the oldest-first order then applies — including to the pinned issue if it is still open. The
-Python Runner does this in serial Pickups as well.
+that Iteration could not read it — a failed Pool, Readiness, **Dynamic route** or **Lease**
+read of the pin. The Python Runner spends the pin this way in serial Pickups as well.
+Under **Rolling dispatch**, an Iteration that could not read the pin leaves it unspent,
+and the pin keeps serial ownership for the next Iteration. A Lane's **Pickup skip** of a
+`parallel-safe` pin also spends it (#645): its **Lease** held by another Run, a `task-type:` label routing refuses, or
+a **Dynamic route** refusal that is not a read that failed. Once the pin is spent, by any of
+these, the oldest-first order applies — including to the pinned issue if it is still open.
 
 **Conflicts, flagged rather than resolved here:**
 
@@ -110,7 +112,7 @@ Python Runner does this in serial Pickups as well.
   exception: a failed read of it stops the Lane walk and is retried on the next, because
   passing it is exactly how another issue would take the pin's Lane. The same holds after the
   walk has taken the pin (#645): a later Lane Pickup step whose read or setup did not happen —
-  the **Lease** probe, a Dynamic-route read that failed, the base revision, the worktree — puts
+  the **Lease** probe, a **Dynamic route** read that failed, the base revision, the worktree — puts
   the pin back at the head of the cache, quarantined, rather than refuse it for the Run or
   release it uncached, and neither a Lane nor serial work fills behind it until it binds. Its
   retries are paced to one per idle poll interval. The bounds on a pin whose reads keep failing are
