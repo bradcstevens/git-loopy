@@ -1132,6 +1132,12 @@ def test_wrapper_dashboard_fault_is_retired_and_unreusable() -> None:
         )
 
 
+def test_wrapper_pipeline_quiescent_is_retired_and_unreusable() -> None:
+    """ADR-0065 retired it; the parity tests alone would pass a coordinated re-add."""
+    assert "WRAPPER_PIPELINE_QUIESCENT" not in events_module.__all__
+    assert "wrapper.pipeline.quiescent" not in _EVENT_SCHEMA["event_types"].values()
+
+
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """Two axes, and the literals are what keep them from being read as one.
 
@@ -1218,10 +1224,13 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.12 adds ``refusals`` to Rolling ``wrapper.run.end`` (§12, #643).
     Consumers that do not read the optional field continue unchanged, so
     wire compatibility remains 1.2.
+
+    2.14 retires ``wrapper.pipeline.quiescent`` (ADR-0065). Nothing read it,
+    so, as with ADR-0046's removal, the wire axis stays at 1.2.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.12"
+    assert _EVENT_SCHEMA["contract_version"] == "2.14"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -4308,8 +4317,9 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
     later advances the contract names, or a bump leaves the notes disagreeing.
     """
     clause = (
-        "have since advanced to 2.11 with the Run-start issue source and "
-        "2.12 with Run-end refusals"
+        "have since advanced to 2.11 with the Run-start issue source, "
+        "2.12 with Run-end refusals and 2.14 with the retirement of "
+        "`wrapper.pipeline.quiescent`"
     )
     policy = " ".join(_ROUTING_RESOLUTION["static_route_notes"]["policy"].split())
     written = " ".join(_written_contract_text().split())
