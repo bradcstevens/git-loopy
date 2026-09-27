@@ -4317,8 +4317,9 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
     later advances the contract names, or a bump leaves the notes disagreeing.
     """
     clause = (
-        "have since advanced to 2.11 with the Run-start issue source and "
-        "2.12 with Run-end refusals"
+        "have since advanced to 2.11 with the Run-start issue source, "
+        "2.12 with Run-end refusals and 2.14 with the retirement of "
+        "`wrapper.pipeline.quiescent`"
     )
     policy = " ".join(_ROUTING_RESOLUTION["static_route_notes"]["policy"].split())
     written = " ".join(_written_contract_text().split())
