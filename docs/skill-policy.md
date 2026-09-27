@@ -490,8 +490,8 @@ existing behavior; shell and PowerShell routing remain deferred.
 The Label row judges the presence of the names a Run reads and cannot create for
 itself — the triage roles, `parallel-safe`, `priority`, and `ready-for-agent`,
 the Label the Pool query filters on. It deliberately ignores two things the Run
-does not need. The `task-type:` and `semver:` taxonomies are *created on the way
-in*, so their absence stops nothing. And a drifted colour or description cannot
+does not need. The `task-type:` taxonomy and `vX.Y.Z` Release-target labels are *created on
+the way in*, so their absence stops nothing. And a drifted colour or description cannot
 stop a Run either, because a Run reads and writes Labels by name; drift stays
 `git-loopy labels`' business.
 

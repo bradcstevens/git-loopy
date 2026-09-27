@@ -1122,7 +1122,7 @@ def test_update_public_maintenance_verified_older_fallback(
 
     release_index = [
         {
-            "tag_name": "v1.2.5-dev.1",
+            "tag_name": "v1.2.5-alpha.1",
             "draft": False,
             "assets": [],  # source-only exact release
         },
@@ -1151,7 +1151,7 @@ def test_update_public_maintenance_verified_older_fallback(
     output: list[str] = []
     result = updatecmd.run_update(
         env=env,
-        release_version_reader=lambda: "1.2.5-dev.1",
+        release_version_reader=lambda: "1.2.5-alpha.1",
         packaged_prompt=tmp_path / "absent-PROMPT.md",
         catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
         output_fn=output.append,
@@ -1165,7 +1165,7 @@ def test_update_public_maintenance_verified_older_fallback(
     # Runtime discovery attaches to the fallback helper without rejecting it
     attached = tui_release.resolve_runtime_helper(
         tmp_path / "repo",
-        release_version="1.2.5-dev.1",
+        release_version="1.2.5-alpha.1",
         warn=lambda message: pytest.fail(message),
         env=env,
     )

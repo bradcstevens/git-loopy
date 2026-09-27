@@ -1,254 +1,711 @@
 {
-  "schema_version": 2,
-  "contract_version": "2.0",
-  "distributions": ["python", "shell", "powershell"],
+  "schema_version": 3,
+  "contract_version": "2.13",
+  "distributions": [
+    "python",
+    "shell",
+    "powershell"
+  ],
   "bump_class_taxonomy": [
     "major",
     "minor",
     "patch",
     "none"
   ],
+  "prerelease_stages": [
+    "alpha",
+    "beta",
+    "rc"
+  ],
   "cases": [
     {
-      "id": "major-bump",
-      "labels": ["ready-for-agent", "semver:major"],
+      "id": "major-target-label",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "ready-for-agent",
+        "v2.0.0"
+      ],
       "bump_class": "major",
-      "distributions": ["python", "shell", "powershell"]
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
-      "id": "minor-bump",
-      "labels": ["semver:minor"],
+      "id": "minor-target-label",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.3.0"
+      ],
       "bump_class": "minor",
-      "distributions": ["python", "shell", "powershell"]
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
-      "id": "patch-bump",
-      "labels": ["task-type:bugfix", "semver:patch"],
+      "id": "patch-target-label",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "task-type:bugfix",
+        "v1.2.4"
+      ],
       "bump_class": "patch",
-      "distributions": ["python", "shell", "powershell"]
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
-      "id": "none-is-a-deliberate-no-bump",
-      "labels": ["semver:none"],
+      "id": "no-target-label-changes-no-version",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "ready-for-agent"
+      ],
       "bump_class": "none",
-      "distributions": ["python", "shell", "powershell"]
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-label-that-is-not-a-version-changes-no-version",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "vendor",
+        "value:high",
+        "V1.3.0"
+      ],
+      "bump_class": "none",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-two-digit-successor-is-a-minor-target",
+      "last_stable_version": "1.9.9",
+      "labels": [
+        "v1.10.0"
+      ],
+      "bump_class": "minor",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "the-first-stable-successor-of-a-zero-major",
+      "last_stable_version": "0.10.0",
+      "labels": [
+        "v1.0.0"
+      ],
+      "bump_class": "major",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     }
   ],
   "refusal_cases": [
     {
-      "id": "unknown-key-is-refused",
-      "labels": ["semver:prepatch"],
-      "reason": "unknown_semver_key",
-      "key": "prepatch",
-      "distributions": ["python", "shell", "powershell"]
+      "id": "a-partial-version-is-malformed",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.3"
+      ],
+      "reason": "malformed_release_target_label",
+      "refused_label": "v1.3",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
-      "id": "unknown-key-beside-a-known-key-is-still-refused",
-      "labels": ["semver:patch", "semver:prepatch"],
-      "reason": "unknown_semver_key",
-      "key": "prepatch",
-      "distributions": ["python", "shell", "powershell"]
+      "id": "a-prerelease-label-is-malformed",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.3.0-beta.1"
+      ],
+      "reason": "malformed_release_target_label",
+      "refused_label": "v1.3.0-beta.1",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
-      "id": "recased-key-is-refused",
-      "labels": ["semver:Minor"],
-      "reason": "unknown_semver_key",
-      "key": "Minor",
-      "distributions": ["python", "shell", "powershell"]
+      "id": "a-leading-zero-is-malformed",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v01.3.0"
+      ],
+      "reason": "malformed_release_target_label",
+      "refused_label": "v01.3.0",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
-      "id": "bare-prefix-is-refused",
-      "labels": ["semver:"],
-      "reason": "unknown_semver_key",
-      "key": "",
-      "distributions": ["python", "shell", "powershell"]
+      "id": "build-metadata-is-malformed",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.3.0+build.1"
+      ],
+      "reason": "malformed_release_target_label",
+      "refused_label": "v1.3.0+build.1",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
-      "id": "missing-label-is-unclassified",
-      "labels": ["ready-for-agent"],
-      "reason": "unclassified_bump_class",
-      "distributions": ["python", "shell", "powershell"]
+      "id": "a-malformed-label-beside-a-valid-one-is-still-refused",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.3.0",
+        "v1.3"
+      ],
+      "reason": "malformed_release_target_label",
+      "refused_label": "v1.3",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
-      "id": "two-known-labels-are-conflicting",
-      "labels": ["semver:major", "semver:minor"],
-      "reason": "conflicting_semver_labels",
-      "keys": ["major", "minor"],
-      "distributions": ["python", "shell", "powershell"]
+      "id": "two-targets-are-conflicting",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.2.4",
+        "v1.3.0"
+      ],
+      "reason": "conflicting_release_target_labels",
+      "conflicting_labels": [
+        "v1.2.4",
+        "v1.3.0"
+      ],
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
-      "id": "none-beside-a-bump-is-conflicting",
-      "labels": ["semver:none", "semver:patch"],
-      "reason": "conflicting_semver_labels",
-      "keys": ["none", "patch"],
-      "distributions": ["python", "shell", "powershell"]
+      "id": "the-released-version-is-unreachable",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.2.3"
+      ],
+      "reason": "unreachable_release_target",
+      "refused_label": "v1.2.3",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "an-older-version-is-unreachable",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.2.2"
+      ],
+      "reason": "unreachable_release_target",
+      "refused_label": "v1.2.2",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-skipped-patch-is-unreachable",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.2.5"
+      ],
+      "reason": "unreachable_release_target",
+      "refused_label": "v1.2.5",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-skipped-minor-is-unreachable",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.4.0"
+      ],
+      "reason": "unreachable_release_target",
+      "refused_label": "v1.4.0",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-minor-with-a-patch-is-unreachable",
+      "last_stable_version": "1.2.3",
+      "labels": [
+        "v1.3.1"
+      ],
+      "reason": "unreachable_release_target",
+      "refused_label": "v1.3.1",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     }
   ],
   "ratchet_cases": [
     {
-      "id": "minor-raises-a-release-line-without-resetting-its-counter",
+      "id": "a-first-patch-starts-an-alpha-line",
       "last_stable_version": "1.2.3",
       "current_target": "1.2.3",
-      "current_counter": 2,
-      "bump_class": "minor",
-      "new_target": "1.3.0",
-      "new_counter": 3,
-      "resulting_version": "1.3.0-dev.3",
-      "distributions": ["python", "shell", "powershell"]
-    },
-    {
-      "id": "major-raises-the-target-from-the-last-stable-version",
-      "last_stable_version": "1.2.3",
-      "current_target": "1.2.3",
-      "current_counter": 0,
-      "bump_class": "major",
-      "new_target": "2.0.0",
-      "new_counter": 1,
-      "resulting_version": "2.0.0-dev.1",
-      "distributions": ["python", "shell", "powershell"]
-    },
-    {
-      "id": "patch-raises-the-target-from-the-last-stable-version",
-      "last_stable_version": "1.2.3",
-      "current_target": "1.2.3",
+      "current_stage": null,
       "current_counter": 0,
       "bump_class": "patch",
       "new_target": "1.2.4",
+      "new_stage": "alpha",
       "new_counter": 1,
-      "resulting_version": "1.2.4-dev.1",
-      "distributions": ["python", "shell", "powershell"]
+      "resulting_version": "1.2.4-alpha.1",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-first-minor-starts-an-alpha-line",
+      "last_stable_version": "1.2.3",
+      "current_target": "1.2.3",
+      "current_stage": null,
+      "current_counter": 0,
+      "bump_class": "minor",
+      "new_target": "1.3.0",
+      "new_stage": "alpha",
+      "new_counter": 1,
+      "resulting_version": "1.3.0-alpha.1",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-major-starts-an-alpha-line-rather-than-promoting",
+      "last_stable_version": "1.2.3",
+      "current_target": "1.2.3",
+      "current_stage": null,
+      "current_counter": 0,
+      "bump_class": "major",
+      "new_target": "2.0.0",
+      "new_stage": "alpha",
+      "new_counter": 1,
+      "resulting_version": "2.0.0-alpha.1",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
       "id": "larger-bump-preserves-the-running-counter",
       "last_stable_version": "1.2.3",
       "current_target": "1.2.4",
+      "current_stage": "alpha",
       "current_counter": 2,
       "bump_class": "minor",
       "new_target": "1.3.0",
+      "new_stage": "alpha",
       "new_counter": 3,
-      "resulting_version": "1.3.0-dev.3",
-      "distributions": ["python", "shell", "powershell"]
+      "resulting_version": "1.3.0-alpha.3",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-larger-target-returns-a-beta-line-to-alpha",
+      "last_stable_version": "1.2.3",
+      "current_target": "1.2.4",
+      "current_stage": "beta",
+      "current_counter": 2,
+      "bump_class": "minor",
+      "new_target": "1.3.0",
+      "new_stage": "alpha",
+      "new_counter": 3,
+      "resulting_version": "1.3.0-alpha.3",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-major-returns-a-release-candidate-to-alpha",
+      "last_stable_version": "1.2.3",
+      "current_target": "1.3.0",
+      "current_stage": "rc",
+      "current_counter": 1,
+      "bump_class": "major",
+      "new_target": "2.0.0",
+      "new_stage": "alpha",
+      "new_counter": 2,
+      "resulting_version": "2.0.0-alpha.2",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
       "id": "smaller-bump-never-lowers-an-existing-target",
       "last_stable_version": "1.2.3",
       "current_target": "1.3.0",
+      "current_stage": "alpha",
       "current_counter": 3,
       "bump_class": "patch",
       "new_target": "1.3.0",
+      "new_stage": "alpha",
       "new_counter": 4,
-      "resulting_version": "1.3.0-dev.4",
-      "distributions": ["python", "shell", "powershell"]
+      "resulting_version": "1.3.0-alpha.4",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-bump-within-the-target-keeps-a-beta-stage",
+      "last_stable_version": "1.2.3",
+      "current_target": "1.3.0",
+      "current_stage": "beta",
+      "current_counter": 2,
+      "bump_class": "patch",
+      "new_target": "1.3.0",
+      "new_stage": "beta",
+      "new_counter": 3,
+      "resulting_version": "1.3.0-beta.3",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "an-equal-target-keeps-a-release-candidate-stage",
+      "last_stable_version": "1.2.3",
+      "current_target": "1.3.0",
+      "current_stage": "rc",
+      "current_counter": 1,
+      "bump_class": "minor",
+      "new_target": "1.3.0",
+      "new_stage": "rc",
+      "new_counter": 2,
+      "resulting_version": "1.3.0-rc.2",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
       "id": "a-two-digit-target-outranks-a-single-digit-candidate-numerically",
       "last_stable_version": "1.9.1",
       "current_target": "1.10.0",
+      "current_stage": "alpha",
       "current_counter": 3,
       "bump_class": "patch",
       "new_target": "1.10.0",
+      "new_stage": "alpha",
       "new_counter": 4,
-      "resulting_version": "1.10.0-dev.4",
-      "distributions": ["python", "shell", "powershell"]
+      "resulting_version": "1.10.0-alpha.4",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
       "id": "a-two-digit-candidate-outranks-a-single-digit-target-numerically",
       "last_stable_version": "1.9.9",
       "current_target": "1.9.9",
+      "current_stage": null,
       "current_counter": 0,
       "bump_class": "minor",
       "new_target": "1.10.0",
+      "new_stage": "alpha",
       "new_counter": 1,
-      "resulting_version": "1.10.0-dev.1",
-      "distributions": ["python", "shell", "powershell"]
+      "resulting_version": "1.10.0-alpha.1",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     }
   ],
   "counter_cases": [
     {
       "id": "a-bump-increments-the-existing-counter-once",
       "last_stable_version": "1.2.3",
-      "current_target": "1.2.3",
+      "current_target": "1.2.4",
+      "current_stage": "alpha",
       "current_counter": 7,
       "bump_class": "patch",
       "new_target": "1.2.4",
+      "new_stage": "alpha",
       "new_counter": 8,
-      "resulting_version": "1.2.4-dev.8",
-      "distributions": ["python", "shell", "powershell"]
+      "resulting_version": "1.2.4-alpha.8",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
       "id": "none-advances-neither-target-nor-counter",
       "last_stable_version": "1.2.3",
       "current_target": "1.3.0",
+      "current_stage": "beta",
       "current_counter": 3,
       "bump_class": "none",
       "new_target": "1.3.0",
+      "new_stage": "beta",
       "new_counter": 3,
-      "resulting_version": "1.3.0-dev.3",
-      "distributions": ["python", "shell", "powershell"]
+      "resulting_version": "1.3.0-beta.3",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    }
+  ],
+  "stage_cases": [
+    {
+      "id": "alpha-advances-to-beta-and-restarts-the-counter",
+      "current_version": "1.3.0-alpha.8",
+      "stage": "beta",
+      "resulting_version": "1.3.0-beta.1",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "beta-advances-to-a-release-candidate",
+      "current_version": "1.3.0-beta.2",
+      "stage": "rc",
+      "resulting_version": "1.3.0-rc.1",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "alpha-may-advance-straight-to-a-release-candidate",
+      "current_version": "1.3.0-alpha.2",
+      "stage": "rc",
+      "resulting_version": "1.3.0-rc.1",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    }
+  ],
+  "stage_refusal_cases": [
+    {
+      "id": "a-stage-never-moves-backwards",
+      "current_version": "1.3.0-rc.1",
+      "stage": "beta",
+      "reason": "stage_not_forward",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-stage-never-repeats",
+      "current_version": "1.3.0-beta.2",
+      "stage": "beta",
+      "reason": "stage_not_forward",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "alpha-is-only-ever-a-line-start",
+      "current_version": "1.3.0-alpha.2",
+      "stage": "alpha",
+      "reason": "stage_not_forward",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-stable-release-has-no-stage-to-advance",
+      "current_version": "1.3.0",
+      "stage": "beta",
+      "reason": "no_prerelease_line",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "an-unknown-stage-is-refused",
+      "current_version": "1.3.0-alpha.1",
+      "stage": "gamma",
+      "reason": "unknown_prerelease_stage",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     }
   ],
   "promotion_cases": [
     {
-      "id": "matching-closed-milestone-promotes-the-current-release-line",
-      "current_version": "1.3.0-dev.3",
+      "id": "matching-closed-milestone-promotes-a-release-candidate",
+      "current_version": "1.3.0-rc.2",
       "milestone_title": "v1.3.0",
       "milestone_state": "CLOSED",
       "resulting_version": "1.3.0",
-      "distributions": ["python", "shell", "powershell"]
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "matching-closed-milestone-promotes-a-beta-line",
+      "current_version": "1.3.0-beta.1",
+      "milestone_title": "v1.3.0",
+      "milestone_state": "CLOSED",
+      "resulting_version": "1.3.0",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "matching-closed-milestone-promotes-an-alpha-line",
+      "current_version": "1.3.0-alpha.3",
+      "milestone_title": "v1.3.0",
+      "milestone_state": "CLOSED",
+      "resulting_version": "1.3.0",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
       "id": "an-open-matching-milestone-does-not-promote",
-      "current_version": "1.3.0-dev.3",
+      "current_version": "1.3.0-rc.1",
       "milestone_title": "v1.3.0",
       "milestone_state": "OPEN",
       "resulting_version": null,
-      "distributions": ["python", "shell", "powershell"]
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     },
     {
       "id": "a-closed-milestone-for-another-target-does-not-promote",
-      "current_version": "1.3.0-dev.3",
+      "current_version": "1.3.0-alpha.3",
       "milestone_title": "v1.2.4",
       "milestone_state": "CLOSED",
       "resulting_version": null,
-      "distributions": ["python", "shell", "powershell"]
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-retired-dev-line-is-not-promoted",
+      "current_version": "1.3.0-dev.3",
+      "milestone_title": "v1.3.0",
+      "milestone_state": "CLOSED",
+      "resulting_version": null,
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     }
   ],
-  "bump_promotion_cases": [
+  "pickup_label_cases": [
     {
-      "id": "a-major-bump-promotes-without-a-milestone",
+      "id": "a-first-patch-labels-the-patch-successor",
       "last_stable_version": "1.2.3",
-      "current_target": "1.2.3",
-      "current_counter": 0,
-      "bump_class": "major",
-      "resulting_version": "2.0.0",
-      "distributions": ["python", "shell", "powershell"]
-    },
-    {
-      "id": "a-major-bump-promotes-a-line-already-under-way",
-      "last_stable_version": "1.2.3",
-      "current_target": "1.3.0",
-      "current_counter": 3,
-      "bump_class": "major",
-      "resulting_version": "2.0.0",
-      "distributions": ["python", "shell", "powershell"]
-    },
-    {
-      "id": "a-minor-bump-is-not-exempt-and-stays-a-prerelease",
-      "last_stable_version": "1.2.3",
-      "current_target": "1.2.3",
-      "current_counter": 0,
-      "bump_class": "minor",
-      "resulting_version": "1.3.0-dev.1",
-      "distributions": ["python", "shell", "powershell"]
-    },
-    {
-      "id": "a-patch-bump-is-not-exempt-and-stays-a-prerelease",
-      "last_stable_version": "1.2.3",
-      "current_target": "1.3.0",
-      "current_counter": 3,
+      "current_version": "1.2.3",
       "bump_class": "patch",
-      "resulting_version": "1.3.0-dev.4",
-      "distributions": ["python", "shell", "powershell"]
+      "label": "v1.2.4",
+      "distributions": [
+        "python"
+      ]
+    },
+    {
+      "id": "a-patch-joins-the-target-already-under-way",
+      "last_stable_version": "1.2.3",
+      "current_version": "1.3.0-alpha.2",
+      "bump_class": "patch",
+      "label": "v1.3.0",
+      "distributions": [
+        "python"
+      ]
+    },
+    {
+      "id": "a-major-labels-past-the-target-under-way",
+      "last_stable_version": "1.2.3",
+      "current_version": "1.3.0-beta.1",
+      "bump_class": "major",
+      "label": "v2.0.0",
+      "distributions": [
+        "python"
+      ]
+    },
+    {
+      "id": "none-writes-no-label",
+      "last_stable_version": "1.2.3",
+      "current_version": "1.3.0-rc.1",
+      "bump_class": "none",
+      "label": null,
+      "distributions": [
+        "python"
+      ]
     }
   ],
   "order_independence_cases": [
@@ -256,16 +713,60 @@
       "id": "one-minor-and-two-patches-produce-one-release-line",
       "last_stable_version": "1.2.3",
       "current_target": "1.2.3",
+      "current_stage": null,
       "current_counter": 0,
       "integration_orders": [
-        ["patch", "patch", "minor"],
-        ["minor", "patch", "patch"],
-        ["patch", "minor", "patch"]
+        [
+          "patch",
+          "patch",
+          "minor"
+        ],
+        [
+          "minor",
+          "patch",
+          "patch"
+        ],
+        [
+          "patch",
+          "minor",
+          "patch"
+        ]
       ],
       "resulting_target": "1.3.0",
+      "resulting_stage": "alpha",
       "resulting_counter": 3,
-      "resulting_version": "1.3.0-dev.3",
-      "distributions": ["python", "shell", "powershell"]
+      "resulting_version": "1.3.0-alpha.3",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
+    },
+    {
+      "id": "a-raise-during-beta-lands-the-same-alpha-in-either-order",
+      "last_stable_version": "1.2.3",
+      "current_target": "1.2.4",
+      "current_stage": "beta",
+      "current_counter": 2,
+      "integration_orders": [
+        [
+          "patch",
+          "minor"
+        ],
+        [
+          "minor",
+          "patch"
+        ]
+      ],
+      "resulting_target": "1.3.0",
+      "resulting_stage": "alpha",
+      "resulting_counter": 4,
+      "resulting_version": "1.3.0-alpha.4",
+      "distributions": [
+        "python",
+        "shell",
+        "powershell"
+      ]
     }
   ]
 }

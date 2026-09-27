@@ -42,7 +42,7 @@ def test_saved_dynamic_authority_preserves_exact_effort_semantics(
     tmp_path, monkeypatch, capsys, mode, case,
 ):
     _, git = _wire_single_issue_github(tmp_path, monkeypatch)
-    labels = ["ready-for-agent", "task-type:implementation", "semver:none"]
+    labels = ["ready-for-agent", "task-type:implementation"]
     if mode == "lane":
         labels.append("parallel-safe")
     tracker = FakeGitHubClient(

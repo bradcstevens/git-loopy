@@ -432,7 +432,7 @@ assert_equal "previously installed helper" "$(<"$record_failure_helper")" \
 # published, then verifies that helper against its resolved rather than
 # declared version.
 fallback_clone="$cli_dir/fallback"
-make_fake_clone "$fallback_clone" 4.5.7-dev.9
+make_fake_clone "$fallback_clone" 4.5.7-alpha.9
 fallback_releases="$cli_dir/fallback-releases"
 publish_fake_release "$fallback_releases/v4.5.6" 4.5.6
 jq -n \

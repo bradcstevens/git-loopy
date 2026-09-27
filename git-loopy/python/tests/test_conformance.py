@@ -85,6 +85,8 @@ from git_loopy.issue_order import (
     order_issues,
     promote_pinned,
 )
+from git_loopy.issue_pin import PIN_READS, pin_live_after
+from git_loopy.serial_pickup import reason_for
 from git_loopy.measured_routing import ProvingTask
 from git_loopy import measured_routing as measured_routing_module
 from git_loopy.staircase import Candidate
@@ -270,6 +272,69 @@ def test_ordering_cases_are_named_uniquely() -> None:
     """Case ids are the parametrize ids every port reports failures by."""
     ids = [case["id"] for case in _ISSUE_ORDERING["cases"]]
 
+    assert len(ids) == len(set(ids))
+
+
+_PIN_DURATION = _load_fixture("pin-duration.json")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _PIN_DURATION["cases"],
+    ids=lambda case: case["id"],
+)
+def test_pin_duration_fixture(case: dict[str, Any]) -> None:
+    """How long a **Pin** lasts: the first Pickup that reads it spends it (#644).
+
+    Each step is one Pickup. It orders the Pool with the Pin still live before
+    it, names what a binding of the Pin would report, then asks the production
+    spend decision whether the Pin is live afterwards. The read outcome is an
+    input, so eligibility stays out of the fixture.
+    """
+    pin = case["pin"]
+    live = True
+    for index, pickup in enumerate(case["pickups"], start=1):
+        live_pin = pin if live else None
+        issues = [_orderable(candidate) for candidate in pickup["issues"]]
+        order = promote_pinned(order_issues(issues).order, live_pin)
+        pinned = next((issue for issue in issues if issue.number == pin), None)
+        reason = (
+            None
+            if pinned is None
+            else reason_for(pinned.number, pinned.labels, pin=live_pin)
+        )
+        live = pin_live_after(
+            live,
+            listed=pinned is not None,
+            complete=pickup["complete"],
+            read=pickup["pin_read"],
+        )
+
+        assert {
+            "order": [issue.number for issue in order],
+            "pin_reason": reason,
+            "live_after": live,
+        } == pickup["expected"], f"Pickup {index}"
+
+
+def test_pin_duration_fixture_declares_the_production_read_vocabulary() -> None:
+    """The read outcomes a step may name are the ones the spend decision knows."""
+    assert set(_PIN_DURATION["pin_reads"]) == PIN_READS
+    used = {
+        pickup["pin_read"]
+        for case in _PIN_DURATION["cases"]
+        for pickup in case["pickups"]
+        if pickup["pin_read"] is not None
+    }
+    assert used == PIN_READS
+
+
+def test_pin_duration_fixture_covers_every_named_case() -> None:
+    """Cases (a)-(f) of #644 are each driven by at least one row."""
+    covered = {case["covers"] for case in _PIN_DURATION["cases"]}
+
+    assert covered == set(_PIN_DURATION["covers"]) == set("abcdef")
+    ids = [case["id"] for case in _PIN_DURATION["cases"]]
     assert len(ids) == len(set(ids))
 
 
@@ -1015,8 +1080,62 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
 
 
 def test_wrapper_dashboard_fault_is_retired_and_unreusable() -> None:
+    """A Dashboard fault is not a Run event, and its name is never reused (#459).
+
+    The negative pin is the fixture, not the absence of a constant. A port that
+    grows a new ``wrapper.dashboard.fault`` — or exit code 3, which used to mean
+    "continued past a Dashboard fault" — has to delete the pin first, which is
+    the review the retirement exists to force. Conformance then asserts that
+    none of the three Orchestrators emit the pinned literal.
+    """
+    pin = _EVENT_SCHEMA["retired_event_types"]["WRAPPER_DASHBOARD_FAULT"]
+    literal = "wrapper.dashboard.fault"
+    retired_exit = 3
+
+    assert pin == {
+        "literal": literal,
+        "exit_code": retired_exit,
+        "reason": (
+            "The Run outlives its Dashboard (#459, ADR-0058). A client fault "
+            "is not a Run event. Neither this literal nor exit code 3 may be reused."
+        ),
+    }
+    assert literal not in _EVENT_SCHEMA["event_types"].values()
     assert "WRAPPER_DASHBOARD_FAULT" not in events_module.__all__
-    assert "wrapper.dashboard.fault" not in _EVENT_SCHEMA["event_types"].values()
+    assert all(case["exit_code"] != retired_exit for case in _EXIT_CODES["cases"])
+    assert _EXIT_CODES["retired"] == [
+        {
+            "id": "dashboard-fault-exit-is-retired",
+            "reason": "dashboard_fault",
+            "exit_code": retired_exit,
+            "event": literal,
+        }
+    ]
+    from git_loopy.wrapper import exit_code_for
+
+    for case in _EXIT_CODES["cases"]:
+        assert exit_code_for(case["reason"]) != retired_exit
+
+    repo = CONFORMANCE_DIR.parent
+    vocabularies = (
+        repo / "python" / "git_loopy" / "events.py",
+        repo / "shell" / "lib" / "events.sh",
+        repo / "powershell" / "GitLoopy.Events.psm1",
+    )
+    for path in vocabularies:
+        text = path.read_text(encoding="utf-8")
+        assert literal not in text, f"{path} still emits the retired Dashboard fault"
+    tui = repo / "tui" / "src"
+    for path in tui.rglob("*.rs"):
+        assert literal not in path.read_text(encoding="utf-8"), (
+            f"{path} still names the retired Dashboard fault"
+        )
+
+
+def test_wrapper_pipeline_quiescent_is_retired_and_unreusable() -> None:
+    """ADR-0065 retired it; the parity tests alone would pass a coordinated re-add."""
+    assert "WRAPPER_PIPELINE_QUIESCENT" not in events_module.__all__
+    assert "wrapper.pipeline.quiescent" not in _EVENT_SCHEMA["event_types"].values()
 
 
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
@@ -1101,10 +1220,38 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     (§12), which the Unbound-Run notice reads (#642). Python already emitted
     it; the declaration is what lets a consumer rely on it, and it is again an
     additive payload field that leaves the wire axis at 1.2.
+
+    2.12 adds ``refusals`` to Rolling ``wrapper.run.end`` (§12, #643).
+    Consumers that do not read the optional field continue unchanged, so
+    wire compatibility remains 1.2.
+
+    2.14 retires ``wrapper.pipeline.quiescent`` (ADR-0065). Nothing read it,
+    so, as with ADR-0046's removal, the wire axis stays at 1.2.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.11"
+    assert _EVENT_SCHEMA["contract_version"] == "2.14"
+    assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
+        "refusals",
+    ]
+    assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_entry_keys"] == [
+        "issue",
+        "reason",
+    ]
+
+
+def test_the_production_run_end_projects_the_pinned_refusal_entry() -> None:
+    """``refusals`` is the optional field; each entry requires both keys.
+
+    Driven through the composer the Rolling terminal decision appends, the
+    same way the Run-start readback is projected, so a renamed key fails here
+    rather than in a notice that silently skips the entry.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]
+    entry = loop_module.run_end_refusal(42, "blocked_by_open_dependency: x/y#7")
+
+    assert contract["refusals_optional"] == ["refusals"]
+    assert list(entry) == contract["refusals_entry_keys"]
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -1401,6 +1548,21 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
             "redacted": (
                 "Skill identity is the canonical name: no absolute path, home "
                 "directory, exposure directory, or Skill content may appear."
+            ),
+        },
+        # #643: the candidates a Rolling terminal decision refused, which the
+        # Unbound-Run notice reads as the Pool. Optional, so the wire stays 1.2.
+        "wrapper.run.end": {
+            "refusals_optional": ["refusals"],
+            "refusals_entry_keys": ["issue", "reason"],
+            "refusals_note": (
+                "Contract 2.12, #643. Rolling Pool-cache all_blocked and "
+                "all_skipped endings carry one refusal per surviving candidate, "
+                "in selection order, with the wrapper.pickup.skipped reason "
+                "vocabulary; no other ending carries it. It is not a Pool "
+                "collection. A consumer ignores malformed entries without "
+                "losing outcome, and an absent field preserves the old notice. "
+                "Event schema compatibility stays 1.2."
             ),
         },
     }
@@ -4145,6 +4307,25 @@ def test_the_contract_states_a_task_type_labels_origin_is_unobservable() -> None
 
     assert "origin" in section
     assert "Task-type classifier" in section
+
+
+def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> None:
+    """The fixture note and §14.4 state one fact about the two advanced fixtures.
+
+    ``routing-resolution.json`` stays declared at 2.10. Its sentence about
+    ``event-schema.json`` and ``dashboard-insights.json`` must name the same
+    later advances the contract names, or a bump leaves the notes disagreeing.
+    """
+    clause = (
+        "have since advanced to 2.11 with the Run-start issue source, "
+        "2.12 with Run-end refusals and 2.14 with the retirement of "
+        "`wrapper.pipeline.quiescent`"
+    )
+    policy = " ".join(_ROUTING_RESOLUTION["static_route_notes"]["policy"].split())
+    written = " ".join(_written_contract_text().split())
+
+    assert clause in policy
+    assert clause in written
 
 
 @pytest.mark.parametrize(("fixture", "expected"), [

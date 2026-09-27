@@ -46,8 +46,11 @@ def git(root: Path, *args: str) -> str:
 
 def python_distribution_version(version: str) -> str:
     """The PEP 440 spelling of one Release version."""
-    stable, _, counter = version.partition("-dev.")
-    return f"{stable}.dev{counter}" if counter else stable
+    stable, _, prerelease = version.partition("-")
+    if not prerelease:
+        return stable
+    stage, _, counter = prerelease.partition(".")
+    return f"{stable}{ {'alpha': 'a', 'beta': 'b', 'rc': 'rc'}[stage] }{counter}"
 
 
 def write_release_metadata(root: Path, version: str) -> None:
@@ -162,12 +165,12 @@ def trunk_repository(
     git(root, "config", "user.name", "Release Rehearsal")
     git(root, "config", "user.email", "release-rehearsal@example.invalid")
 
-    write_release_metadata(root, "0.11.0-dev.1")
-    (root / "docs/releases/v0.11.0-dev.1.md").write_text(
-        "# git-loopy 0.11.0-dev.1\n\nFirst advance.\n", encoding="utf-8"
+    write_release_metadata(root, "0.11.0-alpha.1")
+    (root / "docs/releases/v0.11.0-alpha.1.md").write_text(
+        "# git-loopy 0.11.0-alpha.1\n\nFirst advance.\n", encoding="utf-8"
     )
     git(root, "add", ".")
-    git(root, "commit", "-qm", "chore(release): advance Release line to 0.11.0-dev.1")
+    git(root, "commit", "-qm", "chore(release): advance Release line to 0.11.0-alpha.1")
 
     write_release_metadata(root, version)
     (root / f"docs/releases/v{version}.md").write_text(

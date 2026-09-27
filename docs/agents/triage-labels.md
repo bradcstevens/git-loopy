@@ -84,7 +84,7 @@ and the blocking edges are expressed on this tracker.
 ## Creating the labels
 
 `git-loopy init`, run inside the repository, creates whichever triage,
-`parallel-safe`, `priority`, Task-type, Bump-class (`semver:`), and
+`parallel-safe`, `priority`, Task-type, and
 `wayfinder:` labels are absent and leaves the ones that already exist
 untouched. Re-running it creates nothing.
 
@@ -102,8 +102,9 @@ git-loopy labels --apply    # create what is missing, correct what drifted,
 It reports every label in the vocabulary as `missing`, `drifted` (naming the
 attribute that differs), or matched, resolving the five roles through the table
 above so a renamed role is neither missing nor drift. `parallel-safe`,
-`priority`, and the `task-type:`, `semver:`, and `wayfinder:` labels are
-compared on their literal strings.
+`priority`, and the `task-type:` and `wayfinder:` labels are
+compared on their literal strings. `vX.Y.Z` Release-target labels are an open set
+Pickup creates as it writes one (ADR-0066), so they are not in the vocabulary.
 Labels the tracker carries outside the vocabulary are never reported, never
 edited, and never deleted; nothing is ever renamed. An unreachable or
 unauthorised tracker warns and exits non-zero.

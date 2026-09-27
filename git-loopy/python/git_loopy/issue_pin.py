@@ -38,14 +38,18 @@ from dataclasses import dataclass
 from typing import Final
 
 __all__ = [
+    "PIN_READ_BOUND",
+    "PIN_READ_REFUSED",
+    "PIN_READ_UNREAD",
+    "PIN_READS",
     "PIN_REFUSAL_UNREADABLE",
     "PIN_REFUSAL_CLOSED",
     "PIN_REFUSAL_NOT_READY_FOR_AGENT",
     "PIN_REFUSAL_NOT_AFK_READY",
-    "PIN_REFUSAL_NOT_PARALLEL_SAFE",
     "PIN_REFUSALS",
     "PinnedIssue",
     "PinRefusal",
+    "pin_live_after",
     "refuse_pin",
 ]
 
@@ -66,13 +70,6 @@ PIN_REFUSAL_NOT_READY_FOR_AGENT: Final[str] = "not_ready_for_agent"
 #: :data:`git_loopy.sources.EXCLUSION_REASONS`.
 PIN_REFUSAL_NOT_AFK_READY: Final[str] = "not_afk_ready"
 
-#: A **Parallel mode** invocation pinned an issue that is not ``parallel-safe``.
-#: Refused rather than ignored: a **Lane** Pool is ``ready-for-agent`` *and*
-#: ``parallel-safe``, so such an issue never enters it, the promotion finds
-#: nothing to promote, and the Run works the head of the order instead — the
-#: silent substitution this module exists to prevent.
-PIN_REFUSAL_NOT_PARALLEL_SAFE: Final[str] = "not_parallel_safe"
-
 #: Every reason a pin may be refused, coarsest gate first — which is also the
 #: order :func:`refuse_pin` asks them in. Closed, like
 #: :data:`git_loopy.sources.EXCLUSION_REASONS` and
@@ -83,14 +80,10 @@ PIN_REFUSALS: Final[tuple[str, ...]] = (
     PIN_REFUSAL_CLOSED,
     PIN_REFUSAL_NOT_READY_FOR_AGENT,
     PIN_REFUSAL_NOT_AFK_READY,
-    PIN_REFUSAL_NOT_PARALLEL_SAFE,
 )
 
 #: The label a pinned issue must carry to be worked at all.
 _LABEL_READY_FOR_AGENT: Final[str] = "ready-for-agent"
-
-#: The label a pinned issue must additionally carry to enter a **Lane**.
-_LABEL_PARALLEL_SAFE: Final[str] = "parallel-safe"
 
 #: The state ``gh`` reports for an issue that can still be worked.
 _STATE_OPEN: Final[str] = "OPEN"
@@ -168,12 +161,6 @@ class PinRefusal:
                 f"--issue {self.issue}: {ref} does not carry the "
                 f"`{_LABEL_READY_FOR_AGENT}` label"
             )
-        if self.reason == PIN_REFUSAL_NOT_PARALLEL_SAFE:
-            return (
-                f"--issue {self.issue}: {ref} does not carry the "
-                f"`{_LABEL_PARALLEL_SAFE}` label, which a Parallel-mode Lane "
-                "requires"
-            )
         if self.detail == "planning_document":
             return (
                 f"--issue {self.issue}: {ref} is a planning document "
@@ -191,7 +178,6 @@ def refuse_pin(
     *,
     afk_exclusion: str | None,
     number: int | None = None,
-    require_parallel_safe: bool = False,
 ) -> PinRefusal | None:
     """Why this pin cannot be honoured, or ``None`` to accept it.
 
@@ -202,7 +188,6 @@ def refuse_pin(
             than derived, so the discriminator keeps one home.
         number: The pinned number, used only when ``issue`` is ``None`` and
             there is therefore no record to read it off.
-        require_parallel_safe: ``True`` for a **Parallel mode** invocation.
 
     Returns:
         The refusal, or ``None`` when the pin stands.
@@ -221,8 +206,54 @@ def refuse_pin(
             reason=PIN_REFUSAL_NOT_AFK_READY,
             detail=afk_exclusion,
         )
-    if require_parallel_safe and _LABEL_PARALLEL_SAFE not in issue.labels:
-        return PinRefusal(
-            issue=issue.number, reason=PIN_REFUSAL_NOT_PARALLEL_SAFE
-        )
     return None
+
+
+#: A Pickup bound the Pin.
+PIN_READ_BOUND: Final[str] = "bound"
+
+#: A Pickup passed the Pin over for an answer about the Pin itself: an open
+#: blocker, a Lease held elsewhere, a refused Task type, or an authoritative
+#: read that found it no longer eligible.
+PIN_READ_REFUSED: Final[str] = "refused"
+
+#: A Pickup reached the Pin but one of its admission reads did not happen:
+#: unprovable Readiness, or a failed Lease, Dynamic-route or validation read.
+PIN_READ_UNREAD: Final[str] = "unread"
+
+PIN_READS: Final[frozenset[str]] = frozenset(
+    {PIN_READ_BOUND, PIN_READ_REFUSED, PIN_READ_UNREAD}
+)
+
+
+def pin_live_after(
+    live: bool, *, listed: bool, complete: bool, read: str | None = None
+) -> bool:
+    """Whether the **Pin** is still live after one Pickup (Wrapper contract §3.2, #644).
+
+    The first Pickup that reads the Pin spends it. A Pickup reads the Pin when
+    it binds it, passes it over for an answer about it, or completes a Pool or
+    Membership read that does not list it. A Pickup that could not read it —
+    an incomplete read without it, or an unresolved admission read — leaves it
+    live, and the next Pickup promotes it again. Once spent it stays spent.
+
+    Every Pickup path, serial or Lane, in every Runner member asks this one
+    question, and ``pin-duration.json`` pins its answers.
+
+    Args:
+        live: Whether the Pin was live before this Pickup.
+        listed: Whether this Pickup's Pool or Membership read listed the Pin.
+        complete: Whether that read was complete (§2.1).
+        read: What the Pickup did with a listed Pin — one of
+            :data:`PIN_READS` — or ``None`` when it never reached it.
+
+    Raises:
+        ValueError: If ``read`` is not in :data:`PIN_READS`.
+    """
+    if read is not None and read not in PIN_READS:
+        raise ValueError(f"unknown Pin read: {read!r}")
+    if not live:
+        return False
+    if not listed:
+        return not complete
+    return read is None or read == PIN_READ_UNREAD

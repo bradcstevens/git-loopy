@@ -26,8 +26,11 @@ Precedence rules (ADR-0006), applied key by key:
   overridden by an absent CLI flag. To remove an env baseline, unset
   the env var or use ``-E`` semantics in the wrapper script.
 * Per-run-only knobs (the positional ``<max-iterations>``, ``-v`` verbosity,
-  ``--no-reasoning``, ``--parallel``, ``GIT_LOOPY_PRICING_FILE``) are NEVER read
-  from a persisted ``config.toml`` — only from flags / env.
+  ``--no-reasoning``, ``GIT_LOOPY_PRICING_FILE``) are NEVER read
+  from a persisted ``config.toml`` — only from flags / env. The retired mode
+  switches (``--parallel``, ``--interactive``, ``--no-interactive``, and
+  ``GIT_LOOPY_MAX_PARALLEL`` / ``GIT_LOOPY_INTERACTIVE`` /
+  ``GIT_LOOPY_LANE_ADAPT``) are refused at preflight, not read.
 
 CLI surface — ``git-loopy`` is the single, canonical entrypoint (ADR-0007; the
 old bash launcher is retired):
@@ -207,6 +210,16 @@ _COMMAND_SPECS = (
         "runs",
         "Run control",
         "List this clone's Runs and whether each one is still running.",
+    ),
+    _CommandSpec(
+        "attach",
+        "Run control",
+        "Observe one Run without starting or owning it.",
+    ),
+    _CommandSpec(
+        "stop",
+        "Run control",
+        "Request an acknowledged two-stage Stop of one live Run.",
     ),
     _CommandSpec(
         "labels",
@@ -606,8 +619,9 @@ def build_parser() -> argparse.ArgumentParser:
             "every concurrent run at the same issue. It bypasses order and "
             "nothing else -- a pinned issue that is closed, unreadable, lacks "
             "ready-for-agent, or fails the AFK-ready body discriminator fails "
-            "the invocation rather than falling back to normal order. May be "
-            "given at most once."
+            "the invocation rather than falling back to normal order. The "
+            "first Pickup that reads the pin spends it, and the issue then "
+            "rejoins the order like any other. May be given at most once."
         ),
     )
     parser.add_argument(
@@ -769,8 +783,8 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="git-loopy",
         description=(
-            "git-loopy subcommands (setup, Config, Skill management, Sweep, "
-            "Calibration, and installation identity)."
+            "git-loopy subcommands (setup, Config, Skill management, Run control, "
+            "Sweep, Calibration, and installation identity)."
         ),
     )
     sub = parser.add_subparsers(
@@ -1167,7 +1181,107 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "guessed. Another clone of the same repository is a separate "
             "control domain and is never listed. Listing observes only: it "
             "starts no work, stops nothing, and reclaims nothing (see "
-            "`git-loopy sweep` for that)."
+            "`git-loopy sweep` for that). `git-loopy attach` and "
+            "`git-loopy stop` name a Run through this same listing."
+        ),
+    )
+
+    # Importing attachcmd here would pull the renderer into every subcommand's
+    # dispatch. The handler imports it. Help stays on this parser alone.
+    attach = _add_command(
+        sub,
+        "attach",
+        description=(
+            "Observe one Run in this clone without starting, resuming, or "
+            "owning it. The Run identity is required; this command never "
+            "guesses the newest Run, and it never reaches another clone or a "
+            "machine-wide scan. Reattaching, or attaching from a second "
+            "terminal, is this same command. There is no reconnect operation. "
+            "Navigation stays in this client. Attach does not request a Stop "
+            "and does not open a channel into an Execution host, whether that "
+            "host is local or GitHub Actions.\n\n"
+            "A usable Dashboard helper draws the Run. `q` is Detach: this "
+            "client only, the terminal returns to the shell, and the worker "
+            "and other clients are unchanged. A missing or unusable helper is "
+            "diagnosed, and this client stays attached through the line "
+            "printer. That fallback is still Attach, not Detach and not Stop. "
+            "Interrupt the line printer to Detach.\n\n"
+            "A Dashboard fault after attachment restores the terminal, reports "
+            "the fault, and continues through the same line printer without "
+            "restarting the Dashboard. That is not Detach. It does not change "
+            "the Run's Events, outcome, or exit code. A lost worker is not "
+            "resumed. A trace that has no further bytes yet does not end "
+            "observation of a live Run. Liveness this host cannot prove is "
+            "reported as unknown, not as a finished Run and not as a live one.\n\n"
+            "Stop is a different command (`git-loopy stop`). Attach does not "
+            "write one."
+        ),
+    )
+    attach.add_argument(
+        "run_id",
+        metavar="RUN-ID",
+        help=(
+            "The Run to observe. The full identity, or an unambiguous leading "
+            "part of one. `git-loopy runs` lists this clone's Runs."
+        ),
+    )
+
+    # The numeric default lives in stopcmd. Importing it here would pull the
+    # trace parser, and through it the SDK, into every subcommand's dispatch.
+    # The help test keeps this literal aligned with that constant.
+    stop = _add_command(
+        sub,
+        "stop",
+        description=(
+            "Request a two-stage Wind-down of one live Run in this clone. The "
+            "Run identity is required; this command never guesses the newest "
+            "Run, and it never reaches another clone or a machine-wide scan. "
+            "It writes one Stop request beside that Run's control artifact and "
+            "returns success only after the Run acknowledges the requested "
+            "stage. Acknowledgment is not a finished Run: draining work may "
+            "still be in progress, and this command does not wait for it. A "
+            "timeout is unconfirmed, not success, and not a claim that the "
+            "Run stopped.\n\n"
+            "The first distinct request asks for drain. A later `git-loopy "
+            "stop` of the same Run, with a new request identity, is a "
+            "deliberate second Stop and asks for cancellation. A further "
+            "request adds no harder stage. Cancellation is requested, not "
+            "awaited. It does not resume workers, discard salvaged local or "
+            "remote contributions, or interrupt a publish transaction. Pass "
+            "`--request-id` with the id a previous invocation printed to "
+            "redeliver that one request; a redelivery does not escalate. No "
+            "Dashboard helper and no remote-control service is involved: the "
+            "Run reads the request itself, on either Execution host, and is "
+            "the only party that records the Wind-down."
+        ),
+    )
+    stop.add_argument(
+        "run_id",
+        metavar="RUN-ID",
+        help=(
+            "The Run to stop. The full identity, or an unambiguous leading "
+            "part of one. `git-loopy runs` lists this clone's Runs."
+        ),
+    )
+    stop.add_argument(
+        "--request-id",
+        default=None,
+        help=(
+            "Redeliver this logical request instead of starting a new Stop. "
+            "Use the id a previous invocation printed. A redelivery cannot "
+            "escalate and cannot duplicate a latched transition. Omit it to "
+            "make a deliberate further Stop."
+        ),
+    )
+    stop.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help=(
+            "Seconds to wait for the Run to acknowledge the requested stage "
+            "(default 10). Elapsing the bound is "
+            "unconfirmed, not success, and does not wait for draining work "
+            "to finish."
         ),
     )
 
@@ -1503,6 +1617,48 @@ def _run_runs(_args: argparse.Namespace) -> int:
         print(f"git-loopy: runs requires a git repository: {exc}", file=sys.stderr)
         return 1
     return runscmd.run_runs(repo_root=repo_root)
+
+
+def _run_attach(args: argparse.Namespace) -> int:
+    """Dispatch the public Attach command.
+
+    Same domain as ``runs`` and ``stop``: the invoking clone, never a
+    machine-wide search. The command observes. It does not start a worker
+    and it does not emit a Wind-down (ADR-0058).
+    """
+    from git_loopy import attachcmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: attach requires a git repository: {exc}", file=sys.stderr)
+        return 1
+    return attachcmd.run_attach(repo_root=repo_root, run_id=args.run_id)
+
+
+def _run_stop(args: argparse.Namespace) -> int:
+    """Dispatch the public Stop command.
+
+    Same domain as ``runs``: the invoking clone, never a machine-wide search.
+    The command waits for the Run's own acknowledgment; it does not emit the
+    Wind-down itself (ADR-0058).
+    """
+    from git_loopy import stopcmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: stop requires a git repository: {exc}", file=sys.stderr)
+        return 1
+    timeout = (
+        stopcmd.DEFAULT_STOP_ACK_TIMEOUT if args.timeout is None else args.timeout
+    )
+    return stopcmd.run_stop(
+        repo_root=repo_root,
+        run_id=args.run_id,
+        request_id=args.request_id,
+        timeout=timeout,
+    )
 
 
 def _run_info(
@@ -3194,6 +3350,15 @@ def main(argv: list[str] | None = None) -> int:
         build_parser().print_help()
         return 0
 
+    # Retired mode variables are a preflight refusal on every invocation that
+    # would otherwise accept them and ignore them. ``--version`` stays exempt:
+    # it exits before configuration, discovery, or services.
+    if "--version" not in argv:
+        removed_env_error = _removed_mode_env_error(os.environ)
+        if removed_env_error is not None:
+            print(f"git-loopy: error: {removed_env_error}", file=sys.stderr)
+            return 1
+
     # Pre-dispatch on the first token: a reserved subcommand
     # routes to its own parser, so the bare run's optional positional
     # <max-iterations> can coexist with subcommands (argparse cannot host both
@@ -3227,6 +3392,10 @@ def main(argv: list[str] | None = None) -> int:
             return _run_sweep(sub_args)
         if sub_args.command == "runs":
             return _run_runs(sub_args)
+        if sub_args.command == "stop":
+            return _run_stop(sub_args)
+        if sub_args.command == "attach":
+            return _run_attach(sub_args)
         if sub_args.command == "config":
             return _run_config(sub_args)
         raise AssertionError(f"undispatched command {sub_args.command!r}")
@@ -3255,11 +3424,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"git-loopy {release_version}")
         return 0
-
-    removed_env_error = _removed_mode_env_error(os.environ)
-    if removed_env_error is not None:
-        print(f"git-loopy: error: {removed_env_error}", file=sys.stderr)
-        return 1
 
     # Early git-root resolution so cwd-not-a-repo crashes with a clean
     # message before we pay the cost of importing the loop module
@@ -3400,11 +3564,10 @@ def main(argv: list[str] | None = None) -> int:
     elif startup_state is SkillPolicyStartupState.LEGACY:
         _warn(_LEGACY_SKILL_POLICY_WARNING)
 
-    # Interactive path (issue #23, ADR-0001): launch the loop as a peer of a
-    # Textual app observing a LiveRunState. The driver module imports Textual,
-    # so it is reached only once `_should_run_interactive` has confirmed the
-    # interactive path. Every non-interactive condition keeps today's
-    # exact line-printer behavior (driver left as None).
+    # A terminal Run detaches its worker and attaches a client (ADR-0058).
+    # The picker, when requested, runs in this process before that detach.
+    # A non-terminal Run stays here as the line printer and never spawns a
+    # client.
     select_model = _should_select_model(args)
     if _should_run_interactive():
         return asyncio.run(

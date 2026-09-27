@@ -23,17 +23,19 @@ from git_loopy import release_publication
 from git_loopy.gate import AgentsMdGateRunner
 from git_loopy.release_publication import (
     PublishedRelease,
+    ReleaseClaim,
     ReleasePublicationError,
     ReleaseService,
     ReleaseServiceError,
     SubprocessReleaseService,
+    ensure_source_release,
     publish_release,
     release_title,
 )
 from git_loopy.release_rehearsal import (
     SOURCE_ONLY,
     VerifiedPublicationInput,
-    major_bump_promotion,
+    stable_commit_promotion,
     rehearse_promotion,
 )
 from git_loopy.source_release import write_source_archive
@@ -67,7 +69,7 @@ def proved(tmp_path_factory: pytest.TempPathFactory) -> Proved:
     trunk = trunk_repository(root / "trunk", VERSION)
     publication_input = rehearse_promotion(
         trunk,
-        major_bump_promotion(),
+        stable_commit_promotion(),
         workspace=root / "candidate",
         archive_output=root / "git-loopy-source.tar",
         gate_runner=GATE_RUNNER,
@@ -821,9 +823,9 @@ def test_a_trunk_that_moved_on_does_not_change_what_gets_published(
 ) -> None:
     """The next Iteration's Release-line advance is not a later candidate."""
     remote, checkout = _remote_checkout(proved, tmp_path)
-    write_release_metadata(checkout, "0.12.0-dev.1")
-    (checkout / "docs/releases/v0.12.0-dev.1.md").write_text(
-        "# git-loopy 0.12.0-dev.1\n\nThe line moved on.\n", encoding="utf-8"
+    write_release_metadata(checkout, "0.12.0-alpha.1")
+    (checkout / "docs/releases/v0.12.0-alpha.1.md").write_text(
+        "# git-loopy 0.12.0-alpha.1\n\nThe line moved on.\n", encoding="utf-8"
     )
     git(checkout, "add", ".")
     git(checkout, "commit", "-qm", "chore(release): advance Release line")
@@ -1541,15 +1543,61 @@ def test_a_retry_over_the_production_host_finding_matching_state_writes_nothing(
     assert _remote_refs(remote) == published
 
 
-def test_this_boundary_is_not_yet_a_way_to_publish_without_the_full_proof() -> None:
-    """A tripwire, not a feature: publication has no entry point of its own.
+def test_an_already_public_tag_reconciles_its_release_and_never_creates_a_second(
+    tmp_path: Path,
+) -> None:
+    """The tag-triggered follower accepts a match and refuses a disagreement."""
+    claim = ReleaseClaim(
+        tag=TAG,
+        version=VERSION,
+        prerelease=False,
+        notes_path=Path(f"docs/releases/v{VERSION}.md"),
+    )
+    notes = b"# git-loopy 0.11.0\n\nCommitted notes.\n"
+    matching = FakeReleaseService(
+        releases={
+            TAG: PublishedRelease(
+                tag=TAG,
+                name=release_title(VERSION),
+                body=notes.decode(),
+                prerelease=False,
+                draft=False,
+            )
+        }
+    )
 
-    ADR-0059 requires that a stable Release is published only behind the whole
-    pre-tag proof *and* a bounded real-host smoke, and that smoke does not exist
-    yet. A module-level CLI or a workflow step reaching in here before the
-    composed Promotion exists would be exactly the shortcut the ADR forbids, so
-    the absence is asserted rather than left to intention. The composed slice
-    replaces this test with its own wiring.
+    assert ensure_source_release(claim, notes, matching) is False
+    assert matching.create_calls == []
+
+    absent = FakeReleaseService()
+    assert ensure_source_release(claim, notes, absent) is True
+    assert absent.releases[TAG].assets == ()
+    assert absent.releases[TAG].prerelease is False
+
+    mismatched = FakeReleaseService(
+        releases={
+            TAG: PublishedRelease(
+                tag=TAG,
+                name="git-loopy something-else",
+                body=notes.decode(),
+                prerelease=False,
+                draft=False,
+            )
+        }
+    )
+    with pytest.raises(ReleasePublicationError, match="title"):
+        ensure_source_release(claim, notes, mismatched)
+    assert mismatched.create_calls == []
+
+
+def test_this_boundary_is_not_a_way_to_publish_without_the_full_proof() -> None:
+    """Publication still has no command line of its own.
+
+    The composed Promotion (``git_loopy.release_promotion``) is the only entry
+    that may expose a tag, and only after the rehearsal and a passed smoke.
+    A module-level CLI here would be the shortcut ADR-0059 forbids. The
+    tag-triggered follower reconciles an already-public tag through
+    ``source_release --ensure-release``; it does not reach this module by name.
     """
     assert not hasattr(release_publication, "main")
     workflows = REPOSITORY_ROOT / ".github/workflows"

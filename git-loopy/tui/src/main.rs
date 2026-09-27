@@ -11,9 +11,7 @@
 //! decides *where* the frames go.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, IsTerminal, Write};
-#[cfg(unix)]
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{self, BufRead, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,6 +38,20 @@ use ratatui::Terminal;
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{
+    GetLastError, ERROR_LOCK_VIOLATION, ERROR_NOT_LOCKED, HANDLE,
+};
+#[cfg(all(windows, test))]
+use windows_sys::Win32::Storage::FileSystem::LOCKFILE_EXCLUSIVE_LOCK;
+#[cfg(windows)]
+use windows_sys::Win32::Storage::FileSystem::{
+    LockFileEx, UnlockFileEx, LOCKFILE_FAIL_IMMEDIATELY,
+};
+#[cfg(windows)]
+use windows_sys::Win32::System::IO::OVERLAPPED;
 
 const USAGE: &str = "\
 usage: git-loopy-tui [options] < events.jsonl
@@ -85,7 +97,8 @@ controls (--render, --attach):
   drag the Activity header  size the Activity band
   click it, or a            collapse the band to its header, or restore it
   shift+up, shift+down      size it a row at a time, with no mouse at all
-  q, ctrl-c                 hand the terminal back and stop the client
+  s                         request Stop of the attached Run; press again to escalate
+  q, ctrl-c                 hand the terminal back; the Run keeps going
 
 A Run that ends empty_pool, all_blocked or all_skipped without binding an
 issue keeps the Dashboard up with a notice saying why, until q. The launching client sets GIT_LOOPY_TUI_REPOSITORY to the
@@ -673,7 +686,6 @@ const TICK: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_millis(100);
 
 /// How long attach mode waits before checking whether its trace grew.
-#[cfg(unix)]
 const ATTACH_POLL: Duration = Duration::from_millis(100);
 
 /// Draw the live Dashboard on the controlling terminal until end of input.
@@ -695,7 +707,7 @@ fn render(options: &Options) -> Result<(), String> {
     let pending = Arc::new(Pending::new(INPUT_CAPACITY));
     let stopping = Arc::new(AtomicBool::new(false));
     read_the_trace(Arc::clone(&pending));
-    read_the_keyboard(Arc::clone(&pending), Arc::clone(&stopping));
+    read_the_keyboard(Arc::clone(&pending), Arc::clone(&stopping), None);
 
     let outcome = drive_dashboard(&mut surface, &mut session, Pending::drain(&pending))
         .map_err(|error| format!("the presentation input failed: {error}"));
@@ -703,7 +715,6 @@ fn render(options: &Options) -> Result<(), String> {
     outcome
 }
 
-#[cfg(unix)]
 fn attach(options: &Options) -> Result<(), String> {
     install_restoration_hook();
     let mut surface = CrosstermSurface::open(terminal_capabilities())?;
@@ -719,19 +730,18 @@ fn attach(options: &Options) -> Result<(), String> {
     read_the_attached_trace(
         Arc::clone(&pending),
         Arc::clone(&stopping),
-        AttachFollower::new(paths.trace, paths.control),
+        AttachFollower::new(paths.trace, paths.control.clone()),
     );
-    read_the_keyboard(Arc::clone(&pending), Arc::clone(&stopping));
+    read_the_keyboard(
+        Arc::clone(&pending),
+        Arc::clone(&stopping),
+        Some(paths.control),
+    );
 
     let outcome = drive_dashboard(&mut surface, &mut session, Pending::drain(&pending))
         .map_err(|error| format!("the presentation input failed: {error}"));
     stopping.store(true, Ordering::Relaxed);
     outcome
-}
-
-#[cfg(not(unix))]
-fn attach(_options: &Options) -> Result<(), String> {
-    Err("attach mode is not supported on this platform".to_string())
 }
 
 /// The bounded buffer, plus the one condition both sides wait on.
@@ -813,7 +823,6 @@ fn read_the_trace(pending: Arc<Pending>) {
 }
 
 /// The local trace follower attach mode drives from.
-#[cfg(unix)]
 struct AttachFollower {
     trace: PathBuf,
     control: PathBuf,
@@ -822,13 +831,11 @@ struct AttachFollower {
     finished: bool,
 }
 
-#[cfg(unix)]
 struct AttachPoll {
     lines: Vec<String>,
     finished: bool,
 }
 
-#[cfg(unix)]
 impl AttachFollower {
     fn new(trace: PathBuf, control: PathBuf) -> Self {
         Self {
@@ -894,7 +901,6 @@ impl AttachFollower {
 }
 
 /// The dedicated attach-mode trace reader.
-#[cfg(unix)]
 fn read_the_attached_trace(
     pending: Arc<Pending>,
     stopping: Arc<AtomicBool>,
@@ -926,9 +932,147 @@ fn read_the_attached_trace(
     });
 }
 
-#[cfg(unix)]
 fn is_run_end_line(line: &str) -> bool {
     matches!(Event::from_jsonl_line(line), Some(event) if event.kind == "wrapper.run.end")
+}
+
+/// Where an attached client writes a Stop, beside the control artifact.
+///
+/// The artifact itself stays the liveness lock. This directory is the one
+/// verb that crosses into the Run, and it is the same layout the Python
+/// Runner reads: `<control-path>.stops/<request-id>` containing
+/// `{"verb":"stop","seq":N}`.
+fn stops_directory(control: &Path) -> PathBuf {
+    let mut name = control.as_os_str().to_os_string();
+    name.push(".stops");
+    PathBuf::from(name)
+}
+
+/// Link one logical Stop into the request directory.
+///
+/// `Ok(false)` is redelivery of an identity already on disk, not a second
+/// Stop. A failed write leaves no complete request, so the caller retries
+/// the same identity.
+fn submit_stop(control: &Path, request_id: &str, seq: i64) -> io::Result<bool> {
+    let directory = stops_directory(control);
+    std::fs::create_dir_all(&directory)?;
+    let target = directory.join(request_id);
+    if target.is_file() {
+        return Ok(false);
+    }
+    let temporary = directory.join(format!(".{request_id}.tmp"));
+    let body = serde_json::json!({"verb": "stop", "seq": seq});
+    {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temporary)?;
+        serde_json::to_writer(&mut file, &body)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+    }
+    match std::fs::hard_link(&temporary, &target) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&temporary);
+            Ok(true)
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&temporary);
+            Ok(false)
+        }
+        Err(_) if target.is_file() => {
+            let _ = std::fs::remove_file(&temporary);
+            Ok(false)
+        }
+        Err(error) => {
+            // `hard_link` can be refused on a filesystem that still accepts a
+            // rename. Rename only when the name is still absent, so a
+            // concurrent client cannot be overwritten.
+            if target.exists() {
+                let _ = std::fs::remove_file(&temporary);
+                return Ok(false);
+            }
+            std::fs::rename(&temporary, &target)
+                .map(|()| true)
+                .map_err(|rename| {
+                    let _ = std::fs::remove_file(&temporary);
+                    if target.is_file() {
+                        return io::Error::new(io::ErrorKind::AlreadyExists, error);
+                    }
+                    rename
+                })
+        }
+    }
+}
+
+/// One attached client's Stop gesture.
+///
+/// A keypress that reached disk is spent: the next press is a deliberate
+/// further Stop and takes a new identity. A keypress that did not reach disk
+/// is retried as the same identity, so automatic redelivery cannot escalate.
+struct StopGesture {
+    last_id: Option<String>,
+    delivered: bool,
+    ids: u64,
+}
+
+impl StopGesture {
+    fn new() -> Self {
+        Self {
+            last_id: None,
+            delivered: true,
+            ids: 0,
+        }
+    }
+
+    fn request_id(&mut self) -> String {
+        if !self.delivered {
+            return self
+                .last_id
+                .clone()
+                .expect("a failed Stop keeps the identity it already chose");
+        }
+        self.ids += 1;
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or(0);
+        let id = format!("s{nanos:x}{:x}", self.ids);
+        self.last_id = Some(id.clone());
+        self.delivered = false;
+        id
+    }
+
+    fn submit(&mut self, control: &Path) -> io::Result<bool> {
+        let id = self.request_id();
+        let seq = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| i64::try_from(since.as_nanos()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        match submit_stop(control, &id, seq) {
+            Ok(created) => {
+                self.delivered = true;
+                Ok(created)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// What one key does to the client, and whether it crosses into the Run.
+enum KeyEffect {
+    /// Local to this client. Never written anywhere.
+    Navigate(Key),
+    /// The one verb that crosses: a Stop request, not a navigation input.
+    Stop,
+}
+
+fn key_effect(code: KeyCode, modifiers: KeyModifiers) -> Option<KeyEffect> {
+    if modifiers.is_empty() && matches!(code, KeyCode::Char('s')) {
+        return Some(KeyEffect::Stop);
+    }
+    intent(code, modifiers).map(KeyEffect::Navigate)
 }
 
 /// The dedicated terminal reader.
@@ -937,8 +1081,13 @@ fn is_run_end_line(line: &str) -> bool {
 /// the Orchestrator's pipe, and the two must never contend for a byte. It reads
 /// the pointer as well as the keyboard, because both arrive on the one stream a
 /// terminal in mouse-reporting mode multiplexes them onto.
-fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>) {
+///
+/// `control` is the attached Run's control artifact. Without one, Stop has
+/// nowhere to go and is ignored — it does not become Quit. Navigation is never
+/// written to that artifact.
+fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>, control: Option<PathBuf>) {
     std::thread::spawn(move || {
+        let mut stop = StopGesture::new();
         while !stopping.load(Ordering::Relaxed) {
             match event::poll(POLL) {
                 Ok(true) => {}
@@ -947,8 +1096,14 @@ fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>) {
             }
             match event::read() {
                 Ok(TerminalEvent::Key(key)) if key.kind != KeyEventKind::Release => {
-                    if let Some(intent) = intent(key.code, key.modifiers) {
-                        pending.offer(Input::Key(intent));
+                    match key_effect(key.code, key.modifiers) {
+                        Some(KeyEffect::Navigate(intent)) => pending.offer(Input::Key(intent)),
+                        Some(KeyEffect::Stop) => {
+                            if let Some(control) = control.as_ref() {
+                                let _ = stop.submit(control);
+                            }
+                        }
+                        None => {}
                     }
                 }
                 Ok(TerminalEvent::Mouse(mouse)) => {
@@ -1044,16 +1199,22 @@ fn host_instant() -> Timestamp {
     )
 }
 
-#[cfg(unix)]
+/// Whether the Run still holds the control artifact's advisory lock.
+///
+/// A missing artifact is a dead Run. The probe must not itself look like the
+/// owner. POSIX takes a non-blocking exclusive `flock` and releases it.
+/// Windows takes a non-blocking *shared* `LockFileEx` of the first byte — the
+/// same range the Runner holds exclusively — so two attached clients cannot
+/// mistake each other for the Run.
 fn control_owner_alive(path: &Path) -> io::Result<bool> {
     let file = match OpenOptions::new().read(true).write(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error),
     };
-    match lock_nonblocking(&file) {
+    match probe_control_lock(&file) {
         Ok(()) => {
-            unlock(&file)?;
+            release_control_probe(&file)?;
             Ok(false)
         }
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(true),
@@ -1062,8 +1223,13 @@ fn control_owner_alive(path: &Path) -> io::Result<bool> {
 }
 
 #[cfg(unix)]
-fn lock_nonblocking(file: &File) -> io::Result<()> {
+fn probe_control_lock(file: &File) -> io::Result<()> {
     lock(file.as_raw_fd(), LOCK_EX | LOCK_NB)
+}
+
+#[cfg(unix)]
+fn release_control_probe(file: &File) -> io::Result<()> {
+    unlock(file)
 }
 
 #[cfg(unix)]
@@ -1092,12 +1258,82 @@ unsafe extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
 }
 
-#[cfg(all(test, unix))]
+/// The byte the Runner locks. Windows locks are ranges, not whole files, so a
+/// probe of any other range would miss a live Run.
+#[cfg(windows)]
+const CONTROL_LOCK_LENGTH: u32 = 1;
+
+#[cfg(windows)]
+fn probe_control_lock(file: &File) -> io::Result<()> {
+    lock_control_region(file, LOCKFILE_FAIL_IMMEDIATELY)
+}
+
+#[cfg(windows)]
+fn release_control_probe(file: &File) -> io::Result<()> {
+    unlock_control_region(file)
+}
+
+#[cfg(all(windows, test))]
+fn hold_control_lock(file: &File) -> io::Result<()> {
+    lock_control_region(file, LOCKFILE_EXCLUSIVE_LOCK)
+}
+
+#[cfg(windows)]
+fn lock_control_region(file: &File, flags: u32) -> io::Result<()> {
+    let mut overlapped = OVERLAPPED::default();
+    // The handle is a live Rust file, and `overlapped` stays valid for this
+    // synchronous call. The file is not opened for overlapped I/O, so the
+    // structure only carries the offset.
+    let (locked, code) = unsafe {
+        let locked = LockFileEx(
+            file.as_raw_handle() as HANDLE,
+            flags,
+            0,
+            CONTROL_LOCK_LENGTH,
+            0,
+            &mut overlapped,
+        );
+        let code = if locked == 0 { GetLastError() } else { 0 };
+        (locked, code)
+    };
+    if locked != 0 {
+        return Ok(());
+    }
+    if code == ERROR_LOCK_VIOLATION {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "the control lock is held",
+        ));
+    }
+    Err(io::Error::from_raw_os_error(code as i32))
+}
+
+#[cfg(windows)]
+fn unlock_control_region(file: &File) -> io::Result<()> {
+    let mut overlapped = OVERLAPPED::default();
+    let (unlocked, code) = unsafe {
+        let unlocked = UnlockFileEx(
+            file.as_raw_handle() as HANDLE,
+            0,
+            CONTROL_LOCK_LENGTH,
+            0,
+            &mut overlapped,
+        );
+        let code = if unlocked == 0 { GetLastError() } else { 0 };
+        (unlocked, code)
+    };
+    if unlocked != 0 || code == ERROR_NOT_LOCKED {
+        return Ok(());
+    }
+    Err(io::Error::from_raw_os_error(code as i32))
+}
+
+#[cfg(test)]
 struct ControlLock {
     file: File,
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 impl ControlLock {
     fn acquire(path: &Path) -> io::Result<Self> {
         if let Some(parent) = path.parent() {
@@ -1109,15 +1345,28 @@ impl ControlLock {
             .create(true)
             .truncate(false)
             .open(path)?;
-        lock(file.as_raw_fd(), LOCK_EX)?;
+        hold_for_test(&file)?;
         Ok(Self { file })
     }
 }
 
 #[cfg(all(test, unix))]
+fn hold_for_test(file: &File) -> io::Result<()> {
+    lock(file.as_raw_fd(), LOCK_EX)
+}
+
+#[cfg(all(test, windows))]
+fn hold_for_test(file: &File) -> io::Result<()> {
+    hold_control_lock(file)
+}
+
+#[cfg(test)]
 impl Drop for ControlLock {
     fn drop(&mut self) {
+        #[cfg(unix)]
         let _ = unlock(&self.file);
+        #[cfg(windows)]
+        let _ = unlock_control_region(&self.file);
     }
 }
 
@@ -1272,17 +1521,12 @@ const CONTROLLING_TERMINAL: &str = "CONOUT$";
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     use std::fs;
-    #[cfg(unix)]
     use std::io::Write;
-    #[cfg(unix)]
     use std::path::Path;
     use std::path::PathBuf;
-    #[cfg(unix)]
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
-    #[cfg(unix)]
     static UNIQUE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
@@ -1367,11 +1611,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn navigation_stays_local_and_only_stop_crosses() {
+        for code in [
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('q'),
+            KeyCode::Up,
+            KeyCode::Enter,
+        ] {
+            assert!(
+                !matches!(key_effect(code, KeyModifiers::NONE), Some(KeyEffect::Stop)),
+                "navigation must not be a Stop"
+            );
+        }
+        assert!(matches!(
+            key_effect(KeyCode::Char('s'), KeyModifiers::NONE),
+            Some(KeyEffect::Stop)
+        ));
+        assert!(intent(KeyCode::Char('s'), KeyModifiers::NONE).is_none());
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("git-loopy-stop-{}-{nanos}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch dir");
+        let control = root.join("run.control");
+        std::fs::write(&control, b"").expect("control artifact");
+
+        let mut gesture = StopGesture::new();
+        assert!(gesture.submit(&control).expect("first Stop"));
+        let first = std::fs::read_dir(stops_directory(&control))
+            .expect("stops dir")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(first.len(), 1, "one logical Stop");
+
+        assert!(gesture.submit(&control).expect("second Stop"));
+        let names = std::fs::read_dir(stops_directory(&control))
+            .expect("stops dir")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(names.len(), 2, "a deliberate second Stop is a new identity");
+
+        let mut retry = StopGesture::new();
+        let id = retry.request_id();
+        assert_eq!(
+            retry.request_id(),
+            id,
+            "a failed write retries the same identity"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn invocation(arguments: &[&str]) -> Invocation {
         parse(arguments.iter().map(|argument| argument.to_string())).expect("the arguments parse")
     }
 
-    #[cfg(unix)]
     fn test_artifact_dir(name: &str) -> PathBuf {
         let unique = UNIQUE.fetch_add(1, AtomicOrdering::Relaxed);
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1383,7 +1682,6 @@ mod tests {
         path
     }
 
-    #[cfg(unix)]
     fn append(path: &Path, text: &str) {
         let mut file = OpenOptions::new()
             .create(true)
@@ -1429,7 +1727,6 @@ mod tests {
         assert!(error.contains("--control"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn attach_mode_replays_existing_lines_then_waits_for_more_until_the_run_ends() {
         let directory = test_artifact_dir("run-end");
@@ -1482,7 +1779,6 @@ mod tests {
         assert!(fifth.lines.is_empty() && fifth.finished);
     }
 
-    #[cfg(unix)]
     #[test]
     fn attach_mode_stops_when_the_control_lock_releases() {
         let directory = test_artifact_dir("control-release");

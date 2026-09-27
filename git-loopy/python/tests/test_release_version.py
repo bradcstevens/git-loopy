@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import stat
 import subprocess
 import sys
@@ -263,9 +264,13 @@ def test_no_fixture_other_than_release_version_contains_live_release_version() -
     )
 
 
-def _write_release_distribution(root: Path, version: str = "1.2.3-dev.4") -> None:
+def _write_release_distribution(root: Path, version: str = "1.2.3-alpha.4") -> None:
     _write_repository_metadata(root, version)
-    python_version = version.replace("-dev.", ".dev")
+    python_version = re.sub(
+        r"-(alpha|beta|rc)\.",
+        lambda stage: {"alpha": "a", "beta": "b", "rc": "rc"}[stage.group(1)],
+        version,
+    )
     (root / "git-loopy/python/uv.lock").write_text(
         '\n'.join(
             (
@@ -328,31 +333,31 @@ def test_release_writer_advances_all_distribution_copies(tmp_path: Path) -> None
         if path.is_file()
     }
 
-    write_repository_release_version(tmp_path, "2.3.4-dev.5")
+    write_repository_release_version(tmp_path, "2.3.4-alpha.5")
 
     assert validate_repository_release_version(
-        tmp_path, publication_version="2.3.4-dev.5"
-    ) == "2.3.4-dev.5"
+        tmp_path, publication_version="2.3.4-alpha.5"
+    ) == "2.3.4-alpha.5"
     assert (tmp_path / "git-loopy/python/uv.lock").read_text(encoding="utf-8") == (
-        '[[package]]\nname = "git-loopy"\nversion = "2.3.4.dev5"\n'
+        '[[package]]\nname = "git-loopy"\nversion = "2.3.4a5"\n'
         'source = { editable = "." }\n'
     )
     assert (tmp_path / "git-loopy/tui/Cargo.toml").read_text(encoding="utf-8") == (
-        '[package]\nname = "git-loopy-tui"\nversion = "2.3.4-dev.5"\n'
+        '[package]\nname = "git-loopy-tui"\nversion = "2.3.4-alpha.5"\n'
     )
     assert (tmp_path / "git-loopy/tui/Cargo.lock").read_text(encoding="utf-8") == (
-        '[[package]]\nname = "git-loopy-tui"\nversion = "2.3.4-dev.5"\n'
+        '[[package]]\nname = "git-loopy-tui"\nversion = "2.3.4-alpha.5"\n'
     )
     assert (tmp_path / "git-loopy/tui/README.md").read_text(encoding="utf-8") == (
-        '{"name": "git-loopy-tui", "version": "2.3.4-dev.5"}\n'
+        '{"name": "git-loopy-tui", "version": "2.3.4-alpha.5"}\n'
     )
     assert json.loads(
         (tmp_path / "git-loopy/conformance/release-version.json").read_text(
             encoding="utf-8"
         )
     ) == {
-        "expected_release_version": "2.3.4-dev.5",
-        "expected_python_distribution_version": "2.3.4.dev5",
+        "expected_release_version": "2.3.4-alpha.5",
+        "expected_python_distribution_version": "2.3.4a5",
         "fixture": "unchanged",
     }
     assert (tmp_path / "git-loopy/conformance/other.json").read_text(
@@ -392,14 +397,14 @@ def test_release_writer_promotes_the_live_fixture_with_the_distribution(
         "[]",
         "{}",
         '{"expected_release_version": 1, '
-        '"expected_python_distribution_version": "1.2.3.dev4"}',
+        '"expected_python_distribution_version": "1.2.3a4"}',
         '{"expected_release_version": "9.0.0", '
-        '"expected_python_distribution_version": "1.2.3.dev4"}',
-        '{"expected_release_version": "1.2.3-dev.4", '
+        '"expected_python_distribution_version": "1.2.3a4"}',
+        '{"expected_release_version": "1.2.3-alpha.4", '
         '"expected_python_distribution_version": "9.0.0"}',
         '{"expected_release_version": 1, '
-        '"expected_release_version": "1.2.3-dev.4", '
-        '"expected_python_distribution_version": "1.2.3.dev4"}',
+        '"expected_release_version": "1.2.3-alpha.4", '
+        '"expected_python_distribution_version": "1.2.3a4"}',
     ],
 )
 def test_release_writer_refuses_invalid_fixture_without_touching_distribution(
@@ -416,7 +421,7 @@ def test_release_writer_refuses_invalid_fixture_without_touching_distribution(
     }
 
     with pytest.raises(ReleaseVersionError, match="Release fixture"):
-        write_repository_release_version(tmp_path, "2.3.4-dev.5")
+        write_repository_release_version(tmp_path, "2.3.4-alpha.5")
 
     assert {
         path.relative_to(tmp_path): path.read_bytes()
@@ -425,9 +430,9 @@ def test_release_writer_refuses_invalid_fixture_without_touching_distribution(
     } == before
 
 
-def test_release_line_reader_continues_a_dev_counter_from_its_stable_release() -> None:
+def test_release_line_reader_continues_a_prerelease_counter_from_its_stable_release() -> None:
     last_stable, release_line = release_line_from_version(
-        "1.3.0-dev.7",
+        "1.3.0-alpha.7",
         last_stable_version="1.2.3",
     )
 
@@ -439,17 +444,18 @@ def test_release_line_reader_continues_a_dev_counter_from_its_stable_release() -
 def test_release_promotion_cli_stabilizes_only_a_matching_closed_milestone(
     tmp_path: Path,
 ) -> None:
-    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    _write_release_distribution(tmp_path, version="1.3.0-rc.1")
     notes = tmp_path / "docs/releases"
     notes.mkdir(parents=True)
-    (notes / "v1.3.0-dev.1.md").write_text(
-        "# git-loopy 1.3.0-dev.1\n\nFirst development fragment.\n",
-        encoding="utf-8",
-    )
-    (notes / "v1.3.0-dev.7.md").write_text(
-        "# git-loopy 1.3.0-dev.7\n\nFinal development fragment.\n",
-        encoding="utf-8",
-    )
+    for version, body in (
+        ("1.3.0-alpha.7", "Final alpha fragment."),
+        ("1.3.0-beta.10", "Tenth beta fragment."),
+        ("1.3.0-beta.2", "Second beta fragment."),
+        ("1.2.4-alpha.1", "Another target's fragment."),
+    ):
+        (notes / f"v{version}.md").write_text(
+            f"# git-loopy {version}\n\n{body}\n", encoding="utf-8"
+        )
     output = tmp_path / "github-output"
 
     result = _run_validator(
@@ -470,25 +476,89 @@ def test_release_promotion_cli_stabilizes_only_a_matching_closed_milestone(
         "# git-loopy 1.3.0\n\n"
         "git-loopy 1.3.0 was promoted from the committed development fragments below.\n\n"
         "## Development fragments\n\n"
-        "### 1.3.0-dev.1\n\n"
-        "First development fragment.\n\n"
-        "### 1.3.0-dev.7\n\n"
-        "Final development fragment.\n"
+        "### 1.3.0-alpha.7\n\n"
+        "Final alpha fragment.\n\n"
+        "### 1.3.0-beta.2\n\n"
+        "Second beta fragment.\n\n"
+        "### 1.3.0-beta.10\n\n"
+        "Tenth beta fragment.\n\n"
+        "### 1.3.0-rc.1\n\n"
+        "This development fragment advances the Release line to `1.3.0-rc.1` "
+        "on the way to stable `1.3.0`.\n"
     )
     assert output.read_text(encoding="utf-8") == (
         "promoted=true\n"
         "version=1.3.0\n"
         "subject=chore(release): promote Release line to 1.3.0\n"
         "notes_path=docs/releases/v1.3.0.md\n"
-        "fragment_path=docs/releases/v1.3.0-dev.7.md\n"
+        "fragment_path=docs/releases/v1.3.0-rc.1.md\n"
     )
+
+
+def test_release_stage_cli_moves_a_line_forward_and_restarts_its_counter(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path, version="1.3.0-alpha.7")
+    output = tmp_path / "github-output"
+
+    result = _run_validator(
+        tmp_path, "--advance-stage", "beta", "--github-output", str(output)
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert validate_repository_release_version(tmp_path) == "1.3.0-beta.1"
+    assert (tmp_path / "docs/releases/v1.3.0-beta.1.md").read_text(
+        encoding="utf-8"
+    ) == (
+        "# git-loopy 1.3.0-beta.1\n\n"
+        "This development fragment advances the Release line to `1.3.0-beta.1` "
+        "on the way to stable `1.3.0`.\n"
+    )
+    assert output.read_text(encoding="utf-8") == (
+        "advanced=true\n"
+        "version=1.3.0-beta.1\n"
+        "subject=chore(release): advance Release line to 1.3.0-beta.1\n"
+        "notes_path=docs/releases/v1.3.0-beta.1.md\n"
+        "fragment_path=docs/releases/v1.3.0-beta.1.md\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("version", "stage", "reason"),
+    [
+        ("1.3.0-rc.1", "beta", "cannot move from rc to beta"),
+        ("1.3.0", "rc", "is stable and has no prerelease stage"),
+    ],
+)
+def test_release_stage_cli_refuses_without_touching_the_distribution(
+    tmp_path: Path, version: str, stage: str, reason: str
+) -> None:
+    _write_release_distribution(tmp_path, version=version)
+
+    result = _run_validator(tmp_path, "--advance-stage", stage)
+
+    assert result.returncode == 1
+    assert reason in result.stderr
+    assert validate_repository_release_version(tmp_path) == version
+    assert not (tmp_path / "docs/releases").exists()
+
+
+def test_release_stage_cli_refuses_a_second_trigger(tmp_path: Path) -> None:
+    _write_release_distribution(tmp_path, version="1.3.0-alpha.7")
+
+    result = _run_validator(
+        tmp_path, "--advance-stage", "rc", "--promote-milestone", "v1.3.0"
+    )
+
+    assert result.returncode == 2
+    assert validate_repository_release_version(tmp_path) == "1.3.0-alpha.7"
 
 
 def test_release_promotion_cli_appends_its_decision_to_a_shared_step_output(
     tmp_path: Path,
 ) -> None:
     """A step's output file is shared, so a Promotion never truncates it."""
-    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    _write_release_distribution(tmp_path, version="1.3.0-alpha.7")
     output = tmp_path / "github-output"
     output.write_text("already=recorded\n", encoding="utf-8")
 
@@ -510,11 +580,11 @@ def test_release_promotion_cli_outputs_the_synthesized_current_fragment_path(
     tmp_path: Path,
 ) -> None:
     """A Promotion tells its workflow to stage every fragment it synthesized."""
-    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    _write_release_distribution(tmp_path, version="1.3.0-alpha.7")
     notes = tmp_path / "docs/releases"
     notes.mkdir(parents=True)
-    (notes / "v1.3.0-dev.1.md").write_text(
-        "# git-loopy 1.3.0-dev.1\n\nFirst development fragment.\n",
+    (notes / "v1.3.0-alpha.1.md").write_text(
+        "# git-loopy 1.3.0-alpha.1\n\nFirst development fragment.\n",
         encoding="utf-8",
     )
     output = tmp_path / "github-output"
@@ -530,8 +600,8 @@ def test_release_promotion_cli_outputs_the_synthesized_current_fragment_path(
     )
 
     assert result.returncode == 0, result.stderr
-    assert (notes / "v1.3.0-dev.7.md").is_file()
-    assert "fragment_path=docs/releases/v1.3.0-dev.7.md\n" in output.read_text(
+    assert (notes / "v1.3.0-alpha.7.md").is_file()
+    assert "fragment_path=docs/releases/v1.3.0-alpha.7.md\n" in output.read_text(
         encoding="utf-8"
     )
 
@@ -539,7 +609,7 @@ def test_release_promotion_cli_outputs_the_synthesized_current_fragment_path(
 def test_release_promotion_cli_preserves_a_human_authored_stable_note(
     tmp_path: Path,
 ) -> None:
-    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    _write_release_distribution(tmp_path, version="1.3.0-alpha.7")
     notes = tmp_path / "docs/releases"
     notes.mkdir(parents=True)
     stable_note = notes / "v1.3.0.md"
@@ -565,7 +635,7 @@ def test_release_promotion_cli_preserves_a_human_authored_stable_note(
 def test_release_promotion_cli_leaves_an_unmatched_milestone_prerelease_untouched(
     tmp_path: Path,
 ) -> None:
-    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    _write_release_distribution(tmp_path, version="1.3.0-alpha.7")
     output = tmp_path / "github-output"
 
     result = _run_validator(
@@ -579,7 +649,7 @@ def test_release_promotion_cli_leaves_an_unmatched_milestone_prerelease_untouche
     )
 
     assert result.returncode == 0, result.stderr
-    assert validate_repository_release_version(tmp_path) == "1.3.0-dev.7"
+    assert validate_repository_release_version(tmp_path) == "1.3.0-alpha.7"
     assert output.read_text(encoding="utf-8") == "promoted=false\n"
 
 
@@ -626,7 +696,7 @@ def test_release_writer_restores_every_copy_when_replacement_fails(
     monkeypatch.setattr(release_version.os, "replace", fail_uv_lock_replacement)
 
     with pytest.raises(ReleaseVersionError, match="all copies were restored"):
-        write_repository_release_version(tmp_path, "2.3.4-dev.5")
+        write_repository_release_version(tmp_path, "2.3.4-alpha.5")
 
     after = {
         path.relative_to(tmp_path): (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
@@ -650,7 +720,7 @@ def test_release_writer_refuses_unreadable_copy_without_touching_distribution(
     }
 
     with pytest.raises(ReleaseVersionError, match="cannot read Rust lockfile"):
-        write_repository_release_version(tmp_path, "2.3.4-dev.5")
+        write_repository_release_version(tmp_path, "2.3.4-alpha.5")
 
     after = {
         path.relative_to(tmp_path): path.read_bytes()
@@ -680,6 +750,6 @@ def test_release_writer_removes_staged_files_when_staging_fails(
     )
 
     with pytest.raises(ReleaseVersionError, match="cannot stage"):
-        write_repository_release_version(tmp_path, "2.3.4-dev.5")
+        write_repository_release_version(tmp_path, "2.3.4-alpha.5")
 
     assert not list(tmp_path.rglob("*.git-loopy-release"))

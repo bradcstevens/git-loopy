@@ -49,11 +49,11 @@ def test_recorded_dynamic_authority_governs_permitted_retries(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[
             _make_issue(42, labels=[
-                "ready-for-agent", "task-type:implementation", "semver:none",
+                "ready-for-agent", "task-type:implementation",
                 *(["parallel-safe"] if mode == "lane" else []),
             ]),
             _make_issue(43, labels=[
-                "ready-for-agent", "task-type:docs", "semver:none",
+                "ready-for-agent", "task-type:docs",
             ]),
         ],
     )
@@ -287,7 +287,7 @@ def test_recorded_dynamic_authority_governs_permitted_retries(
         for key in ("model", "effort", "context_tier"):
             assert f'`{json.dumps(pickup[key])}`' in comment
         labels = tracker.issue_labels(issue)
-        assert "ready-for-agent" in labels and "semver:none" in labels
+        assert "ready-for-agent" in labels
         owned = [
             label for label in labels
             if label.startswith(("model_id:", "model_context:", "model_effort:"))

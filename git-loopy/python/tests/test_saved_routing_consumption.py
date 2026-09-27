@@ -67,7 +67,7 @@ def test_classification_can_discover_a_saved_static_route_without_leaderboard_ac
 
     client, fake_git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=[
-            "ready-for-agent", "semver:none",
+            "ready-for-agent",
             *(["parallel-safe"] if mode == "lane" else []),
         ],
     )
@@ -187,7 +187,7 @@ def test_reported_in_flight_billing_closes_admission_before_session_completion(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=[
             _make_issue(ref, labels=[
-                "ready-for-agent", "semver:none",
+                "ready-for-agent",
                 *([] if ref == inputs["held_issue"] and pending_role == "classifier" else [
                     "task-type:implementation",
                 ]),
@@ -416,7 +416,7 @@ def test_reported_in_flight_billing_closes_admission_before_session_completion(
         assert not any(
             label.startswith("git-loopy-route:") for label in tracker.issue_labels(ref)
         )
-        assert {"ready-for-agent", "semver:none", "task-type:implementation"} <= set(
+        assert {"ready-for-agent", "task-type:implementation"} <= set(
             tracker.issue_labels(ref)
         )
         (delivery,) = [

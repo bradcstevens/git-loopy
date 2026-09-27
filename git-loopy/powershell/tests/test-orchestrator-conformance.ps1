@@ -228,6 +228,59 @@ Assert-Equal `
     $IssueOrdering["pin_outranks_priority"] `
     "issue-ordering: the fixture declares that a Pin outranks Priority"
 
+# Wrapper contract §3.2 (contract 2.14, #644) — how long a Pin lasts. Each step
+# is one Pickup: it orders the Pool with the Pin live before it, names what a
+# binding of the Pin reports, then asks the production spend decision whether
+# the Pin is live afterwards.
+$PinDuration = ConvertFrom-GitLoopyJsonText -Text (
+    Get-Content -LiteralPath (Join-Path $ConformanceDir "pin-duration.json") -Raw
+)
+foreach ($Case in $PinDuration["cases"]) {
+    $CaseId = $Case["id"]
+    $Live = $true
+    $Step = 0
+    foreach ($Pickup in @($Case["pickups"])) {
+        $Step += 1
+        $LivePin = if ($Live) { $Case["pin"] } else { $null }
+        $Issues = @($Pickup["issues"])
+        $Result = Get-GitLoopyIssueOrder -Candidates $Issues -Pin $LivePin
+        $Pinned = @($Issues | Where-Object { "$($_["number"])" -ceq "$($Case["pin"])" })
+        $Listed = $Pinned.Count -gt 0
+        $PinReason = if ($Listed) {
+            Get-GitLoopyPickupReason `
+                -Ref ([string]$Case["pin"]) `
+                -Labels @($Pinned[0]["labels"]) `
+                -Pin $LivePin
+        }
+        else {
+            $null
+        }
+        $Live = Get-GitLoopyPinLiveAfter `
+            -Live $Live `
+            -Listed $Listed `
+            -Complete ([bool]$Pickup["complete"]) `
+            -Read ([string]$Pickup["pin_read"])
+        $Expected = $Pickup["expected"]
+        Assert-Equal `
+            (@($Expected["order"]) -join ",") `
+            (@($Result["order"]) -join ",") `
+            "pin-duration order: $CaseId Pickup $Step"
+        Assert-Equal `
+            $Expected["pin_reason"] `
+            $PinReason `
+            "pin-duration reason: $CaseId Pickup $Step"
+        Assert-Equal `
+            $Expected["live_after"] `
+            $Live `
+            "pin-duration live after: $CaseId Pickup $Step"
+    }
+}
+Assert-Equal `
+    "a,b,c,d,e,f" `
+    ((@($PinDuration["cases"] | ForEach-Object { $_["covers"] }) |
+        Sort-Object -Unique) -join ",") `
+    "pin-duration: the rows cover cases (a)-(f)"
+
 foreach ($Defect in @($IssueOrdering["timestamp_defects"])) {
     $Covered = @($IssueOrdering["cases"] | Where-Object {
             @($_["expected"]["undated"] | Where-Object {

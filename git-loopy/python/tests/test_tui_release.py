@@ -251,7 +251,7 @@ def test_a_helper_resolves_the_release_the_artifact_fixture_names(
         ("1.2.3", ["1.2.3", "1.2.3-rc.1"], "1.2.3"),
         ("1.2.3-rc.1", ["1.2.3", "1.2.3-rc.1"], "1.2.3-rc.1"),
         # Numeric prerelease identifiers compare numerically, not as text.
-        ("1.2.3", ["1.2.3-dev.2", "1.2.3-dev.10"], "1.2.3-dev.10"),
+        ("1.2.3", ["1.2.3-alpha.2", "1.2.3-alpha.10"], "1.2.3-alpha.10"),
         # Numeric identifiers rank below alphanumeric ones.
         ("1.2.3", ["1.2.3-alpha.1", "1.2.3-alpha.beta"], "1.2.3-alpha.beta"),
         # A larger set of prerelease fields wins when the prefix is equal.
@@ -270,7 +270,7 @@ def test_release_resolution_follows_semantic_versioning_precedence(
 ) -> None:
     """Ordering is SemVer's, not string ordering.
 
-    ``dev.10`` sorting below ``dev.2`` would quietly install a helper several
+    ``alpha.10`` sorting below ``alpha.2`` would quietly install a helper several
     Releases stale, which the identity check cannot catch because the stale
     helper honestly reports the version it was resolved as.
     """
@@ -838,7 +838,7 @@ def test_refresh_machine_local_helper_selects_older_fallback_when_exact_version_
     )
     release_index = [
         {
-            "tag_name": "v1.2.5-dev.1",
+            "tag_name": "v1.2.5-alpha.1",
             "draft": False,
             "assets": [],  # source-only!
         },
@@ -867,7 +867,7 @@ def test_refresh_machine_local_helper_selects_older_fallback_when_exact_version_
     monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
 
     installed = tui_release.refresh_machine_local_helper(
-        "1.2.5-dev.1",
+        "1.2.5-alpha.1",
         env,
         host_system=lambda: "Darwin",
         host_machine=lambda: "arm64",
@@ -883,7 +883,7 @@ def test_refresh_machine_local_helper_selects_older_fallback_when_exact_version_
     assert (
         tui_release.resolve_runtime_helper(
             tmp_path / "repo",
-            release_version="1.2.5-dev.1",
+            release_version="1.2.5-alpha.1",
             warn=lambda message: pytest.fail(message),
             env=env,
         )
@@ -898,14 +898,14 @@ def test_refresh_preserves_a_matching_local_build_for_an_explicit_source_only_re
 ) -> None:
     env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
     installed = _write_fake_helper(
-        tui_release.machine_local_helper_paths(env)[0], version="1.2.5-dev.1"
+        tui_release.machine_local_helper_paths(env)[0], version="1.2.5-alpha.1"
     )
     record = tui_release.helper_release_record_path(installed)
-    record.write_text("1.2.5-dev.1\n", encoding="utf-8")
+    record.write_text("1.2.5-alpha.1\n", encoding="utf-8")
     before = installed.read_bytes(), record.read_bytes()
     policy_url = (
         "https://raw.githubusercontent.com/bradcstevens/git-loopy/"
-        "v1.2.5-dev.1/git-loopy/conformance/release-trust.json"
+        "v1.2.5-alpha.1/git-loopy/conformance/release-trust.json"
     )
     requested: list[str] = []
 
@@ -918,7 +918,7 @@ def test_refresh_preserves_a_matching_local_build_for_an_explicit_source_only_re
         }).encode()
 
     refreshed = tui_release.refresh_machine_local_helper(
-        "1.2.5-dev.1",
+        "1.2.5-alpha.1",
         env,
         host_system=lambda: "Darwin",
         host_machine=lambda: "arm64",
@@ -931,7 +931,7 @@ def test_refresh_preserves_a_matching_local_build_for_an_explicit_source_only_re
     assert (installed.read_bytes(), record.read_bytes()) == before
     assert requested == [policy_url]
     assert tui_release.resolve_runtime_helper(
-        tmp_path / "repo", release_version="1.2.5-dev.1",
+        tmp_path / "repo", release_version="1.2.5-alpha.1",
         warn=lambda message: pytest.fail(message), env=env,
     ) == installed
 
@@ -951,13 +951,13 @@ def test_refresh_does_not_infer_source_only_from_missing_assets(
 ) -> None:
     env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
     installed = _write_fake_helper(
-        tui_release.machine_local_helper_paths(env)[0], version="1.2.5-dev.1"
+        tui_release.machine_local_helper_paths(env)[0], version="1.2.5-alpha.1"
     )
     before = installed.read_bytes()
 
     with pytest.raises(tui_release.TuiReleaseError):
         tui_release.refresh_machine_local_helper(
-            "1.2.5-dev.1", env,
+            "1.2.5-alpha.1", env,
             host_system=lambda: "Darwin", host_machine=lambda: "arm64",
             host_libc=lambda: None, releases_fetcher=lambda _artifact: (),
             download=lambda _url: policy,
@@ -972,7 +972,7 @@ def test_a_matching_local_helper_cannot_hide_an_unreadable_release_index(
 ) -> None:
     env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
     _write_fake_helper(
-        tui_release.machine_local_helper_paths(env)[0], version="1.2.5-dev.1"
+        tui_release.machine_local_helper_paths(env)[0], version="1.2.5-alpha.1"
     )
 
     def unavailable(_url: str) -> bytes:
@@ -980,7 +980,7 @@ def test_a_matching_local_helper_cannot_hide_an_unreadable_release_index(
 
     with pytest.raises(tui_release.TuiReleaseError, match="release index unavailable"):
         tui_release.refresh_machine_local_helper(
-            "1.2.5-dev.1", env,
+            "1.2.5-alpha.1", env,
             host_system=lambda: "Darwin", host_machine=lambda: "arm64",
             host_libc=lambda: None, download=unavailable,
         )
@@ -1107,7 +1107,7 @@ def test_refresh_machine_local_helper_reads_the_index_independently_of_the_cwd(
     monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
 
     installed = tui_release.refresh_machine_local_helper(
-        "1.2.5-dev.1",
+        "1.2.5-alpha.1",
         env,
         host_system=lambda: "Darwin",
         host_machine=lambda: "arm64",

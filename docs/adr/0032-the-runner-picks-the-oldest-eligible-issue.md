@@ -69,3 +69,65 @@ is after selection. Sorting on it would sort on nothing.
   and   not a **Lease** (ADR-0033); a pinned issue held by another live run fails the
   invocation rather than falling back, because silently working a different issue than the one
   named is worse than stopping.
+
+## Amendment: the pin goes first under Rolling dispatch, and once (#430)
+
+Under **Rolling dispatch** the pin is worked ahead of **Lanes** too. A pin without
+`parallel-safe` takes serial ownership at Run start, before any Lane is reserved, and Lanes
+open only after its serial Iteration ends — whatever that Iteration does with it: closes it,
+makes no progress, or skips it as **Blocked** (the pin still bypasses nothing but order). A
+`parallel-safe` pin takes the first Lane reservation; a failed read of it holds the Lanes
+until the tracker answers rather than hand that Lane to the next candidate. Lacking `parallel-safe` is never a
+reason to refuse a pin.
+
+The pin is spent by its first binding, or by the end of that first serial Iteration unless
+that Iteration could not read it — a failed Pool, Readiness, **Dynamic route** or **Lease**
+read of the pin. The Python Runner spends the pin this way in serial Pickups as well.
+Under **Rolling dispatch**, an Iteration that could not read the pin leaves it unspent,
+and the pin keeps serial ownership for the next Iteration. A Lane's **Pickup skip** of a
+`parallel-safe` pin also spends it (#645): its **Lease** held by another Run, a `task-type:` label routing refuses, or
+a **Dynamic route** refusal that is not a read that failed. Once the pin is spent, by any of
+these, the oldest-first order applies — including to the pinned issue if it is still open.
+
+**Conflicts, flagged rather than resolved here:**
+
+- The Wrapper contract's Pin clause 1 still says a Run "resumes oldest-first the moment its
+  pinned issue leaves the **Pool**", and the shell and PowerShell Orchestrators promote the pin
+  for as long as it stays open. #430 kept those members and the Conformance fixtures out of
+  scope; reconciling them is [#644](https://github.com/bradcstevens/git-loopy/issues/644).
+- [ADR-0020](0020-rolling-dispatch-with-bounded-green-integration.md)'s serial interleave (#219
+  §5.9-5.10) gives Rolling dispatch one full refill turn after each serial Iteration before
+  serial demand may relatch. A pin whose Iteration's read never showed it is the one
+  exception: that Iteration keeps serial ownership for the pin, with no refill turn in between,
+  because a refill turn is exactly how Lanes would go first. It ends at the first Iteration
+  that is offered the pin, or at the cap or a drain. An Iteration that could not read the pin
+  binds nothing rather than the next candidate (a pin it reads and skips is passed over as in
+  any Pickup), spends a unit like any
+  Iteration, and is granted again only once a read shows the pin or proves it gone — or, when
+  the read that failed was the pin's **Lease** probe, once the Lease remote answers for the pin
+  or a complete read proves it gone, so a Lease-remote outage costs one unit as a tracker
+  outage does (#645).
+- ADR-0020's quarantine rule (#219 §2.11) keeps one unreadable candidate from
+  head-of-line-blocking the candidates behind it. An unspent `parallel-safe` pin is the one
+  exception: a failed read of it stops the Lane walk and is retried on the next, because
+  passing it is exactly how another issue would take the pin's Lane. The same holds after the
+  walk has taken the pin (#645): a later Lane Pickup step whose read or setup did not happen —
+  the **Lease** probe, a **Dynamic route** read that failed, the base revision, the worktree — puts
+  the pin back at the head of the cache, quarantined, rather than refuse it for the Run or
+  release it uncached, and neither a Lane nor serial work fills behind it until it binds. Its
+  retries are paced to one per idle poll interval. The bounds on a pin whose reads keep failing are
+  [#647](https://github.com/bradcstevens/git-loopy/issues/647).
+
+## Amendment: one Pin lifetime across the Runner family (#644)
+
+[#644](https://github.com/bradcstevens/git-loopy/issues/644) resolved the first conflict the
+#430 amendment flagged. Wrapper contract 2.14 states one rule for every member: the first
+**Pickup** that reads the pin spends it — it binds it, passes it over for an answer about it,
+or completes a Pool or **Membership read** that no longer lists it — and a Pickup that could
+not read it leaves it live. The shell and PowerShell Orchestrators now promote the pin only
+while it is live, and `conformance/pin-duration.json` pins the rule for all three
+Orchestrators. The Python Runner also spends a `parallel-safe` pin that a Pickup, Lane walk
+or serial, passes over as **Blocked** or stale. A serial-only member walks on past an unread
+pin, as §3.3 does for any candidate; holding for it is **Rolling dispatch** behaviour, and it
+stays under the two exceptions above. The bounds on a pin whose reads keep failing stay with
+[#647](https://github.com/bradcstevens/git-loopy/issues/647).

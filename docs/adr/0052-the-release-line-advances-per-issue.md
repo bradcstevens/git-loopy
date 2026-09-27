@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0066](0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md):**
+the `semver:` labels are replaced by a `vX.Y.Z` Release-target label with no `none`
+key (no label changes no version), `-dev.N` is replaced by `-alpha.N` → `-beta.N` →
+`-rc.N`, and the `major` exemption from milestone Promotion is withdrawn.
+
 **Amended by [ADR-0059](0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md):**
 the exact stable snapshot must be verified before a public tag exists, public
 tags are immutable, and publication is explicitly source-only or artifact-bearing.

@@ -2,6 +2,15 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md):**
+the non-fatal auto-push below remains a durability net for Iteration
+Checkpoints, but cannot by itself certify a Lane publication whose tracker
+closure attests to base. Where an upstream exists, publication requires base
+to be durably available there before the closure is treated as complete.
+That is a stronger guarantee for tracker-attested work, not a reversal of
+the decision to preserve partial Iteration progress when a best-effort push
+fails.
+
 ## Context
 
 Iterations sometimes ended with the agent's changes **uncommitted** (modified tracked

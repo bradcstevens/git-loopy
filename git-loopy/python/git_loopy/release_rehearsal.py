@@ -61,7 +61,7 @@ from git_loopy.source_release import SourceReleaseError, verify_tagged_source_re
 
 SOURCE_ONLY = "source-only"
 MILESTONE_TRIGGER = "milestone"
-MAJOR_BUMP_TRIGGER = "major-bump"
+STABLE_COMMIT_TRIGGER = "stable-commit"
 
 _CONFORMANCE_DIRECTORY = Path("git-loopy/conformance")
 
@@ -78,12 +78,12 @@ class ReleaseRehearsalError(ValueError):
 
 @dataclass(frozen=True)
 class PromotionTrigger:
-    """Why a stable Release is being cut — ADR-0052's two triggers, and no others.
+    """Why a stable Release is being cut — a milestone, or its committed result.
 
-    A closed ``vX.Y.Z`` milestone promotes the `dev.N` line its own title names;
-    a `major` **Bump class** is exempt from the milestone and has already
-    reached stable under a Run, so its candidate is an existing commit rather
-    than one this rehearsal composes.
+    A closed ``vX.Y.Z`` milestone promotes the prerelease line its own title
+    names, which this rehearsal composes. Once that Promotion is committed to
+    the trunk, the stable commit itself is the candidate the tag step rehearses
+    (ADR-0066 retired the `major` exemption that once also landed one).
     """
 
     kind: str
@@ -96,8 +96,8 @@ class PromotionTrigger:
         if self.kind == MILESTONE_TRIGGER:
             return f"milestone {self.milestone_title}"
         if self.candidate_commit is not None:
-            return f"a `major` Bump class at {self.candidate_commit}"
-        return "a `major` Bump class"
+            return f"the stable commit {self.candidate_commit}"
+        return "the untagged stable commit"
 
 
 def milestone_promotion(title: str, *, state: str = "closed") -> PromotionTrigger:
@@ -107,15 +107,15 @@ def milestone_promotion(title: str, *, state: str = "closed") -> PromotionTrigge
     )
 
 
-def major_bump_promotion(*, commit: str | None = None) -> PromotionTrigger:
-    """The trigger a `major` **Bump class** carries, already stable on the trunk.
+def stable_commit_promotion(*, commit: str | None = None) -> PromotionTrigger:
+    """The trigger a stable Release already committed on the trunk carries.
 
     ``commit`` names one candidate explicitly instead of taking the oldest
     untagged stable commit. An operator repairing a candidate needs to say
-    *which* commit they mean; the bump-commit rule still decides whether it can
-    be tagged.
+    *which* commit they mean; the stable-commit rule still decides whether it
+    can be tagged.
     """
-    return PromotionTrigger(kind=MAJOR_BUMP_TRIGGER, candidate_commit=commit)
+    return PromotionTrigger(kind=STABLE_COMMIT_TRIGGER, candidate_commit=commit)
 
 
 @dataclass(frozen=True)
@@ -327,8 +327,8 @@ def _untagged_stable_commit(workspace: Path) -> str:
     """The oldest trunk commit declaring a stable Release version no tag reaches.
 
     The same walk `release-promotion.yml` publishes by, and for the same reason:
-    a Run lands a Release-line commit per closed issue, so the stable value a
-    `major` cut is routinely buried under the next issue's `dev.N` advance. The
+    a Run lands a Release-line commit per closed issue, so a committed stable
+    Promotion can be buried under the next issue's prerelease advance. The
     head's ``VERSION`` is not the candidate.
     """
     walk = _run_git(
@@ -349,8 +349,8 @@ def _untagged_stable_commit(workspace: Path) -> str:
         if not is_prerelease(version):
             return commit
     raise ReleaseRehearsalError(
-        "no untagged stable Release on the trunk: a `major` Bump class promotes "
-        "on its label alone, so a candidate has to already be committed"
+        "no untagged stable Release on the trunk: a committed Promotion is the "
+        "candidate, so one has to already be committed"
     )
 
 
@@ -394,7 +394,7 @@ def _prepare_promotion_candidate(
     if trigger.kind == MILESTONE_TRIGGER:
         version = _promote_milestone(workspace, trigger)
         commit = _run_git(workspace, "rev-parse", "HEAD")
-    elif trigger.kind == MAJOR_BUMP_TRIGGER:
+    elif trigger.kind == STABLE_COMMIT_TRIGGER:
         commit = (
             _run_git(workspace, "rev-parse", f"{trigger.candidate_commit}^{{commit}}")
             if trigger.candidate_commit is not None
@@ -744,13 +744,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="state of --promote-milestone (default: closed)",
     )
     parser.add_argument(
-        "--major-bump",
+        "--stable-commit",
         action="store_true",
-        help="rehearse the stable commit a major Bump class already landed",
+        help="rehearse a stable Release commit already on the trunk",
     )
     parser.add_argument(
         "--candidate-commit",
-        help="with --major-bump, the exact commit to rehearse",
+        help="with --stable-commit, the exact commit to rehearse",
     )
     parser.add_argument(
         "--github-output",
@@ -761,18 +761,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _trigger_from(args: argparse.Namespace) -> PromotionTrigger:
-    if args.promote_milestone is not None and args.major_bump:
+    if args.promote_milestone is not None and args.stable_commit:
         raise ReleaseRehearsalError(
-            "a Promotion has one trigger: pass --promote-milestone or --major-bump"
+            "a Promotion has one trigger: pass --promote-milestone or --stable-commit"
         )
     if args.promote_milestone is not None:
         return milestone_promotion(
             args.promote_milestone, state=args.milestone_state
         )
-    if args.major_bump:
-        return major_bump_promotion(commit=args.candidate_commit)
+    if args.stable_commit:
+        return stable_commit_promotion(commit=args.candidate_commit)
     raise ReleaseRehearsalError(
-        "no Promotion trigger: pass --promote-milestone or --major-bump"
+        "no Promotion trigger: pass --promote-milestone or --stable-commit"
     )
 
 

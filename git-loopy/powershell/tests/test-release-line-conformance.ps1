@@ -135,6 +135,21 @@ function New-ReleaseLineScratchRepository {
                 -Content ((Get-Utf8Text -Path $Destination) -replace '\r?\n', "`r`n")
         }
     }
+    # The live Release line may be any value (even a retired -dev.N one), so the
+    # scratch copies are first rewritten textually to a known stable value.
+    $Live = (Get-Utf8Text -Path (Join-Path $RepositoryRoot "VERSION")).Trim()
+    $LiveMatch = [regex]::Match($Live, '\A([0-9]+\.[0-9]+\.[0-9]+)-(dev|alpha|beta|rc)\.([0-9]+)\z')
+    if ($LiveMatch.Success) {
+        $Spelling = @{ dev = "."; alpha = ""; beta = ""; rc = "" }[$LiveMatch.Groups[2].Value]
+        $Short = @{ dev = "dev"; alpha = "a"; beta = "b"; rc = "rc" }[$LiveMatch.Groups[2].Value]
+        $LivePython = "$($LiveMatch.Groups[1].Value)$Spelling$Short$($LiveMatch.Groups[3].Value)"
+        foreach ($Path in $VersionPaths) {
+            $Destination = Join-Path $Scratch $Path
+            Set-Utf8Text `
+                -Path $Destination `
+                -Content (Get-Utf8Text -Path $Destination).Replace($Live, "0.0.1").Replace($LivePython, "0.0.1")
+        }
+    }
     Set-GitLoopyRepositoryReleaseVersion -RepositoryRoot $Scratch -Version $Version
     & git -C $Scratch init -q
     & git -C $Scratch config user.email tester@example.invalid
@@ -147,21 +162,45 @@ function New-ReleaseLineScratchRepository {
     return $Scratch
 }
 
+function Get-Counter {
+    param([object]$Value)
+
+    return [bigint][long]$Value
+}
+
 foreach ($Case in Get-PowerShellCases "cases") {
     Assert-Equal $Case["bump_class"] (
-        Resolve-GitLoopyBumpClass -Labels @($Case["labels"])
+        Resolve-GitLoopyBumpClass `
+            -Labels ([string[]]@($Case["labels"])) `
+            -LastStableVersion $Case["last_stable_version"]
     ) "Release-line Bump-class decision: $($Case["id"])"
 }
 
 foreach ($Case in Get-PowerShellCases "refusal_cases") {
+    $Refusal = $null
     try {
-        Resolve-GitLoopyBumpClass -Labels @($Case["labels"]) | Out-Null
-        throw "FAIL: Release-line Bump-class refusal was accepted: $($Case["id"])"
+        Resolve-GitLoopyBumpClass `
+            -Labels ([string[]]@($Case["labels"])) `
+            -LastStableVersion $Case["last_stable_version"] | Out-Null
     }
     catch {
-        if ($_.Exception.Message -notmatch [regex]::Escape([string]$Case["reason"])) {
-            throw
-        }
+        $Refusal = $_.Exception
+    }
+    if ($null -eq $Refusal) {
+        throw "FAIL: Release-line Bump-class refusal was accepted: $($Case["id"])"
+    }
+    Assert-Equal "Release-line Bump class: $($Case["reason"])" $Refusal.Message (
+        "Release-line Bump-class refusal reason: $($Case["id"])"
+    )
+    if ($Case.ContainsKey("refused_label")) {
+        Assert-Equal $Case["refused_label"] $Refusal.Data["refused_label"] (
+            "Release-line refused label: $($Case["id"])"
+        )
+    }
+    if ($Case.ContainsKey("conflicting_labels")) {
+        Assert-Equal (@($Case["conflicting_labels"]) -join "|") (
+            @($Refusal.Data["conflicting_labels"]) -join "|"
+        ) "Release-line conflicting labels: $($Case["id"])"
     }
 }
 
@@ -170,12 +209,36 @@ foreach ($Group in @("ratchet_cases", "counter_cases")) {
         $Line = Invoke-GitLoopyReleaseLineAdvance `
             -LastStableVersion $Case["last_stable_version"] `
             -CurrentTarget $Case["current_target"] `
-            -CurrentCounter $Case["current_counter"] `
+            -CurrentStage $Case["current_stage"] `
+            -CurrentCounter (Get-Counter $Case["current_counter"]) `
             -BumpClass $Case["bump_class"]
         Assert-Equal $Case["new_target"] $Line.Target "Release-line target: $($Case["id"])"
-        Assert-Equal $Case["new_counter"] $Line.Counter "Release-line counter: $($Case["id"])"
+        Assert-Equal $Case["new_stage"] $Line.Stage "Release-line stage: $($Case["id"])"
+        Assert-Equal (Get-Counter $Case["new_counter"]) $Line.Counter "Release-line counter: $($Case["id"])"
         Assert-Equal $Case["resulting_version"] $Line.Version "Release-line version: $($Case["id"])"
     }
+}
+
+foreach ($Case in Get-PowerShellCases "stage_cases") {
+    Assert-Equal $Case["resulting_version"] (
+        Step-GitLoopyReleaseStage -CurrentVersion $Case["current_version"] -Stage $Case["stage"]
+    ) "Release-line stage advance: $($Case["id"])"
+}
+
+foreach ($Case in Get-PowerShellCases "stage_refusal_cases") {
+    $Refusal = $null
+    try {
+        Step-GitLoopyReleaseStage -CurrentVersion $Case["current_version"] -Stage $Case["stage"] | Out-Null
+    }
+    catch {
+        $Refusal = $_.Exception
+    }
+    if ($null -eq $Refusal) {
+        throw "FAIL: Release-line stage refusal was accepted: $($Case["id"])"
+    }
+    Assert-Equal "Release-line stage: $($Case["reason"])" $Refusal.Message (
+        "Release-line stage refusal reason: $($Case["id"])"
+    )
 }
 
 foreach ($Case in Get-PowerShellCases "promotion_cases") {
@@ -187,35 +250,29 @@ foreach ($Case in Get-PowerShellCases "promotion_cases") {
     ) "closed milestone Promotion: $($Case["id"])"
 }
 
-foreach ($Case in Get-PowerShellCases "bump_promotion_cases") {
-    $Advanced = Invoke-GitLoopyReleaseLineAdvance `
-        -LastStableVersion $Case["last_stable_version"] `
-        -CurrentTarget $Case["current_target"] `
-        -CurrentCounter $Case["current_counter"] `
-        -BumpClass $Case["bump_class"]
-    Assert-Equal $Case["resulting_version"] (
-        (Invoke-GitLoopyReleaseLinePromotion `
-            -ReleaseLine $Advanced -BumpClass $Case["bump_class"]).Version
-    ) "Bump-class Promotion exemption: $($Case["id"])"
-}
-
 foreach ($Case in Get-PowerShellCases "order_independence_cases") {
     foreach ($Order in @($Case["integration_orders"])) {
         $Target = [string]$Case["current_target"]
-        [int]$Counter = $Case["current_counter"]
+        $Stage = $Case["current_stage"]
+        $Counter = Get-Counter $Case["current_counter"]
         foreach ($BumpClass in @($Order)) {
             $Line = Invoke-GitLoopyReleaseLineAdvance `
                 -LastStableVersion $Case["last_stable_version"] `
                 -CurrentTarget $Target `
+                -CurrentStage $Stage `
                 -CurrentCounter $Counter `
                 -BumpClass $BumpClass
             $Target = $Line.Target
+            $Stage = $Line.Stage
             $Counter = $Line.Counter
         }
         Assert-Equal $Case["resulting_target"] $Line.Target (
             "Release-line Integration-order target: $($Case["id"])"
         )
-        Assert-Equal $Case["resulting_counter"] $Line.Counter (
+        Assert-Equal $Case["resulting_stage"] $Line.Stage (
+            "Release-line Integration-order stage: $($Case["id"])"
+        )
+        Assert-Equal (Get-Counter $Case["resulting_counter"]) $Line.Counter (
             "Release-line Integration-order counter: $($Case["id"])"
         )
         Assert-Equal $Case["resulting_version"] $Line.Version (
@@ -237,50 +294,50 @@ try {
 
     $Advance = Invoke-GitLoopyRepositoryReleaseLineAdvance `
         -RepositoryRoot $Scratch `
-        -Labels @("semver:patch")
+        -Labels @("v1.2.4")
     Assert-Equal "patch" $Advance.BumpClass "a closed patch resolves its Bump class"
     Assert-Equal "1.2.4" $Advance.Target "a closed patch ratchets its target"
-    Assert-Equal "1.2.4-dev.1" $Advance.Version (
+    Assert-Equal "1.2.4-alpha.1" $Advance.Version (
         "a closed patch advances every Release metadata copy"
     )
-    $FirstFragmentPath = Join-Path $Scratch "docs/releases/v1.2.4-dev.1.md"
+    $FirstFragmentPath = Join-Path $Scratch "docs/releases/v1.2.4-alpha.1.md"
     Assert-Equal (
-        "# git-loopy 1.2.4-dev.1`n`n" +
-        "This development fragment advances the Release line to ``1.2.4-dev.1`` on the way to stable ``1.2.4``.`n"
+        "# git-loopy 1.2.4-alpha.1`n`n" +
+        "This development fragment advances the Release line to ``1.2.4-alpha.1`` on the way to stable ``1.2.4``.`n"
     ) (Get-Utf8Text -Path $FirstFragmentPath) (
-        "a Release-line advance writes its dev.N fragment"
+        "a Release-line advance writes its alpha fragment"
     )
     Assert-Equal $true (
-        (Get-HeadCommitPaths -RepositoryRoot $Scratch) -contains "docs/releases/v1.2.4-dev.1.md"
+        (Get-HeadCommitPaths -RepositoryRoot $Scratch) -contains "docs/releases/v1.2.4-alpha.1.md"
     ) "the advance commit includes the fragment note path"
-    Assert-Equal "1.2.4-dev.1" (
+    Assert-Equal "1.2.4-alpha.1" (
         Get-GitLoopyReleaseVersion -Path (Join-Path $Scratch "VERSION")
     ) "the Release authority advanced"
-    Assert-Equal "1.2.4-dev.1" (
+    Assert-Equal "1.2.4-alpha.1" (
         [regex]::Match(
             (Get-Content -LiteralPath (Join-Path $Scratch "git-loopy/tui/Cargo.toml") -Raw),
             '(?m)^version = "([^"]+)"'
         ).Groups[1].Value
     ) "the Rust manifest copy advanced"
-    Assert-Equal "1.2.4.dev1" (
+    Assert-Equal "1.2.4a1" (
         [regex]::Match(
             (Get-Content -LiteralPath (Join-Path $Scratch "git-loopy/python/uv.lock") -Raw),
             '(?s)name = "git-loopy".*?version = "([^"]+)"'
         ).Groups[1].Value
-    ) "the Python lockfile copy normalizes dev.N"
+    ) "the Python lockfile copy normalizes alpha.N"
     $ReleaseFixturePath = Join-Path $Scratch "git-loopy/conformance/release-version.json"
     $ReleaseFixture = Get-Utf8Text -Path $ReleaseFixturePath | ConvertFrom-Json -AsHashtable
-    Assert-Equal "1.2.4-dev.1" $ReleaseFixture["expected_release_version"] (
+    Assert-Equal "1.2.4-alpha.1" $ReleaseFixture["expected_release_version"] (
         "a Release-line advance updates the fixture's public SemVer expectation"
     )
-    Assert-Equal "1.2.4.dev1" $ReleaseFixture["expected_python_distribution_version"] (
+    Assert-Equal "1.2.4a1" $ReleaseFixture["expected_python_distribution_version"] (
         "a Release-line advance updates the fixture's normalized PEP 440 expectation"
     )
     Assert-Equal (
         Get-ReleaseFixtureContentWithVersions `
             -Content (Get-Utf8Text -Path (Join-Path $RepositoryRoot "git-loopy/conformance/release-version.json")) `
-            -ReleaseVersion "1.2.4-dev.1" `
-            -PythonDistributionVersion "1.2.4.dev1"
+            -ReleaseVersion "1.2.4-alpha.1" `
+            -PythonDistributionVersion "1.2.4a1"
     ) (Get-Utf8Text -Path $ReleaseFixturePath) (
         "a Release-line advance preserves every other release-version fixture field"
     )
@@ -307,7 +364,7 @@ try {
     try {
         Set-GitLoopyRepositoryReleaseVersion `
             -RepositoryRoot $DuplicateFixtureScratch `
-            -Version "1.2.4-dev.1"
+            -Version "1.2.4-alpha.1"
         throw "FAIL: duplicate release-version fixture fields were accepted"
     }
     catch {
@@ -356,7 +413,7 @@ try {
     try {
         Set-GitLoopyRepositoryReleaseVersion `
             -RepositoryRoot $InvalidFixtureScratch `
-            -Version "1.2.4-dev.1"
+            -Version "1.2.4-alpha.1"
         throw "FAIL: an invalid release-version fixture field type was accepted"
     }
     catch {
@@ -370,7 +427,7 @@ try {
     try {
         Set-GitLoopyRepositoryReleaseVersion `
             -RepositoryRoot $InvalidFixtureScratch `
-            -Version "1.2.4-dev.1"
+            -Version "1.2.4-alpha.1"
     }
     catch {
         $MalformedFixtureRejected = $true
@@ -383,117 +440,86 @@ try {
     ) "malformed fixture refusal preserves the repository Release version"
 
     $SecondAdvance = Invoke-GitLoopyRepositoryReleaseLineAdvance `
-        -RepositoryRoot $Scratch -Labels @("semver:minor")
-    Assert-Equal "1.3.0-dev.2" $SecondAdvance.Version (
+        -RepositoryRoot $Scratch -Labels @("ready-for-agent", "v1.3.0")
+    Assert-Equal "1.3.0-alpha.2" $SecondAdvance.Version (
         "a second closure preserves the running Release-line counter"
     )
-    Set-Utf8Text `
-        -Path (Join-Path $Scratch "docs/releases/v2.0.0-dev.1.md") `
-        -Content "# git-loopy 2.0.0-dev.1`n`nFirst accumulated fragment.`n"
-    Set-Utf8Text `
-        -Path (Join-Path $Scratch "docs/releases/v2.0.0-dev.2.md") `
-        -Content "# git-loopy 2.0.0-dev.2`n`nSecond accumulated fragment.`n"
-    & git -C $Scratch add -- docs/releases/v2.0.0-dev.1.md docs/releases/v2.0.0-dev.2.md
-    & git -C $Scratch commit -qm "seed accumulated Release fragments"
-    Assert-Equal "chore(release): advance Release line to 1.3.0-dev.2" (
-        (& git -C $Scratch log -2 --format=%s | Select-Object -Last 1)
+    Assert-Equal "chore(release): advance Release line to 1.3.0-alpha.2" (
+        (& git -C $Scratch log -1 --format=%s)
     ) "the Release line is committed after every metadata copy changes"
     $Major = Invoke-GitLoopyRepositoryReleaseLineAdvance `
-        -RepositoryRoot $Scratch -Labels @("semver:major")
-    Assert-Equal "2.0.0" $Major.Version (
-        "a major Bump class cuts stable without a milestone"
+        -RepositoryRoot $Scratch -Labels @("v2.0.0")
+    Assert-Equal "2.0.0-alpha.3" $Major.Version (
+        "a major target raises the line without cutting stable"
     )
-    $StableNotes = Get-Utf8Text -Path (Join-Path $Scratch "docs/releases/v2.0.0.md")
-    Assert-Contains "### 2.0.0-dev.1" $StableNotes (
-        "a major Promotion composes accumulated dev.N fragments"
-    )
-    Assert-Contains "First accumulated fragment." $StableNotes (
-        "the stable draft keeps the first accumulated fragment body"
-    )
-    Assert-Contains "### 2.0.0-dev.2" $StableNotes (
-        "the stable draft keeps the second accumulated fragment heading"
-    )
-    Assert-Contains "Second accumulated fragment." $StableNotes (
-        "the stable draft keeps the second accumulated fragment body"
-    )
-    Assert-Contains "### 2.0.0-dev.3" $StableNotes (
-        "the stable draft includes the major-closing fragment"
-    )
-    Assert-Contains "This development fragment advances the Release line to ``2.0.0-dev.3`` on the way to stable ``2.0.0``." $StableNotes (
-        "the stable draft includes the new fragment text"
-    )
-    Assert-Equal "chore(release): promote Release line to 2.0.0" (
-        (& git -C $Scratch log -1 --format=%s)
-    ) "a stable cut is committed as a Promotion rather than an advance"
-    $MajorCommitPaths = Get-HeadCommitPaths -RepositoryRoot $Scratch
-    Assert-Equal $true (
-        $MajorCommitPaths -contains "docs/releases/v2.0.0-dev.3.md"
-    ) "the Promotion commit includes the major fragment note path"
-    Assert-Equal $true (
-        $MajorCommitPaths -contains "docs/releases/v2.0.0.md"
-    ) "the Promotion commit includes the composed stable note path"
-    $PreserveFragmentScratch = New-ReleaseLineScratchRepository `
-        -ScratchRoot $ScratchRoot `
-        -Version "1.3.0-dev.2" `
-        -ReachableStableTag "1.2.3"
-    $AuthoredFragment = "# git-loopy 2.0.0-dev.3`n`nAn authored final development fragment.`n"
-    Set-Utf8Text `
-        -Path (Join-Path $PreserveFragmentScratch "docs/releases/v2.0.0-dev.3.md") `
-        -Content $AuthoredFragment
-    Import-Module $ModulePath -Force
-    $PreservedFragmentMajor = Invoke-GitLoopyRepositoryReleaseLineAdvance `
-        -RepositoryRoot $PreserveFragmentScratch `
-        -Labels @("semver:major")
-    Assert-Equal "2.0.0" $PreservedFragmentMajor.Version (
-        "a Promotion cuts stable with an authored current development fragment"
-    )
-    Assert-Equal $AuthoredFragment (
-        Get-Utf8Text -Path (Join-Path $PreserveFragmentScratch "docs/releases/v2.0.0-dev.3.md")
-    ) "a Promotion preserves an authored current development fragment"
-    Assert-Contains "An authored final development fragment." (
-        Get-Utf8Text -Path (Join-Path $PreserveFragmentScratch "docs/releases/v2.0.0.md")
-    ) "the stable draft composes the authored current development fragment"
-    Assert-Equal $true (
-        (Get-HeadCommitPaths -RepositoryRoot $PreserveFragmentScratch) -contains "docs/releases/v2.0.0-dev.3.md"
-    ) "the Promotion commits its authored current development fragment"
-    $PostPromotion = Invoke-GitLoopyRepositoryReleaseLineAdvance `
-        -RepositoryRoot $Scratch -Labels @("semver:patch")
-    Assert-Equal "2.0.1-dev.1" $PostPromotion.Version (
-        "the issue after a major Promotion starts a fresh dev.N counter"
-    )
+    Assert-Equal "major" $Major.BumpClass "a major target label resolves against the last stable Release"
+    Assert-Equal $false (
+        [IO.File]::Exists((Join-Path $Scratch "docs/releases/v2.0.0.md"))
+    ) "a major advance writes no stable draft"
     $ReleaseCommitCount = [int](& git -C $Scratch rev-list --count HEAD)
     Assert-Equal $null (
         Invoke-GitLoopyRepositoryReleaseLineAdvance `
-            -RepositoryRoot $Scratch -Labels @("semver:none")
-    ) "semver:none does not advance the Release line"
+            -RepositoryRoot $Scratch -Labels @("ready-for-agent", "vendor", "V9.0.0")
+    ) "an issue without a Release-target label does not advance the Release line"
     Assert-Equal $ReleaseCommitCount ([int](& git -C $Scratch rev-list --count HEAD)) (
-        "semver:none does not create a Release commit"
+        "an unlabelled issue does not create a Release commit"
     )
+    try {
+        Invoke-GitLoopyRepositoryReleaseLineAdvance -RepositoryRoot $Scratch -Labels @("v1.2.9") | Out-Null
+        throw "FAIL: an unreachable Release target was accepted"
+    }
+    catch {
+        Assert-Contains "unreachable_release_target" $_.Exception.Message (
+            "an unreachable Release target is refused at the repository seam"
+        )
+    }
 
-    $PreserveScratch = New-ReleaseLineScratchRepository `
+    $TaggedScratch = New-ReleaseLineScratchRepository `
         -ScratchRoot $ScratchRoot `
-        -Version "1.3.0-dev.2" `
+        -Version "1.3.0-beta.2" `
         -ReachableStableTag "1.2.3"
-    Set-Utf8Text `
-        -Path (Join-Path $PreserveScratch "docs/releases/v2.0.0.md") `
-        -Content "# git-loopy 2.0.0`n`nHuman-authored stable notes.`n"
     Import-Module $ModulePath -Force
-    $PreservedMajor = Invoke-GitLoopyRepositoryReleaseLineAdvance `
-        -RepositoryRoot $PreserveScratch `
-        -Labels @("semver:major")
-    Assert-Equal "2.0.0" $PreservedMajor.Version (
-        "a major Promotion still cuts stable when a human-authored draft exists"
+    $BetaAdvance = Invoke-GitLoopyRepositoryReleaseLineAdvance `
+        -RepositoryRoot $TaggedScratch -Labels @("v1.2.4")
+    Assert-Equal "1.3.0-beta.3" $BetaAdvance.Version (
+        "a bump below the target keeps the beta stage and resolves against the reachable stable tag"
     )
-    Assert-Equal "# git-loopy 2.0.0`n`nHuman-authored stable notes.`n" (
-        Get-Utf8Text -Path (Join-Path $PreserveScratch "docs/releases/v2.0.0.md")
-    ) "a major Promotion preserves an existing stable note"
-    $PreserveCommitPaths = Get-HeadCommitPaths -RepositoryRoot $PreserveScratch
-    Assert-Equal $true (
-        $PreserveCommitPaths -contains "docs/releases/v2.0.0-dev.3.md"
-    ) "the preserved Promotion still commits its fragment note path"
-    Assert-Equal $true (
-        $PreserveCommitPaths -contains "docs/releases/v2.0.0.md"
-    ) "the preserved Promotion commits the human stable note path"
+    Assert-Equal "1.3.0b3" (
+        [regex]::Match(
+            (Get-Content -LiteralPath (Join-Path $TaggedScratch "git-loopy/python/uv.lock") -Raw),
+            '(?s)name = "git-loopy".*?version = "([^"]+)"'
+        ).Groups[1].Value
+    ) "the Python distribution spells beta as bN"
+
+    $Fragments = @(
+        "v2.0.0-rc.1.md", "v2.0.0-alpha.10.md", "v2.0.0-beta.1.md", "v2.0.0-alpha.2.md", "v2.0.0-dev.3.md"
+    )
+    foreach ($Name in $Fragments) {
+        $Version = $Name.Substring(1, $Name.Length - 4)
+        Set-Utf8Text `
+            -Path (Join-Path $Scratch "docs/releases/$Name") `
+            -Content "# git-loopy $Version`n`nBody of $Version.`n"
+    }
+    $StableNotes = & (Get-Module GitLoopy.Release) {
+        param($Root)
+        New-GitLoopyStableReleaseNotesContent `
+            -Version "2.0.0" `
+            -Fragments (Get-GitLoopyReleaseTargetFragments `
+                -RepositoryRoot $Root `
+                -StableVersion "2.0.0" `
+                -PendingFragments @([pscustomobject]@{
+                    RelativePath = "docs/releases/v2.0.0-alpha.3.md"
+                    Version = "2.0.0-alpha.3"
+                    Content = "# git-loopy 2.0.0-alpha.3`n`nPending body.`n"
+                }))
+    } $Scratch
+    $Headings = @([regex]::Matches($StableNotes, '(?m)^### (.+)$') | ForEach-Object { $_.Groups[1].Value })
+    Assert-Equal "2.0.0-alpha.2|2.0.0-alpha.3|2.0.0-alpha.10|2.0.0-beta.1|2.0.0-rc.1" ($Headings -join "|") (
+        "a stable draft composes every stage's fragments alpha < beta < rc, then by counter, ignoring dev.N"
+    )
+    Assert-Contains "git-loopy 2.0.0 was promoted from the committed development fragments below." $StableNotes (
+        "the stable draft keeps its development-fragment wording"
+    )
 }
 finally {
     if ([IO.Directory]::Exists($ScratchRoot)) {

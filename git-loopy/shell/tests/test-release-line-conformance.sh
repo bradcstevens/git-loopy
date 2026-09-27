@@ -39,7 +39,8 @@ while IFS= read -r case_json; do
   cases=$((cases + 1))
   assert_equal \
     "$(jq -r '.bump_class' <<<"$case_json")" \
-    "$(git_loopy_resolve_bump_class "$(jq -c '.labels' <<<"$case_json")")" \
+    "$(git_loopy_resolve_bump_class "$(jq -c '.labels' <<<"$case_json")" \
+      "$(jq -r '.last_stable_version' <<<"$case_json")")" \
     "Release-line Bump-class decision: $(jq -r '.id' <<<"$case_json")"
 done < <(shell_cases cases)
 ((cases > 0)) || fail "release-line fixture declares no Shell Bump-class cases"
@@ -47,15 +48,29 @@ done < <(shell_cases cases)
 cases=0
 while IFS= read -r case_json; do
   cases=$((cases + 1))
+  id="$(jq -r '.id' <<<"$case_json")"
   if diagnostic="$(
-    git_loopy_resolve_bump_class "$(jq -c '.labels' <<<"$case_json")" 2>&1
+    git_loopy_resolve_bump_class "$(jq -c '.labels' <<<"$case_json")" \
+      "$(jq -r '.last_stable_version' <<<"$case_json")" 2>&1
   )"; then
-    fail "Release-line Bump-class refusal was accepted: $(jq -r '.id' <<<"$case_json")"
+    fail "Release-line Bump-class refusal was accepted: $id"
   fi
   assert_equal \
     "$(jq -r '.reason' <<<"$case_json")" \
     "$(sed -n 's/^git-loopy: Release-line Bump class: //p' <<<"$diagnostic")" \
-    "Release-line Bump-class refusal: $(jq -r '.id' <<<"$case_json")"
+    "Release-line Bump-class refusal: $id"
+  if jq -e 'has("refused_label")' <<<"$case_json" >/dev/null; then
+    assert_equal \
+      "$(jq -r '.refused_label' <<<"$case_json")" \
+      "$(sed -n 's/^git-loopy: refused label: //p' <<<"$diagnostic")" \
+      "Release-line refused label: $id"
+  fi
+  if jq -e 'has("conflicting_labels")' <<<"$case_json" >/dev/null; then
+    assert_equal \
+      "$(jq -r '.conflicting_labels | join(",")' <<<"$case_json")" \
+      "$(sed -n 's/^git-loopy: conflicting labels: //p' <<<"$diagnostic")" \
+      "Release-line conflicting labels: $id"
+  fi
 done < <(shell_cases refusal_cases)
 ((cases > 0)) || fail "release-line fixture declares no Shell refusal cases"
 
@@ -67,17 +82,47 @@ for group in ratchet_cases counter_cases; do
       git_loopy_advance_release_line \
         "$(jq -r '.last_stable_version' <<<"$case_json")" \
         "$(jq -r '.current_target' <<<"$case_json")" \
+        "$(jq -r '.current_stage // ""' <<<"$case_json")" \
         "$(jq -r '.current_counter' <<<"$case_json")" \
         "$(jq -r '.bump_class' <<<"$case_json")"
     )"
     assert_equal \
-      "$(jq -c '{target: .new_target, counter: .new_counter, version: .resulting_version}' \
-        <<<"$case_json")" \
+      "$(jq -c '{target: .new_target, stage: .new_stage, counter: .new_counter,
+        version: .resulting_version}' <<<"$case_json")" \
       "$result" \
       "Release-line $group: $(jq -r '.id' <<<"$case_json")"
   done < <(shell_cases "$group")
   ((cases > 0)) || fail "release-line fixture declares no Shell $group"
 done
+
+cases=0
+while IFS= read -r case_json; do
+  cases=$((cases + 1))
+  assert_equal \
+    "$(jq -r '.resulting_version' <<<"$case_json")" \
+    "$(git_loopy_advance_release_stage \
+      "$(jq -r '.current_version' <<<"$case_json")" \
+      "$(jq -r '.stage' <<<"$case_json")")" \
+    "Release-line stage advance: $(jq -r '.id' <<<"$case_json")"
+done < <(shell_cases stage_cases)
+((cases > 0)) || fail "release-line fixture declares no Shell stage cases"
+
+cases=0
+while IFS= read -r case_json; do
+  cases=$((cases + 1))
+  if diagnostic="$(
+    git_loopy_advance_release_stage \
+      "$(jq -r '.current_version' <<<"$case_json")" \
+      "$(jq -r '.stage' <<<"$case_json")" 2>&1
+  )"; then
+    fail "Release-line stage refusal was accepted: $(jq -r '.id' <<<"$case_json")"
+  fi
+  assert_equal \
+    "$(jq -r '.reason' <<<"$case_json")" \
+    "$(sed -n 's/^git-loopy: Release-line stage: //p' <<<"$diagnostic")" \
+    "Release-line stage refusal: $(jq -r '.id' <<<"$case_json")"
+done < <(shell_cases stage_refusal_cases)
+((cases > 0)) || fail "release-line fixture declares no Shell stage refusal cases"
 
 cases=0
 while IFS= read -r case_json; do
@@ -95,33 +140,19 @@ done < <(shell_cases promotion_cases)
 cases=0
 while IFS= read -r case_json; do
   cases=$((cases + 1))
-  advanced="$(git_loopy_advance_release_line \
-    "$(jq -r '.last_stable_version' <<<"$case_json")" \
-    "$(jq -r '.current_target' <<<"$case_json")" \
-    "$(jq -r '.current_counter' <<<"$case_json")" \
-    "$(jq -r '.bump_class' <<<"$case_json")")"
-  assert_equal \
-    "$(jq -r '.resulting_version' <<<"$case_json")" \
-    "$(git_loopy_promote_release_line \
-      "$advanced" "$(jq -r '.bump_class' <<<"$case_json")" | jq -r '.version')" \
-    "Bump-class Promotion exemption: $(jq -r '.id' <<<"$case_json")"
-done < <(shell_cases bump_promotion_cases)
-((cases > 0)) || fail "release-line fixture declares no Shell Bump-class Promotion cases"
-
-cases=0
-while IFS= read -r case_json; do
-  cases=$((cases + 1))
   outcomes='[]'
   while IFS= read -r integration_order; do
     target="$(jq -r '.current_target' <<<"$case_json")"
+    stage="$(jq -r '.current_stage // ""' <<<"$case_json")"
     counter="$(jq -r '.current_counter' <<<"$case_json")"
     while IFS= read -r bump_class; do
       result="$(
         git_loopy_advance_release_line \
           "$(jq -r '.last_stable_version' <<<"$case_json")" \
-          "$target" "$counter" "$bump_class"
+          "$target" "$stage" "$counter" "$bump_class"
       )"
       target="$(jq -r '.target' <<<"$result")"
+      stage="$(jq -r '.stage // ""' <<<"$result")"
       counter="$(jq -r '.counter' <<<"$result")"
     done < <(jq -r '.[]' <<<"$integration_order")
     outcomes="$(jq -c --argjson result "$result" '. + [$result]' <<<"$outcomes")"
@@ -129,6 +160,7 @@ while IFS= read -r case_json; do
   assert_equal \
     "$(jq -c '[.integration_orders[] | {
       target: $case.resulting_target,
+      stage: $case.resulting_stage,
       counter: $case.resulting_counter,
       version: $case.resulting_version
     }]' --argjson case "$case_json" <<<"$case_json")" \
@@ -140,14 +172,27 @@ done < <(shell_cases order_independence_cases)
 # The writer updates every distribution copy before the Release-line commit makes
 # the advance visible. Drive its public seam in a real repository so a staging or
 # commit regression cannot hide behind a pure ratchet test.
+#
+# Seed every copied metadata file to a known stable value first, so this suite
+# never depends on whatever the live Release line happens to be.
+seed_release_metadata() {
+  local root="$1" live live_python path
+  live="$(cat "$repository_root/VERSION")"
+  live_python="$(jq -r '.expected_python_distribution_version' \
+    "$repository_root/git-loopy/conformance/release-version.json")"
+  for path in "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}"; do
+    mkdir -p "$root/$(dirname "$path")"
+    LIVE="$live" LIVE_PY="$live_python" perl -pe '
+      s/\Q$ENV{LIVE}\E/1.2.3/g; s/\Q$ENV{LIVE_PY}\E/1.2.3/g
+    ' "$repository_root/$path" >"$root/$path"
+  done
+}
 scratch="$(mktemp -d)"
 missing_metadata=""
 preserve_notes=""
-trap 'rm -rf "$scratch" "$missing_metadata" "$preserve_notes"' EXIT
-for path in "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}"; do
-  mkdir -p "$scratch/$(dirname "$path")"
-  cp "$repository_root/$path" "$scratch/$path"
-done
+preserve_fragment=""
+trap 'rm -rf "$scratch" "$missing_metadata" "$preserve_notes" "$preserve_fragment"' EXIT
+seed_release_metadata "$scratch"
 git_loopy_write_repository_release_version "$scratch" "1.2.3" ||
   fail "could not establish a stable Release line in the writer fixture"
 git -C "$scratch" init -q
@@ -160,30 +205,30 @@ fixture_without_live_versions="$(
   jq -c 'del(.expected_release_version, .expected_python_distribution_version)' \
     "$scratch/git-loopy/conformance/release-version.json"
 )"
-git_loopy_advance_repository_release_line "$scratch" '["semver:patch"]' >/dev/null
+git_loopy_advance_repository_release_line "$scratch" '["v1.2.4"]' >/dev/null
 assert_equal \
-  '{"target":"1.2.4","counter":1,"version":"1.2.4-dev.1","bump_class":"patch"}' \
+  '{"target":"1.2.4","stage":"alpha","counter":1,"version":"1.2.4-alpha.1","bump_class":"patch"}' \
   "$GIT_LOOPY_RELEASE_ADVANCE_JSON" \
-  "a closed patch issue advances and commits the Release line"
-assert_equal "1.2.4-dev.1" "$(git_loopy_read_release_version "$scratch/VERSION")" \
+  "a closed patch-target issue advances and commits the Release line"
+assert_equal "1.2.4-alpha.1" "$(git_loopy_read_release_version "$scratch/VERSION")" \
   "the Release authority advanced"
-assert_equal "1.2.4-dev.1" \
+assert_equal "1.2.4-alpha.1" \
   "$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' \
     "$scratch/git-loopy/python/git_loopy/__init__.py")" \
   "the Python source copy advanced"
-assert_equal "1.2.4-dev.1" \
+assert_equal "1.2.4-alpha.1" \
   "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$scratch/git-loopy/tui/Cargo.toml")" \
   "the Rust manifest copy advanced"
-assert_equal "1.2.4.dev1" \
+assert_equal "1.2.4a1" \
   "$(awk '/name = "git-loopy"/ { found = 1 } found && /^version = / {
     gsub(/"/, "", $3); print $3; exit
   }' "$scratch/git-loopy/python/uv.lock")" \
   "the Python lockfile uses its normalized Release version"
-assert_equal "1.2.4-dev.1" \
+assert_equal "1.2.4-alpha.1" \
   "$(jq -r '.expected_release_version' \
     "$scratch/git-loopy/conformance/release-version.json")" \
   "the live conformance Release version advances"
-assert_equal "1.2.4.dev1" \
+assert_equal "1.2.4a1" \
   "$(jq -r '.expected_python_distribution_version' \
     "$scratch/git-loopy/conformance/release-version.json")" \
   "the live conformance Python distribution version is normalized"
@@ -196,104 +241,108 @@ assert_equal "git-loopy/conformance/release-version.json" \
     git-loopy/conformance)" \
   "only the designated live Release conformance fixture advances"
 assert_equal \
-  $'# git-loopy 1.2.4-dev.1\n\nThis development fragment advances the Release line to `1.2.4-dev.1` on the way to stable `1.2.4`.' \
-  "$(cat "$scratch/docs/releases/v1.2.4-dev.1.md")" \
+  $'# git-loopy 1.2.4-alpha.1\n\nThis development fragment advances the Release line to `1.2.4-alpha.1` on the way to stable `1.2.4`.' \
+  "$(cat "$scratch/docs/releases/v1.2.4-alpha.1.md")" \
   "an advance writes its committed development Release-note fragment"
 git -C "$scratch" diff-tree --no-commit-id --name-only -r HEAD |
-  grep -Fqx "docs/releases/v1.2.4-dev.1.md" ||
+  grep -Fqx "docs/releases/v1.2.4-alpha.1.md" ||
   fail "the advance commit includes its development Release-note fragment"
-git_loopy_advance_repository_release_line "$scratch" '["semver:minor"]' >/dev/null
-assert_equal "1.3.0-dev.2" "$(git_loopy_read_release_version "$scratch/VERSION")" \
+git_loopy_advance_repository_release_line "$scratch" '["v1.3.0"]' >/dev/null
+assert_equal "1.3.0-alpha.2" "$(git_loopy_read_release_version "$scratch/VERSION")" \
   "a second closure keeps the in-Run Release target and counter without a stable tag"
 assert_equal \
-  "chore(release): advance Release line to 1.3.0-dev.2" \
+  "chore(release): advance Release line to 1.3.0-alpha.2" \
   "$(git -C "$scratch" log -1 --format=%s)" \
   "the Release line is committed after every metadata copy changed"
+if git_loopy_advance_repository_release_line "$scratch" '["v1.4.0"]' >/dev/null 2>&1; then
+  fail "an unreachable Release target advanced the Release line"
+fi
+assert_equal "1.3.0-alpha.2" "$(git_loopy_read_release_version "$scratch/VERSION")" \
+  "a refused Release target leaves the Release line untouched"
+git_loopy_advance_repository_release_line "$scratch" '["v2.0.0"]' >/dev/null
+assert_equal "2.0.0-alpha.3" "$(git_loopy_read_release_version "$scratch/VERSION")" \
+  "a major target raises the line but never promotes it to stable on its own"
+assert_equal \
+  "chore(release): advance Release line to 2.0.0-alpha.3" \
+  "$(git -C "$scratch" log -1 --format=%s)" \
+  "a major target is committed as an advance rather than a Promotion"
+GIT_LOOPY_RELEASE_LINE_INITIALIZED=false
+GIT_LOOPY_RELEASE_LAST_STABLE=""
+GIT_LOOPY_RELEASE_TARGET=""
+GIT_LOOPY_RELEASE_STAGE=""
+GIT_LOOPY_RELEASE_COUNTER=0
+git_loopy_advance_repository_release_line "$scratch" '["v1.2.4"]' >/dev/null
+assert_equal "2.0.0-alpha.4" "$(git_loopy_read_release_version "$scratch/VERSION")" \
+  "a fresh Run reads the current line and last stable tag from the repository"
+release_commit_count="$(git -C "$scratch" rev-list --count HEAD)"
+assert_equal "null" \
+  "$(git_loopy_advance_repository_release_line "$scratch" '["ready-for-agent"]')" \
+  "an issue with no Release-target label does not advance the Release line"
+assert_equal "$release_commit_count" "$(git -C "$scratch" rev-list --count HEAD)" \
+  "an issue with no Release-target label does not create a Release commit"
+
+# A stable draft composes every fragment for its target across all stages,
+# ordered alpha < beta < rc and then by counter.
 mkdir -p "$scratch/docs/releases"
-printf '# git-loopy 2.0.0-dev.1\n\nFirst accumulated fragment.\n' \
-  >"$scratch/docs/releases/v2.0.0-dev.1.md"
-printf '# git-loopy 2.0.0-dev.2\n\nSecond accumulated fragment.\n' \
-  >"$scratch/docs/releases/v2.0.0-dev.2.md"
-git -C "$scratch" add -- \
-  docs/releases/v2.0.0-dev.1.md docs/releases/v2.0.0-dev.2.md
-git -C "$scratch" commit -qm "seed accumulated Release-note fragments"
+printf '# git-loopy 2.0.0-rc.1\n\nRelease-candidate fragment.\n' \
+  >"$scratch/docs/releases/v2.0.0-rc.1.md"
+printf '# git-loopy 2.0.0-beta.1\n\nBeta fragment.\n' \
+  >"$scratch/docs/releases/v2.0.0-beta.1.md"
+printf '# git-loopy 2.0.0-alpha.10\n\nLate alpha fragment.\n' \
+  >"$scratch/docs/releases/v2.0.0-alpha.10.md"
 preserve_notes="$(mktemp -d)"
 cp -R "$scratch/." "$preserve_notes"
 preserve_fragment="$(mktemp -d)"
 cp -R "$scratch/." "$preserve_fragment"
-authored_fragment=$'# git-loopy 2.0.0-dev.3\n\nAn authored final development fragment.'
-printf '%s\n' "$authored_fragment" >"$preserve_fragment/docs/releases/v2.0.0-dev.3.md"
-git_loopy_advance_repository_release_line "$preserve_fragment" '["semver:major"]' >/dev/null
+stable_line='{"target":"2.0.0","stage":null,"counter":0,"version":"2.0.0"}'
+git_loopy_write_repository_release_notes "$scratch" \
+  '{"target":"2.0.0","stage":"rc","counter":2,"version":"2.0.0-rc.2"}' "$stable_line" ||
+  fail "a stable draft could not be composed"
+assert_equal \
+  $'2.0.0-alpha.3\n2.0.0-alpha.4\n2.0.0-alpha.10\n2.0.0-beta.1\n2.0.0-rc.1\n2.0.0-rc.2' \
+  "$(sed -n 's/^### //p' "$scratch/docs/releases/v2.0.0.md")" \
+  "a stable draft orders fragments alpha < beta < rc, then by counter"
+grep -Fqx "Late alpha fragment." "$scratch/docs/releases/v2.0.0.md" ||
+  fail "a stable draft composes the accumulated development fragments"
+authored_fragment=$'# git-loopy 2.0.0-rc.2\n\nAn authored final development fragment.'
+printf '%s\n' "$authored_fragment" >"$preserve_fragment/docs/releases/v2.0.0-rc.2.md"
+git_loopy_write_repository_release_notes "$preserve_fragment" \
+  '{"target":"2.0.0","stage":"rc","counter":2,"version":"2.0.0-rc.2"}' "$stable_line" ||
+  fail "a stable draft could not be composed over an authored fragment"
 assert_equal "$authored_fragment" \
-  "$(cat "$preserve_fragment/docs/releases/v2.0.0-dev.3.md")" \
-  "a Promotion preserves an authored current development fragment"
+  "$(cat "$preserve_fragment/docs/releases/v2.0.0-rc.2.md")" \
+  "a stable draft preserves an authored current development fragment"
 grep -Fqx "An authored final development fragment." \
   "$preserve_fragment/docs/releases/v2.0.0.md" ||
   fail "a stable draft composes the authored current development fragment"
-GIT_LOOPY_RELEASE_LINE_INITIALIZED=true
-GIT_LOOPY_RELEASE_LAST_STABLE="1.2.3"
-GIT_LOOPY_RELEASE_TARGET="1.3.0"
-GIT_LOOPY_RELEASE_COUNTER=2
-git_loopy_advance_repository_release_line "$scratch" '["semver:major"]' >/dev/null
-assert_equal "2.0.0" "$(git_loopy_read_release_version "$scratch/VERSION")" \
-  "a major Bump class cuts stable without a milestone"
-assert_equal \
-  "chore(release): promote Release line to 2.0.0" \
-  "$(git -C "$scratch" log -1 --format=%s)" \
-  "a stable cut is committed as a Promotion rather than an advance"
-stable_notes="$(cat "$scratch/docs/releases/v2.0.0.md")"
-[[ "$stable_notes" == *"First accumulated fragment."* &&
-  "$stable_notes" == *"Second accumulated fragment."* &&
-  "$stable_notes" == *"2.0.0-dev.3"* ]] ||
-  fail "a major Promotion composes accumulated development fragments into a stable draft"
-grep -Fqx "### 2.0.0-dev.3" "$scratch/docs/releases/v2.0.0.md" ||
-  fail "a generated development fragment keeps its Release version heading in the stable draft"
-git -C "$scratch" diff-tree --no-commit-id --name-only -r HEAD |
-  grep -Fqx "docs/releases/v2.0.0-dev.3.md" ||
-  fail "a major Promotion commit includes its final development fragment"
-git -C "$scratch" diff-tree --no-commit-id --name-only -r HEAD |
-  grep -Fqx "docs/releases/v2.0.0.md" ||
-  fail "a major Promotion commit includes its generated stable draft"
 printf '# Human release essay\n\nThis is deliberately not generated.\n' \
   >"$preserve_notes/docs/releases/v2.0.0.md"
-GIT_LOOPY_RELEASE_LINE_INITIALIZED=false
-GIT_LOOPY_RELEASE_LAST_STABLE=""
-GIT_LOOPY_RELEASE_TARGET=""
-GIT_LOOPY_RELEASE_COUNTER=0
-git_loopy_advance_repository_release_line "$preserve_notes" '["semver:major"]' >/dev/null
+git_loopy_write_repository_release_notes "$preserve_notes" \
+  '{"target":"2.0.0","stage":"rc","counter":2,"version":"2.0.0-rc.2"}' "$stable_line" ||
+  fail "a stable draft could not be written beside human notes"
 assert_equal \
   $'# Human release essay\n\nThis is deliberately not generated.' \
   "$(cat "$preserve_notes/docs/releases/v2.0.0.md")" \
-  "a human stable Release note is preserved when a major promotes"
-git -C "$preserve_notes" diff-tree --no-commit-id --name-only -r HEAD |
-  grep -Fqx "docs/releases/v2.0.0-dev.3.md" ||
-  fail "a Promotion with human notes still commits its development fragment"
-git -C "$preserve_notes" diff-tree --no-commit-id --name-only -r HEAD |
+  "a human stable Release note is preserved"
+printf '%s\n' "${GIT_LOOPY_RELEASE_NOTE_COMMIT_PATHS[@]}" |
   grep -Fqx "docs/releases/v2.0.0.md" ||
-  fail "a Promotion must commit its preserved human stable Release note"
-GIT_LOOPY_RELEASE_LINE_INITIALIZED=true
-GIT_LOOPY_RELEASE_LAST_STABLE="2.0.0"
-GIT_LOOPY_RELEASE_TARGET="2.0.0"
-GIT_LOOPY_RELEASE_COUNTER=0
-git_loopy_advance_repository_release_line "$scratch" '["semver:patch"]' >/dev/null
-assert_equal "2.0.1-dev.1" "$(git_loopy_read_release_version "$scratch/VERSION")" \
-  "the issue after a major Promotion starts a fresh dev.N counter"
-release_commit_count="$(git -C "$scratch" rev-list --count HEAD)"
-assert_equal "null" \
-  "$(git_loopy_advance_repository_release_line "$scratch" '["semver:none"]')" \
-  "a deliberate no-bump does not advance the Release line"
-assert_equal "$release_commit_count" "$(git -C "$scratch" rev-list --count HEAD)" \
-  "a deliberate no-bump does not create a Release commit"
+  fail "a stable draft must commit its preserved human stable Release note"
+if _git_loopy_validate_release_line_version "2.0.0-dev.1" 2>/dev/null; then
+  fail "a retired -dev.N value was accepted as a Release line"
+fi
+assert_equal "null" "$(git_loopy_promote_closed_milestone 2.0.0-dev.1 v2.0.0 closed)" \
+  "a retired -dev.N value is never promoted by a milestone"
 
 missing_metadata="$(mktemp -d)"
 trap 'rm -rf "$scratch" "$preserve_notes" "$preserve_fragment" "$missing_metadata"' EXIT
 printf '1.2.3\n' >"$missing_metadata/VERSION"
+GIT_LOOPY_RELEASE_STAGE=""
 GIT_LOOPY_RELEASE_LINE_INITIALIZED=false
 GIT_LOOPY_RELEASE_LAST_STABLE=""
 GIT_LOOPY_RELEASE_TARGET=""
 GIT_LOOPY_RELEASE_COUNTER=0
 if git_loopy_advance_repository_release_line \
-  "$missing_metadata" '["semver:patch"]' >/dev/null 2>&1; then
+  "$missing_metadata" '["v1.2.4"]' >/dev/null 2>&1; then
   fail "a Release line advanced without every version metadata copy"
 fi
 [[ -z "$(find "$missing_metadata" -name '.git-loopy-release*' -print -quit)" ]] ||
@@ -301,10 +350,7 @@ fi
 
 invalid_fixture="$(mktemp -d)"
 trap 'rm -rf "$scratch" "$preserve_notes" "$preserve_fragment" "$missing_metadata" "$invalid_fixture"' EXIT
-for path in "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}"; do
-  mkdir -p "$invalid_fixture/$(dirname "$path")"
-  cp "$repository_root/$path" "$invalid_fixture/$path"
-done
+seed_release_metadata "$invalid_fixture"
 git_loopy_write_repository_release_version "$invalid_fixture" "1.2.3" ||
   fail "could not establish Release metadata before fixture validation refusals"
 while IFS=$'\t' read -r id fixture_content; do

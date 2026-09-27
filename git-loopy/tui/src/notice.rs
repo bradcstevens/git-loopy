@@ -53,13 +53,15 @@ pub(crate) struct UnboundRunTally {
     bound_work: bool,
     /// The issue source the Run declared on its start record.
     issue_source: Option<String>,
-    /// The Pool, as the latest `wrapper.afk_ready.collected` recorded it, or
-    /// `None` when the trace recorded none. A Membership read is never read
-    /// as the Pool: it lists only candidates eligible to take, and is
-    /// authority for nothing (ADR-0042).
+    /// The Pool, as Run-end refusals or (without them) the latest
+    /// `wrapper.afk_ready.collected` recorded it. A Membership read only
+    /// lists candidates eligible to take, and is authority for nothing
+    /// (ADR-0042).
     members: Option<BTreeSet<IssueRef>>,
     /// The most recent refusal of each candidate, in issue order.
     skips: BTreeMap<IssueRef, String>,
+    /// Run-end refusals in candidate order, when the end record supplies them.
+    refusal_order: Option<Vec<IssueRef>>,
     /// The most recent exclusion of each candidate, in issue order.
     exclusions: BTreeMap<IssueRef, String>,
     /// The Run's terminal outcome, once it has one.
@@ -96,7 +98,27 @@ impl UnboundRunTally {
                     excluded.reason.clone().unwrap_or_default(),
                 );
             }
-            EventPayload::RunEnd(end) => self.outcome.clone_from(&end.outcome),
+            EventPayload::RunEnd(end) => {
+                self.outcome.clone_from(&end.outcome);
+                if let Some(refusals) = &end.refusals {
+                    self.refusal_order = Some(
+                        refusals
+                            .iter()
+                            .map(|refusal| refusal.issue.clone())
+                            .collect(),
+                    );
+                    self.members = Some(
+                        refusals
+                            .iter()
+                            .map(|refusal| refusal.issue.clone())
+                            .collect(),
+                    );
+                    self.skips = refusals
+                        .iter()
+                        .map(|refusal| (refusal.issue.clone(), refusal.reason.clone()))
+                        .collect();
+                }
+            }
             _ => {}
         }
     }
@@ -243,7 +265,14 @@ impl UnboundRunTally {
     /// every one is named rather than a real root silently dropped.
     fn blockers(&self, pool: &BTreeSet<IssueRef>) -> Vec<String> {
         let mut named: Vec<String> = Vec::new();
-        for reason in self.skips.values() {
+        let candidates: Vec<_> = self.refusal_order.as_ref().map_or_else(
+            || self.skips.keys().collect(),
+            |order| order.iter().collect(),
+        );
+        for issue in candidates {
+            let Some(reason) = self.skips.get(issue) else {
+                continue;
+            };
             let Some(detail) = reason
                 .strip_prefix(BLOCKED_BY_OPEN_DEPENDENCY)
                 .and_then(|rest| rest.strip_prefix(':'))

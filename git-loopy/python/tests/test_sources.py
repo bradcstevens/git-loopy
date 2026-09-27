@@ -2922,17 +2922,8 @@ class TestThePinIsValidatedAtPreflight:
         assert rc == 1
         assert "#7" in logged
 
-    def test_a_parallel_invocation_refuses_a_pin_that_is_not_parallel_safe(
-        self,
-    ) -> None:
-        gh = FakeGitHubClient(issues=[_make_issue(7, labels=["ready-for-agent"])])
-
-        rc, logged = self._preflight(gh, pin=7, pin_requires_parallel_safe=True)
-
-        assert rc == 1
-        assert "parallel-safe" in logged
-
-    def test_a_serial_invocation_does_not_require_parallel_safe(self) -> None:
+    def test_a_pin_is_never_refused_for_lacking_parallel_safe(self) -> None:
+        """#430: a serial-required Pin is worked on the serial path instead."""
         gh = FakeGitHubClient(issues=[_make_issue(7, labels=["ready-for-agent"])])
 
         rc, _ = self._preflight(gh, pin=7)

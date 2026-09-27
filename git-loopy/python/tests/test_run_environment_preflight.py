@@ -309,13 +309,13 @@ def test_environment_preflight_ignores_the_labels_a_run_creates_for_itself(
 
     `gh.SubprocessTaskTypeLabelClient.apply_issue_label` creates the Label and
     then attaches it, and the writers treat a failure as non-fatal — no Label is
-    worth an Iteration. Refusing a Run over a `task-type:` or `semver:` name the
+    worth an Iteration. Refusing a Run over a `task-type:` or `vX.Y.Z` name the
     Run would have created is `doctor` judging what the Run does not (ADR-0055).
     """
     carried = tuple(
         spec.name
         for spec in labels.read_tracker_vocabulary(tmp_path)
-        if not spec.name.startswith(("task-type:", "semver:"))
+        if not spec.name.startswith("task-type:")
     )
 
     result = resolve_run_environment_preflight(

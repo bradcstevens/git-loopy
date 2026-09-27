@@ -39,7 +39,7 @@ def test_bare_setup_preserves_the_recorded_route_into_actual_work(
 ) -> None:
     client, git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=[
-            "ready-for-agent", "task-type:implementation", "semver:none",
+            "ready-for-agent", "task-type:implementation",
             *(["parallel-safe"] if mode == "lane" else []),
         ],
     )

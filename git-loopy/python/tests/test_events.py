@@ -157,7 +157,6 @@ def test_rolling_dispatch_event_constants_are_literal_strings() -> None:
     assert events_module.WRAPPER_CONTRIBUTION_END == "wrapper.contribution.end"
     assert events_module.WRAPPER_CONCURRENCY_CHANGED == "wrapper.concurrency.changed"
     assert events_module.WRAPPER_SERIAL_REQUESTED == "wrapper.serial.requested"
-    assert events_module.WRAPPER_PIPELINE_QUIESCENT == "wrapper.pipeline.quiescent"
     assert events_module.WRAPPER_ROLLING_REFILL_TURN == "wrapper.rolling.refill_turn"
 
 

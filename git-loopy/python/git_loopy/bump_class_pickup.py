@@ -1,4 +1,9 @@
-"""Infer and persist an issue's closed **Bump class** at **Pickup** (#489)."""
+"""Infer an issue's **Bump class** at **Pickup** and persist its Release target.
+
+The classifier answers with one closed Bump-class key; what reaches the tracker
+is the ``vX.Y.Z`` label naming the Release the issue ships in (ADR-0066), and a
+``none`` writes nothing at all (#489).
+"""
 
 from __future__ import annotations
 
@@ -8,11 +13,13 @@ from dataclasses import dataclass, replace as dataclass_replace
 from enum import Enum
 from typing import Awaitable, Callable, Protocol, Sequence
 
-from git_loopy.labels import LabelSpec, SEMVER_LABELS
+from git_loopy.labels import LabelSpec, release_target_label_spec
 from git_loopy.release_version import (
     BUMP_CLASS_KEYS,
-    BUMP_CLASS_LABEL_PREFIX,
     BumpClassError,
+    ReleaseLine,
+    is_release_target_label,
+    pickup_release_target_label,
     resolve_bump_class,
 )
 from git_loopy.sources import AfkReadyItem
@@ -30,13 +37,13 @@ __all__ = [
 
 BUMP_CLASS_MARKER_TEMPLATE = "<bump-class>{key}</bump-class>"
 _MARKER_RE = re.compile(
-    r"<bump-class>\s*(?:semver:)?\s*([A-Za-z0-9._-]+)\s*</bump-class>",
+    r"<bump-class>\s*([A-Za-z0-9._-]+)\s*</bump-class>",
     re.IGNORECASE,
 )
-_BARE_KEY_RE = re.compile(r"\A(?:semver:)?\s*([A-Za-z0-9._-]+)\Z")
-_WRITABLE: dict[str, LabelSpec] = {
-    spec.name[len(BUMP_CLASS_LABEL_PREFIX) :]: spec for spec in SEMVER_LABELS
-}
+_BARE_KEY_RE = re.compile(r"\A\s*([A-Za-z0-9._-]+)\Z")
+
+#: Reads the last stable Release and the Release line currently under way.
+ReleaseLineReader = Callable[[], tuple[str, ReleaseLine]]
 
 
 class BumpClassClassificationOutcome(Enum):
@@ -74,9 +81,10 @@ async def classify_bump_class(
     *,
     pair: ClassifierPair | None,
     propose: Callable[[ClassifierPair, AfkReadyItem], Awaitable[str | None]],
+    last_stable_version: str,
 ) -> BumpClassClassification:
     """Infer one Bump class from the bound issue's own content."""
-    carried = _carried_bump_class(item.labels)
+    carried = _carried_bump_class(item.labels, last_stable_version)
     if isinstance(carried, str):
         return BumpClassClassification(
             BumpClassClassificationOutcome.ALREADY_LABELLED, bump_class=carried
@@ -143,15 +151,16 @@ def bump_class_prompt(item: AfkReadyItem) -> str:
 
 @dataclass(frozen=True)
 class PickupBumpClassifier:
-    """Classify a bound issue's Bump class and write only a closed taxonomy key."""
+    """Classify a bound issue's Bump class and write its Release-target label."""
 
     pair: ClassifierPair | None
     propose: Callable[[ClassifierPair, AfkReadyItem], Awaitable[str | None]]
     client: BumpClassLabelClient
+    release_line: ReleaseLineReader
     diag: logging.Logger | None = None
 
     async def labelled(self, item: AfkReadyItem) -> AfkReadyItem:
-        """Return ``item`` with a newly persisted Bump-class label, if any."""
+        """Return ``item`` with a newly persisted Release-target label, if any."""
         number = _issue_number(item)
         if number is None:
             self._report(
@@ -162,29 +171,42 @@ class PickupBumpClassifier:
                 ),
             )
             return item
+        try:
+            last_stable, current_line = self.release_line()
+        except Exception as exc:  # noqa: BLE001 - classification is non-fatal
+            self._report(
+                item,
+                BumpClassClassification(
+                    BumpClassClassificationOutcome.FAILED,
+                    detail=f"cannot read the Release line: {type(exc).__name__}: {exc}",
+                ),
+            )
+            return item
         classification = await classify_bump_class(
-            item, pair=self.pair, propose=self.propose
+            item, pair=self.pair, propose=self.propose, last_stable_version=last_stable
         )
         if classification.outcome is BumpClassClassificationOutcome.ALREADY_LABELLED:
             return item
         if classification.outcome is not BumpClassClassificationOutcome.CLASSIFIED:
             self._report(item, classification)
             return item
-        spec = _WRITABLE.get(classification.bump_class or "")
-        if spec is None:
+        label = pickup_release_target_label(
+            last_stable, current_line, classification.bump_class or ""
+        )
+        if label is None:
             self._report(
                 item,
-                BumpClassClassification(
-                    BumpClassClassificationOutcome.REFUSED_KEY,
-                    detail=f"no writable Bump-class label for {classification.bump_class!r}",
+                dataclass_replace(
+                    classification, detail="no version change, so no label is written"
                 ),
             )
             return item
+        spec = release_target_label_spec(label[1:])
         try:
             live = tuple(self.client.read_issue_labels(number))
         except Exception:
             live = item.labels
-        live_carried = _carried_bump_class(live)
+        live_carried = _carried_bump_class(live, last_stable)
         if live_carried is not None:
             if isinstance(live_carried, BumpClassError):
                 self._report(
@@ -233,11 +255,13 @@ class PickupBumpClassifier:
             pass
 
 
-def _carried_bump_class(labels: Sequence[str]) -> str | BumpClassError | None:
-    if not any(label.startswith(BUMP_CLASS_LABEL_PREFIX) for label in labels):
+def _carried_bump_class(
+    labels: Sequence[str], last_stable_version: str
+) -> str | BumpClassError | None:
+    if not any(is_release_target_label(label) for label in labels):
         return None
     try:
-        return resolve_bump_class(labels)
+        return resolve_bump_class(labels, last_stable_version)
     except BumpClassError as exc:
         return exc
 

@@ -1,6 +1,6 @@
 {
   "fixture_schema_version": "1.6",
-  "wrapper_contract_version": "2.11",
+  "wrapper_contract_version": "2.14",
   "event_schema_version": "1.2",
   "semantic_contract": {
     "dashboard_band_order": [
@@ -7948,7 +7948,7 @@
           "bump_class": "patch",
           "issue": 42,
           "release_target": "1.2.4",
-          "release_version": "1.2.4-dev.1"
+          "release_version": "1.2.4-alpha.1"
         },
         {
           "ts": "2026-05-16T00:00:02.000Z",
@@ -7959,7 +7959,7 @@
           "bump_class": "minor",
           "issue": 43,
           "release_target": "1.3.0",
-          "release_version": "1.3.0-dev.2"
+          "release_version": "1.3.0-alpha.2"
         }
       ],
       "snapshots": [
@@ -8098,7 +8098,7 @@
                   "effective_ceiling_tokens": null
                 },
                 "release_target": "1.3.0",
-                "release_version": "1.3.0-dev.2",
+                "release_version": "1.3.0-alpha.2",
                 "cost": {
                   "availability": "available"
                 },
@@ -9662,14 +9662,6 @@
           "refill_stopped": true
         },
         {
-          "ts": "2026-05-16T00:00:26.000Z",
-          "run_id": "01HXR0000000000000000000DD",
-          "iter": null,
-          "type": "wrapper.pipeline.quiescent",
-          "phase": "draining_for_serial",
-          "reason": "serial_latched"
-        },
-        {
           "ts": "2026-05-16T00:00:27.000Z",
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
@@ -9982,7 +9974,7 @@
           }
         },
         {
-          "after_event_count": 36,
+          "after_event_count": 35,
           "render_at_utc": "2026-05-16T00:00:32.000Z",
           "expected": {
             "dashboard": {

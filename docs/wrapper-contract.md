@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.11 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.14 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -260,12 +260,29 @@ The pin **bypasses the order and nothing else** (ADR-0032), which is four separa
    moved to the head and every other issue keeps its §3.2 sequence behind it. The sort key stays
    what §3.2 requires — a pure function of the fetched issue fields — because a pin is one
    operator's instruction for one invocation and is not a property of any issue. A Run therefore
-   resumes oldest-first the moment its pinned issue leaves the **Pool**.
+   resumes oldest-first the moment the Pin is **spent** (contract 2.14, #644), and **the first
+   Pickup that reads the Pin spends it** for the rest of the invocation. A Pickup reads the Pin
+   when it binds it; when it passes it over for an answer about the Pin itself — an open
+   `blocked_by` dependency, a **Lease** held elsewhere, a refused **Task type**, or an
+   authoritative read that finds it no longer eligible; or when it completes its Pool or
+   Membership read (§2.1 `complete`) and the Pin is not in it. **A Pickup that could not read the
+   Pin leaves it live**: an incomplete or failed read that did not show it, or an admission read
+   of the Pin that did not resolve (`readiness_unprovable`, and a failed Lease or **Dynamic
+   route** read in a member that takes those reads). The next Pickup promotes a live Pin again. A
+   serial-only member walks on past an unread Pin exactly as §3.3 walks past any skip, binding the
+   next candidate while the Pin stays live; holding a Pickup for an unread Pin is **Rolling
+   dispatch** behaviour, not a family requirement. Once spent, the issue is ordered by §3.2 like
+   any other: it is never promoted again, even after it unblocks or reappears, so an invocation
+   has at most one `wrapper.pickup.bound` with reason `pin`. Until contract 2.14 this clause said
+   a Run resumed oldest-first only once the pinned issue left the **Pool**, which let a Pin that
+   made no progress head every later Pickup. `pin-duration.json` pins the spend decision as a
+   sequence of Pickups, each taking the Pool and how that Pickup read the Pin.
 2. **It outranks Priority.** A pinned issue reached the head because an operator named it,
    whatever its labels said. Were **Priority** to win, `--issue N` would work on most
    repositories and silently do nothing on exactly the ones that use the label. `wrapper.pickup.
-   bound` MUST report `reason: pin` for that binding, and `order`/`priority` for every other
-   binding in the same Run — the pin explains one binding, not the whole Run.
+   bound` MUST report `reason: pin` for a binding of the **live** Pin, and `order`/`priority` for
+   every other binding in the same Run, a binding of the spent Pin included — the pin explains
+   one binding, not the whole Run.
 3. **It does not bypass eligibility, and an ineligible pin FAILS the invocation.** A pinned issue
    that is closed, missing, unreadable, lacks `ready-for-agent`, or fails the §3.1 AFK-ready
    discriminator MUST end the invocation with the `preflight_failed` exit code, naming what is
@@ -274,9 +291,9 @@ The pin **bypasses the order and nothing else** (ADR-0032), which is four separa
    §3.3 makes a candidate the runner cannot take a *skip* precisely because a serial Run merely
    walked past it, whereas a pin is an operator naming an issue, and there is no next candidate
    that honours what they asked for. Silently working a different issue than the one named is
-   worse than stopping. In **Parallel mode** the pin MUST additionally carry `parallel-safe`,
-   because a **Lane** Pool requires it and a pinned issue that never enters the Pool would leave
-   the Run working the head of the order — the same silent substitution, arrived at by omission.
+   worse than stopping. (#430 removed this clause's former sentence requiring a Parallel-mode pin
+   to carry `parallel-safe`, without a version bump; contract 2.14 records that removal. Lacking
+   `parallel-safe` decides how a pin is worked, never whether.)
 4. **It weakens nothing for any other issue.** The pin promotes; it does not restrict the Pool.
    Every other candidate remains eligible on exactly the terms §3.1 and §3.2 already set.
 
@@ -346,8 +363,9 @@ An Orchestrator running serially MUST:
   pickup (`binding_source: lane_pickup`) exactly as it governs this one.
 - **Record the binding (contract 1.13).** A **Pickup** that binds MUST emit
   `wrapper.pickup.bound` (§12) carrying the issue, the selection reason — `pin` when §3.2's
-  **Pin** named this candidate, else `priority` or `order` — and where the candidate sat in the
-  order. Selection is the runner's decision as of contract 1.12, and a decision nobody
+  **live** Pin named this candidate (contract 2.14, #644), else `priority` or `order` — and where
+  the candidate sat in the order. Selection is the runner's decision as of contract 1.12, and a
+  decision nobody
   can see is a decision nobody can audit: the starvation §3.2 exists to end was invisible
   precisely because being passed over left no trace. The record is emitted *after* the
   `wrapper.issue.activated` that publishes the binding, so it never describes a binding the rest
@@ -446,7 +464,9 @@ Where **every** candidate was refused and **at least one** refusal was `readines
 Run MUST end under `preflight_failed` (§10) — not `all_skipped`, and not `all_blocked`. Where every
 refusal was `blocked_by_open_dependency` the Run ends `all_blocked`, and otherwise `all_skipped`,
 both exactly as before. `conformance/exit-codes.json` pins this as `unbound_pool_cases`, so the
-family asks one rule rather than restating it per member.
+family asks one rule rather than restating it per member. Where Rolling dispatch reaches
+`all_blocked` or `all_skipped` from its Pool cache, the Run's end records the candidates behind
+that claim as `refusals` (§12, contract 2.12, #643); `preflight_failed` carries none.
 
 This is §2.2's rule at the next seam down. `all_skipped` means "a labelling mistake an operator can
 fix" and `all_blocked` means "every candidate proves an open blocker" — both are claims about the
@@ -481,8 +501,11 @@ scheduler's own collision guard is untouched.
 Because both seams read the same assertion, **both orders MUST agree**: a Lane MUST NOT reserve an
 issue a serial Iteration of the same Run already found blocked, and a serial fallback taken while
 Lane concurrency is throttled MUST NOT bind one the scheduler already refused. A candidacy refusal
-is silent by design — it is the churn this rule exists to remove — while a serial Pickup skip
-reports itself as §3.3.1 requires.
+emits no Pickup skip — it is the churn this rule exists to remove — while a serial Pickup skip
+reports itself as §3.3.1 requires. A Lane's refusal of candidacy is instead recorded on the Run's
+end (contract 2.12, #643): when a Rolling terminal decision ends `all_blocked` or `all_skipped`,
+`wrapper.run.end`'s `refusals` (§12) names every survivor it refused and why, including candidates
+no Lane Pickup ever saw.
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
@@ -599,6 +622,10 @@ error (exit `2`).
 | `1`  | Stopped — operator   | The operator ended the Run deliberately (§10.1, contract 2.3).       |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
 
+Exit code `3` is retired. It used to mean a Run that continued past a Dashboard
+fault. The Run now outlives its client, so a client fault is not a Run outcome
+and the code must not be reused (`exit-codes.json` `retired`, #459).
+
 A Runner with a **Pickup** (§14.3) MUST distinguish the two exit-`1` aborts by reason, and MUST
 NOT report either as the exit-`0` empty queue: "there is nothing to do" and "I could not take any
 of what there is" are different facts about the repository, and only the first is a finished Run.
@@ -618,6 +645,8 @@ candidate proves an open dependency. A mixed Pool remains `all_skipped`, so wait
 work an operator can fix — except where the mix holds a refusal nobody could read, which §3.3.1
 sends to `preflight_failed` instead. Both of these reasons are claims about the *work* in the
 Pool, and neither may be established by a *read* that failed.
+For a Rolling terminal decision, the Run-end refusal record (§12, contract 2.12, #643)
+captures the candidates behind either claim; a failed read has no such record.
 
 ### 10.1 An operator Stop is a decided outcome (contract 2.3, MUST)
 
@@ -659,7 +688,7 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_ISSUE_SOURCE`       | 1     | `github`         | `github` or `prds` (legacy local-markdown mode).              |
 | `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | Consecutive no-progress Iterations before abort.              |
 | `GIT_LOOPY_INCLUDE_PRS`        | 3     | off              | `1`/`true`/`yes` to also advance `ready-for-agent` PRs.       |
-| `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | MUST be honoured only by a member whose declared parallel capability manifest exposes this operator choice; Python still ignores it because terminal selection is structural: a TTY detaches the worker and keeps the parent as the attach client, while non-TTY stays on the direct line printer. |
+| `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | MUST be honoured only by a member whose declared parallel capability manifest exposes this operator choice. Python refuses it: the Dashboard is available whenever stdout is a terminal, and the line printer runs when it is not. |
 | `GIT_LOOPY_MODEL_SELECT`       | 3     | off              | `1` enters the startup model picker (**ModelSelectionMode**). |
 | `GIT_LOOPY_DENY_TOOLS`         | 1     | empty            | Denylist of tools (set *union* across config tiers).          |
 | `GIT_LOOPY_DENY_SKILLS`        | 1     | empty            | Deprecated denylist of skills (set *union* across config tiers); subtracts only (§17). |
@@ -674,6 +703,9 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 Every Orchestrator MUST emit its structured record as JSONL using the shared **Event schema**
 (`git_loopy.events`), so the **TUI helper**, the `.git-loopy/logs/<iso>-<run_id>.jsonl` replay
 log, and any external consumer read one format regardless of which port produced it.
+A literal in `retired_event_types` MUST NOT be emitted by any member.
+`wrapper.dashboard.fault` is retired there: a Dashboard fault is a client failure,
+not a Run event (#459).
 The additive Event schema has compatibility `schema_version` **1**; changing the Wrapper contract
 does not implicitly change that version. Unknown event types and unknown payload fields remain
 additive and MUST be ignored by compatible consumers.
@@ -931,6 +963,27 @@ because only the `github` source's candidates carry that label. An absent `issue
 undeclared source, and a consumer MUST NOT infer one. The **Unbound-Run notice** (#642) is such a
 consumer.
 
+**Run-end refusals (contract 2.12, #643).** A Rolling Run that ends `all_blocked` or
+`all_skipped` from its Pool cache MUST carry `refusals` on `wrapper.run.end`: one
+`{"issue": <issue ref>, "reason": <skip reason>}` entry for every surviving candidate
+the terminal Membership read classified, in §3.2 selection order. A Blocked
+candidate's reason is `blocked_by_open_dependency: <owner/repo#N>, ...`, listing
+every proven open blocker exactly as a serial `wrapper.pickup.skipped` does. A
+candidate refused by a Lane Pickup repeats the reason that Pickup recorded,
+using the same reason vocabulary; the Pickup skip itself remains unchanged.
+No other ending carries `refusals`, including serial Iterations, `empty_pool`,
+`preflight_failed`, Stop and cap endings; a Runner without Rolling dispatch
+never emits it. It is a terminal refusal record, **not** a Pool collection or
+a Membership read: it MUST NOT add Queue rows or trigger the `gone` sweep
+reserved for `wrapper.afk_ready.collected` (ADR-0042).
+
+For an Unbound-Run notice, present `refusals` takes precedence over the latest
+collection: its valid issues define the Pool for counting and the
+outside-the-Pool blocker rule, and its reasons count as recorded skips. An
+absent field leaves the historical notice unchanged. Malformed entries are
+ignored without losing the Run's outcome. This additive payload field changes
+neither the Event type nor `event_schema_version` (still 1.2).
+
 **A truthful `parallel_mode: true` can still yield a wholly serial Run, and it MUST say so
 (contract 1.28).** The rule above is about the *distribution*; an Orchestrator that declares
 Parallel mode truthfully may still meet a Run whose **issue source** has no **Parallel-safe**
@@ -969,7 +1022,8 @@ Orchestrator rollout tickets own enabling those producers.
   Lane's contribution identity is minted when its session starts and a Pickup happens before
   that — an Event that demanded the identity triple could never be emitted at the moment it
   describes. `reason` on a binding is one of `order`, `priority`, or `pin` — `pin` exactly when
-  §3.2's **Pin** named the bound candidate, which outranks a `priority` label on the same issue;
+  §3.2's **live** Pin named the bound candidate (a spent Pin reports `order` or `priority`,
+  contract 2.14, #644), which outranks a `priority` label on the same issue;
   on a skip it is the free-text reason the candidate was passed over. `considered` is required rather than derivable:
   *the runner took the oldest* and *the runner took the only one left* are different facts about
   a backlog, and `position: 1` alone cannot tell them apart. Every skip that ended in a binding
@@ -1024,8 +1078,12 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
 `wrapper.integration.branch_observed`, `wrapper.integration.recovery_started`,
 `wrapper.integration.published`, and `wrapper.contribution.end`. Scheduler-scoped:
 `wrapper.pool.refreshed`, `wrapper.concurrency.changed`, `wrapper.serial.requested`,
-`wrapper.pipeline.quiescent`, `wrapper.rolling.refill_turn`,
-`wrapper.parallel.serial_fallback`, and `wrapper.parallel.degraded`.
+`wrapper.rolling.refill_turn`, `wrapper.parallel.serial_fallback`, and `wrapper.parallel.degraded`.
+
+**Retired `wrapper.pipeline.quiescent` (contract 2.14, ADR-0065).** Every phase it named is
+already announced by `wrapper.serial.requested`, `wrapper.stop.requested`, the serial Iteration's
+`wrapper.iteration.start` or `wrapper.rolling.refill_turn`, and nothing read it. No Orchestrator
+declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
 
 - **Identity, not Lane.** Every contribution-scoped record MUST carry `contribution_id`, `issue`,
   and `lane_id`, and its envelope `iter` MUST be `null`. `lane_id` is the reusable **Lane** the
@@ -1839,9 +1897,16 @@ host's own listing (§14.3), and exact-dimension Route publication with its
 migration and capacity refresh (§14.5). `routing-resolution.json` declares
 that provenance at 2.10; `event-schema.json` and `dashboard-insights.json`
 carried it at 2.10 and have since advanced to 2.11 with the Run-start issue
-source (§12). `discriminator.json` reached 2.10 separately with the
-Wayfinder-map exclusion (§3.1). Event wire compatibility remains 1.2,
-and historical streams' interpretation is unchanged.
+source, 2.12 with Run-end refusals and 2.14 with the retirement of
+`wrapper.pipeline.quiescent` (§12). Contract 2.13 (ADR-0066) edited both
+fixtures' content, moving every `release_version` example from `-dev.N` to
+`-alpha.N` and rewording `event-schema.json`'s `wrapper.release.advanced`
+`emitted` rule, but left both version pins at 2.12 while the contract header
+and the Python `WRAPPER_CONTRACT_VERSION` read 2.13. Both pins then moved from
+2.12 straight to 2.14 (ADR-0065), so neither ever carried 2.13.
+`discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
+(§3.1). Event wire compatibility remains 1.2, and historical streams'
+interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
@@ -2314,23 +2379,33 @@ cross-release compatibility.
 
 ## 16. Release-line advancement (MUST)
 
+**Release-target labels and prerelease stages (contract 2.13, ADR-0066).** The
+`semver:` labels, `-dev.N` counter and `major` Promotion exemption of 2.12 are
+replaced as below; `release-line.json` declares this at 2.13.
+
 Every **Orchestrator** MUST advance the **Release line** for a closed issue
-with a Bump class other than `semver:none`, after its Integration has published
+that carries a `vX.Y.Z` Release-target label, after its Integration has published
 the issue and while holding the `_integration_lock` that serializes Integration
 ([ADR-0009](adr/0009-runner-driven-integration-and-auto-resolution.md)). The
-advance derives its Release target by ratcheting the closed Bump-class labels
-and increments that target's `dev.N` counter; it MUST NOT be performed in a
-Lane contribution. The resulting Release-line commit is therefore a
+label MUST be one of the last stable Release's three successors, from which the
+Bump class is derived; a malformed, conflicting or unreachable label MUST be
+refused, and an issue with no such label advances nothing. The advance derives
+its Release target by ratcheting, increments the prerelease counter, and
+restarts the stage at `alpha` when the line starts or its target rises
+([ADR-0066](adr/0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md));
+it MUST NOT be performed in a Lane contribution. The resulting Release-line commit is therefore a
 post-Integration fact, not work a Lane proposes.
 
 After a successful Release-line commit, the Orchestrator MUST emit
 `wrapper.release.advanced` with the closed `issue`, its `bump_class`, the
-ratcheted `release_target`, and the committed `release_version`. A
-`semver:none` issue and a failed advance emit no such Event. A closed
-`vX.Y.Z` milestone may **Promote** the current development line to stable, but
-does not select the target; `semver:major` is deliberately exempt from that
-milestone trigger and may Promote unattended. [ADR-0052](adr/0052-the-release-line-advances-per-issue.md)
-records both the ratchet and that unattended-major consequence as deliberate.
+ratcheted `release_target`, and the committed `release_version`. An issue with
+no Release-target label and a failed advance emit no such Event. A closed
+`vX.Y.Z` milestone may **Promote** the current prerelease line to stable from
+any stage, but does not select the target, and it is the only Promotion
+trigger: no Bump class Promotes unattended. Moving a line to `beta` or `rc` is
+an operator's act outside a Run. [ADR-0052](adr/0052-the-release-line-advances-per-issue.md)
+records the ratchet; [ADR-0066](adr/0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md)
+records the label, the stages and the withdrawn `major` exemption.
 
 What happens when a human closes a milestone-bearing issue outside a **Run** is
 open: this contract does not say whether that closure advances the Release

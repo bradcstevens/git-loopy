@@ -879,7 +879,10 @@ no issue work started. Its startup diagnostics follow
 
 On a TTY the loop runs as a **detached worker** the terminal client watches, so
 the client reports that worker's exit status and echoes the tail of its startup
-diagnostics rather than showing an empty Dashboard and exiting `0`. The handoff
+diagnostics rather than showing an empty Dashboard and exiting `0`. Closing that
+terminal, or killing the client, leaves the worker running. A later client
+attaches by following the same trace; there is no separate reconnect. The public
+command is `git-loopy attach <run-id>`. The handoff
 uses ordinary scrollback — setup's wizard leaves the screen before the client
 takes it — so a blocked startup is readable after the fact instead of being
 erased by a screen restore.
@@ -962,8 +965,8 @@ Every Run of **this clone** — the worktree you invoked it from plus every othe
 worktree `git worktree list` registers — newest first. Run it from any of those
 worktrees and you get the same listing, including Runs that were started from a
 different one. `RUN` is the full Run identity, and `SCOPE` is the worktree the
-Run published its artefacts in; together they are what the forthcoming Attach
-and Stop commands target by.
+Run published its artefacts in; together they are what `git-loopy attach` and
+`git-loopy stop` target, so the two cannot disagree about which Runs exist.
 
 The domain is the clone, never the machine. An independent clone of the same
 repository has its own Runs and its own listing; nothing here scans for them,
@@ -988,6 +991,104 @@ rule `git-loopy sweep` already follows.
 The listing is purely observational: it starts no agent work, sends no Stop,
 reclaims nothing, and never reaches your issue tracker. It needs only `git`.
 
+An attached Dashboard requests **Stop** with `s`. That writes one durable
+request beside the Run's control artifact (`<trace>.control.stops/`); it does
+not emit a Wind-down. The Run reads the request and latches the same two-stage
+Wind-down a Stop from the launching terminal enters: the first distinct request
+drains, a deliberate second escalates to cancellation, and a further request
+adds no harder stage. Sending the same request again is redelivery, not a
+second Stop. `q` still only hands the terminal back — the Run keeps going.
+Acknowledgment is the Run's own `wrapper.stop.requested` record for the stage
+asked for, or a stronger one. A wait that elapses without that record is
+unconfirmed, not success, and not a claim that the Run has finished draining.
+`git-loopy stop` writes that same request; see below.
+
+---
+
+## Attaching to a Run (`git-loopy attach`)
+
+```bash
+git-loopy attach 01K6Z9QWERTYUIOPASDFGHJKLZ
+git-loopy attach 01K6Z9
+```
+
+Observes one Run of **this clone** without starting it, resuming it, or taking
+ownership of it. The identity is required. Resolution is the same listing as
+`git-loopy runs`: this worktree and every worktree it has registered, never
+another clone, and never the newest Run by default. An unambiguous leading
+prefix names that one Run; a prefix that names two is refused. Reattaching,
+and attaching from a second terminal, is this same command. There is no
+reconnect operation.
+
+A usable **Dashboard** helper draws the Run. **Detach** is `q` in that helper,
+or an interrupt of the line printer: this client only, the terminal returns to
+the shell, and the worker and other clients keep going. Navigation stays in
+the client that made it. It does not change the Run's Events, and it is not a
+**Stop**.
+
+A missing or unusable helper is diagnosed, and the client stays attached
+through the line printer. That fallback is still **Attach**, not Detach and
+not Stop. A **Dashboard fault** after attachment restores the terminal, reports
+the fault, and continues on that same line printer without restarting the
+Dashboard. The fault does not change the Run's Events, outcome, or exit code.
+
+A trace that has no further bytes yet does not end observation of a live Run.
+Observation ends when the trace carries `wrapper.run.end`, or when the control
+lock says the worker is gone. A lost worker is reported as gone. It is not
+resumed, and it is not presented as a Run this command started. Liveness this
+host cannot prove is reported as unknown — not as a finished Run, and not as a
+live one. Attach opens no channel into an Execution host. A Run whose
+contributions are local and a Run whose contributions are on GitHub Actions
+are observed the same way: through the Run's own trace and control artifact.
+
+**Stop** is `git-loopy stop`, or `s` in an attached Dashboard. Attach does not
+write one. Shell and PowerShell do not attach and do not provide this command.
+
+---
+
+## Stopping a Run (`git-loopy stop`)
+
+```bash
+git-loopy stop 01K6Z9QWERTYUIOPASDFGHJKLZ
+git-loopy stop 01K6Z9QWERTYUIOPASDFGHJKLZ --timeout 10
+git-loopy stop 01K6Z9QWERTYUIOPASDFGHJKLZ --request-id cli-0123abcd
+```
+
+Requests the same two-stage **Wind-down** an attached Dashboard requests with
+`s`. No Dashboard helper and no remote-control service is required. The Run
+identity is required. Resolution is the same clone-scoped listing as
+`git-loopy runs`: this worktree and every worktree it has registered, never
+another clone, and never the newest Run by default. A Run whose liveness this
+host cannot prove is refused. A Run that has ended is refused — there is
+nothing to stop, and the command will not claim that it stopped one.
+
+The command writes one Stop request beside that Run's control artifact and
+waits for the Run to acknowledge the stage that request asks for. Success is
+that acknowledgment (`wrapper.stop.requested` at the asked stage, or a stronger
+one). It is the latch, not a finished Run, and the command does not wait for
+draining contributions to finish. A bounded timeout (`--timeout`, default 10
+seconds) is **unconfirmed**: a non-success result, and not a claim that the Run
+stopped or finished.
+
+The first distinct request asks for drain. Running `git-loopy stop` again, with
+a new request identity, is a deliberate second Stop and asks for cancellation. A
+further request adds no harder stage. Cancellation is requested, not awaited.
+It does not resume workers. It does not discard salvaged local or remote
+contributions, and it does not interrupt a publish transaction — those
+protections stay the Run's. This command does not grow a second lifecycle, and
+it does not open a channel into an Execution host. The Run reads the request
+wherever its contributions execute, including GitHub Actions.
+
+`--request-id` redelivers one logical request. Use the id the previous
+invocation printed. A redelivery cannot escalate and cannot duplicate a latched
+transition. Omitting it always starts a new logical Stop. If the write itself
+has to be retried, the command reuses the identity it already chose, so that
+retry is not a second Stop.
+
+A client that dies after the request is linked does not withdraw it. Another
+client — a Dashboard pressing `s`, or a second `git-loopy stop` — sees the same
+two stages. Shell and PowerShell do not attach and do not provide this command.
+
 ---
 
 ## Exit codes
@@ -1009,7 +1110,7 @@ reclaims nothing, and never reaches your issue tracker. It needs only `git`.
 | `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `GIT_LOOPY_CONTEXT_TIER`                    | `default`                       | Root-session tier: `default` or `long_context`. `--context-tier` wins, then this value, project Config, global Config, and the default. It constrains every **Routing resolution**, including a legacy `[routing]` model/effort pair, but does **not** suppress per-task-type routing. |
 | `GIT_LOOPY_ROUTE_POLICY`                    | unset (`unselected`)            | Which **Route policy** this Run uses. `unselected` is a named legacy choice for one Run. Leaving it unset on a local Run with no Config refuses before work. Local saved Config still requires an explicit Static/Dynamic choice before work. Unselected non-local Runs retain legacy behavior. A selected Static route on GitHub Actions proceeds only when that host reports its own listing and both listings accept it. `static` selects the **Static route** (ADR-0057): your `model` / `reasoning_effort` / `context_tier` are verified against the **authenticated harness this Run spawns** and then honoured exactly, rather than being passed through the built-in model roster's capability gate. `--route-policy` wins, then this value, project Config, global Config. A settings combination the harness does not support **fails before any work** instead of being quietly downgraded. `dynamic` selects the **Dynamic route** (ADR-0057): each issue's pair is elected from live Artificial Analysis evidence by a bounded **Route selector**, and needs `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` plus a deadline, a credit allowance, a selector concurrency and a verified `[route_associations]` table. An explicit run-wide model or effort override bypasses those dynamic prerequisites, but its Static settings must still pass live harness validation. |
-| `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or `semver:` label back at **Pickup** (ADR-0029, ADR-0052). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
+| `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or a `vX.Y.Z` Release-target label back at **Pickup** (ADR-0029, ADR-0066). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
@@ -1044,15 +1145,24 @@ full list.
 issue `N` instead of the head of the selection order, and every other issue
 keeps its place in that order behind it. The pin **bypasses order and nothing
 else** — a pinned issue still has to be eligible, and a pin that is closed,
-missing, unreadable, lacks `ready-for-agent`, fails the AFK-ready body
-discriminator, or lacks `parallel-safe` **fails the
-invocation** rather than falling back to normal order, because silently working
+missing, unreadable, lacks `ready-for-agent`, or fails the AFK-ready body
+discriminator **fails the invocation** rather than falling back to normal order, because silently working
 a different issue than the one you named is worse than stopping. The refusal
 names what is wrong, down to the specific missing `##` section. It is
 deliberately a flag and not a label or an env var: those are globally scoped and
 would point every concurrent run at the same issue, which is the opposite of
 what pinning is for. At most one issue may be pinned per invocation; a second
 `--issue` is a usage error. There is no config-file or environment equivalent.
+
+A pin lasts one turn, not the whole run (Wrapper contract 2.14, #644). The first
+Pickup that reads it spends it: it binds the issue, passes it over for an answer
+about it (an open blocker, a Lease held elsewhere, a refused task type, or a
+read that finds it no longer eligible), or completes a Pool read that no longer
+lists it. A Pickup that could not read it — an incomplete read, or Readiness it
+could not prove — leaves it live, so the next Pickup tries it first again. Once
+spent, an issue that is still open rejoins the selection order like any other,
+so a pinned issue that makes no progress does not head every later Iteration.
+The shell and PowerShell Orchestrators follow the same rule.
 
 ---
 
@@ -1774,8 +1884,9 @@ non-`local` `execution_host` is refused before any work, for the reason above.
 `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`) name the pair the **Task-type
 classifier** and **Bump-class classifier** run on. At **Pickup**, each reads an
 unlabelled issue's own content: the former writes a `task-type:` label for
-**Routing** to read, and the latter writes a `semver:` label for the **Release
-line** to read (ADR-0029, ADR-0052).
+**Routing** to read, and the latter writes the `vX.Y.Z` Release-target label the
+issue ships in for the **Release line** to read, or nothing when it infers no
+version change (ADR-0029, ADR-0052, ADR-0066).
 
 Two properties are worth knowing before you set it:
 
@@ -1785,10 +1896,11 @@ Two properties are worth knowing before you set it:
   nowhere as a routing input. Leaving these keys unset does **not** fall back to
   `model`; it falls back to the **cheapest pair on the live roster**.
 - **The taxonomies are closed.** A proposal outside the seven `task-type:` keys
-  or four `semver:` keys is refused, never written. A Bump class the classifier
+  or the four Bump-class keys (`major`, `minor`, `patch`, `none`) is refused,
+  never written. A Bump class the classifier
   cannot determine is reported rather than defaulted.
 - **What they infer is written back to your tracker.** The proposed key is
-  applied to the issue as a `task-type:` or `semver:` label, unattended and with
+  applied to the issue as a `task-type:` or `vX.Y.Z` label, unattended and with
   no review step — that is what makes the corpus inspectable, correctable and
   reusable instead of re-inferred on every run. An issue that already carries a
   valid label is never relabelled; the check is re-asked of the tracker

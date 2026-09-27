@@ -88,7 +88,7 @@ def _scripted(*outcomes: Any) -> Any:
     """
     calls: list[int] = []
 
-    async def _run_one_iteration(iter_num: int) -> tuple[str, int, int]:
+    async def _run_one_iteration(iter_num: int, **_kwargs: object) -> tuple[str, int, int]:
         calls.append(iter_num)
         entry = outcomes[iter_num - 1]
         if isinstance(entry, type) and issubclass(entry, BaseException):

@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "expected_release_version": "0.11.0-dev.8",
-  "expected_python_distribution_version": "0.11.0.dev8",
+  "expected_release_version": "0.11.0-alpha.1",
+  "expected_python_distribution_version": "0.11.0a1",
   "valid_versions": [
     {
       "id": "stable",
       "value": "1.2.3"
     },
     {
-      "id": "development",
-      "value": "1.2.3-dev.0"
+      "id": "alpha",
+      "value": "1.2.3-alpha.1"
     },
     {
       "id": "release-candidate",
@@ -23,8 +23,8 @@
       "prerelease": false
     },
     {
-      "id": "development",
-      "version": "1.2.3-dev.0",
+      "id": "alpha",
+      "version": "1.2.3-alpha.1",
       "prerelease": true
     },
     {

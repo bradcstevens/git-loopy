@@ -191,8 +191,9 @@ implementation tickets instead.
 ### Release milestones
 
 A `vX.Y.Z` GitHub milestone is solely the **Promotion** trigger: closing it
-promotes the current matching `dev.N` Release line to stable. The Release target
-is instead ratcheted from closed issues' **Bump class** labels. Never invent a
+promotes the current matching `-alpha.N`/`-beta.N`/`-rc.N` Release line to stable.
+The Release target is instead ratcheted from closed issues' `vX.Y.Z` Release-target
+labels (ADR-0066); an issue with no such label changes no version. Never invent a
 milestone — `gh api repos/{owner}/{repo}/milestones --jq '.[].title'` lists the
 ones that exist. See `docs/releases/README.md#release-target-and-promotion`.
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.11",
+  "contract_version": "2.14",
   "event_schema_version": "1.2",
   "insight_capabilities": {
     "names": [
@@ -134,6 +134,11 @@
     "note": "Contract 2.2. Host metering and CI-trigger identity are siblings of execution_host on wrapper.run.start, because where the orchestrator publishes is a deployment fact, not an Execution-host fact. host_metering declares no meter for local work as not applicable, a free standard GitHub Actions runner on a public target, or metered GitHub Actions work. It is a disclosure, never host-compute Cost: no number, unit, Dashboard column, or Consumption entry follows from it. ci_trigger_identity names the GitHub Actions deployment route whose existing job identity cannot trigger downstream CI; git-loopy never selects, transports, or upgrades a credential to change that behaviour. An absent disclosure is unknown on an old trace."
   },
   "payload_contracts": {
+    "wrapper.run.end": {
+      "refusals_optional": ["refusals"],
+      "refusals_entry_keys": ["issue", "reason"],
+      "refusals_note": "Contract 2.12, #643. Rolling Pool-cache all_blocked and all_skipped endings carry one refusal per surviving candidate, in selection order, with the wrapper.pickup.skipped reason vocabulary; no other ending carries it. It is not a Pool collection. A consumer ignores malformed entries without losing outcome, and an absent field preserves the old notice. Event schema compatibility stays 1.2."
+    },
     "calibration.trial.start": {
       "required": ["calibration_id", "trial_id", "model", "effort", "issue", "base_commit", "oracle_commit", "slot"]
     },
@@ -381,7 +386,7 @@
         "release_version"
       ],
       "bump_class_values": ["major", "minor", "patch"],
-      "emitted": "After a successful Release-line commit for a closed Bump-class issue. semver:none and failed advances emit nothing."
+      "emitted": "After a successful Release-line commit for a closed issue carrying a vX.Y.Z Release-target label. An issue with no such label and failed advances emit nothing."
     },
     "wrapper.contribution.end": {
       "required_when_present": [
@@ -452,15 +457,6 @@
       "emitted": "When refill stops, not when the serial turn is finally granted. Everything in flight drains first, and an iteration cap can end the Run before the grant, so a consumer that waits for the grant may never learn the serial half of the Pool existed.",
       "serial_required": "How many serial-required items the peek that latched this saw. Null when nothing counted them: only the driver's own Pool peek can, and it is skipped once demand is latched. Never 0 — a latch with nothing behind it cannot happen."
     },
-    "wrapper.pipeline.quiescent": {
-      "required_when_present": ["phase", "reason"],
-      "phase_values": [
-        "draining_for_serial",
-        "serial_ownership",
-        "rolling_refill_turn",
-        "iteration_cap_drain"
-      ]
-    },
     "wrapper.rolling.refill_turn": {
       "required_when_present": ["reservations", "effective_lane_limit"]
     },
@@ -529,7 +525,6 @@
       "wrapper.routing.prepared",
       "wrapper.concurrency.changed",
       "wrapper.serial.requested",
-      "wrapper.pipeline.quiescent",
       "wrapper.rolling.refill_turn",
       "wrapper.parallel.serial_fallback",
       "wrapper.parallel.degraded"
@@ -579,6 +574,13 @@
     "duration_source": "monotonic clock",
     "duration_unit": "seconds"
   },
+  "retired_event_types": {
+    "WRAPPER_DASHBOARD_FAULT": {
+      "literal": "wrapper.dashboard.fault",
+      "exit_code": 3,
+      "reason": "The Run outlives its Dashboard (#459, ADR-0058). A client fault is not a Run event. Neither this literal nor exit code 3 may be reused."
+    }
+  },
   "event_types": {
     "CALIBRATION_TRIAL_START": "calibration.trial.start",
     "CALIBRATION_TRIAL_END": "calibration.trial.end",
@@ -618,7 +620,6 @@
     "WRAPPER_CONTRIBUTION_END": "wrapper.contribution.end",
     "WRAPPER_CONCURRENCY_CHANGED": "wrapper.concurrency.changed",
     "WRAPPER_SERIAL_REQUESTED": "wrapper.serial.requested",
-    "WRAPPER_PIPELINE_QUIESCENT": "wrapper.pipeline.quiescent",
     "WRAPPER_ROLLING_REFILL_TURN": "wrapper.rolling.refill_turn",
     "WRAPPER_PARALLEL_SERIAL_FALLBACK": "wrapper.parallel.serial_fallback",
     "WRAPPER_PARALLEL_DEGRADED": "wrapper.parallel.degraded",
@@ -1393,7 +1394,7 @@
   "rolling_stream_cases": [
     {
       "id": "two-lanes-refill-park-recover-and-latch-serial",
-      "description": "One Run that fills two Lanes, refills Lane 1 the moment its first contribution is admitted, parks a third finisher against the full H=2 Integration backlog and narrows for it, advances a patch Release line after closing its first Integration publication, recovers one contribution inside its private stage, latches Serial-required work, and passes over its last candidate with a Pickup skip that binds nothing.",
+      "description": "One Run that fills two Lanes, refills Lane 1 the moment its first contribution is admitted, parks a third finisher against the full H=2 Integration backlog and narrows for it, advances a patch Release line after closing its first Integration publication, recovers one contribution inside its private stage, latches Serial-required work, and passes over its last candidate with a Pickup skip that binds nothing; every contribution, including c-0002 and c-0003, closes.",
       "distributions": [
         "python",
         "shell",
@@ -1685,7 +1686,7 @@
           "bump_class": "patch",
           "issue": 42,
           "release_target": "1.2.4",
-          "release_version": "1.2.4-dev.1"
+          "release_version": "1.2.4-alpha.1"
         },
         {
           "ts": "2026-05-16T00:00:18.000Z",
@@ -1763,6 +1764,17 @@
           "lane_id": "lane-2"
         },
         {
+          "ts": "2026-05-16T00:00:23.500Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.auto_close",
+          "contribution_id": "c-0002",
+          "issue": 43,
+          "lane_id": "lane-2",
+          "issue_ref": 43,
+          "outcome": "closed"
+        },
+        {
           "ts": "2026-05-16T00:00:24.000Z",
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
@@ -1800,14 +1812,6 @@
           "refill_stopped": true
         },
         {
-          "ts": "2026-05-16T00:00:26.000Z",
-          "run_id": "01HXR0000000000000000000DD",
-          "iter": null,
-          "type": "wrapper.pipeline.quiescent",
-          "phase": "draining_for_serial",
-          "reason": "serial_latched"
-        },
-        {
           "ts": "2026-05-16T00:00:27.000Z",
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
@@ -1836,6 +1840,17 @@
           "lane_id": "lane-1"
         },
         {
+          "ts": "2026-05-16T00:00:29.500Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.auto_close",
+          "contribution_id": "c-0003",
+          "issue": 44,
+          "lane_id": "lane-1",
+          "issue_ref": 44,
+          "outcome": "closed"
+        },
+        {
           "ts": "2026-05-16T00:00:30.000Z",
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
@@ -1861,14 +1876,6 @@
             "peak_context_window": 41000,
             "strike_reaction": "reset"
           }
-        },
-        {
-          "ts": "2026-05-16T00:00:31.000Z",
-          "run_id": "01HXR0000000000000000000DD",
-          "iter": null,
-          "type": "wrapper.pipeline.quiescent",
-          "phase": "serial_ownership",
-          "reason": "serial_granted"
         },
         {
           "ts": "2026-05-16T00:00:31.500Z",
@@ -1913,21 +1920,21 @@
         "{\"ts\": \"2026-05-16T00:00:15.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 1, \"host_state\": \"healthy\", \"pressure\": \"integration_backlog\", \"rate_limit_state\": \"healthy\"}\n",
         "{\"ts\": \"2026-05-16T00:00:16.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:17.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.auto_close\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"issue_ref\": 42, \"lane_id\": \"lane-1\", \"outcome\": \"closed\"}\n",
-        "{\"ts\": \"2026-05-16T00:00:17.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-dev.1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:17.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-alpha.1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:18.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
         "{\"ts\": \"2026-05-16T00:00:19.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.admitted\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:20.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
         "{\"ts\": \"2026-05-16T00:00:21.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.branch_observed\", \"base_publications_since_cut\": 1, \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
         "{\"ts\": \"2026-05-16T00:00:22.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.recovery_started\", \"attempt\": 1, \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\", \"max_attempts\": 3}\n",
         "{\"ts\": \"2026-05-16T00:00:23.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:23.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.auto_close\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"issue_ref\": 43, \"lane_id\": \"lane-2\", \"outcome\": \"closed\"}\n",
         "{\"ts\": \"2026-05-16T00:00:24.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 2, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 1, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
         "{\"ts\": \"2026-05-16T00:00:25.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.serial.requested\", \"issue\": 45, \"reason\": \"not_parallel_safe\", \"refill_stopped\": true, \"serial_required\": 2}\n",
-        "{\"ts\": \"2026-05-16T00:00:26.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pipeline.quiescent\", \"phase\": \"draining_for_serial\", \"reason\": \"serial_latched\"}\n",
         "{\"ts\": \"2026-05-16T00:00:27.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:28.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.branch_observed\", \"base_publications_since_cut\": 2, \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:29.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:29.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.auto_close\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"issue_ref\": 44, \"lane_id\": \"lane-1\", \"outcome\": \"closed\"}\n",
         "{\"ts\": \"2026-05-16T00:00:30.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
-        "{\"ts\": \"2026-05-16T00:00:31.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pipeline.quiescent\", \"phase\": \"serial_ownership\", \"reason\": \"serial_granted\"}\n",
         "{\"ts\": \"2026-05-16T00:00:31.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.skipped\", \"considered\": 1, \"issue\": 46, \"position\": 1, \"reason\": \"routing refused: unknown task-type label 'task-type:chore '\"}\n",
         "{\"ts\": \"2026-05-16T00:00:32.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.rolling.refill_turn\", \"effective_lane_limit\": 2, \"reservations\": 0}\n"
       ]
@@ -1971,21 +1978,12 @@
           "rate_limit_state": "throttled",
           "credit_state": null,
           "host_state": null
-        },
-        {
-          "ts": "2026-05-16T00:00:04.000Z",
-          "run_id": "01HXR0000000000000000000DD",
-          "iter": null,
-          "type": "wrapper.pipeline.quiescent",
-          "phase": "iteration_cap_drain",
-          "reason": "cap_reached"
         }
       ],
       "jsonl": [
         "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": []}\n",
         "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.parallel.serial_fallback\", \"eligible\": 0, \"lane_cap\": 3, \"reason\": \"no_parallel_safe_candidates\", \"unavailable\": 0, \"worked\": 0}\n",
-        "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 1, \"host_state\": null, \"pressure\": \"rate_limit\", \"rate_limit_state\": \"throttled\"}\n",
-        "{\"ts\": \"2026-05-16T00:00:04.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pipeline.quiescent\", \"phase\": \"iteration_cap_drain\", \"reason\": \"cap_reached\"}\n"
+        "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 1, \"host_state\": null, \"pressure\": \"rate_limit\", \"rate_limit_state\": \"throttled\"}\n"
       ]
     }
   ],
@@ -2000,9 +1998,9 @@
         "bump_class": "patch",
         "issue": 42,
         "release_target": "1.2.4",
-        "release_version": "1.2.4-dev.1"
+        "release_version": "1.2.4-alpha.1"
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000RA\", \"iter\": 3, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-dev.1\"}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000RA\", \"iter\": 3, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-alpha.1\"}\n"
     },
     {
       "id": "envelope-before-sorted-payload",
