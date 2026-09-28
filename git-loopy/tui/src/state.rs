@@ -487,12 +487,14 @@ pub struct DashboardState {
     pub(crate) capabilities: InsightCapabilities,
     execution_host: ExecutionHostProvenance,
     contribution_hosts: BTreeMap<String, String>,
-    /// Open contributions past their Lane-work boundary (ADR-0065, #681).
+    /// Issues whose open contribution is past its Lane-work boundary
+    /// (ADR-0065, #681).
     ///
-    /// Their later stamped records — Recovery usage, the landing closure —
-    /// still reach the issue's Log and Consumption, but no longer its Active
-    /// timer: a Parallel issue's Active time is its Lane work only.
-    lane_work_finished: BTreeSet<String>,
+    /// Keyed by issue, not contribution: a Recovery session stamps only
+    /// `lane_issue`. Its later records — Recovery usage, the landing
+    /// closure — still reach the issue's Log and Consumption, but no longer
+    /// its Active timer: a Parallel issue's Active time is its Lane work only.
+    lane_work_finished: BTreeSet<IssueRef>,
     pub(crate) wind_down: Option<WindDown>,
     pub(crate) wind_down_observed: bool,
     /// The folded `parallel` Declaration (ADR-0044).
@@ -662,7 +664,7 @@ impl DashboardState {
                 return;
             }
             if is_lane_event(&event.kind) {
-                self.render_lane_event(&lane, event, now, now_monotonic, true);
+                self.render_lane_event(&lane, event, now, now_monotonic);
                 return;
             }
         }
@@ -677,35 +679,25 @@ impl DashboardState {
         if let Some(contribution) = event.contribution.clone() {
             match &event.payload {
                 EventPayload::ContributionStart(_) => {
+                    self.lane_work_finished.remove(&contribution.issue);
                     self.lane_touch(&contribution.issue, now_monotonic, now);
                     return;
                 }
                 EventPayload::ContributionWorkFinished(_) => {
                     // The Active timer stops here; the Status stays until the
                     // Integration Statuses arrive (#682).
-                    self.lane_work_finished
-                        .insert(contribution.contribution_id.clone());
+                    self.lane_work_finished.insert(contribution.issue.clone());
                     self.deactivate(&contribution.issue, now_monotonic, None);
                     return;
                 }
                 EventPayload::ContributionEnd(end) => {
-                    self.lane_work_finished
-                        .remove(&contribution.contribution_id);
+                    self.lane_work_finished.remove(&contribution.issue);
                     self.record_contribution_end(&contribution, end, now, now_monotonic);
                     return;
                 }
                 _ => {
                     if is_contribution_stamped_event(&event.kind) {
-                        let lane_work_open = !self
-                            .lane_work_finished
-                            .contains(&contribution.contribution_id);
-                        self.render_lane_event(
-                            &contribution.issue,
-                            event,
-                            now,
-                            now_monotonic,
-                            lane_work_open,
-                        );
+                        self.render_lane_event(&contribution.issue, event, now, now_monotonic);
                         return;
                     }
                 }
@@ -941,9 +933,8 @@ impl DashboardState {
         event: &Event,
         now: Option<Timestamp>,
         now_monotonic: Option<f64>,
-        lane_work_open: bool,
     ) {
-        if lane_work_open {
+        if !self.lane_work_finished.contains(lane) {
             self.lane_touch(lane, now_monotonic, now);
         } else {
             self.insert_entry(lane.clone());
