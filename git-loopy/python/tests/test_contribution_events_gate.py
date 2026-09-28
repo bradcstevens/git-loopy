@@ -52,7 +52,6 @@ _EVENT_SCHEMA = json.loads(
 #: that owns it. Deleting an entry is that ticket's job, and the gate forces it:
 #: a waived type any scenario emits is a failure.
 WAIVERS: dict[str, int] = {
-    "wrapper.contribution.work_finished": 681,
     "wrapper.integration.parked": 682,
     "wrapper.integration.admitted": 682,
     "wrapper.integration.started": 684,
@@ -507,7 +506,6 @@ def test_only_the_python_runner_declares_contribution_events() -> None:
 
 def test_the_initial_waivers_each_name_their_producer_ticket() -> None:
     assert WAIVERS == {
-        "wrapper.contribution.work_finished": 681,
         "wrapper.integration.parked": 682,
         "wrapper.integration.admitted": 682,
         "wrapper.integration.started": 684,

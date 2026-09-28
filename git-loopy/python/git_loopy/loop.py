@@ -6212,6 +6212,15 @@ class _ParallelLoop:
         # disposition can never contradict the ending just reported for it.
         # Re-deriving it from the completion SHA would be a second answer the
         # local runner's own commit accounting can disagree with.
+        #
+        # The Lane-work boundary (#681, ADR-0065): only a session that returned
+        # a captured outcome reaches it, so every host failure, a pre-session
+        # Stop and Run-exit reclamation have already returned above. What
+        # follows it is exactly one of admitted, parked, or an
+        # ``unchanged_branch`` end.
+        self._emit_contribution_event(
+            contribution, events_module.WRAPPER_CONTRIBUTION_WORK_FINISHED
+        )
         disposition = scheduler.finish_work(
             contribution, changed=lane_outcome.progressed
         )
