@@ -453,13 +453,14 @@ boundary.
 **Completeness.** `blockedBy` is a paginated connection. An Orchestrator MUST request at least
 GitHub's per-issue cap of 50 links in a single page; asking for fewer is a member defect, not an
 expected state. Where the returned nodes do not account for `totalCount`, or a node comes back
-unreadable, readiness has **not been proven** and the candidate MUST be skipped — under
-`readiness_unprovable`, never under `blocked_by_open_dependency`, unless its reads prove a refusal
-that outranks it (**Precedence**, below). The two are different facts: the
-first reports that no assertion could be read, and there may be no blocker at all; the second
-reports an open blocker that was read. Reporting an unprovable read as blocked would assert the
-very thing the read failed to establish, and would tell an operator to wait for a blocker to close
-when the wait can never end.
+unreadable, readiness has **not been proven** and the candidate MUST be skipped under
+`readiness_unprovable` — unless its reads prove a refusal that outranks it (**Precedence**,
+below) — and never under `blocked_by_open_dependency` on the strength of what went unread.
+`readiness_unprovable` and `blocked_by_open_dependency` are different facts: the first reports
+that no assertion could be read, and there may be no blocker at all; the second reports an open
+blocker that was read. Reporting an unprovable read as blocked would assert the very thing the
+read failed to establish, and would tell an operator to wait for a blocker to close when the wait
+can never end.
 
 **Reason vocabulary.** A readiness skip MUST report one reason from this closed vocabulary on its
 `wrapper.pickup.skipped` Event (§12):
@@ -548,10 +549,10 @@ serve as `--json closedByPullRequestsReferences` (`gh` 2.94.0 and later). A pull
 `OPEN` refuses, a draft included: a draft reports `OPEN`, so whether it is a draft is never read.
 `MERGED` and `CLOSED` never refuse. A merged pull request can leave its issue open, and a closed one
 will never close it. The default connection omits pull requests closed without merging but keeps
-merged ones, and gh's projection of a node carries its id, number and repository but no state, so
-appearing in the connection proves nothing on its own. A pull-request candidate in PR mode (§3.1)
-is never Awaiting merge: a member reads no closing references for it and resolves no state, just
-as `blockedBy` does not apply to it.
+merged ones, and gh's projection of a node carries its id, number, url and repository but no
+state, so appearing in the connection proves nothing on its own. A pull-request candidate in PR
+mode (§3.1) is never Awaiting merge: a member reads no closing references for it and resolves no
+state, just as `blockedBy` does not apply to it.
 
 **One hop.** An Orchestrator MUST read the candidate's own connection and nothing beyond it: a
 pull request's checks, reviews, mergeability and own references are never read. A closing pull

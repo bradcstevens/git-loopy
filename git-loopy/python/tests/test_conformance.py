@@ -5634,7 +5634,7 @@ def test_awaiting_merge_case_inputs_speak_the_fixture_vocabularies(
             assert (node["ref"] is None) is (node["unread"] == "reference_unreadable")
         else:
             assert "unread" not in node
-            assert node["state"] in read["state_read"]["states"]
+            assert node["state"] in _awaiting_merge_state_read()["states"]
         if node["ref"] is not None:
             assert _FULL_REF_RE.fullmatch(node["ref"])
 

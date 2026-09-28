@@ -225,7 +225,8 @@ so **Parallel mode** can refuse **Lane** candidacy to a **Blocked** or **Awaitin
 without a refresh paying a round-trip per candidate — the pull requests' states cost it one
 request per hundred distinct references, never one per candidate. A read that could not
 determine them leaves **Readiness** unknown, exactly as an incomplete read already leaves
-emptiness unknown.
+emptiness unknown — unless the same read found a blocker or a closing pull request open, which
+outranks the unknown.
 _Avoid_: poll, refresh, shallow pool, live pool.
 
 **Strike**:
