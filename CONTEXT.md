@@ -225,8 +225,8 @@ so **Parallel mode** can refuse **Lane** candidacy to a **Blocked** or **Awaitin
 without a refresh paying a round-trip per candidate — the pull requests' states cost it one
 request per hundred distinct references, never one per candidate. A read that could not
 determine them leaves **Readiness** unknown, exactly as an incomplete read already leaves
-emptiness unknown — unless the same read found a blocker or a closing pull request open, which
-outranks the unknown.
+emptiness unknown. A refusal the same read did prove — a blocker or a closing pull request read
+as open — outranks the unknown.
 _Avoid_: poll, refresh, shallow pool, live pool.
 
 **Strike**:
@@ -361,13 +361,13 @@ A candidate whose **Readiness** could not be read and that proved no wait. Its `
 connection came back incomplete or with an unreadable node, or its closing pull-request
 references came back incomplete or with an unreadable node, or a referenced pull request's state
 could not be read — a state read that failed, or a pull request the token cannot see. It skips at
-**Pickup** like a **Blocked** candidate — no Pickup may bind a candidate whose blockers it never
-checked — but it is *not* the same fact and may not stand in for one: a **Blocked** candidate
-proved an open blocker and an **Awaiting merge** one proved an open pull request, while this one
-proved nothing and may be perfectly ready. A blocker or pull request read as open outranks it,
-because a fact that was read is never displaced by one that could not be. A **Pool** that bound
-nothing and holds one of these is therefore neither an **All-skipped Run** nor an
-**All-blocked Run**; it ends the Run the way an unread **Pool** does, as a precondition an
+**Pickup** like a **Blocked** candidate — no Pickup may bind a candidate whose blockers or closing
+pull requests it never checked — but it is *not* the same fact and may not stand in for one: a
+**Blocked** candidate proved an open blocker and an **Awaiting merge** one proved an open pull
+request, while this one proved nothing and may be perfectly ready. A blocker or pull request read
+as open outranks it, because a fact that was read is never displaced by one that could not be. A
+**Pool** that bound nothing and holds one of these is therefore neither an **All-skipped Run** nor
+an **All-blocked Run**; it ends the Run the way an unread **Pool** does, as a precondition an
 operator can repair, naming the candidates. One rule, asked by every Orchestrator.
 _Avoid_: blocked, skipped, empty (each of those is a claim about the *work*; this is a report
 about the *read*).

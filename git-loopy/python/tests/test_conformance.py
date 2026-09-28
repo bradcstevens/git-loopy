@@ -5291,6 +5291,11 @@ def _awaiting_merge_state_read() -> dict[str, Any]:
     return _AWAITING_MERGE["read"]["state_read"]
 
 
+def _awaiting_merge_reason(skip_reason: str, names: list[str]) -> str:
+    """`<skip_reason>: <ref>, <ref>` when it names something, else the bare skip reason."""
+    return f"{skip_reason}: {', '.join(names)}" if names else skip_reason
+
+
 def _awaiting_merge_case_ids() -> list[str]:
     return [
         case["id"]
@@ -5347,7 +5352,7 @@ def _awaiting_merge_expected_from_reads(case: Mapping[str, Any]) -> dict[str, An
             return {
                 "admissible": False,
                 "skip_reason": skip_reason,
-                "reason": f"{skip_reason}: {', '.join(names)}" if names else skip_reason,
+                "reason": _awaiting_merge_reason(skip_reason, names),
                 "names": names,
                 "unbound_pool_class": _awaiting_merge_skip_reasons()[skip_reason][
                     "unbound_pool_class"
@@ -5669,8 +5674,8 @@ def test_awaiting_merge_expected_results_are_self_consistent(
         assert expected["reason"] == expected["skip_reason"]
     else:
         assert expected["names"]
-        assert expected["reason"] == (
-            f"{expected['skip_reason']}: {', '.join(expected['names'])}"
+        assert expected["reason"] == _awaiting_merge_reason(
+            expected["skip_reason"], expected["names"]
         )
         assert all(_FULL_REF_RE.fullmatch(ref) for ref in expected["names"])
 

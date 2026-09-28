@@ -469,7 +469,7 @@ can never end.
 | --- | --- |
 | `blocked_by_open_dependency` | At least one `blocked_by` dependency was read and is open |
 | `awaiting_pull_request_merge` | At least one pull request that will close the candidate was read as open (contract 2.17) |
-| `readiness_unprovable` | The `blockedBy` connection was incomplete or a node was unreadable, or (contract 2.17) a closing pull request's reference or state could not be read, and no refusal above was proven |
+| `readiness_unprovable` | The `blockedBy` connection was incomplete or a node was unreadable, or (contract 2.17) the closing pull-request references were incomplete or a closing pull request's reference or state could not be read, and no refusal above was proven |
 
 A candidate whose reads establish more than one reports the first in the table's order (contract
 2.17, **Awaiting merge**, below). `issue-readiness.json` pins the verdict and the reason for every
@@ -619,7 +619,10 @@ operator's next act is to merge or close what it names.
   Blocked one. A Rolling terminal decision's `refusals` (§12) carries each such candidate with its
   full reason.
 - **No Event field.** `wrapper.pickup.skipped` carries the reason string, and the reason string
-  carries the references. No Event field is added, and `event_schema_version` does not move.
+  carries the references. No Event field is added, and `event_schema_version` does not move. No
+  fixture the Dashboard reads changes either, so `event-schema.json` and `dashboard-insights.json`
+  keep their version pins, and so does the Dashboard core's `WRAPPER_CONTRACT_VERSION`, as at 2.13
+  (§14.4, ADR-0069).
 
 `conformance/awaiting-merge.json` pins the read shape, the answers ADR-0069 records, the verdict and
 reason for every case, and the unbound-Pool rule by refusal reason. It is a new fixture rather than
