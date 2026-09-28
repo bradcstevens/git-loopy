@@ -559,7 +559,7 @@ pull request's checks, reviews, mergeability and own references are never read. 
 request in another repository refuses exactly as one in this repository does.
 
 **Every read that decides Readiness resolves its own states.** The connection MUST be requested
-wherever `blockedBy` is: on the §3.1 collection read, on each **Membership read** (§9), and on each
+wherever `blockedBy` is: on the §3.1 collection read, on each **Membership read**, and on each
 authoritative re-read of one candidate — a Lane's own Pickup validation, and the re-read a
 candidate gets when its **Routing preparation** starts (§14.6). Each such read MUST resolve the
 states of the pull requests it carries before it takes a verdict, with GraphQL `nodes(ids:)` over

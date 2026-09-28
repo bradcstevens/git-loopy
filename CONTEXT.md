@@ -319,14 +319,14 @@ tracker dependency is closed, and no open pull request will close the candidate 
 A fact the tracker holds about the issue rather than about how the issue was authored: it clears
 itself when the last blocker closes or the closing pull request merges or closes, with no human
 touching the issue. Read one hop and
-never traversed further. Decided at two seams, from whichever read that seam was already
-taking, and neither seam issues a read of its own: at **Pickup**, from what the **Pool**'s
-collection read carried, for each candidate the serial runner reaches; and at **Lane**
-candidacy, from the **Membership read**, for each candidate **Rolling dispatch** considers. A
-**Lane**'s own Pickup validation, and the re-read a candidate gets when its **Routing
-preparation** starts, each decide it again from their own read. Every read that decides it
-resolves the states of the pull requests it carries rather than trusting another read's, so a
-merge between two reads is seen by the second.
+never traversed further. Decided at two seams that take no read of their own, each from the read
+it was already taking: at **Pickup**, from what the **Pool**'s collection read carried, for each
+candidate the serial runner reaches; and at **Lane** candidacy, from the **Membership read**, for
+each candidate **Rolling dispatch** considers. Each authoritative re-read of one candidate
+decides it again from its own read: a **Lane**'s own Pickup validation, and the re-read a
+candidate gets when its **Routing preparation** starts. Every read that decides it resolves the
+states of the pull requests it carries rather than trusting another read's, so a merge between
+two reads is seen by the second.
 _Avoid_: eligibility (that is the human's `ready-for-agent` assertion, settled at
 collection), **Pool exclusion**, **Pickup skip** (that is what the runner *does* about
 unreadiness, not the fact itself).
