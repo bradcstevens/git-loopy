@@ -4310,7 +4310,8 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
 
     ``routing-resolution.json`` stays declared at 2.10. Its sentence about
     ``event-schema.json`` and ``dashboard-insights.json`` must name the same
-    later advances the contract names, or a bump leaves the notes disagreeing.
+    later advances the contract names, or a bump leaves the notes disagreeing,
+    and the latest advance named must be the version those fixtures declare.
     """
     clause = (
         "have since advanced to 2.11 with the Run-start issue source, "
@@ -4322,6 +4323,25 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
 
     assert clause in policy
     assert clause in written
+
+    # The shared clause is a prefix, so a later advance can be added to one
+    # note and not the other. Compare every advance each note names, and bind
+    # the latest to the version both advanced fixtures actually declare.
+    advance = re.compile(r"\b(2\.\d+) with\b")
+    policy_history = policy.split("carried it at 2.10", 1)[1].split(
+        "Wire compatibility", 1
+    )[0]
+    written_history = written.split("carried it at 2.10", 1)[1].split(
+        "`discriminator.json` reached", 1
+    )[0]
+    policy_advances = advance.findall(policy_history)
+    written_advances = advance.findall(written_history)
+
+    assert policy_advances == written_advances
+    declared = _declared_fixture_contract_versions()
+    latest = max(policy_advances, key=lambda v: tuple(map(int, v.split("."))))
+    assert declared["event-schema.json"] == latest
+    assert declared["dashboard-insights.json"] == latest
 
 
 @pytest.mark.parametrize(("fixture", "expected"), [

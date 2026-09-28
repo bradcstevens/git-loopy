@@ -60,12 +60,21 @@ read it. As when ADR-0046 retired `wrapper.continuation.*`, the removal alone mo
 `contribution_events: true` must be shown — by faked Parallel **Runs** driven through its
 production loop — to emit every type in `contribution_identity.lifecycle_types` and
 `scheduler_scoped_types`, and each contribution's emitted lifecycle must follow the order the
-rolling stream case pins. A waiver names the ticket that owns the missing producer; the only one
-is `wrapper.pool.refreshed`, which [ADR-0042](0042-a-membership-read-keeps-the-queue-live.md)
-assigns to #431. A source grep is a mention, not a claim
+rolling stream case pins. A waiver names the ticket that owns the missing producer, and a waived
+type the gate sees emitted fails it, so each producer ticket deletes its own waiver. The live list
+is `WAIVERS` in `git-loopy/python/tests/test_contribution_events_gate.py`. A source grep is a
+mention, not a claim
 ([ADR-0049](0049-every-conformance-fixture-is-claimed-or-waived-by-every-member.md)), and a grep
 is what let eight types ride on one producer. The shell and PowerShell Orchestrators declare
 `contribution_events: false` and owe nothing here.
+
+> **Amendment ([#680](https://github.com/bradcstevens/git-loopy/issues/680)).** As first
+> decided, this paragraph named one waiver: `wrapper.pool.refreshed`, which
+> [ADR-0042](0042-a-membership-read-keeps-the-queue-live.md) assigns to #431. The gate showed
+> that premise was already false. The Python Runner emits that type on every membership read,
+> including the one at scheduler start, so the gate's own rule would turn that waiver red. #680
+> dropped it. The waivers the gate does carry are for producers that do not exist yet, each keyed
+> to the ticket that owns it, and `WAIVERS` rather than this record is where they are listed.
 
 ## Considered options
 

@@ -7516,6 +7516,8 @@ class _ParallelLoop:
         The closure is stamped with the landing contribution's identity, as
         ``contribution_identity.stamped_types`` requires, so a replay reads it
         inside that contribution's lifecycle rather than as a Run-level record.
+        The pool is ``[item]``, which is the whitelist every backstop filters
+        against, so each closure here names the landing issue itself.
         """
         try:
             post_base = self._git.head_sha()
@@ -7529,18 +7531,6 @@ class _ParallelLoop:
         for completion in self._serial._handle_completions_safely(
             [item], landed, leased_pool=True
         ):
-            if completion.ref != contribution.ref:
-                # A ``Closes #N`` backstop closing another issue keeps its own
-                # ``issue`` field and stays Run-scoped.
-                self._serial._emit(
-                    events_module.WRAPPER_AUTO_CLOSE,
-                    iter_num=None,
-                    issue=completion.ref,
-                    sha=completion.sha,
-                    shas=list(completion.shas),
-                    lane_issue=completion.ref,
-                )
-                continue
             self._emit_contribution_event(
                 contribution,
                 events_module.WRAPPER_AUTO_CLOSE,
