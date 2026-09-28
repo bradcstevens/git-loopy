@@ -2,6 +2,14 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0069](0069-a-candidate-awaiting-a-pull-request-merge-is-not-pickup-admissible.md):**
+**Readiness** widens from "every native dependency is closed" to "nothing outside the Run stands
+between the candidate and its session", so a candidate an open pull request will close is not
+admissible either (**Awaiting merge**). Blocked outranks it. The one-hop read, the GraphQL
+transport, the cross-repository rule, `readiness_unprovable` and the Pickup-skip shape stand. Each
+read that carries closing references now also resolves their states, at a cost per read, never
+per candidate.
+
 Decided by [#437](https://github.com/bradcstevens/git-loopy/issues/437).
 
 A candidate whose native tracker dependencies include an open issue is **not admissible at

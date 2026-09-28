@@ -220,10 +220,12 @@ for anything: no **Pickup** reads it, it cannot make an issue **gone**, and it c
 establish that the Pool is empty. It may only add rows. Its cadence is a floor, not a
 period — an Orchestrator takes it on a tick it already owns, never from a second writer
 ([ADR-0042](docs/adr/0042-a-membership-read-keeps-the-queue-live.md)). It carries each
-candidate's blockers on the one list call it already makes, so **Parallel mode** can refuse
-**Lane** candidacy to a **Blocked** issue without a refresh paying a round-trip per
-candidate; a read that could not determine them leaves **Readiness** unknown, exactly as an
-incomplete read already leaves emptiness unknown.
+candidate's blockers and closing pull-request references on the one list call it already makes,
+so **Parallel mode** can refuse **Lane** candidacy to a **Blocked** or **Awaiting merge** issue
+without a refresh paying a round-trip per candidate — the pull requests' states cost it one
+request per hundred distinct references, never one per candidate. A read that could not
+determine them leaves **Readiness** unknown, exactly as an incomplete read already leaves
+emptiness unknown.
 _Avoid_: poll, refresh, shallow pool, live pool.
 
 **Strike**:
@@ -303,7 +305,7 @@ _Avoid_: assignment, dispatch, selection.
 **Pickup skip**:
 A candidate the runner walked past at **Pickup** without binding — one whose
 `task-type:` label refuses to resolve a **Routed pair**, one the **Attempt lifecycle** has
-already defeated this run, or one that is **Blocked**. Distinct from a **Pool
+already defeated this run, or one that is **Blocked** or **Awaiting merge**. Distinct from a **Pool
 exclusion**, which happens at collection and is a human's mistake to fix: a skip is the
 runner declining work it could not start, and it carries a `wrapper.pickup.skipped`
 **Event** so that being passed over leaves a trace. An issue passed over fifty times
@@ -311,9 +313,11 @@ used to be indistinguishable from one nobody had reached yet.
 _Avoid_: rejection, exclusion, deferral.
 
 **Readiness**:
-Whether a candidate's native tracker dependencies are all closed. A fact about the
-tracker's dependency graph rather than about how the issue was authored: it clears
-itself when the last blocker closes, with no human touching the issue. Read one hop and
+Whether nothing outside the **Run** stands between a candidate and its session: every native
+tracker dependency is closed, and no open pull request will close the candidate when it merges.
+A fact the tracker holds about the issue rather than about how the issue was authored: it clears
+itself when the last blocker closes or the closing pull request merges or closes, with no human
+touching the issue. Read one hop and
 never traversed further. Decided at two seams, from whichever read that seam was already
 taking: at **Pickup**, from the authoritative re-read, for each candidate the serial
 runner reaches; and at **Lane** candidacy, from the **Membership read**, for each
@@ -330,14 +334,33 @@ stays in the **Pool** so the closure whitelist and the emptiness test still see 
 one in this repository does. An issue blocked by *itself* is blocked, like any other;
 a longer cycle is invisible at one hop and reads as an ordinary blocker.
 _Avoid_: ineligible, excluded, defeated, deferred; **Unresolved readiness** (a read that
-failed is not a blocker that was read).
+failed is not a blocker that was read); **Awaiting merge** (a pull request that will close the
+candidate is not a dependency).
+
+**Awaiting merge**:
+A candidate that an open pull request will close when merged. The work already exists and waits
+on a merge, so a session would only redo it. It is not admissible at **Pickup**, is refused
+**Lane** candidacy exactly as a **Blocked** candidate is, stays in the **Pool**, and costs no
+**Strike**. Only a pull request read as open refuses — a draft counts, and a merged or closed one
+never does — and the skip names every such pull request by its full reference, so the operator
+knows what to merge. Being **Blocked** outranks it: a candidate with both reports only its
+blockers. It clears itself when the pull request merges and closes the issue, or closes unmerged
+and leaves the candidate admissible again. A pull-request candidate is never Awaiting merge.
+_Avoid_: **Blocked** (that names an open `blocked_by` dependency, and a closing pull request is
+not one); **Pool exclusion** (nothing about how the issue was authored is wrong, and it stays in
+the Pool); **Unresolved readiness** (a pull-request state that could not be read proves no wait);
+in review, has a PR.
 
 **Unresolved readiness**:
-A candidate whose `blockedBy` connection came back incomplete or with an unreadable node, so
-no assertion about its dependencies could be read at all. It skips at **Pickup** like a
-**Blocked** candidate — no Pickup may bind a candidate whose blockers it never checked — but it
-is *not* the same fact and may not stand in for one: a **Blocked** candidate proved an open
-blocker, while this one proved nothing and may be perfectly ready. A **Pool** that bound
+A candidate whose **Readiness** could not be read and that proved no wait. Its `blockedBy`
+connection came back incomplete or with an unreadable node, or its closing pull-request
+references came back incomplete or with an unreadable node, or a referenced pull request's state
+could not be read — a state read that failed, or a pull request the token cannot see. It skips at
+**Pickup** like a **Blocked** candidate — no Pickup may bind a candidate whose blockers it never
+checked — but it is *not* the same fact and may not stand in for one: a **Blocked** candidate
+proved an open blocker and an **Awaiting merge** one proved an open pull request, while this one
+proved nothing and may be perfectly ready. A blocker or pull request read as open outranks it,
+because a fact that was read is never displaced by one that could not be. A **Pool** that bound
 nothing and holds one of these is therefore neither an **All-skipped Run** nor an
 **All-blocked Run**; it ends the Run the way an unread **Pool** does, as a precondition an
 operator can repair, naming the candidates. One rule, asked by every Orchestrator.
@@ -371,7 +394,8 @@ every **Lane**: a **Serial-required** pin is the run's first serial **Iteration*
 Lane is reserved until it ends; a `parallel-safe` pin takes the first Lane. Lacking
 `parallel-safe` decides how a pin is worked, never whether. The first **Pickup** that
 reads a pin spends it, in every Runner member: it binds it, passes it over for an answer
-about the pin itself (an open blocker, a **Lease** held elsewhere, a refused task type, or
+about the pin itself (an open blocker, an open closing pull request — an **Awaiting merge**
+pin — a **Lease** held elsewhere, a refused task type, or
 an authoritative read that finds it stale), or completes a Pool or **Membership read**
 that no longer lists it. A **Serial-required** pin is also spent by the end of the serial
 Iteration latched for it. A Pickup that could not read the pin — an incomplete read, or
@@ -1179,8 +1203,9 @@ _Avoid_: blacklist, ban, exclusion (that is a **Pool exclusion**, decided at col
 
 **All-skipped Run**:
 How a **Run** ends when a **Pickup** finds the **Pool** non-empty and can bind none of it: exit
-`1` under its own reason, `all_skipped`, unless every refusal proves an open native blocker (an
-**All-blocked Run**) or any refusal is an **Unresolved readiness** one. It is not an empty Pool
+`1` under its own reason, `all_skipped`, unless every refusal proves a wait no work inside the
+Run can end — an open native blocker or an open closing pull request (an
+**All-blocked Run**) — or any refusal is an **Unresolved readiness** one. It is not an empty Pool
 — "there is nothing to do" and "I could not take any of what there is" are different facts about
 the repository, and only the first is a finished Run — and it is not a **Strike**, because that
 **Iteration** spends no session and gives up on nothing new. It is terminal on the spot rather
@@ -1191,12 +1216,16 @@ _Avoid_: all-blocked run, empty pool, stuck, no work, unreadable pool.
 
 **All-blocked Run**:
 How a **Run** ends when a non-empty **Pool** contains only candidates whose **Pickup skip** proves
-an open native blocker: exit `1` under `all_blocked`. It is terminal on the spot because no work
-inside the Run can close a blocker. It shares the non-zero exit status with an **All-skipped Run**
-because neither completed the available work; its distinct reason lets an operator or supervising
-process wait for dependency closure rather than repair the Pool. Like an All-skipped Run it is a
-claim about the *work*, so a single **Unresolved readiness** refusal outranks it.
-_Avoid_: all-skipped run, empty pool, readiness-unprovable.
+a wait no work inside the Run can end — an open native blocker (**Blocked**) or an open pull
+request that will close the candidate (**Awaiting merge**), in any mix: exit `1` under
+`all_blocked`. It is terminal on the spot because no work inside the Run can close a blocker or
+merge a pull request its own Pickup refused to redo. It shares the non-zero exit status with an
+**All-skipped Run** because neither completed the available work; its distinct reason lets an
+operator or supervising process wait for dependency closure or a merge rather than repair the
+Pool. Like an All-skipped Run it is a claim about the *work*, so a single **Unresolved
+readiness** refusal outranks it.
+_Avoid_: all-skipped run, empty pool, readiness-unprovable, all-awaiting run (a Pool waiting only
+on merges is still an All-blocked Run).
 
 **Unbound Run**:
 A **Run** that ends without ever binding, activating or contributing to an issue: its **Pool**

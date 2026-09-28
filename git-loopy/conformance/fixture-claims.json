@@ -9,6 +9,12 @@
       "powershell": {"kind": "waived_owed", "reason": "The PowerShell Orchestrator owns the contract Attempt lifecycle but its suite does not exercise this fixture.", "issue": 554},
       "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard renders Orchestrator state and does not own Pickup or Attempt lifecycle transitions."}
     },
+    "awaiting-merge.json": {
+      "python": {"kind": "waived_owed", "reason": "The Python reference Orchestrator decides Readiness from blockers alone; #695 resolves closing pull requests, implements Awaiting merge and claims this fixture.", "issue": 695},
+      "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator decides Readiness from blockers alone; #697 resolves closing pull requests, implements Awaiting merge and claims this fixture.", "issue": 697},
+      "powershell": {"kind": "waived_owed", "reason": "The PowerShell Orchestrator decides Readiness from blockers alone; #698 resolves closing pull requests, implements Awaiting merge and claims this fixture.", "issue": 698},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Awaiting merge is an Orchestrator admission decision; the Dashboard never reads an issue's tracker state."}
+    },
     "calibration-search.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives the production calibration search with fixture scripts."},
       "shell": {"kind": "waived_out_of_scope", "reason": "The written contract assigns measured routing and calibration search to the Python reference Orchestrator only."},

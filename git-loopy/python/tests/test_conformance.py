@@ -5249,6 +5249,620 @@ def test_readiness_fixture_drives_the_python_readiness_seam(
 
 
 # ---------------------------------------------------------------------------
+# **Awaiting merge** (#692): a candidate an open pull request will close is not
+# **Pickup**-admissible. ADR-0069 (amending ADR-0047), Wrapper contract section
+# 3.3.1, contract 2.17.
+#
+# Like the readiness block above when it landed, these tests pin the *fixture*:
+# its vocabularies, and that every expected result follows from its own inputs.
+# They deliberately drive no production seam. Python (#695), shell (#697) and
+# PowerShell (#698) each owe the fixture until their own ticket claims it
+# (`fixture-claims.json`), and a test here that compared it against a Runner
+# would be a claim the register does not record.
+# ---------------------------------------------------------------------------
+
+_AWAITING_MERGE = _load_fixture("awaiting-merge.json")
+
+_AWAITING_PULL_REQUEST_MERGE = "awaiting_pull_request_merge"
+_AWAITING_MERGE_CASE_LISTS = (
+    "cases",
+    "completeness_cases",
+    "state_request_cases",
+    "unbound_pool_cases",
+)
+_AWAITING_MERGE_OPEN_QUESTIONS = [
+    "more_than_100_references",
+    "connection_completeness",
+    "authoritative_re_reads",
+    "unprovable_blocker_beside_open_pull_request",
+]
+#: Refusals §3.3's admissible set makes today that are not Readiness verdicts.
+#: Each still counts toward the Pool that bound nothing, and toward nothing else.
+_NON_READINESS_REFUSALS = ("attempt_lifecycle_defeated", "routing_refused")
+_FULL_REF_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*")
+
+
+def _awaiting_merge_skip_reasons() -> dict[str, dict[str, Any]]:
+    return {entry["reason"]: entry for entry in _AWAITING_MERGE["skip_reasons"]}
+
+
+def _awaiting_merge_case_ids() -> list[str]:
+    return [
+        case["id"]
+        for key in _AWAITING_MERGE_CASE_LISTS
+        for case in _AWAITING_MERGE[key]
+    ]
+
+
+def _awaiting_merge_case(case_id: str) -> dict[str, Any]:
+    return next(case for case in _AWAITING_MERGE["cases"] if case["id"] == case_id)
+
+
+def _closing_nodes(case: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return case["closing_pull_requests"]["nodes"]
+
+
+def _repository_of(ref: str) -> str:
+    return ref.split("#", 1)[0]
+
+
+def _awaiting_merge_established(case: Mapping[str, Any]) -> dict[str, list[str]]:
+    """What one case's reads establish, keyed by the reason each fact supports.
+
+    An oracle over the fixture's own inputs, never a Runner's decision. Each
+    value is what that reason would name. Precedence is applied afterwards, from
+    the fixture, so reordering `precedence` there is a change these tests see.
+    """
+    if case["candidate_kind"] == "pull_request":
+        return {}
+    established: dict[str, list[str]] = {}
+    blocked_by = case["blocked_by"]
+    blockers = [
+        node["ref"]
+        for node in blocked_by["nodes"]
+        if node.get("readable", True) and node["state"] == "open"
+    ]
+    if blockers:
+        established[_BLOCKED_BY_OPEN_DEPENDENCY] = blockers
+    refusing = _AWAITING_MERGE["read"]["state_read"]["refusing_states"]
+    references = case["closing_pull_requests"]
+    awaiting = [node["ref"] for node in references["nodes"] if node["state"] in refusing]
+    if awaiting:
+        established[_AWAITING_PULL_REQUEST_MERGE] = awaiting
+    if (
+        len(blocked_by["nodes"]) < blocked_by["total_count"]
+        or any(not node.get("readable", True) for node in blocked_by["nodes"])
+        or not references["complete"]
+        or any(node["state"] is None for node in references["nodes"])
+    ):
+        established[_READINESS_UNPROVABLE] = []
+    return established
+
+
+def _awaiting_merge_expected_from_reads(case: Mapping[str, Any]) -> dict[str, Any]:
+    """The result a case's reads entitle it to, under the fixture's precedence."""
+    established = _awaiting_merge_established(case)
+    for skip_reason in _AWAITING_MERGE["precedence"]:
+        if skip_reason in established:
+            names = established[skip_reason]
+            return {
+                "admissible": False,
+                "skip_reason": skip_reason,
+                "reason": f"{skip_reason}: {', '.join(names)}" if names else skip_reason,
+                "names": names,
+                "unbound_pool_class": _awaiting_merge_skip_reasons()[skip_reason][
+                    "unbound_pool_class"
+                ],
+            }
+    return {
+        "admissible": True,
+        "skip_reason": None,
+        "reason": None,
+        "names": [],
+        "unbound_pool_class": "admitted",
+    }
+
+
+def _awaiting_merge_unbound_outcome(refusals: Sequence[str]) -> str:
+    """The ending a Pool that bound nothing reaches, by the fixture's own rule."""
+    rule = _AWAITING_MERGE["unbound_pool_rule"]
+    counted = [rule["counted_as"][refusal] for refusal in refusals]
+    holds = {
+        "any_unresolved": "unresolved" in counted,
+        "every_refusal_waiting": bool(counted)
+        and all(kind == "waiting" for kind in counted),
+        "otherwise": True,
+    }
+    for step in rule["outcomes"]:
+        if holds[step["when"]]:
+            return step["outcome"]
+    raise AssertionError("the unbound-Pool rule has no step for this Pool")
+
+
+def test_awaiting_merge_skip_reasons_are_a_closed_vocabulary() -> None:
+    """One reason joins the vocabulary, and nothing else about it moves.
+
+    The fixture's vocabulary is `issue-readiness.json`'s plus
+    `awaiting_pull_request_merge`, in precedence order. Blocked stays first so
+    every candidate Blocked today keeps its reason, and both waits outrank the
+    unproven read that names nothing.
+    """
+    reasons = [entry["reason"] for entry in _AWAITING_MERGE["skip_reasons"]]
+    today = [entry["reason"] for entry in _ISSUE_READINESS["skip_reasons"]]
+
+    assert reasons == [
+        _BLOCKED_BY_OPEN_DEPENDENCY,
+        _AWAITING_PULL_REQUEST_MERGE,
+        _READINESS_UNPROVABLE,
+    ]
+    assert len(set(reasons)) == len(reasons)
+    assert [reason for reason in reasons if reason not in today] == [
+        _AWAITING_PULL_REQUEST_MERGE
+    ]
+    assert set(today) <= set(reasons)
+    assert _AWAITING_MERGE["precedence"] == reasons
+    assert _AWAITING_MERGE["unbound_pool_classes"] == ["admitted", "waiting", "unresolved"]
+    entries = _awaiting_merge_skip_reasons()
+    assert {reason: entry["unbound_pool_class"] for reason, entry in entries.items()} == {
+        _BLOCKED_BY_OPEN_DEPENDENCY: "waiting",
+        _AWAITING_PULL_REQUEST_MERGE: "waiting",
+        _READINESS_UNPROVABLE: "unresolved",
+    }
+    assert {reason: entry["names"] for reason, entry in entries.items()} == {
+        _BLOCKED_BY_OPEN_DEPENDENCY: "open_blockers",
+        _AWAITING_PULL_REQUEST_MERGE: "open_closing_pull_requests",
+        _READINESS_UNPROVABLE: "nothing",
+    }
+
+
+def test_an_awaiting_merge_pin_is_spent_and_an_unprovable_one_stays_live() -> None:
+    """The Pin reads each reason in `pin-duration.json`'s own vocabulary.
+
+    An Awaiting-merge Pin is an answer about the Pin itself, so it is passed
+    over and spent exactly as a Blocked one is (`refused`). An unproven read
+    is not an answer, so it leaves the Pin live (`unread`).
+    """
+    pin_reads = set(_PIN_DURATION["pin_reads"])
+
+    for entry in _AWAITING_MERGE["skip_reasons"]:
+        assert entry["pin_read"] in pin_reads - {"bound"}, entry["reason"]
+        assert entry["pin_read"] == (
+            "unread" if entry["unbound_pool_class"] == "unresolved" else "refused"
+        ), entry["reason"]
+
+
+def test_the_awaiting_merge_read_rides_existing_reads_and_bounds_its_state_reads() -> None:
+    """The properties of the read a member cannot choose for itself.
+
+    The references ride every read that already decides blocker Readiness, one
+    hop and never traversed. Completeness turns on the carrier, because gh
+    projects no `totalCount`. States come from GraphQL `nodes(ids:)` at most
+    100 ids a request, and only an open pull request refuses.
+    """
+    read = _AWAITING_MERGE["read"]
+
+    assert read["transport"] == "graphql"
+    assert read["connection"] == "closedByPullRequestsReferences"
+    assert read["hops"] == _ISSUE_READINESS["read"]["hops"] == 1
+    assert read["rides"] == ["collection", "membership", "pickup_validation"]
+    assert read["candidate_kinds"] == ["issue", "pull_request"]
+    placeholders = re.findall(r"<([^>]+)>", read["ref_format"])
+    assert placeholders
+    assert set(placeholders) <= set(read["reference_fields"])
+    assert read["state_key"] in read["reference_fields"]
+    assert read["zero_valued_fields"]
+    assert set(read["zero_valued_fields"]) <= set(read["reference_fields"])
+    carriers = read["carriers"]
+    assert set(carriers) == {"view", "list"}
+    assert carriers["view"]["pages_to_completion"] is True
+    assert carriers["list"]["pages_to_completion"] is False
+    assert carriers["view"]["page_size"] == carriers["list"]["page_size"] == 100
+    state_read = read["state_read"]
+    assert state_read["transport"] == "graphql"
+    assert state_read["field"] == "nodes(ids:)"
+    assert state_read["max_ids_per_request"] == 100
+    assert state_read["states"] == ["open", "merged", "closed"]
+    assert state_read["refusing_states"] == ["open"]
+    assert read["unread_causes"] == [
+        "reference_unreadable",
+        "state_request_failed",
+        "state_node_null",
+    ]
+
+
+def test_awaiting_merge_case_ids_are_unique_across_every_case_list() -> None:
+    ids = _awaiting_merge_case_ids()
+
+    assert len(set(ids)) == len(ids)
+
+
+_AWAITING_MERGE_REQUIRED_CASES: dict[str, frozenset[str]] = {
+    "cases": frozenset(
+        {
+            "an-open-closing-pull-request-awaits-merge",
+            "a-draft-closing-pull-request-awaits-merge",
+            "a-merged-closing-pull-request-on-an-open-issue-is-ready",
+            "a-closed-unmerged-closing-pull-request-is-ready",
+            "a-closing-pull-request-in-another-repository-awaits-merge",
+            "an-open-blocker-outranks-an-open-closing-pull-request",
+            "a-failed-state-read-is-unprovable",
+            "several-open-closing-pull-requests-are-named-in-connection-order",
+            "an-open-pull-request-outranks-an-unprovable-blocker-read",
+            "a-pull-request-candidate-is-never-awaiting-merge",
+        }
+    ),
+    "completeness_cases": frozenset({"a-list-carried-full-page-is-incomplete"}),
+    "state_request_cases": frozenset(
+        {
+            "no-reference-costs-no-request",
+            "a-hundred-and-one-distinct-references-cost-two-requests",
+        }
+    ),
+    "unbound_pool_cases": frozenset(
+        {
+            "every-refusal-awaiting-merge-is-all-blocked",
+            "awaiting-merge-beside-blocked-is-all-blocked",
+            "awaiting-merge-beside-a-defeated-candidate-is-all-skipped",
+            "an-unprovable-refusal-outranks-awaiting-merge",
+        }
+    ),
+}
+
+
+def test_awaiting_merge_fixture_carries_every_case_the_decision_names() -> None:
+    """#692's acceptance criteria name these cases; an id alone is not the case."""
+    for key, required in _AWAITING_MERGE_REQUIRED_CASES.items():
+        present = {case["id"] for case in _AWAITING_MERGE[key]}
+        assert required <= present, f"{key} lacks {sorted(required - present)}"
+
+
+_AWAITING_MERGE_CASE_SHAPES: dict[str, Any] = {
+    "an-open-closing-pull-request-awaits-merge": lambda case: any(
+        node["state"] == "open" and not node["draft"] for node in _closing_nodes(case)
+    ),
+    "a-draft-closing-pull-request-awaits-merge": lambda case: any(
+        node["state"] == "open" and node["draft"] for node in _closing_nodes(case)
+    ),
+    "a-merged-closing-pull-request-on-an-open-issue-is-ready": lambda case: [
+        node["state"] for node in _closing_nodes(case)
+    ]
+    == ["merged"],
+    "a-closed-unmerged-closing-pull-request-is-ready": lambda case: [
+        node["state"] for node in _closing_nodes(case)
+    ]
+    == ["closed"],
+    "a-closing-pull-request-in-another-repository-awaits-merge": lambda case: any(
+        _repository_of(ref) != _repository_of(case["candidate"])
+        for ref in case["expected"]["names"]
+    ),
+    "an-open-blocker-outranks-an-open-closing-pull-request": lambda case: set(
+        _awaiting_merge_established(case)
+    )
+    == {_BLOCKED_BY_OPEN_DEPENDENCY, _AWAITING_PULL_REQUEST_MERGE},
+    "a-failed-state-read-is-unprovable": lambda case: bool(_closing_nodes(case))
+    and all(node.get("unread") == "state_request_failed" for node in _closing_nodes(case)),
+    "several-open-closing-pull-requests-are-named-in-connection-order": lambda case: len(
+        case["expected"]["names"]
+    )
+    >= 2
+    and case["expected"]["names"] != sorted(case["expected"]["names"]),
+    # The unproven read must be the *blocker* read, or this is a different case.
+    "an-open-pull-request-outranks-an-unprovable-blocker-read": lambda case: set(
+        _awaiting_merge_established(case)
+    )
+    == {_AWAITING_PULL_REQUEST_MERGE, _READINESS_UNPROVABLE}
+    and case["closing_pull_requests"]["complete"]
+    and all(node["state"] is not None for node in _closing_nodes(case)),
+    "a-pull-request-candidate-is-never-awaiting-merge": lambda case: case[
+        "candidate_kind"
+    ]
+    == "pull_request",
+}
+
+
+@pytest.mark.parametrize("case_id", sorted(_AWAITING_MERGE_CASE_SHAPES))
+def test_each_named_awaiting_merge_case_exercises_what_it_is_named_for(
+    case_id: str,
+) -> None:
+    """A draft case carries a draft, a cross-repository case another repository."""
+    assert _AWAITING_MERGE_CASE_SHAPES.keys() == _AWAITING_MERGE_REQUIRED_CASES["cases"]
+    assert _AWAITING_MERGE_CASE_SHAPES[case_id](_awaiting_merge_case(case_id))
+
+
+def _awaiting_merge_pointer_resolves(pointer: str) -> bool:
+    if pointer.startswith("case:"):
+        return pointer.removeprefix("case:") in _awaiting_merge_case_ids()
+    node: Any = _AWAITING_MERGE
+    for key in pointer.split("."):
+        if not isinstance(node, Mapping) or key not in node:
+            return False
+        node = node[key]
+    return True
+
+
+def test_awaiting_merge_answers_each_open_question_with_data_that_pins_it() -> None:
+    """#692's four open questions, each answered by data a member is held to.
+
+    An answer that pointed at nothing would be prose a port could ignore, so
+    every `pinned_by` entry must resolve to a fixture key or a case id.
+    """
+    answers = _AWAITING_MERGE["answers"]
+
+    assert [answer["question"] for answer in answers] == _AWAITING_MERGE_OPEN_QUESTIONS
+    for answer in answers:
+        assert answer["asked"].strip(), answer["question"]
+        assert answer["answer"].strip(), answer["question"]
+        assert answer["pinned_by"], answer["question"]
+        for pointer in answer["pinned_by"]:
+            assert _awaiting_merge_pointer_resolves(pointer), (answer["question"], pointer)
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_case_inputs_speak_the_fixture_vocabularies(
+    case: dict[str, Any],
+) -> None:
+    """Every node state, unread cause and reference is one the fixture defines.
+
+    A state is `null` exactly when the reference was not read, and the cause
+    says why. Only an unreadable reference node lacks a ref of its own.
+    """
+    read = _AWAITING_MERGE["read"]
+
+    assert case["candidate_kind"] in read["candidate_kinds"]
+    assert _FULL_REF_RE.fullmatch(case["candidate"])
+    if case["candidate_kind"] == "pull_request":
+        assert case["blocked_by"] is None
+        assert case["closing_pull_requests"] is None
+        return
+    assert isinstance(case["closing_pull_requests"]["complete"], bool)
+    for node in _closing_nodes(case):
+        assert set(node) <= {"ref", "state", "draft", "unread"}
+        # Whether a pull request is a draft is known only once it was read.
+        assert ("draft" in node) is (node["state"] is not None)
+        assert isinstance(node.get("draft", False), bool)
+        if node["state"] is None:
+            assert node["unread"] in read["unread_causes"]
+            assert (node["ref"] is None) is (node["unread"] == "reference_unreadable")
+        else:
+            assert "unread" not in node
+            assert node["state"] in read["state_read"]["states"]
+        if node["ref"] is not None:
+            assert _FULL_REF_RE.fullmatch(node["ref"])
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_expected_results_are_self_consistent(
+    case: dict[str, Any],
+) -> None:
+    """Admissible, admitted, no reason: one fact, never three that disagree.
+
+    A reason that names something is `<skip_reason>: <ref>, <ref>` in full
+    `owner/repo#N` form, the one shape `blocked_by_open_dependency` already
+    writes. A reason that names nothing is the bare skip reason.
+    """
+    expected = case["expected"]
+    admitted = expected["unbound_pool_class"] == "admitted"
+
+    assert expected["admissible"] is admitted
+    assert (expected["skip_reason"] is None) is admitted
+    assert (expected["reason"] is None) is admitted
+    if admitted:
+        assert expected["names"] == []
+        return
+    entry = _awaiting_merge_skip_reasons()[expected["skip_reason"]]
+    assert expected["unbound_pool_class"] == entry["unbound_pool_class"]
+    if entry["names"] == "nothing":
+        assert expected["names"] == []
+        assert expected["reason"] == expected["skip_reason"]
+    else:
+        assert expected["names"]
+        assert expected["reason"] == (
+            f"{expected['skip_reason']}: {', '.join(expected['names'])}"
+        )
+        assert all(_FULL_REF_RE.fullmatch(ref) for ref in expected["names"])
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_expected_result_follows_from_the_case_reads(
+    case: dict[str, Any],
+) -> None:
+    """Every expected result is what the reads and the precedence entitle it to.
+
+    A proven wait outranks an unproven read in both directions, and Blocked
+    outranks Awaiting merge. Only a pull request read open refuses: merged and
+    closed never do, and a draft is open.
+    """
+    assert _awaiting_merge_expected_from_reads(case) == case["expected"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _readiness_cases(),
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_changes_no_issue_readiness_answer(
+    case: dict[str, Any],
+) -> None:
+    """A candidate no pull request closes reports exactly what it reports today.
+
+    `issue-readiness.json` stays as it is, and the widened decision, given each
+    of its cases with no closing reference, reaches that case's own answer.
+    """
+    derived = _awaiting_merge_expected_from_reads(
+        {
+            **case,
+            "candidate_kind": "issue",
+            "closing_pull_requests": {"complete": True, "nodes": []},
+        }
+    )
+    expected = case["expected"]
+
+    assert derived["admissible"] is expected["admissible"]
+    assert derived["skip_reason"] == expected["skip_reason"]
+    assert derived["names"] == expected.get("blockers", [])
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["completeness_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_connection_completeness_follows_its_carrier(
+    case: dict[str, Any],
+) -> None:
+    """A read that paged to its end is complete; an unpaged full page is not."""
+    carrier = _AWAITING_MERGE["read"]["carriers"][case["carrier"]]
+
+    assert case["nodes"] >= 0
+    assert (
+        carrier["pages_to_completion"] or case["nodes"] < carrier["page_size"]
+    ) is case["complete"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["state_request_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_state_reads_cost_a_request_per_hundred_distinct_ids(
+    case: dict[str, Any],
+) -> None:
+    """Cost grows with a read's distinct references, never with its candidates."""
+    per_request = _AWAITING_MERGE["read"]["state_read"]["max_ids_per_request"]
+
+    assert 0 <= case["distinct"] <= case["carried"]
+    assert (case["distinct"] == 0) is (case["carried"] == 0)
+    assert case["requests"] == -(-case["distinct"] // per_request)
+
+
+def test_the_awaiting_merge_unbound_pool_rule_counts_each_refusal_by_reason() -> None:
+    """The count-shaped rule, restated by the reason that decides each count.
+
+    A Readiness reason counts as its own unbound-Pool class; a refusal that is
+    not a Readiness verdict counts toward the Pool alone. An unresolved refusal
+    outranks everything, and only a Pool of waits is `all_blocked`.
+    """
+    rule = _AWAITING_MERGE["unbound_pool_rule"]
+    entries = _awaiting_merge_skip_reasons()
+
+    assert set(rule["counted_as"]) == set(entries) | set(_NON_READINESS_REFUSALS)
+    for reason, entry in entries.items():
+        assert rule["counted_as"][reason] == entry["unbound_pool_class"], reason
+    for refusal in _NON_READINESS_REFUSALS:
+        assert rule["counted_as"][refusal] is None, refusal
+    assert [step["when"] for step in rule["outcomes"]] == [
+        "any_unresolved",
+        "every_refusal_waiting",
+        "otherwise",
+    ]
+    assert [step["outcome"] for step in rule["outcomes"]] == [
+        "preflight_failed",
+        "all_blocked",
+        "all_skipped",
+    ]
+    assert {step["outcome"] for step in rule["outcomes"]} <= {
+        case["reason"] for case in _EXIT_CODES["cases"]
+    }
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["unbound_pool_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_unbound_pool_case_follows_the_rule(
+    case: dict[str, Any],
+) -> None:
+    assert case["refusals"]
+    assert set(case["refusals"]) <= set(_AWAITING_MERGE["unbound_pool_rule"]["counted_as"])
+    assert _awaiting_merge_unbound_outcome(case["refusals"]) == case["outcome"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _EXIT_CODES["unbound_pool_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_unbound_pool_rule_restates_the_count_shaped_rule(
+    case: dict[str, Any],
+) -> None:
+    """`exit-codes.json` stays as it is, and the reason-shaped rule agrees with it.
+
+    Whichever waiting reason fills its `waiting` count, and whichever refusal
+    that is not a Readiness verdict fills the rest, each count-shaped case
+    reaches its own outcome. So an Awaiting-merge refusal counts exactly as a
+    Blocked one does.
+    """
+    counted_as = _AWAITING_MERGE["unbound_pool_rule"]["counted_as"]
+    waiting_kinds = [kind for kind, counted in counted_as.items() if counted == "waiting"]
+    unresolved_kinds = [
+        kind for kind, counted in counted_as.items() if counted == "unresolved"
+    ]
+    rest = case["candidates"] - case["waiting"] - case["unresolved"]
+
+    assert waiting_kinds and unresolved_kinds
+    for waiting_kind in waiting_kinds:
+        for unresolved_kind in unresolved_kinds:
+            for other_kind in _NON_READINESS_REFUSALS:
+                refusals = (
+                    [waiting_kind] * case["waiting"]
+                    + [unresolved_kind] * case["unresolved"]
+                    + [other_kind] * rest
+                )
+                assert _awaiting_merge_unbound_outcome(refusals) == case["outcome"], (
+                    waiting_kind,
+                    other_kind,
+                )
+
+
+def _readiness_section() -> str:
+    """The written §3.3.1, so a coincidence elsewhere in the contract cannot pass."""
+    contract = _written_contract_text()
+    return contract.split("### 3.3.1 Readiness", 1)[1].split("\n## ", 1)[0]
+
+
+def test_the_contract_names_the_awaiting_merge_fixture_and_every_reason_it_pins() -> None:
+    """§3.3.1 is where a port learns the new reason and which fixture pins it.
+
+    Derived from the fixture on disk rather than restated, so renaming the file
+    or adding a reason to it fails here instead of leaving the contract behind.
+    """
+    section = _readiness_section()
+
+    assert (CONFORMANCE_DIR / "awaiting-merge.json").is_file()
+    assert "`awaiting-merge.json`" in section
+    assert "#### Awaiting merge" in section
+    for reason in _awaiting_merge_skip_reasons():
+        assert f"`{reason}`" in section, f"§3.3.1 does not describe {reason}"
+
+
+def test_the_contract_reason_table_is_in_the_fixtures_precedence_order() -> None:
+    """The contract says a candidate reports the first reason in its table.
+
+    So the table's row order *is* the precedence, and it must be the fixture's.
+    A port reading only the contract would otherwise rank the reasons however
+    the table happened to list them.
+    """
+    section = _readiness_section()
+    rows = re.findall(r"^\| `([a-z_]+)` \|", section, flags=re.MULTILINE)
+
+    assert rows == _AWAITING_MERGE["precedence"]
+    assert "reports the first in the table's order" in section
+
+
+# ---------------------------------------------------------------------------
 # #482: a scheduling distribution is obliged to emit the Membership read.
 # ---------------------------------------------------------------------------
 
