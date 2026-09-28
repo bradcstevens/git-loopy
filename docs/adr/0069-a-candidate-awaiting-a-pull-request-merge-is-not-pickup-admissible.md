@@ -16,9 +16,11 @@ touching the issue: when the pull request merges, the issue closes and leaves th
 the pull request closes unmerged, the candidate is admissible again on the next **Iteration**.
 
 No member of the **Runner family** reads closing pull requests today. This ADR is the decision
-the three Orchestrators and the Rust **Dashboard** are then held to, landed one slice ahead of
-them as ADR-0047 was, so they implement one decision rather than four compatible guesses. No
-member's behaviour changes here.
+they are then held to, landed one slice ahead of them as ADR-0047 was, so they implement one
+decision rather than four compatible guesses. The three Orchestrators are held to the admission
+decision through `awaiting-merge.json`. The Rust **Dashboard** decides no admission, so it records
+a **Permanent waiver** on that fixture, and is held instead to the skip reason this decision
+names, through the **Unbound-Run notice** ([#694]). No member's behaviour changes here.
 
 ## What happened
 

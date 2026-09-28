@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from decimal import Decimal
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import pytest
 from rich.console import Console
@@ -5025,7 +5025,7 @@ def _readiness_cases() -> list[dict[str, Any]]:
     return _ISSUE_READINESS["cases"]
 
 
-def _read_open_blockers(case: dict[str, Any]) -> list[str]:
+def _read_open_blockers(case: Mapping[str, Any]) -> list[str]:
     """Blockers positively read as open -- the only ones a member may name."""
     return [
         node["ref"]
@@ -5034,7 +5034,7 @@ def _read_open_blockers(case: dict[str, Any]) -> list[str]:
     ]
 
 
-def _read_is_incomplete(case: dict[str, Any]) -> bool:
+def _read_is_incomplete(case: Mapping[str, Any]) -> bool:
     """The connection under-delivered, or a node came back unreadable."""
     connection = case["blocked_by"]
     if len(connection["nodes"]) < connection["total_count"]:
@@ -5268,6 +5268,7 @@ _AWAITING_MERGE_CASE_LISTS = (
     "cases",
     "completeness_cases",
     "state_request_cases",
+    "state_failure_cases",
     "unbound_pool_cases",
 )
 _AWAITING_MERGE_OPEN_QUESTIONS = [
@@ -5316,12 +5317,7 @@ def _awaiting_merge_established(case: Mapping[str, Any]) -> dict[str, list[str]]
     if case["candidate_kind"] == "pull_request":
         return {}
     established: dict[str, list[str]] = {}
-    blocked_by = case["blocked_by"]
-    blockers = [
-        node["ref"]
-        for node in blocked_by["nodes"]
-        if node.get("readable", True) and node["state"] == "open"
-    ]
+    blockers = _read_open_blockers(case)
     if blockers:
         established[_BLOCKED_BY_OPEN_DEPENDENCY] = blockers
     refusing = _AWAITING_MERGE["read"]["state_read"]["refusing_states"]
@@ -5330,8 +5326,7 @@ def _awaiting_merge_established(case: Mapping[str, Any]) -> dict[str, list[str]]
     if awaiting:
         established[_AWAITING_PULL_REQUEST_MERGE] = awaiting
     if (
-        len(blocked_by["nodes"]) < blocked_by["total_count"]
-        or any(not node.get("readable", True) for node in blocked_by["nodes"])
+        _read_is_incomplete(case)
         or not references["complete"]
         or any(node["state"] is None for node in references["nodes"])
     ):
@@ -5498,6 +5493,9 @@ _AWAITING_MERGE_REQUIRED_CASES: dict[str, frozenset[str]] = {
             "a-hundred-and-one-distinct-references-cost-two-requests",
         }
     ),
+    "state_failure_cases": frozenset(
+        {"a-failed-request-leaves-unread-only-the-ids-it-carried"}
+    ),
     "unbound_pool_cases": frozenset(
         {
             "every-refusal-awaiting-merge-is-all-blocked",
@@ -5516,7 +5514,7 @@ def test_awaiting_merge_fixture_carries_every_case_the_decision_names() -> None:
         assert required <= present, f"{key} lacks {sorted(required - present)}"
 
 
-_AWAITING_MERGE_CASE_SHAPES: dict[str, Any] = {
+_AWAITING_MERGE_CASE_SHAPES: dict[str, Callable[[Mapping[str, Any]], bool]] = {
     "an-open-closing-pull-request-awaits-merge": lambda case: any(
         node["state"] == "open" and not node["draft"] for node in _closing_nodes(case)
     ),
@@ -5560,12 +5558,16 @@ _AWAITING_MERGE_CASE_SHAPES: dict[str, Any] = {
 }
 
 
+def test_every_named_awaiting_merge_case_has_a_shape_check() -> None:
+    """A named case with no shape check would pass on its id alone."""
+    assert _AWAITING_MERGE_CASE_SHAPES.keys() == _AWAITING_MERGE_REQUIRED_CASES["cases"]
+
+
 @pytest.mark.parametrize("case_id", sorted(_AWAITING_MERGE_CASE_SHAPES))
 def test_each_named_awaiting_merge_case_exercises_what_it_is_named_for(
     case_id: str,
 ) -> None:
     """A draft case carries a draft, a cross-repository case another repository."""
-    assert _AWAITING_MERGE_CASE_SHAPES.keys() == _AWAITING_MERGE_REQUIRED_CASES["cases"]
     assert _AWAITING_MERGE_CASE_SHAPES[case_id](_awaiting_merge_case(case_id))
 
 
@@ -5745,6 +5747,41 @@ def test_awaiting_merge_state_reads_cost_a_request_per_hundred_distinct_ids(
     assert 0 <= case["distinct"] <= case["carried"]
     assert (case["distinct"] == 0) is (case["carried"] == 0)
     assert case["requests"] == -(-case["distinct"] // per_request)
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["state_failure_cases"],
+    ids=lambda case: case["id"],
+)
+def test_a_failed_awaiting_merge_state_request_leaves_unread_only_the_ids_it_carried(
+    case: dict[str, Any],
+) -> None:
+    """Open question 1: a failure is scoped to its own request, never the read.
+
+    Each case's split is forced -- every request full, or every request failed
+    -- so the count a failure leaves unread is the same however a member
+    batches its ids. A member that let one failed request unread the whole read
+    would leave every id unread.
+    """
+    per_request = _AWAITING_MERGE["read"]["state_read"]["max_ids_per_request"]
+    every_request_full = case["distinct"] == case["requests"] * per_request
+    every_request_failed = case["failed_requests"] == case["requests"]
+    if every_request_full:
+        unread = case["failed_requests"] * per_request
+    else:
+        unread = case["distinct"]
+
+    assert 0 < case["distinct"] <= case["carried"]
+    assert case["requests"] == -(-case["distinct"] // per_request)
+    assert 0 < case["failed_requests"] <= case["requests"]
+    assert every_request_full or every_request_failed
+    assert case["expected"] == {
+        "unread": unread,
+        "read": case["distinct"] - unread,
+        "unread_cause": "state_request_failed",
+    }
+    assert case["expected"]["unread_cause"] in _AWAITING_MERGE["read"]["unread_causes"]
 
 
 def test_the_awaiting_merge_unbound_pool_rule_counts_each_refusal_by_reason() -> None:

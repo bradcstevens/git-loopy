@@ -98,7 +98,7 @@
     "carrier_note": "gh projects neither totalCount nor pageInfo for this connection, so the carrier decides completeness (open question 2). gh issue view pages the connection a hundred nodes at a time until hasNextPage is false, so a view-carried connection is complete at any length. gh issue list pages only the Issues connection and asks each issue for one page of a hundred references, so a list-carried connection of fewer than 100 nodes is complete and one of exactly 100 may have been cut short. A reference node gh rendered from null arrives as its zero value -- empty id, number 0 -- and is unreadable (`zero_valued_fields`).",
     "rides_note": "The references are one more field on every read that already decides blocker Readiness, and each such read resolves its own states (open question 3): the section 3.1 collection read, once its candidates are read and before the Pickup walk; each **Membership read**, from its list call; and each authoritative Pickup validation of one candidate -- a Lane's own Pickup, and the serial re-read before **Routing preparation** (section 14.6). No read takes a verdict from states another read resolved, so a merge between two reads is seen by the second. The serial Pickup walk and Lane candidacy take their verdicts from the read that carried them and issue no read of their own.",
     "state_read_note": "Only a pull request read as open refuses. A draft reports OPEN, so being a draft is never read. MERGED and CLOSED never refuse: a merged pull request can leave its issue open, and a closed one will never close it. A read collects the distinct ids its candidates carry and resolves them with GraphQL `nodes(ids:)`, at most 100 ids a request (open question 1), so its cost grows with the distinct references it carries, never with its candidates, and is nothing when no candidate carries one.",
-    "unread_note": "`unread_causes` closes why a reference was not read: `reference_unreadable` (gh rendered the node from null, so there is no id to resolve), `state_request_failed` (the request carrying its id failed -- only the ids that request carried are unread), and `state_node_null` (the request returned null for the id: the token cannot see the pull request). Each leaves the candidate's Readiness unproven unless the same candidate carries a blocker or a pull request read as open."
+    "unread_note": "`unread_causes` closes why a reference was not read: `reference_unreadable` (gh rendered the node from null, so there is no id to resolve), `state_request_failed` (the request carrying its id failed -- only the ids that request carried are unread), and `state_node_null` (the request returned null for the id: the token cannot see the pull request). Each leaves the candidate's Readiness unproven unless the same candidate carries a blocker or a pull request read as open. `state_failure_cases` pins that scope with reads whose split is forced -- every request full, or every request failed -- so the count a failure leaves unread depends neither on how a member batches its ids nor on which of its requests fail."
   },
   "answers": [
     {
@@ -110,6 +110,8 @@
         "state_request_cases",
         "case:a-hundred-and-one-distinct-references-cost-two-requests",
         "case:no-reference-costs-no-request",
+        "state_failure_cases",
+        "case:a-failed-request-leaves-unread-only-the-ids-it-carried",
         "case:an-open-pull-request-outranks-an-unread-state"
       ]
     },
@@ -570,7 +572,7 @@
         ],
         "unbound_pool_class": "waiting"
       },
-      "note": "A failed request leaves unread only the ids it carried. The pull request another request read as open still proves the wait, and the reason names only what was read."
+      "note": "#313 and #314 reached the state read in different requests -- a read carrying more than a hundred distinct ids makes more than one -- and only #313's failed. A failed request leaves unread only the ids it carried (state_failure_cases), so the pull request the other request read as open still proves the wait, and the reason names only what was read."
     },
     {
       "id": "an-open-pull-request-outranks-an-unreadable-reference-node",
@@ -841,6 +843,58 @@
       "carried": 250,
       "distinct": 250,
       "requests": 3
+    }
+  ],
+  "state_failure_cases": [
+    {
+      "id": "a-failed-request-leaves-unread-only-the-ids-it-carried",
+      "carried": 200,
+      "distinct": 200,
+      "requests": 2,
+      "failed_requests": 1,
+      "expected": {
+        "unread": 100,
+        "read": 100,
+        "unread_cause": "state_request_failed"
+      },
+      "note": "Open question 1: two hundred distinct ids fill two requests of a hundred however a member batches them, so the request that failed leaves exactly its hundred ids unread and the other hundred keep the states their request returned. A member that let one failed request unread the whole read would leave all two hundred unread."
+    },
+    {
+      "id": "two-failed-requests-of-three-leave-the-third-read",
+      "carried": 300,
+      "distinct": 300,
+      "requests": 3,
+      "failed_requests": 2,
+      "expected": {
+        "unread": 200,
+        "read": 100,
+        "unread_cause": "state_request_failed"
+      }
+    },
+    {
+      "id": "a-failed-lone-request-leaves-its-whole-read-unread",
+      "carried": 3,
+      "distinct": 2,
+      "requests": 1,
+      "failed_requests": 1,
+      "expected": {
+        "unread": 2,
+        "read": 0,
+        "unread_cause": "state_request_failed"
+      },
+      "note": "Up to a hundred distinct ids is one request, so its failure leaves unread both distinct ids the read's three references carried: the whole read, because the whole read was that one request."
+    },
+    {
+      "id": "every-failed-request-leaves-every-id-unread",
+      "carried": 250,
+      "distinct": 250,
+      "requests": 3,
+      "failed_requests": 3,
+      "expected": {
+        "unread": 250,
+        "read": 0,
+        "unread_cause": "state_request_failed"
+      }
     }
   ],
   "unbound_pool_rule": {
