@@ -73,11 +73,11 @@ is what let eight types ride on one producer. The shell and PowerShell Orchestra
 > [ADR-0042](0042-a-membership-read-keeps-the-queue-live.md) assigns to #431. The gate showed that
 > premise was already false. The Python Runner emits that type from the Membership read, on the
 > first complete read that finds Queue members (normally the one at scheduler start) and on each
-> later read that changes membership or is the forced read that decides the Run's terminal
-> outcome. Every GitHub scenario the gate runs therefore emits it, and the gate's own rule would
-> turn that waiver red. #680 dropped it. The waivers the gate does carry are for producers that do
-> not exist yet, each keyed to the ticket that owns it, and `WAIVERS` rather than this record is
-> where they are listed.
+> later read that changes membership or is a forced read that checks whether the Run can end.
+> Every GitHub scenario the gate runs therefore emits it, and the gate's own rule would turn that
+> waiver red. #680 dropped it. The waivers the gate does carry are for producers that do not exist
+> yet, each keyed to the ticket that owns it, and `WAIVERS` rather than this record is where they
+> are listed.
 
 ## Considered options
 
