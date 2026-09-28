@@ -71,9 +71,10 @@ is what let eight types ride on one producer. The shell and PowerShell Orchestra
 > **Amendment ([#680](https://github.com/bradcstevens/git-loopy/issues/680)).** As first
 > decided, this paragraph named one waiver: `wrapper.pool.refreshed`, which
 > [ADR-0042](0042-a-membership-read-keeps-the-queue-live.md) assigns to #431. The gate showed
-> that premise was already false. The Python Runner emits that type on every membership read,
-> including the one at scheduler start, so the gate's own rule would turn that waiver red. #680
-> dropped it. The waivers the gate does carry are for producers that do not exist yet, each keyed
+> that premise was already false. The Python Runner emits that type from the Membership read,
+> on the first complete read that finds Queue members (normally the one at scheduler start) and
+> on each later read that changes membership. Every GitHub scenario the gate runs therefore emits
+> it, and the gate's own rule would turn that waiver red. #680 dropped it. The waivers the gate does carry are for producers that do not exist yet, each keyed
 > to the ticket that owns it, and `WAIVERS` rather than this record is where they are listed.
 
 ## Considered options

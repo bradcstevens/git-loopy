@@ -7516,8 +7516,9 @@ class _ParallelLoop:
         The closure is stamped with the landing contribution's identity, as
         ``contribution_identity.stamped_types`` requires, so a replay reads it
         inside that contribution's lifecycle rather than as a Run-level record.
-        The pool is ``[item]``, which is the whitelist every backstop filters
-        against, so each closure here names the landing issue itself.
+        The pool is ``[item]``: the closure backstop filters closing keywords
+        to it and the PR-advance backstop reads only its items, so each
+        closure here names the landing issue itself.
         """
         try:
             post_base = self._git.head_sha()

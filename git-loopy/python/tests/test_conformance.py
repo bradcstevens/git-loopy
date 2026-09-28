@@ -3965,6 +3965,11 @@ def _written_contract_version() -> str:
     return match["version"]
 
 
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """A dotted contract version as a comparable tuple of its parts."""
+    return tuple(int(part) for part in version.split("."))
+
+
 def _declared_fixture_contract_versions() -> dict[str, str]:
     """Every fixture's declared Wrapper contract version, by file name."""
     declared: dict[str, str] = {}
@@ -4090,12 +4095,12 @@ def test_no_fixture_claims_a_contract_version_the_contract_has_not_reached() -> 
     be conforming to a version that does not exist.
     """
     written = _written_contract_version()
-    ceiling = tuple(int(part) for part in written.split("."))
+    ceiling = _version_tuple(written)
 
     ahead = {
         name: version
         for name, version in _declared_fixture_contract_versions().items()
-        if tuple(int(part) for part in version.split(".")) > ceiling
+        if _version_tuple(version) > ceiling
     }
     assert ahead == {}, f"fixtures ahead of written contract {written}: {ahead}"
 
@@ -4339,7 +4344,7 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
 
     assert policy_advances == written_advances
     declared = _declared_fixture_contract_versions()
-    latest = max(policy_advances, key=lambda v: tuple(map(int, v.split("."))))
+    latest = max(policy_advances, key=_version_tuple)
     assert declared["event-schema.json"] == latest
     assert declared["dashboard-insights.json"] == latest
 
@@ -4363,9 +4368,7 @@ def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
     declared = _declared_fixture_contract_versions()
 
     # Non-vacuity: the revision these fixtures name is one the contract reached.
-    assert tuple(int(p) for p in expected.split(".")) <= tuple(
-        int(p) for p in written.split(".")
-    )
+    assert _version_tuple(expected) <= _version_tuple(written)
     assert declared[fixture] == expected, (
         f"{fixture} declares contract {declared[fixture]}, not {expected}"
     )
