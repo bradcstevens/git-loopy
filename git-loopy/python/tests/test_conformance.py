@@ -5374,6 +5374,15 @@ def _awaiting_merge_unbound_outcome(refusals: Sequence[str]) -> str:
     raise AssertionError("the unbound-Pool rule has no step for this Pool")
 
 
+def _awaiting_merge_state_requests(distinct: int) -> int:
+    """The state requests a read of `distinct` ids makes.
+
+    One per `max_ids_per_request` ids, rounded up, so no ids cost no request.
+    """
+    per_request = _AWAITING_MERGE["read"]["state_read"]["max_ids_per_request"]
+    return -(-distinct // per_request)
+
+
 def test_awaiting_merge_skip_reasons_are_a_closed_vocabulary() -> None:
     """One reason joins the vocabulary, and nothing else about it moves.
 
@@ -5471,49 +5480,9 @@ def test_awaiting_merge_case_ids_are_unique_across_every_case_list() -> None:
     assert len(set(ids)) == len(ids)
 
 
-_AWAITING_MERGE_REQUIRED_CASES: dict[str, frozenset[str]] = {
-    "cases": frozenset(
-        {
-            "an-open-closing-pull-request-awaits-merge",
-            "a-draft-closing-pull-request-awaits-merge",
-            "a-merged-closing-pull-request-on-an-open-issue-is-ready",
-            "a-closed-unmerged-closing-pull-request-is-ready",
-            "a-closing-pull-request-in-another-repository-awaits-merge",
-            "an-open-blocker-outranks-an-open-closing-pull-request",
-            "a-failed-state-read-is-unprovable",
-            "several-open-closing-pull-requests-are-named-in-connection-order",
-            "an-open-pull-request-outranks-an-unprovable-blocker-read",
-            "a-pull-request-candidate-is-never-awaiting-merge",
-        }
-    ),
-    "completeness_cases": frozenset({"a-list-carried-full-page-is-incomplete"}),
-    "state_request_cases": frozenset(
-        {
-            "no-reference-costs-no-request",
-            "a-hundred-and-one-distinct-references-cost-two-requests",
-        }
-    ),
-    "state_failure_cases": frozenset(
-        {"a-failed-request-leaves-unread-only-the-ids-it-carried"}
-    ),
-    "unbound_pool_cases": frozenset(
-        {
-            "every-refusal-awaiting-merge-is-all-blocked",
-            "awaiting-merge-beside-blocked-is-all-blocked",
-            "awaiting-merge-beside-a-defeated-candidate-is-all-skipped",
-            "an-unprovable-refusal-outranks-awaiting-merge",
-        }
-    ),
-}
-
-
-def test_awaiting_merge_fixture_carries_every_case_the_decision_names() -> None:
-    """#692's acceptance criteria name these cases; an id alone is not the case."""
-    for key, required in _AWAITING_MERGE_REQUIRED_CASES.items():
-        present = {case["id"] for case in _AWAITING_MERGE[key]}
-        assert required <= present, f"{key} lacks {sorted(required - present)}"
-
-
+# Every case #692's acceptance criteria name, keyed to what the case must
+# exercise. Its keys are the `cases` the fixture owes, so no named case can
+# pass on its id alone.
 _AWAITING_MERGE_CASE_SHAPES: dict[str, Callable[[Mapping[str, Any]], bool]] = {
     "an-open-closing-pull-request-awaits-merge": lambda case: any(
         node["state"] == "open" and not node["draft"] for node in _closing_nodes(case)
@@ -5558,9 +5527,34 @@ _AWAITING_MERGE_CASE_SHAPES: dict[str, Callable[[Mapping[str, Any]], bool]] = {
 }
 
 
-def test_every_named_awaiting_merge_case_has_a_shape_check() -> None:
-    """A named case with no shape check would pass on its id alone."""
-    assert _AWAITING_MERGE_CASE_SHAPES.keys() == _AWAITING_MERGE_REQUIRED_CASES["cases"]
+_AWAITING_MERGE_REQUIRED_CASES: dict[str, frozenset[str]] = {
+    "cases": frozenset(_AWAITING_MERGE_CASE_SHAPES),
+    "completeness_cases": frozenset({"a-list-carried-full-page-is-incomplete"}),
+    "state_request_cases": frozenset(
+        {
+            "no-reference-costs-no-request",
+            "a-hundred-and-one-distinct-references-cost-two-requests",
+        }
+    ),
+    "state_failure_cases": frozenset(
+        {"a-failed-request-leaves-unread-only-the-ids-it-carried"}
+    ),
+    "unbound_pool_cases": frozenset(
+        {
+            "every-refusal-awaiting-merge-is-all-blocked",
+            "awaiting-merge-beside-blocked-is-all-blocked",
+            "awaiting-merge-beside-a-defeated-candidate-is-all-skipped",
+            "an-unprovable-refusal-outranks-awaiting-merge",
+        }
+    ),
+}
+
+
+def test_awaiting_merge_fixture_carries_every_case_the_decision_names() -> None:
+    """#692's acceptance criteria name these cases; an id alone is not the case."""
+    for key, required in _AWAITING_MERGE_REQUIRED_CASES.items():
+        present = {case["id"] for case in _AWAITING_MERGE[key]}
+        assert required <= present, f"{key} lacks {sorted(required - present)}"
 
 
 @pytest.mark.parametrize("case_id", sorted(_AWAITING_MERGE_CASE_SHAPES))
@@ -5742,11 +5736,9 @@ def test_awaiting_merge_state_reads_cost_a_request_per_hundred_distinct_ids(
     case: dict[str, Any],
 ) -> None:
     """Cost grows with a read's distinct references, never with its candidates."""
-    per_request = _AWAITING_MERGE["read"]["state_read"]["max_ids_per_request"]
-
     assert 0 <= case["distinct"] <= case["carried"]
     assert (case["distinct"] == 0) is (case["carried"] == 0)
-    assert case["requests"] == -(-case["distinct"] // per_request)
+    assert case["requests"] == _awaiting_merge_state_requests(case["distinct"])
 
 
 @pytest.mark.parametrize(
@@ -5773,7 +5765,7 @@ def test_a_failed_awaiting_merge_state_request_leaves_unread_only_the_ids_it_car
         unread = case["distinct"]
 
     assert 0 < case["distinct"] <= case["carried"]
-    assert case["requests"] == -(-case["distinct"] // per_request)
+    assert case["requests"] == _awaiting_merge_state_requests(case["distinct"])
     assert 0 < case["failed_requests"] <= case["requests"]
     assert every_request_full or every_request_failed
     assert case["expected"] == {

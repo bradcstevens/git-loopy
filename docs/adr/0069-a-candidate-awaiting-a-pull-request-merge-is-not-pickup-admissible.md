@@ -87,13 +87,13 @@ request is, and a session would redo it just the same.
 landed, and what the open issue still asks for is new work. A pull request closed without merging
 will never close the issue.
 
-So appearing in the connection proves nothing on its own.
+So appearing in the connection proves nothing on its own. The evidence was taken on `gh` 2.96.0.
 
 - **The default connection mixes states.** `closedByPullRequestsReferences` omits pull requests
   closed without merging, but keeps merged ones. #640's connection lists merged #669, while
   #432's lists closed #617 only under `includeClosedPrs`.
-- **gh projects no state.** In `gh` 2.94.0 and 2.96.0, a projected reference carries its id,
-  number, url and repository, and nothing else.
+- **gh projects no state.** A projected reference carries its id, number, url and repository,
+  and nothing else. gh's source at 2.94.0, the Runner's floor, projects the same.
 
 The state is therefore a second read.
 
@@ -142,6 +142,10 @@ Each of the following leaves Readiness unproven — `readiness_unprovable`, neve
 - an unreadable node;
 - a failed state request;
 - a state request that returned `null` for an id, because the token cannot see the pull request.
+
+**The floor is [#695]'s to confirm.** At the floor, `MIN_GH_VERSION_FOR_READINESS` (2.94.0), both
+carriers were read from gh's source only. [#695] owns confirming that the floor serves the field
+on both reads and pages it on `gh issue view`.
 
 **The authoritative re-reads.** Every read that decides Readiness resolves its own states:
 
@@ -299,7 +303,7 @@ not a dependency.
   decision, the vocabulary, the contract amendment and the fixture land together, and these
   tickets implement them:
   - [#693] makes a Readiness verdict carry its own reason and unbound-Pool class;
-  - [#695] makes the Python serial path read closing pull requests;
+  - [#695] makes the Python serial path read closing pull requests, and confirms the gh floor;
   - [#696] extends that to Parallel mode;
   - [#697] and [#698] port it to the shell and PowerShell Orchestrators;
   - [#694] names the pull requests to merge in the Unbound-Run notice.
