@@ -5287,6 +5287,10 @@ def _awaiting_merge_skip_reasons() -> dict[str, dict[str, Any]]:
     return {entry["reason"]: entry for entry in _AWAITING_MERGE["skip_reasons"]}
 
 
+def _awaiting_merge_state_read() -> dict[str, Any]:
+    return _AWAITING_MERGE["read"]["state_read"]
+
+
 def _awaiting_merge_case_ids() -> list[str]:
     return [
         case["id"]
@@ -5320,7 +5324,7 @@ def _awaiting_merge_established(case: Mapping[str, Any]) -> dict[str, list[str]]
     blockers = _read_open_blockers(case)
     if blockers:
         established[_BLOCKED_BY_OPEN_DEPENDENCY] = blockers
-    refusing = _AWAITING_MERGE["read"]["state_read"]["refusing_states"]
+    refusing = _awaiting_merge_state_read()["refusing_states"]
     references = case["closing_pull_requests"]
     awaiting = [node["ref"] for node in references["nodes"] if node["state"] in refusing]
     if awaiting:
@@ -5379,7 +5383,7 @@ def _awaiting_merge_state_requests(distinct: int) -> int:
 
     One per `max_ids_per_request` ids, rounded up, so no ids cost no request.
     """
-    per_request = _AWAITING_MERGE["read"]["state_read"]["max_ids_per_request"]
+    per_request = _awaiting_merge_state_read()["max_ids_per_request"]
     return -(-distinct // per_request)
 
 
@@ -5448,7 +5452,9 @@ def test_the_awaiting_merge_read_rides_existing_reads_and_bounds_its_state_reads
     assert read["transport"] == "graphql"
     assert read["connection"] == "closedByPullRequestsReferences"
     assert read["hops"] == _ISSUE_READINESS["read"]["hops"] == 1
-    assert read["rides"] == ["collection", "membership", "pickup_validation"]
+    assert read["rides"] == ["collection", "membership", "authoritative_re_read"]
+    for ride in read["rides"]:
+        assert f"`{ride}`" in read["rides_note"], ride
     assert read["candidate_kinds"] == ["issue", "pull_request"]
     placeholders = re.findall(r"<([^>]+)>", read["ref_format"])
     assert placeholders
@@ -5585,6 +5591,9 @@ def test_awaiting_merge_answers_each_open_question_with_data_that_pins_it() -> N
     answers = _AWAITING_MERGE["answers"]
 
     assert [answer["question"] for answer in answers] == _AWAITING_MERGE_OPEN_QUESTIONS
+    # The pointer grammar the resolver above accepts is the one the fixture states.
+    assert "`pinned_by`" in _AWAITING_MERGE["answers_note"]
+    assert "`case:<id>`" in _AWAITING_MERGE["answers_note"]
     for answer in answers:
         assert answer["asked"].strip(), answer["question"]
         assert answer["answer"].strip(), answer["question"]
@@ -5756,7 +5765,7 @@ def test_a_failed_awaiting_merge_state_request_leaves_unread_only_the_ids_it_car
     batches its ids. A member that let one failed request unread the whole read
     would leave every id unread.
     """
-    per_request = _AWAITING_MERGE["read"]["state_read"]["max_ids_per_request"]
+    per_request = _awaiting_merge_state_read()["max_ids_per_request"]
     every_request_full = case["distinct"] == case["requests"] * per_request
     every_request_failed = case["failed_requests"] == case["requests"]
     if every_request_full:
@@ -5796,6 +5805,9 @@ def test_the_awaiting_merge_unbound_pool_rule_counts_each_refusal_by_reason() ->
         "every_refusal_waiting",
         "otherwise",
     ]
+    # A port learns what each `when` means from the note, not from this file.
+    for step in rule["outcomes"]:
+        assert f"`{step['when']}`" in rule["note"], step["when"]
     assert [step["outcome"] for step in rule["outcomes"]] == [
         "preflight_failed",
         "all_blocked",

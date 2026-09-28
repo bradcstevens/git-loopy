@@ -435,7 +435,8 @@ refusal taken earlier*, never a replacement for that validation.
 A **Membership read** that could not determine a candidate's blockers — or, from contract 2.17,
 whether a pull request that will close it is open — leaves readiness **unknown**,
 which is not ready — matching how an incomplete read already leaves the Pool's emptiness unknown
-(§9) rather than reporting it empty.
+(§9) rather than reporting it empty. A refusal the same read did prove outranks the unknown
+(**Precedence**, below).
 
 **One hop.** An Orchestrator MUST read the candidate's own `blockedBy` connection and MUST NOT
 traverse the dependency graph further. Transitive traversal is a **non-goal**: it computes a
@@ -453,7 +454,8 @@ boundary.
 GitHub's per-issue cap of 50 links in a single page; asking for fewer is a member defect, not an
 expected state. Where the returned nodes do not account for `totalCount`, or a node comes back
 unreadable, readiness has **not been proven** and the candidate MUST be skipped — under
-`readiness_unprovable`, never under `blocked_by_open_dependency`. The two are different facts: the
+`readiness_unprovable`, never under `blocked_by_open_dependency`, unless its reads prove a refusal
+that outranks it (**Precedence**, below). The two are different facts: the
 first reports that no assertion could be read, and there may be no blocker at all; the second
 reports an open blocker that was read. Reporting an unprovable read as blocked would assert the
 very thing the read failed to establish, and would tell an operator to wait for a blocker to close

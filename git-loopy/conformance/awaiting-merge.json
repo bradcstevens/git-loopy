@@ -70,7 +70,7 @@
     "rides": [
       "collection",
       "membership",
-      "pickup_validation"
+      "authoritative_re_read"
     ],
     "state_read": {
       "transport": "graphql",
@@ -96,7 +96,7 @@
     ],
     "connection_note": "GitHub records the pull request that will close an issue in a structured field, just as it records a blocked_by edge: the issue's closedByPullRequestsReferences connection, which gh issue view and gh issue list both serve as `--json closedByPullRequestsReferences` (gh 2.94.0 and later). The default connection omits pull requests closed without merging and keeps merged ones, and gh's projection of each node carries its id, number, url and repository but no state. So being in the connection proves nothing on its own, and the state is a second read (`state_read`). One hop, never traversed: a pull request's own checks, reviews, mergeability and references are never read.",
     "carrier_note": "gh projects neither totalCount nor pageInfo for this connection, so the carrier decides completeness (open question 2). gh issue view pages the connection a hundred nodes at a time until hasNextPage is false, so a view-carried connection is complete at any length. gh issue list pages only the Issues connection and asks each issue for one page of a hundred references, so a list-carried connection of fewer than 100 nodes is complete and one of exactly 100 may have been cut short. A reference node gh rendered from null arrives as its zero value -- empty id, number 0 -- and is unreadable (`zero_valued_fields`).",
-    "rides_note": "The references are one more field on every read that already decides blocker Readiness, and each such read resolves its own states (open question 3): the section 3.1 collection read, once its candidates are read and before the Pickup walk; each **Membership read**, from its list call; and each authoritative Pickup validation of one candidate -- a Lane's own Pickup, and the serial re-read before **Routing preparation** (section 14.6). No read takes a verdict from states another read resolved, so a merge between two reads is seen by the second. The serial Pickup walk and Lane candidacy take their verdicts from the read that carried them and issue no read of their own.",
+    "rides_note": "The references are one more field on every read that already decides blocker Readiness, and each such read resolves its own states (open question 3): the section 3.1 collection read (`collection`), once its candidates are read and before the Pickup walk; each **Membership read** (`membership`), from its list call; and each authoritative re-read of one candidate (`authoritative_re_read`) -- a Lane's own Pickup validation, and the re-read a candidate gets when its **Routing preparation** starts (section 14.6). No read takes a verdict from states another read resolved, so a merge between two reads is seen by the second. The serial Pickup walk and Lane candidacy take their verdicts from the read that carried them and issue no read of their own.",
     "state_read_note": "Only a pull request read as open refuses. A draft reports OPEN, so being a draft is never read. MERGED and CLOSED never refuse: a merged pull request can leave its issue open, and a closed one will never close it. A read collects the distinct ids its candidates carry and resolves them with GraphQL `nodes(ids:)`, at most 100 ids a request (open question 1), so its cost grows with the distinct references it carries, never with its candidates, and is nothing when no candidate carries one.",
     "unread_note": "`unread_causes` closes why a reference was not read: `reference_unreadable` (gh rendered the node from null, so there is no id to resolve), `state_request_failed` (the request carrying its id failed -- only the ids that request carried are unread), and `state_node_null` (the request returned null for the id: the token cannot see the pull request). Each leaves the candidate's Readiness unproven unless the same candidate carries a blocker or a pull request read as open. `state_failure_cases` pins that scope with reads whose split is forced -- every request full, or every request failed -- so the count a failure leaves unread depends neither on how a member batches its ids nor on which of its requests fail."
   },
@@ -133,7 +133,7 @@
     {
       "question": "authoritative_re_reads",
       "asked": "Readiness is decided today from the serial Pickup's per-candidate re-read and from the Lane's re-read. Does each also resolve pull-request states, and at what cost?",
-      "answer": "Yes. Every read that decides blocker Readiness carries the references and resolves their states itself: the section 3.1 collection read, each Membership read, and each authoritative Pickup validation of one candidate -- a Lane's own Pickup and the serial re-read before Routing preparation. A validation reads its one candidate by view, so its connection is complete, and its states cost one request when the candidate carries a reference and none when it carries none. No verdict is taken from states another read resolved, so a merge between two reads is seen by the second. The serial Pickup walk and Lane candidacy issue no read.",
+      "answer": "Yes. Every read that decides blocker Readiness carries the references and resolves their states itself: the section 3.1 collection read, each Membership read, and each authoritative re-read of one candidate -- a Lane's own Pickup validation, and the re-read a candidate gets when its Routing preparation starts. A re-read of one candidate is view-carried, so its connection is complete, and its states cost one request when the candidate carries a reference and none when it carries none. No verdict is taken from states another read resolved, so a merge between two reads is seen by the second. The serial Pickup walk and Lane candidacy issue no read.",
       "pinned_by": [
         "read.rides",
         "read.carriers.view",
@@ -155,6 +155,7 @@
       ]
     }
   ],
+  "answers_note": "Each entry of `answers` is one of #692's open questions as the operator settled it: `asked` states the question, `answer` states the ruling, and `pinned_by` names the data that holds a member to that ruling. A `pinned_by` pointer is either a dotted path to a key of this fixture (`read.state_read.max_ids_per_request`), which may name a whole case list (`state_request_cases`), or `case:<id>` for one case in any case list. The pointers trace a ruling to its data for a reader; no member evaluates them.",
   "cases": [
     {
       "id": "no-blocker-and-no-closing-pull-request-is-ready",
@@ -919,7 +920,7 @@
         "outcome": "all_skipped"
       }
     ],
-    "note": "Each refusal of a Pool that bound nothing counts by its reason. A Readiness reason counts as its own unbound-Pool class. attempt_lifecycle_defeated and routing_refused stand for refusals that are not Readiness verdicts -- fixture-local tokens, never reasons a member emits -- and count toward neither class. The first step that holds decides the Run's end: any unresolved refusal gives preflight_failed, which still outranks both others; a Pool whose every refusal is a wait gives all_blocked; anything else gives all_skipped. This is exit-codes.json's count-shaped unbound_pool_cases restated by reason, with `waiting` counting both waits."
+    "note": "Each refusal of a Pool that bound nothing counts by its reason. A Readiness reason counts as its own unbound-Pool class. attempt_lifecycle_defeated and routing_refused stand for refusals that are not Readiness verdicts -- fixture-local tokens, never reasons a member emits -- and count toward neither class. The first step whose `when` holds decides the Run's end. `any_unresolved` holds when at least one refusal counts as `unresolved`, and gives preflight_failed, which still outranks both others. `every_refusal_waiting` holds when the Pool refused at least one candidate and every refusal counts as `waiting`, and gives all_blocked. `otherwise` always holds, and gives all_skipped. This is exit-codes.json's count-shaped unbound_pool_cases restated by reason, with `waiting` counting both waits."
   },
   "unbound_pool_cases": [
     {

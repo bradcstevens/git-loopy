@@ -87,7 +87,8 @@ request is, and a session would redo it just the same.
 landed, and what the open issue still asks for is new work. A pull request closed without merging
 will never close the issue.
 
-So appearing in the connection proves nothing on its own. The evidence was taken on `gh` 2.96.0.
+So appearing in the connection proves nothing on its own, as two observations on `gh` 2.96.0
+show:
 
 - **The default connection mixes states.** `closedByPullRequestsReferences` omits pull requests
   closed without merging, but keeps merged ones. #640's connection lists merged #669, while
