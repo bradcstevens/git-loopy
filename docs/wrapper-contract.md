@@ -551,7 +551,7 @@ serve as `--json closedByPullRequestsReferences` (`gh` 2.94.0 and later). A pull
 will never close it. The default connection omits pull requests closed without merging but keeps
 merged ones, and gh's projection of a node carries its id, number, url and repository but no
 state, so appearing in the connection proves nothing on its own. A pull-request candidate in PR
-mode (§3.1) is never Awaiting merge: a member reads no closing references for it and resolves no
+mode (§2) is never Awaiting merge: a member reads no closing references for it and resolves no
 state, just as `blockedBy` does not apply to it.
 
 **One hop.** An Orchestrator MUST read the candidate's own connection and nothing beyond it: a
@@ -620,9 +620,9 @@ operator's next act is to merge or close what it names.
   full reason.
 - **No Event field.** `wrapper.pickup.skipped` carries the reason string, and the reason string
   carries the references. No Event field is added, and `event_schema_version` does not move. No
-  fixture the Dashboard reads changes either, so `event-schema.json` and `dashboard-insights.json`
-  keep their version pins, and so does the Dashboard core's `WRAPPER_CONTRACT_VERSION`, as at 2.13
-  (§14.4, ADR-0069).
+  fixture the Dashboard reads changes either. So `event-schema.json` and `dashboard-insights.json`
+  keep the version pins they declare (§14.4), and the Dashboard core's `WRAPPER_CONTRACT_VERSION`
+  keeps its value, as all three did at contract 2.13 (ADR-0069).
 
 `conformance/awaiting-merge.json` pins the read shape, the answers ADR-0069 records, the verdict and
 reason for every case, and the unbound-Pool rule by refusal reason. It is a new fixture rather than
