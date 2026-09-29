@@ -522,13 +522,13 @@ candidate must still carry `parallel-safe`, must still pass the Attempt-lifecycl
 scheduler's own collision guard is untouched.
 
 Because both seams read the same assertion, **both orders MUST agree**: a Lane MUST NOT reserve an
-issue a serial Iteration of the same Run already found blocked or Awaiting merge, and a serial fallback taken while
-Lane concurrency is throttled MUST NOT bind one the scheduler already refused. A candidacy refusal
-emits no Pickup skip — it is the churn this rule exists to remove — while a serial Pickup skip
-reports itself as §3.3.1 requires. A Lane's refusal of candidacy is instead recorded on the Run's
-end (contract 2.12, #643): when a Rolling terminal decision ends `all_blocked` or `all_skipped`,
-`wrapper.run.end`'s `refusals` (§12) names every survivor it refused and why, including candidates
-no Lane Pickup ever saw.
+issue a serial Iteration of the same Run already found Blocked or Awaiting merge, and a serial
+fallback taken while Lane concurrency is throttled MUST NOT bind one the scheduler already
+refused. A candidacy refusal emits no Pickup skip — it is the churn this rule exists to remove —
+while a serial Pickup skip reports itself as §3.3.1 requires. A Lane's refusal of candidacy is
+instead recorded on the Run's end (contract 2.12, #643): when a Rolling terminal decision ends
+`all_blocked` or `all_skipped`, `wrapper.run.end`'s `refusals` (§12) names every survivor it
+refused and why, including candidates no Lane Pickup ever saw.
 
 #### Awaiting merge (contract 2.17, MUST)
 
