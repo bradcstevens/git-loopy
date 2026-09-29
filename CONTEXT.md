@@ -398,10 +398,10 @@ every **Lane**: a **Serial-required** pin is the run's first serial **Iteration*
 Lane is reserved until it ends; a `parallel-safe` pin takes the first Lane. Lacking
 `parallel-safe` decides how a pin is worked, never whether. The first **Pickup** that
 reads a pin spends it, in every Runner member: it binds it, passes it over for an answer
-about the pin itself (an open blocker, an open closing pull request — an **Awaiting merge**
-pin — a **Lease** held elsewhere, a refused task type, or
-an authoritative read that finds it stale), or completes a Pool or **Membership read**
-that no longer lists it. A **Serial-required** pin is also spent by the end of the serial
+about the pin itself (an open blocker, an open closing pull request that makes it an
+**Awaiting merge** pin, a **Lease** held elsewhere, a refused task type, or an
+authoritative read that finds it stale), or completes a Pool or **Membership read** that
+no longer lists it. A **Serial-required** pin is also spent by the end of the serial
 Iteration latched for it. A Pickup that could not read the pin — an incomplete read, or
 **Readiness** it could not prove — leaves it live, so the next Pickup promotes it again.
 Once spent, an issue still open rejoins the order like any other, so an invocation binds

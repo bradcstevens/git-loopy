@@ -144,9 +144,9 @@ Each of the following leaves Readiness unproven — `readiness_unprovable`, neve
 - a failed state request;
 - a state request that returned `null` for an id, because the token cannot see the pull request.
 
-**The floor is [#695]'s to confirm.** At the floor, `MIN_GH_VERSION_FOR_READINESS` (2.94.0), both
-carriers were read from gh's source only. [#695] owns confirming that the floor serves the field
-on both reads and pages it on `gh issue view`.
+At the floor, `MIN_GH_VERSION_FOR_READINESS` (2.94.0), both carriers were read from gh's source
+only. [#695] owns confirming that the floor serves the field on both reads and pages it on
+`gh issue view`.
 
 **The authoritative re-reads.** Every read that decides Readiness resolves its own states:
 
@@ -297,7 +297,8 @@ Dashboard pins where they were.
 `CONTEXT.md` gains **Awaiting merge**. It widens **Readiness**, **Pickup skip**, **Unresolved
 readiness**, **Pin**, **Membership read**, **All-skipped Run**, **All-blocked Run** and **Routing
 preparation** to take it in. **Blocked** keeps its meaning, and its `_Avoid_` line now says that a
-closing pull request is not a dependency.
+closing pull request is not a dependency. **All-blocked Run**'s `_Avoid_` line now rules out
+"all-awaiting run": a **Pool** waiting only on merges is still an All-blocked Run.
 
 ## Consequences
 
