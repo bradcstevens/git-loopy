@@ -492,8 +492,8 @@ that claim as `refusals` (§12, contract 2.12, #643); `preflight_failed` carries
 This is §2.2's rule at the next seam down. `all_skipped` means "a labelling mistake an operator can
 fix" and `all_blocked` means "every candidate proves a wait no work inside the Run can end" — an
 open blocker, or from contract 2.17 an open pull request that will close it. Both are claims about
-the **work**, and `readiness_unprovable` is a report about the **read**. A Pool nobody managed to read
-may be entirely ready, so either verdict would assert the thing the read failed to establish.
+the **work**, and `readiness_unprovable` is a report about the **read**. A Pool nobody managed to
+read may be entirely ready, so either verdict would assert the thing the read failed to establish.
 `preflight_failed` states what is true instead: a precondition this Run needs is not satisfied and
 an operator can repair it. Because an unprovable verdict carries no blockers by design, the ending
 MUST name the candidates whose readiness could not be read, or an operator is handed exit 1 and
