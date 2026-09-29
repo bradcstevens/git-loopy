@@ -295,9 +295,9 @@ Dashboard pins where they were.
 ## Vocabulary
 
 `CONTEXT.md` gains **Awaiting merge**. It widens **Readiness**, **Pickup skip**, **Unresolved
-readiness**, **Pin**, **Membership read**, **All-skipped Run** and **All-blocked Run** to take it
-in. **Blocked** keeps its meaning, and its `_Avoid_` line now says that a closing pull request is
-not a dependency.
+readiness**, **Pin**, **Membership read**, **All-skipped Run**, **All-blocked Run** and **Routing
+preparation** to take it in. **Blocked** keeps its meaning, and its `_Avoid_` line now says that a
+closing pull request is not a dependency.
 
 ## Consequences
 
