@@ -318,15 +318,14 @@ Whether nothing outside the **Run** stands between a candidate and its session: 
 tracker dependency is closed, and no open pull request will close the candidate when it merges.
 A fact the tracker holds about the issue rather than about how the issue was authored: it clears
 itself when the last blocker closes or the closing pull request merges or closes, with no human
-touching the issue. Read one hop and
-never traversed further. Decided at two seams that take no read of their own, each from the read
-it was already taking: at **Pickup**, from what the **Pool**'s collection read carried, for each
-candidate the serial runner reaches; and at **Lane** candidacy, from the **Membership read**, for
-each candidate **Rolling dispatch** considers. Each authoritative re-read of one candidate
-decides it again from its own read: a **Lane**'s own Pickup validation, and the re-read a
-candidate gets when its **Routing preparation** starts. Every read that decides it resolves the
-states of the pull requests it carries rather than trusting another read's, so a merge between
-two reads is seen by the second.
+touching the issue. Read one hop and never traversed further. Decided at two seams that issue no
+read of their own, each from the read it was already taking: at **Pickup**, from what the
+**Pool**'s collection read carried, for each candidate the serial runner reaches; and at **Lane**
+candidacy, from the **Membership read**, for each candidate **Rolling dispatch** considers. Each
+authoritative re-read of one candidate decides it again from its own read: a **Lane**'s own
+Pickup validation, and the re-read a candidate gets when its **Routing preparation** starts.
+Every read that decides it resolves the states of the pull requests it carries rather than
+trusting another read's, so a merge between two reads is seen by the second.
 _Avoid_: eligibility (that is the human's `ready-for-agent` assertion, settled at
 collection), **Pool exclusion**, **Pickup skip** (that is what the runner *does* about
 unreadiness, not the fact itself).
@@ -1117,10 +1116,10 @@ Pickups do not cancel each other's claimed preparation. Everything behind them r
 **Routing credit** allowance, once per candidate per Run, and stops outright for the rest of the Run
 the moment either bound is spent. A missing **Task type** is classified before static applicability
 is checked, so an operator's **Static route** still costs no assessment; a **Reusable route** costs
-none either and is left to its own Pickup. Blocked, unreadable and otherwise ineligible candidates
-stay visibly pending and are never spent on. It lives only inside a Run, on that Run's own event
-loop, holding its proposals in memory: discovering an issue while nothing is running starts no
-background routing service (ADR-0057).
+none either and is left to its own Pickup. **Blocked**, **Awaiting merge**, unreadable and otherwise
+ineligible candidates stay visibly pending and are never spent on. It lives only inside a Run, on
+that Run's own event loop, holding its proposals in memory: discovering an issue while nothing is
+running starts no background routing service (ADR-0057).
 _Avoid_: prefetch, routing queue, speculative routing, pre-binding (nothing is bound).
 
 **Harness capabilities**:

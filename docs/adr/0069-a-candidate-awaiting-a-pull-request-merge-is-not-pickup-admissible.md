@@ -267,11 +267,12 @@ Dashboard pins where they were.
   pull request and stops. Rejected because that is the incident: a whole session and a Strike
   spent to rediscover a structured fact, in an Iteration the runner cannot tell from a failure.
 - **Take the verdict from states an earlier read resolved.** The collection read has already
-  resolved them, so a re-read could skip its own state request. Rejected under the third answer:
-  a merge between the two reads would go unseen, and the verdict would rest on a state its own
-  read never made.
+  resolved them, so a re-read could skip its own state request. Rejected under
+  "The authoritative re-reads": a merge between the two reads would go unseen, and the verdict
+  would rest on a state its own read never made.
 - **Report an unprovable blocker read beside an open pull request as unprovable.** It would keep
-  `readiness_unprovable` absolute. Rejected under the fourth answer: it displaces a fact that was
+  `readiness_unprovable` absolute. Rejected under
+  "An unprovable blocker read beside a pull request read as open": it displaces a fact that was
   read with one that could not be, and it asks the operator to repair a read when the act that
   ends the wait is a merge.
 - **Rank Awaiting merge above Blocked.** It would name a pull request the operator could merge
