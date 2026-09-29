@@ -176,9 +176,9 @@ A candidate that is not **ready** — one carrying an open native `blocked_by` d
 open pull request will close when merged (**Awaiting merge**, contract 2.17, #692), or one whose
 Readiness could not be read — is likewise NOT an exclusion (contract 2.0). The exclusion
 vocabulary above is **closed at those four reasons**, and readiness MUST NOT be added to it. An
-exclusion is an authoring mistake a human must fix; a candidate that is not ready is correctly
-authored work whose turn has not come, and it clears itself when its last blocker closes or its
-closing pull request merges or closes. It MUST remain in the
+exclusion is an authoring mistake a human must fix; a Blocked or Awaiting-merge candidate is
+correctly authored work whose turn has not come, and it clears itself when its last blocker closes
+or its closing pull request merges or closes. A candidate that is not ready MUST remain in the
 **Pool** — the closure whitelist, the collection Event and the emptiness test all still need to
 see it, and a Pool that is *empty* ends the Run cleanly (§10) where a Pool that is merely *waiting*
 has not run out of work. Readiness is decided at **Pickup** and at **Lane candidacy** instead
@@ -618,11 +618,12 @@ operator's next act is to merge or close what it names.
 - **Rolling dispatch.** Lane candidacy refuses an Awaiting-merge candidate exactly as it refuses a
   Blocked one. A Rolling terminal decision's `refusals` (§12) carries each such candidate with its
   full reason.
-- **No Event field.** `wrapper.pickup.skipped` carries the reason string, and the reason string
-  carries the references. No Event field is added, and `event_schema_version` does not move. No
-  fixture the Dashboard reads changes either. So `event-schema.json` and `dashboard-insights.json`
-  keep the version pins they declare (§14.4), and the Dashboard core's `WRAPPER_CONTRACT_VERSION`
-  keeps its value, as all three did at contract 2.13 (ADR-0069).
+
+**No Event field.** `wrapper.pickup.skipped` carries the reason string, and the reason string
+carries the references. No Event field is added, and `event_schema_version` does not move. No
+fixture the Dashboard reads changes either. So `event-schema.json` and `dashboard-insights.json`
+keep the version pins they declare (§14.4), and the Dashboard core's `WRAPPER_CONTRACT_VERSION`
+keeps its value, as all three did at contract 2.13 (ADR-0069).
 
 `conformance/awaiting-merge.json` pins the read shape, the answers ADR-0069 records, the verdict and
 reason for every case, and the unbound-Pool rule by refusal reason. It is a new fixture rather than
