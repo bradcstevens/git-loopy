@@ -183,8 +183,17 @@ function Complete-FakeIssueJson {
         @($Payload)
     }
     foreach ($Row in $Rows) {
-        if ($Row -is [Collections.IDictionary] -and -not $Row.Contains("blockedBy")) {
+        if ($Row -isnot [Collections.IDictionary]) {
+            continue
+        }
+        if (-not $Row.Contains("blockedBy")) {
             $Row["blockedBy"] = [ordered]@{ totalCount = 0; nodes = @() }
+        }
+        if (
+            -not $Row.Contains("closedByPullRequestsReferences") -and
+            $env:FAKE_GH_OMIT_CLOSING -ne "1"
+        ) {
+            $Row["closedByPullRequestsReferences"] = @()
         }
     }
     return ConvertTo-Json -InputObject $Payload -Compress -Depth 100
@@ -259,6 +268,24 @@ switch -CaseSensitive ($Command) {
         [Console]::Out.Write(
             (Complete-FakeIssueJson -Text ([IO.File]::ReadAllText($ViewPath)))
         )
+        exit 0
+    }
+    "api graphql" {
+        $Stdin = [Console]::In.ReadToEnd()
+        [IO.File]::AppendAllText(
+            $env:FAKE_GH_LOG,
+            "graphql-stdin " + $Stdin + [Environment]::NewLine
+        )
+        if ($env:FAKE_GH_GRAPHQL_JSON) {
+            [Console]::Out.Write($env:FAKE_GH_GRAPHQL_JSON)
+        }
+        if ($env:FAKE_GH_GRAPHQL_STATUS -and [int]$env:FAKE_GH_GRAPHQL_STATUS -ne 0) {
+            exit ([int]$env:FAKE_GH_GRAPHQL_STATUS)
+        }
+        if (-not $env:FAKE_GH_GRAPHQL_JSON) {
+            [Console]::Error.WriteLine("graphql was not stubbed")
+            exit 92
+        }
         exit 0
     }
     default {
@@ -475,8 +502,17 @@ function Complete-FakeIssueJson {
         @($Payload)
     }
     foreach ($Row in $Rows) {
-        if ($Row -is [Collections.IDictionary] -and -not $Row.Contains("blockedBy")) {
+        if ($Row -isnot [Collections.IDictionary]) {
+            continue
+        }
+        if (-not $Row.Contains("blockedBy")) {
             $Row["blockedBy"] = [ordered]@{ totalCount = 0; nodes = @() }
+        }
+        if (
+            -not $Row.Contains("closedByPullRequestsReferences") -and
+            $env:FAKE_GH_OMIT_CLOSING -ne "1"
+        ) {
+            $Row["closedByPullRequestsReferences"] = @()
         }
     }
     return ConvertTo-Json -InputObject $Payload -Compress -Depth 100
@@ -552,6 +588,27 @@ switch -CaseSensitive ($Command) {
         Write-Output (Complete-FakeIssueJson -Text (
             [IO.File]::ReadAllText($ViewPath)
         ))
+        Complete-FakeCommand 0
+        return
+    }
+    "api graphql" {
+        $Stdin = [Console]::In.ReadToEnd()
+        [IO.File]::AppendAllText(
+            $env:FAKE_GH_LOG,
+            "graphql-stdin " + $Stdin + [Environment]::NewLine
+        )
+        if ($env:FAKE_GH_GRAPHQL_JSON) {
+            Write-Output $env:FAKE_GH_GRAPHQL_JSON
+        }
+        if ($env:FAKE_GH_GRAPHQL_STATUS -and [int]$env:FAKE_GH_GRAPHQL_STATUS -ne 0) {
+            Complete-FakeCommand ([int]$env:FAKE_GH_GRAPHQL_STATUS)
+            return
+        }
+        if (-not $env:FAKE_GH_GRAPHQL_JSON) {
+            [Console]::Error.WriteLine("graphql was not stubbed")
+            Complete-FakeCommand 92
+            return
+        }
         Complete-FakeCommand 0
         return
     }
@@ -4964,8 +5021,11 @@ Start-Sleep -Seconds $Sleep
         "Pickup tells the operator which blocker it found"
     )
     Assert-Contains ([IO.File]::ReadAllText($env:FAKE_GH_LOG)) (
-        "--json number,title,body,labels,state,url,createdAt,blockedBy"
-    ) "collection requests blockers from the one shallow field set"
+        "--json number,title,body,labels,state,url,createdAt,blockedBy,closedByPullRequestsReferences"
+    ) "collection requests blockers and closing references from the one shallow field set"
+    Assert-True (-not (
+            [IO.File]::ReadAllText($env:FAKE_GH_LOG) -match "(?m)^api graphql"
+        )) "a Pool with no closing reference makes no state read"
 
     # A non-empty Pool whose candidates all name open blockers ends waiting on
     # blockers rather than consuming the configured iteration budget.
@@ -5024,8 +5084,8 @@ Start-Sleep -Seconds $Sleep
         "all-blocked Pool starts no agent session"
     )
     Assert-Contains ([IO.File]::ReadAllText($AllBlockedStderr)) (
-        "waiting on blockers"
-    ) "the all-blocked ending tells the operator why work did not start"
+        "wait on open blockers or on pull requests to merge"
+    ) "the all-blocked ending names both waits, not blockers alone"
 
     # A read that cannot prove readiness is not a blocker wait, and it is not a
     # refusal either (#542). Mixing it with a proven blocker ends the Run under
@@ -5095,6 +5155,284 @@ Start-Sleep -Seconds $Sleep
     ) "the unreadable-readiness ending names the candidate to act on"
     Assert-True (-not [IO.File]::Exists($env:FAKE_COPILOT_CALLS)) (
         "mixed blocked Pool starts no agent session"
+    )
+
+    # ADR-0069: an open closing pull request is passed over at Pickup. The
+    # references ride the list, their states are one GraphQL read, and the
+    # candidate stays in the Pool. No session and no Strike discover a fact
+    # the collection already held.
+    $AwaitingRows = @(
+        [ordered]@{
+            number = 61
+            title = "Awaiting merge"
+            body = $ReadinessBody
+            labels = @([ordered]@{ name = "ready-for-agent" })
+            state = "OPEN"
+            url = "https://github.com/acme/widgets/issues/61"
+            createdAt = "2026-01-03T00:00:00Z"
+            blockedBy = $ReadyBlockedBy
+            closedByPullRequestsReferences = @(
+                [ordered]@{
+                    id = "PR_61"
+                    number = 300
+                    repository = [ordered]@{
+                        name = "widgets"
+                        owner = [ordered]@{ login = "acme" }
+                    }
+                }
+            )
+            comments = @()
+        },
+        [ordered]@{
+            number = 62
+            title = "Also awaiting"
+            body = $ReadinessBody
+            labels = @([ordered]@{ name = "ready-for-agent" })
+            state = "OPEN"
+            url = "https://github.com/acme/widgets/issues/62"
+            createdAt = "2026-01-04T00:00:00Z"
+            blockedBy = $ReadyBlockedBy
+            closedByPullRequestsReferences = @(
+                [ordered]@{
+                    id = "PR_61"
+                    number = 300
+                    repository = [ordered]@{
+                        name = "widgets"
+                        owner = [ordered]@{ login = "acme" }
+                    }
+                }
+            )
+            comments = @()
+        }
+    )
+    foreach ($Row in $AwaitingRows) {
+        $ViewRow = [ordered]@{}
+        foreach ($Entry in $Row.GetEnumerator()) {
+            $ViewRow[$Entry.Key] = $Entry.Value
+        }
+        # The view carries no reference. The list does. Pickup must follow
+        # the list, the same way it follows the list for blockers.
+        $ViewRow["closedByPullRequestsReferences"] = @()
+        [IO.File]::WriteAllText(
+            (Join-Path $ReadinessViews "$($Row["number"]).json"),
+            ($ViewRow | ConvertTo-Json -Depth 10)
+        )
+    }
+    $AwaitingList = Join-Path $TempDir "readiness-awaiting-list.json"
+    [IO.File]::WriteAllText(
+        $AwaitingList,
+        ($AwaitingRows | ConvertTo-Json -Depth 10 -AsArray)
+    )
+    $env:FAKE_GH_LOG = Join-Path $TempDir "readiness-awaiting-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "readiness-awaiting-list.count"
+    $env:FAKE_GH_LIST_JSON = $AwaitingList
+    $env:FAKE_GH_GRAPHQL_JSON = '{"data":{"nodes":[{"id":"PR_61","state":"OPEN"}]}}'
+    $env:FAKE_GH_GRAPHQL_STATUS = $null
+    $env:FAKE_GH_OMIT_CLOSING = $null
+    Set-CopilotEnv -Prefix "readiness-awaiting"
+    $AwaitingStdout = Join-Path $TempDir "readiness-awaiting.stdout"
+    $AwaitingStderr = Join-Path $TempDir "readiness-awaiting.stderr"
+    $AwaitingStatus = Invoke-Entrypoint `
+        -Repo $ReadinessRepo `
+        -FakeBin $ReadinessBin `
+        -StdoutPath $AwaitingStdout `
+        -StderrPath $AwaitingStderr `
+        -Arguments @("5")
+    Assert-Equal 1 $AwaitingStatus (
+        "awaiting-merge Pool exits nonzero: " +
+        [IO.File]::ReadAllText($AwaitingStderr)
+    )
+    $AwaitingEvents = Read-Events -Path $AwaitingStdout
+    $AwaitingSkips = @(
+        $AwaitingEvents | Where-Object { $_["type"] -ceq "wrapper.pickup.skipped" }
+    )
+    Assert-Equal 2 $AwaitingSkips.Count "awaiting-merge Pool skips both candidates"
+    Assert-Equal "awaiting_pull_request_merge: acme/widgets#300" (
+        $AwaitingSkips[0]["reason"]
+    ) "the skip names the open pull request"
+    Assert-Equal "awaiting_pull_request_merge: acme/widgets#300" (
+        $AwaitingSkips[1]["reason"]
+    ) "a shared pull request is named on each candidate"
+    Assert-Equal 0 @(
+        $AwaitingEvents | Where-Object { $_["type"] -ceq "wrapper.pickup.bound" }
+    ).Count "awaiting-merge Pool binds nothing"
+    Assert-Equal 0 @(
+        $AwaitingEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }
+    ).Count "awaiting-merge Pool charges no Strike"
+    Assert-Equal 0 @(
+        $AwaitingEvents | Where-Object { $_["type"] -ceq "wrapper.pool.excluded" }
+    ).Count "an awaiting-merge candidate stays in the Pool"
+    $AwaitingCollected = @(
+        $AwaitingEvents | Where-Object { $_["type"] -ceq "wrapper.afk_ready.collected" }
+    )
+    Assert-Equal "61,62" (
+        [string]::Join(",", @($AwaitingCollected[0]["issues"]))
+    ) "both awaiting-merge candidates were collected"
+    Assert-Equal "all_blocked" @(
+        $AwaitingEvents | Where-Object { $_["type"] -ceq "wrapper.run.end" }
+    )[0]["outcome"] "an all-waiting Pool ends all_blocked"
+    Assert-Contains ([IO.File]::ReadAllText($AwaitingStderr)) (
+        "wait on open blockers or on pull requests to merge"
+    ) "the all-blocked diagnostic names pull requests to merge"
+    Assert-Contains ([IO.File]::ReadAllText($AwaitingStderr)) "acme/widgets#300" (
+        "Pickup tells the operator which pull request it found"
+    )
+    Assert-True (-not [IO.File]::Exists($env:FAKE_COPILOT_CALLS)) (
+        "awaiting-merge Pool starts no agent session"
+    )
+    $AwaitingLog = [IO.File]::ReadAllText($env:FAKE_GH_LOG)
+    Assert-Contains $AwaitingLog "closedByPullRequestsReferences" (
+        "closing references ride the collection read"
+    )
+    Assert-Equal 1 @(
+        [regex]::Matches($AwaitingLog, "(?m)^api graphql")
+    ).Count "one shared pull request costs one state read"
+    Assert-Contains $AwaitingLog "PR_61" "the state read asks for the carried id"
+    Assert-Contains $AwaitingLog 'nodes(ids:$ids)' (
+        "the state read is the GraphQL nodes request"
+    )
+
+    # A failed state read decides nothing: the candidate is unprovable, and
+    # the Run ends preflight_failed rather than waiting or admitting.
+    [IO.File]::WriteAllText($env:FAKE_GH_LOG, "")
+    [IO.File]::Delete($env:FAKE_GH_LIST_COUNT)
+    $env:FAKE_GH_GRAPHQL_JSON = $null
+    $env:FAKE_GH_GRAPHQL_STATUS = "1"
+    Set-CopilotEnv -Prefix "readiness-state-failed"
+    $StateFailedStdout = Join-Path $TempDir "readiness-state-failed.stdout"
+    $StateFailedStderr = Join-Path $TempDir "readiness-state-failed.stderr"
+    $StateFailedStatus = Invoke-Entrypoint `
+        -Repo $ReadinessRepo `
+        -FakeBin $ReadinessBin `
+        -StdoutPath $StateFailedStdout `
+        -StderrPath $StateFailedStderr `
+        -Arguments @("5")
+    Assert-Equal 1 $StateFailedStatus "a failed state read exits nonzero"
+    $StateFailedEvents = Read-Events -Path $StateFailedStdout
+    Assert-Equal "readiness_unprovable" @(
+        $StateFailedEvents | Where-Object { $_["type"] -ceq "wrapper.pickup.skipped" }
+    )[0]["reason"] "a failed state read is unprovable, not a wait"
+    Assert-Equal "preflight_failed" @(
+        $StateFailedEvents | Where-Object { $_["type"] -ceq "wrapper.run.end" }
+    )[0]["outcome"] "an unprovable refusal ends the Run preflight_failed"
+    Assert-Equal 0 @(
+        $StateFailedEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }
+    ).Count "an unprovable state read charges no Strike"
+    $env:FAKE_GH_GRAPHQL_STATUS = $null
+
+    # A field the list omitted is the same fact: nothing was read, so nothing
+    # says no pull request was found. It is not a state read either.
+    [IO.File]::WriteAllText($env:FAKE_GH_LOG, "")
+    [IO.File]::Delete($env:FAKE_GH_LIST_COUNT)
+    $env:FAKE_GH_OMIT_CLOSING = "1"
+    $OmitList = Join-Path $TempDir "readiness-omit-closing-list.json"
+    [IO.File]::WriteAllText(
+        $OmitList,
+        (@($ReadinessRows[1]) | ConvertTo-Json -Depth 10 -AsArray)
+    )
+    $env:FAKE_GH_LIST_JSON = $OmitList
+    Set-CopilotEnv -Prefix "readiness-omit-closing"
+    $OmitStdout = Join-Path $TempDir "readiness-omit-closing.stdout"
+    $OmitStderr = Join-Path $TempDir "readiness-omit-closing.stderr"
+    $OmitStatus = Invoke-Entrypoint `
+        -Repo $ReadinessRepo `
+        -FakeBin $ReadinessBin `
+        -StdoutPath $OmitStdout `
+        -StderrPath $OmitStderr `
+        -Arguments @("1")
+    $env:FAKE_GH_OMIT_CLOSING = $null
+    Assert-Equal 1 $OmitStatus "a missing closing field exits nonzero"
+    $OmitEvents = Read-Events -Path $OmitStdout
+    Assert-Equal "readiness_unprovable" @(
+        $OmitEvents | Where-Object { $_["type"] -ceq "wrapper.pickup.skipped" }
+    )[0]["reason"] "a missing closing field is unread, not empty"
+    Assert-Equal "preflight_failed" @(
+        $OmitEvents | Where-Object { $_["type"] -ceq "wrapper.run.end" }
+    )[0]["outcome"] "a missing closing field ends the Run preflight_failed"
+    Assert-True (-not (
+            [IO.File]::ReadAllText($env:FAKE_GH_LOG) -match "(?m)^api graphql"
+        )) "an unread closing field makes no state read"
+
+    # An Awaiting-merge Pin is an answer about the Pin, so it is passed over
+    # and spent. The sibling stays ready on the first read so the Run
+    # continues; on the second the sibling is blocked and the Pin's pull
+    # request is gone, so the only admissible candidate binds by the order.
+    $PinSibling = [ordered]@{
+        number = 63
+        title = "Ready sibling"
+        body = $ReadinessBody
+        labels = @([ordered]@{ name = "ready-for-agent" })
+        state = "OPEN"
+        url = "https://github.com/acme/widgets/issues/63"
+        createdAt = "2026-01-01T00:00:00Z"
+        blockedBy = $ReadyBlockedBy
+        closedByPullRequestsReferences = @()
+        comments = @()
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $ReadinessViews "63.json"),
+        ($PinSibling | ConvertTo-Json -Depth 10)
+    )
+    $PinnedAwaiting = [ordered]@{}
+    foreach ($Entry in $AwaitingRows[0].GetEnumerator()) {
+        $PinnedAwaiting[$Entry.Key] = $Entry.Value
+    }
+    $PinnedAwaiting["createdAt"] = "2026-01-05T00:00:00Z"
+    $PinAwaitingList = Join-Path $TempDir "readiness-pin-awaiting-list.json"
+    [IO.File]::WriteAllText(
+        $PinAwaitingList,
+        (@($PinnedAwaiting, $PinSibling) | ConvertTo-Json -Depth 10 -AsArray)
+    )
+    $ReadyAfter = [ordered]@{}
+    foreach ($Entry in $PinnedAwaiting.GetEnumerator()) {
+        $ReadyAfter[$Entry.Key] = $Entry.Value
+    }
+    $ReadyAfter["closedByPullRequestsReferences"] = @()
+    $BlockedSibling = [ordered]@{}
+    foreach ($Entry in $PinSibling.GetEnumerator()) {
+        $BlockedSibling[$Entry.Key] = $Entry.Value
+    }
+    $BlockedSibling["blockedBy"] = $BlockedBy
+    [IO.File]::WriteAllText(
+        "$PinAwaitingList.2",
+        (@($ReadyAfter, $BlockedSibling) | ConvertTo-Json -Depth 10 -AsArray)
+    )
+    [IO.File]::WriteAllText($env:FAKE_GH_LOG, "")
+    [IO.File]::Delete($env:FAKE_GH_LIST_COUNT)
+    $env:FAKE_GH_LIST_JSON = $PinAwaitingList
+    $env:FAKE_GH_GRAPHQL_JSON = '{"data":{"nodes":[{"id":"PR_61","state":"OPEN"}]}}'
+    $env:FAKE_COPILOT_COMMITS = "0"
+    Set-CopilotEnv -Prefix "readiness-pin-awaiting"
+    $PinAwaitingStdout = Join-Path $TempDir "readiness-pin-awaiting.stdout"
+    $PinAwaitingStderr = Join-Path $TempDir "readiness-pin-awaiting.stderr"
+    $PinAwaitingStatus = Invoke-Entrypoint `
+        -Repo $ReadinessRepo `
+        -FakeBin $ReadinessBin `
+        -StdoutPath $PinAwaitingStdout `
+        -StderrPath $PinAwaitingStderr `
+        -Arguments @("2", "--issue", "61")
+    $env:FAKE_COPILOT_COMMITS = $null
+    $env:FAKE_GH_GRAPHQL_JSON = $null
+    Assert-Equal 0 $PinAwaitingStatus (
+        "an Awaiting-merge Pin is spent and the next Pickup binds: " +
+        [IO.File]::ReadAllText($PinAwaitingStderr)
+    )
+    $PinAwaitingEvents = Read-Events -Path $PinAwaitingStdout
+    Assert-Equal "awaiting_pull_request_merge: acme/widgets#300" @(
+        $PinAwaitingEvents | Where-Object { $_["type"] -ceq "wrapper.pickup.skipped" }
+    )[0]["reason"] "the Awaiting-merge Pin is passed over by name"
+    $PinAwaitingBound = @(
+        $PinAwaitingEvents | Where-Object { $_["type"] -ceq "wrapper.pickup.bound" }
+    )
+    Assert-Equal 2 $PinAwaitingBound.Count "the Run binds once per Iteration"
+    Assert-Equal 63 $PinAwaitingBound[0]["issue"] (
+        "the first Pickup binds the sibling after passing the Pin over"
+    )
+    Assert-Equal 61 $PinAwaitingBound[1]["issue"] (
+        "the spent Pin binds once its pull request is gone"
+    )
+    Assert-Equal "order" $PinAwaitingBound[1]["reason"] (
+        "an Awaiting-merge Pin was spent, so the later binding is the order's"
     )
 
     # A successful serial closure is this Orchestrator's post-publication seam.
@@ -5223,6 +5561,9 @@ finally {
         "FAKE_GH_CLOSED",
         "FAKE_GH_CLOSE_DIR",
         "FAKE_GH_CLOSE_STATUS",
+        "FAKE_GH_GRAPHQL_JSON",
+        "FAKE_GH_GRAPHQL_STATUS",
+        "FAKE_GH_OMIT_CLOSING",
         "FAKE_COPILOT_FLAGS",
         "FAKE_COPILOT_PROMPT",
         "FAKE_COPILOT_CALLS",

@@ -142,10 +142,49 @@ foreach ($Case in $IssueReadiness["cases"]) {
         $Actual = Get-GitLoopyReadiness -BlockedBy (
             New-ReadinessConnection -Case $Case -StateCasing $Casing.Value
         )
+        # The record widened for Awaiting merge. Today's four fields are still
+        # the whole of what `issue-readiness.json` pins, so the comparison is
+        # those fields — a new one must not make a Blocked candidate look new.
+        $Projected = [ordered]@{
+            verdict = $Actual["verdict"]
+            admissible = $Actual["admissible"]
+            skip_reason = $Actual["skip_reason"]
+            blockers = [string[]]@($Actual["blockers"])
+        }
         Assert-Equal `
             ($Expected | ConvertTo-Json -Compress -Depth 10) `
-            ($Actual | ConvertTo-Json -Compress -Depth 10) `
+            ($Projected | ConvertTo-Json -Compress -Depth 10) `
             "issue-readiness fixture: $($Case["id"]) ($($Casing.Key))"
+        $ExpectedReason = if (@($ExpectedBlockers).Count -eq 0) {
+            $Expected["skip_reason"]
+        }
+        else {
+            "$($Expected["skip_reason"]): $([string]::Join(', ', $ExpectedBlockers))"
+        }
+        if ($Expected["admissible"]) {
+            Assert-Equal $null $Actual["reason"] (
+                "issue-readiness reason: $($Case["id"]) ($($Casing.Key))"
+            )
+            Assert-Equal "admitted" $Actual["unbound_pool_class"] (
+                "issue-readiness class: $($Case["id"]) ($($Casing.Key))"
+            )
+        }
+        else {
+            Assert-Equal $ExpectedReason $Actual["reason"] (
+                "issue-readiness reason: $($Case["id"]) ($($Casing.Key))"
+            )
+            $ExpectedClass = if (
+                $Expected["skip_reason"] -ceq "readiness_unprovable"
+            ) {
+                "unresolved"
+            }
+            else {
+                "waiting"
+            }
+            Assert-Equal $ExpectedClass $Actual["unbound_pool_class"] (
+                "issue-readiness class: $($Case["id"]) ($($Casing.Key))"
+            )
+        }
     }
 }
 
@@ -165,6 +204,180 @@ Assert-Equal 1 $ReadinessRead["hops"] "issue-readiness read: one hop"
 Assert-True (
     (Get-GitLoopyShallowIssueFields).Split(",") -ccontains $ReadinessRead["connection"]
 ) "issue-readiness read: the shallow fields request the carried connection"
+
+# Wrapper contract §3.3.1 — Awaiting merge (ADR-0069). The production decision,
+# the unbound-Pool rule, and the read's pure halves, over every case. A second
+# copy of the fixture's oracle would stay green while Pickup admitted a
+# candidate an open pull request will close.
+$AwaitingMerge = ConvertFrom-GitLoopyJsonText -Text (
+    Get-Content -LiteralPath (Join-Path $ConformanceDir "awaiting-merge.json") -Raw
+)
+Assert-True (
+    (Get-GitLoopyShallowIssueFields).Split(",") -ccontains (
+        $AwaitingMerge["read"]["connection"]
+    )
+) "awaiting-merge read: the shallow fields request closing references"
+
+function ConvertTo-AwaitingMergeClosing {
+    param(
+        [AllowNull()]
+        [object]$Raw,
+        [Parameter(Mandatory)]
+        [scriptblock]$StateCasing
+    )
+
+    if ($null -eq $Raw) {
+        return $null
+    }
+    return [ordered]@{
+        complete = [bool]$Raw["complete"]
+        nodes = @(
+            foreach ($Node in @($Raw["nodes"])) {
+                $Copy = [ordered]@{
+                    ref = $Node["ref"]
+                    state = $Node["state"]
+                }
+                if ($Node.Contains("unread")) {
+                    $Copy["unread"] = $Node["unread"]
+                }
+                if ($Node.Contains("readable")) {
+                    $Copy["readable"] = $Node["readable"]
+                }
+                if ($null -ne $Copy["state"] -and $Copy["state"] -is [string]) {
+                    $Copy["state"] = & $StateCasing ([string]$Copy["state"])
+                }
+                $Copy
+            }
+        )
+    }
+}
+
+function Get-AwaitingMergeProductionClass {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Reason
+    )
+
+    $Empty = [ordered]@{ totalCount = 0; nodes = @() }
+    switch -CaseSensitive ($Reason) {
+        "blocked_by_open_dependency" {
+            return [string](Get-GitLoopyReadiness -BlockedBy ([ordered]@{
+                totalCount = 1
+                nodes = @(
+                    [ordered]@{
+                        id = "blocker"
+                        number = 1
+                        state = "open"
+                        url = "https://github.com/acme/widgets/issues/1"
+                    }
+                )
+            }))["unbound_pool_class"]
+        }
+        "awaiting_pull_request_merge" {
+            return [string](Get-GitLoopyReadiness `
+                -BlockedBy $Empty `
+                -ClosingPullRequests ([ordered]@{
+                    complete = $true
+                    nodes = @(
+                        [ordered]@{ ref = "acme/widgets#1"; state = "open" }
+                    )
+                }))["unbound_pool_class"]
+        }
+        "readiness_unprovable" {
+            return [string](Get-GitLoopyReadiness `
+                -BlockedBy $null `
+                -ClosingPullRequests ([ordered]@{ complete = $true; nodes = @() })
+            )["unbound_pool_class"]
+        }
+        default { return $null }
+    }
+}
+
+function Get-AwaitingMergeProductionOutcome {
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Refusals
+    )
+
+    [int]$Waiting = 0
+    [int]$Unresolved = 0
+    foreach ($Refusal in $Refusals) {
+        switch (Get-AwaitingMergeProductionClass -Reason $Refusal) {
+            "waiting" { $Waiting += 1 }
+            "unresolved" { $Unresolved += 1 }
+        }
+    }
+    return Get-GitLoopyUnboundPoolOutcome `
+        -Candidates $Refusals.Count `
+        -Waiting $Waiting `
+        -Unresolved $Unresolved
+}
+
+foreach ($Case in $AwaitingMerge["cases"]) {
+    foreach ($Casing in $StateCasings.GetEnumerator()) {
+        $BlockedBy = $null
+        if ($null -ne $Case["blocked_by"]) {
+            $BlockedBy = New-ReadinessConnection `
+                -Case ([ordered]@{ blocked_by = $Case["blocked_by"] }) `
+                -StateCasing $Casing.Value
+        }
+        $Actual = Get-GitLoopyReadiness `
+            -BlockedBy $BlockedBy `
+            -ClosingPullRequests (ConvertTo-AwaitingMergeClosing `
+                -Raw $Case["closing_pull_requests"] `
+                -StateCasing $Casing.Value) `
+            -CandidateKind ([string]$Case["candidate_kind"])
+        $Expected = $Case["expected"]
+        $Label = "$($Case["id"]) ($($Casing.Key))"
+        Assert-Equal $Expected["admissible"] $Actual["admissible"] (
+            "awaiting-merge admissible: $Label"
+        )
+        Assert-Equal $Expected["skip_reason"] $Actual["skip_reason"] (
+            "awaiting-merge skip: $Label"
+        )
+        Assert-Equal $Expected["reason"] $Actual["reason"] (
+            "awaiting-merge reason: $Label"
+        )
+        Assert-Equal `
+            ([string]::Join(",", @($Expected["names"]))) `
+            ([string]::Join(",", @($Actual["names"]))) `
+            "awaiting-merge names: $Label"
+        Assert-Equal $Expected["unbound_pool_class"] $Actual["unbound_pool_class"] (
+            "awaiting-merge class: $Label"
+        )
+    }
+}
+foreach ($Case in $AwaitingMerge["completeness_cases"]) {
+    Assert-Equal $Case["complete"] (
+        Test-GitLoopyClosingConnectionComplete `
+            -Carrier ([string]$Case["carrier"]) `
+            -Nodes ([int]$Case["nodes"])
+    ) "awaiting-merge completeness: $($Case["id"])"
+}
+foreach ($Case in $AwaitingMerge["state_request_cases"]) {
+    Assert-Equal ([int]$Case["requests"]) (
+        Get-GitLoopyStateRequestCount -Distinct ([int]$Case["distinct"])
+    ) "awaiting-merge state requests: $($Case["id"])"
+}
+foreach ($Case in $AwaitingMerge["state_failure_cases"]) {
+    $Scope = Get-GitLoopyStateFailureScope `
+        -Distinct ([int]$Case["distinct"]) `
+        -FailedRequests ([int]$Case["failed_requests"])
+    Assert-Equal ([int]$Case["expected"]["unread"]) ([int]$Scope["unread"]) (
+        "awaiting-merge state failure unread: $($Case["id"])"
+    )
+    Assert-Equal ([int]$Case["expected"]["read"]) ([int]$Scope["read"]) (
+        "awaiting-merge state failure read: $($Case["id"])"
+    )
+    Assert-Equal ([string]$Case["expected"]["unread_cause"]) (
+        [string]$Scope["unread_cause"]
+    ) "awaiting-merge state failure cause: $($Case["id"])"
+}
+foreach ($Case in $AwaitingMerge["unbound_pool_cases"]) {
+    Assert-Equal ([string]$Case["outcome"]) (
+        Get-AwaitingMergeProductionOutcome -Refusals ([string[]]@($Case["refusals"]))
+    ) "awaiting-merge unbound pool: $($Case["id"])"
+}
 
 # Wrapper contract §3.2 — the total order over eligible issues (#391, ADR-0032).
 # Driven through `Get-GitLoopyIssueOrder` itself: an adapter that reproduced the

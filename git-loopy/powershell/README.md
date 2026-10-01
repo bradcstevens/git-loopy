@@ -27,7 +27,7 @@ the [Wrapper contract](../../docs/wrapper-contract.md), the
 | Requirement | Notes |
 | --- | --- |
 | **PowerShell 7+** (`pwsh`) | On **Windows, Linux, or macOS**. Run `pwsh --version` to check. This port needs **no `jq`** — it uses PowerShell's built-in `ConvertFrom-Json`. |
-| **`gh` 2.94.0+**, authenticated | `gh auth login`. The default issue source is GitHub Issues; this minimum supports the `blockedBy` dependency connection. |
+| **`gh` 2.94.0+**, authenticated | `gh auth login`. The default issue source is GitHub Issues; this minimum supports the `blockedBy` dependency connection and `closedByPullRequestsReferences`. |
 | **`git`** | On `PATH`. |
 | **`copilot`** | GitHub Copilot CLI, signed in: `npm install -g @github/copilot`, then run `copilot` once. |
 
@@ -335,6 +335,22 @@ non-zero.
 
 ---
 
+## Pickup skips
+
+A candidate an open `blocked_by` dependency holds is **Blocked**. A candidate an
+open pull request will close is **Awaiting merge**. Pickup passes either over,
+leaves it in the Pool, and charges no Strike: the work already exists, and a
+session would only rediscover it. The skip names every open blocker, or every
+open closing pull request, as `owner/repo#N`. A draft counts as open. A merged
+or closed pull request does not. A pull-request candidate is never Awaiting
+merge.
+
+A read that cannot prove either fact — a missing field, a failed state read, an
+unreadable node — is not a wait and not an admission. One such candidate ends
+the Run `preflight_failed`. An old `gh` that cannot serve
+`closedByPullRequestsReferences` fails at preflight rather than being read as
+"no pull requests".
+
 ## Exit codes
 
 | Exit | Meaning | When |
@@ -343,8 +359,8 @@ non-zero.
 | `0` | Clean — cap reached | The optional iteration cap `N` is reached. |
 | `1` | Aborted — stuck | `GIT_LOOPY_MAX_NMT_STRIKES` consecutive no-progress Iterations. |
 | `1` | Aborted — all skipped | A **Pickup** walked a non-empty Pool and could bind none of it for a reason an operator can repair. Deliberately not the exit-`0` empty Pool: "there is nothing to do" and "I could not take any of what there is" are different facts. |
-| `1` | Waiting — all blocked | Every Pickup refusal proved an open native `blocked_by` dependency. The distinct `all_blocked` reason lets an operator wait for dependency closure rather than repair the Pool. |
-| `1` | Aborted — preflight | A precondition failed before the first Iteration (unauthenticated `gh`, `gh` older than 2.94.0 and so unable to read `blockedBy`, missing `docs/agents/issue-tracker.md`, missing `copilot`, …). |
+| `1` | Waiting — all blocked | Every Pickup refusal is a wait: an open native `blocked_by` dependency, or an open pull request to merge. The distinct `all_blocked` reason lets an operator wait for that outside work rather than repair the Pool. |
+| `1` | Aborted — preflight | A precondition failed before the first Iteration (unauthenticated `gh`, `gh` older than 2.94.0 and so unable to read `blockedBy` or `closedByPullRequestsReferences`, a readiness read that could not be proved, missing `docs/agents/issue-tracker.md`, missing `copilot`, …). |
 | `2` | Usage error | Malformed invocation (e.g. a non-numeric iteration cap). |
 
 The full table is Wrapper contract

@@ -826,18 +826,30 @@ $script:GitLoopyPinViewFailed = $false
 # connection for every candidate a **Pickup** walks, and asking for it on a read
 # the caller was always going to make costs nothing however large the **Pool**
 # grows, where a dedicated dependency call would cost one round-trip per
-# candidate. `gh` serves the field from GraphQL and pages the connection past
-# GitHub's 50-link per-issue cap itself, so the port names no page size of its
-# own; what it must not do is treat a connection it could not read as an empty
-# one, which `Get-GitLoopyReadiness` refuses to do.
+# candidate. `closedByPullRequestsReferences` rides the same call (ADR-0069):
+# the references are free, and their states are a separate read. `gh` serves
+# both fields from GraphQL. It pages `blockedBy` past GitHub's 50-link cap
+# itself, and pages closing references to completion only on `gh issue view`;
+# the list asks for one page. This port names no page size of its own. What it
+# must not do is treat a connection it could not read as an empty one, which
+# `Get-GitLoopyReadiness` refuses to do. A missing closing-reference field is
+# never "no pull requests".
 $Script:GitLoopyShallowIssueFields =
-    "number,title,body,labels,state,url,createdAt,blockedBy"
-# `blockedBy` first shipped in gh 2.94.0. A lower version would fail inside the
-# collection read and masquerade as an empty Pool, so capability is established
-# once in preflight before the Pool exists. Typed rather than a string that
-# happens to look like one, so the gate compares against this constant itself and
-# there is no second reading of the floor to drift from the message naming it.
+    "number,title,body,labels,state,url,createdAt,blockedBy,closedByPullRequestsReferences"
+# `blockedBy` and `closedByPullRequestsReferences` both first shipped in gh
+# 2.94.0. A lower version would fail inside the collection read and masquerade
+# as an empty Pool, so capability is established once in preflight before the
+# Pool exists. Typed rather than a string that happens to look like one, so the
+# gate compares against this constant itself and there is no second reading of
+# the floor to drift from the message naming it.
 $Script:GitLoopyMinGhVersionForReadiness = [version]::new(2, 94, 0)
+# `gh issue list` asks for one page of closing references and exports no
+# pageInfo. Exactly this many nodes is a connection that may have been cut
+# short. `nodes(ids:)` accepts at most this many ids, so the state read pays
+# one request per page of distinct ids and a failure unreads only that page.
+$Script:GitLoopyClosingReferencePageSize = 100
+$Script:GitLoopyPullRequestStateQuery =
+    'query($ids:[ID!]!){ nodes(ids:$ids) { ... on PullRequest { id state } } }'
 # The label the Pool query filters on, named once so the pin's eligibility check
 # (`Assert-GitLoopyPinEligible`) cannot drift from the query it must agree with.
 $Script:GitLoopyReadyLabel = "ready-for-agent"
@@ -945,9 +957,10 @@ function Assert-GitLoopyReadinessCapability {
     ) {
         [Console]::Error.WriteLine(
             "git-loopy: gh $Installed cannot read issue dependencies " +
-            '(blockedBy) via `gh issue list`/`gh issue view --json`; ' +
+            "(blockedBy) or closing pull requests " +
+            "(closedByPullRequestsReferences) via ``gh issue list``/``gh issue view --json``; " +
             "git-loopy requires gh >= $Script:GitLoopyMinGhVersionForReadiness. " +
-            'Upgrade gh: https://cli.github.com/.'
+            "Upgrade gh: https://cli.github.com/."
         )
         return $false
     }
@@ -957,19 +970,231 @@ function Assert-GitLoopyReadinessCapability {
 $Script:GitLoopyBlockerUrlPattern = [regex]::new(
     '^https?://[^/]+/([^/]+)/([^/]+)/issues/([0-9]+)$')
 
-# Wrapper contract §3.3.1 — decide from the carried GraphQL connection. This is
-# deliberately pure: collection performs the source read, while Pickup decides
-# whether the candidate is admissible without another dependency round-trip.
+# Whether a carried closing-reference connection was proven exhausted.
+# `gh issue view` pages until `hasNextPage` is false, so every view-carried
+# connection is complete. `gh issue list` asks for one page and exports no
+# `pageInfo`, so exactly a full page is indistinguishable from a connection
+# cut short. `awaiting-merge.json`'s completeness cases drive this.
+function Test-GitLoopyClosingConnectionComplete {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Carrier,
+        [Parameter(Mandatory)]
+        [int]$Nodes
+    )
+
+    if ($Carrier -ceq "view") {
+        return $true
+    }
+    if ($Carrier -ceq "list") {
+        return $Nodes -lt $Script:GitLoopyClosingReferencePageSize
+    }
+    throw "git-loopy: unknown closing-reference carrier: $Carrier"
+}
+
+# How many state requests `Distinct` pull-request ids cost. Zero ids cost no
+# request. Otherwise one request per page of distinct ids, rounding up.
+function Get-GitLoopyStateRequestCount {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [int]$Distinct
+    )
+
+    if ($Distinct -le 0) {
+        return 0
+    }
+    return [int][math]::Ceiling(
+        $Distinct / [double]$Script:GitLoopyClosingReferencePageSize
+    )
+}
+
+# How many distinct ids a failed state request leaves unread. A full page is
+# the page size, so which request failed does not change the unread count. A
+# short read is one request; its failure leaves the whole read unread.
+function Get-GitLoopyStateFailureScope {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [int]$Distinct,
+        [Parameter(Mandatory)]
+        [int]$FailedRequests
+    )
+
+    $Requests = Get-GitLoopyStateRequestCount -Distinct $Distinct
+    $EveryRequestFull = $Distinct -eq (
+        $Requests * $Script:GitLoopyClosingReferencePageSize
+    )
+    $Unread = if ($EveryRequestFull) {
+        $FailedRequests * $Script:GitLoopyClosingReferencePageSize
+    }
+    else {
+        $Distinct
+    }
+    return [ordered]@{
+        unread = $Unread
+        read = $Distinct - $Unread
+        unread_cause = "state_request_failed"
+    }
+}
+
+function New-GitLoopyReadyReadiness {
+    return [ordered]@{
+        verdict = "ready"
+        admissible = $true
+        skip_reason = $null
+        blockers = [string[]]@()
+        closing_pull_requests = [string[]]@()
+        names = [string[]]@()
+        reason = $null
+        unbound_pool_class = "admitted"
+    }
+}
+
+function New-GitLoopyBlockedReadiness {
+    param(
+        [Parameter(Mandatory)]
+        [string]$SkipReason,
+        [string[]]$Blockers = @(),
+        [string[]]$ClosingPullRequests = @()
+    )
+
+    $Names = switch ($SkipReason) {
+        "blocked_by_open_dependency" { [string[]]$Blockers }
+        "awaiting_pull_request_merge" { [string[]]$ClosingPullRequests }
+        default { [string[]]@() }
+    }
+    $Reason = if (@($Names).Count -eq 0) {
+        $SkipReason
+    }
+    else {
+        "{0}: {1}" -f $SkipReason, ([string]::Join(", ", $Names))
+    }
+    $PoolClass = if ($SkipReason -ceq "readiness_unprovable") {
+        "unresolved"
+    }
+    else {
+        "waiting"
+    }
+    return [ordered]@{
+        verdict = "blocked"
+        admissible = $false
+        skip_reason = $SkipReason
+        blockers = [string[]]$Blockers
+        closing_pull_requests = [string[]]$ClosingPullRequests
+        names = [string[]]$Names
+        reason = $Reason
+        unbound_pool_class = $PoolClass
+    }
+}
+
+# Open closing pull requests, and whether the closing read proved nothing.
+# Membership is not a refusal: only a state read as open is. An explicit
+# `$null` is a field that was not read, never an empty connection.
+function Get-GitLoopyClosingFacts {
+    param(
+        [AllowNull()]
+        [object]$Closing
+    )
+
+    $Open = [Collections.Generic.List[string]]::new()
+    if ($null -eq $Closing -or $Closing -isnot [Collections.IDictionary]) {
+        return @{ Open = $Open; Unprovable = $true }
+    }
+    $Complete = (
+        $Closing.Contains("complete") -and
+        $Closing["complete"] -is [bool] -and
+        $Closing["complete"]
+    )
+    $Nodes = @()
+    if ($Closing.Contains("nodes") -and $null -ne $Closing["nodes"]) {
+        $Nodes = @($Closing["nodes"])
+    }
+    $Unread = $false
+    foreach ($Node in $Nodes) {
+        if ($Node -isnot [Collections.IDictionary]) {
+            $Unread = $true
+            continue
+        }
+        $Ref = $null
+        if (
+            $null -ne $Node["ref"] -and
+            -not [string]::IsNullOrWhiteSpace([string]$Node["ref"])
+        ) {
+            $Ref = [string]$Node["ref"]
+        }
+        $State = $null
+        if (
+            $null -ne $Node["state"] -and
+            -not [string]::IsNullOrWhiteSpace([string]$Node["state"])
+        ) {
+            $State = ([string]$Node["state"]).ToLowerInvariant()
+        }
+        $Cause = $null
+        if (
+            $Node.Contains("unread") -and
+            $null -ne $Node["unread"] -and
+            -not [string]::IsNullOrWhiteSpace([string]$Node["unread"])
+        ) {
+            $Cause = [string]$Node["unread"]
+        }
+        $FlaggedUnreadable = (
+            $Node.Contains("readable") -and $Node["readable"] -eq $false
+        )
+        if (
+            $FlaggedUnreadable -or
+            $Cause -ceq "reference_unreadable" -or
+            $null -eq $Ref
+        ) {
+            $Unread = $true
+            continue
+        }
+        if ($null -eq $State -or $null -ne $Cause) {
+            $Unread = $true
+            continue
+        }
+        if ($State -ceq "open") {
+            $Open.Add($Ref)
+        }
+    }
+    return @{
+        Open = $Open
+        Unprovable = ((-not $Complete) -or $Unread)
+    }
+}
+
+# Wrapper contract §3.3.1 — decide from the carried GraphQL connection and the
+# closing-pull-request read joined to it. Pure: collection performs the source
+# read, while Pickup decides whether the candidate is admissible without
+# another round-trip.
 #
-# Returns `{verdict, admissible, skip_reason, blockers}` — the same record the
-# reference member's `decide_readiness` returns, so the fixture adapter drives
-# exactly the decision the serial Pickup takes.
+# Precedence is the fixture's: an open blocker, then a pull request read as
+# open, then an unprovable read. A pull-request candidate is never Awaiting
+# merge. Omitting `-ClosingPullRequests` is the blocker-only axis
+# `issue-readiness.json` drives — a complete empty connection, not an unread
+# one. Passing `$null` is a field the read did not carry.
+#
+# Returns the widened record Pickup and the unbound-Pool rule both read:
+# `{verdict, admissible, skip_reason, blockers, closing_pull_requests, names,
+# reason, unbound_pool_class}`. `reason` is the `wrapper.pickup.skipped`
+# string. `unbound_pool_class` is what the unbound-Pool rule counts.
 function Get-GitLoopyReadiness {
     [CmdletBinding()]
     param(
         [AllowNull()]
-        [object]$BlockedBy
+        [object]$BlockedBy,
+        [AllowNull()]
+        [object]$ClosingPullRequests,
+        [string]$CandidateKind = "issue"
     )
+
+    if (@("pull_request", "pr") -ccontains $CandidateKind) {
+        return New-GitLoopyReadyReadiness
+    }
+    if (-not $PSBoundParameters.ContainsKey("ClosingPullRequests")) {
+        $ClosingPullRequests = [ordered]@{ complete = $true; nodes = @() }
+    }
 
     $ConnectionIsValid = (
         $BlockedBy -is [Collections.IDictionary] -and
@@ -1027,32 +1252,29 @@ function Get-GitLoopyReadiness {
         }
     }
 
+    $ClosingFacts = Get-GitLoopyClosingFacts -Closing $ClosingPullRequests
+    # An open blocker outranks an open pull request and an unread state. A
+    # pull request read as open outranks an unprovable blocker read. A fact
+    # that was read is never displaced by one that could not be.
     if ($OpenBlockers.Count -gt 0) {
-        return [ordered]@{
-            verdict = "blocked"
-            admissible = $false
-            skip_reason = "blocked_by_open_dependency"
-            blockers = [string[]]$OpenBlockers
-        }
+        return New-GitLoopyBlockedReadiness `
+            -SkipReason "blocked_by_open_dependency" `
+            -Blockers ([string[]]$OpenBlockers)
     }
-    if (
+    if ($ClosingFacts.Open.Count -gt 0) {
+        return New-GitLoopyBlockedReadiness `
+            -SkipReason "awaiting_pull_request_merge" `
+            -ClosingPullRequests ([string[]]$ClosingFacts.Open)
+    }
+    $BlockerUnprovable = (
         -not $ConnectionIsValid -or
         $Nodes.Count -ne [int]$BlockedBy["totalCount"] -or
         $Unreadable
-    ) {
-        return [ordered]@{
-            verdict = "blocked"
-            admissible = $false
-            skip_reason = "readiness_unprovable"
-            blockers = [string[]]@()
-        }
+    )
+    if ($BlockerUnprovable -or $ClosingFacts.Unprovable) {
+        return New-GitLoopyBlockedReadiness -SkipReason "readiness_unprovable"
     }
-    return [ordered]@{
-        verdict = "ready"
-        admissible = $true
-        skip_reason = $null
-        blockers = [string[]]@()
-    }
+    return New-GitLoopyReadyReadiness
 }
 
 # One Pool candidate's **Readiness** verdict, from whichever read its source
@@ -1066,6 +1288,9 @@ function Get-GitLoopyReadiness {
 # *not* treated as an empty connection: the connection was never read, so there
 # is nothing to say no blocker was found, and it reaches `readiness_unprovable`
 # rather than silently admitting a candidate whose blockers were never checked.
+# The same rule holds for closing references: a missing
+# `closing_pull_requests` key is an unread field, never "no pull requests".
+# A pull-request candidate (`kind` `pr`) is never Awaiting merge.
 function Get-GitLoopyCandidateReadiness {
     [CmdletBinding()]
     param(
@@ -1075,14 +1300,22 @@ function Get-GitLoopyCandidateReadiness {
     )
 
     if ($IssueSource -cne "github") {
-        return [ordered]@{
-            verdict = "ready"
-            admissible = $true
-            skip_reason = $null
-            blockers = [string[]]@()
-        }
+        return New-GitLoopyReadyReadiness
     }
-    return Get-GitLoopyReadiness -BlockedBy $Candidate["blocked_by"]
+    $Kind = "issue"
+    if ($Candidate.Contains("kind") -and [string]$Candidate["kind"] -ceq "pr") {
+        $Kind = "pull_request"
+    }
+    if ($Candidate.Contains("closing_pull_requests")) {
+        return Get-GitLoopyReadiness `
+            -BlockedBy $Candidate["blocked_by"] `
+            -ClosingPullRequests $Candidate["closing_pull_requests"] `
+            -CandidateKind $Kind
+    }
+    return Get-GitLoopyReadiness `
+        -BlockedBy $Candidate["blocked_by"] `
+        -ClosingPullRequests $null `
+        -CandidateKind $Kind
 }
 
 # `ConvertFrom-Json` coerces anything ISO-8601-shaped into a [datetime], and it
@@ -2555,6 +2788,324 @@ function Get-GitLoopyOrderedCandidates {
     return $Ordered.ToArray()
 }
 
+# `closedByPullRequestsReferences` as `gh issue list` returns it: a flat
+# array, no `totalCount`, no `pageInfo`. A field the row omitted is unread,
+# never an empty connection. A zero-value node (`id` empty, `number` 0) is a
+# reference the token cannot see, so it is not asked. Membership is not a
+# refusal — this carries no state.
+function ConvertTo-GitLoopyClosingReferences {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Row,
+        [string]$Carrier = "list"
+    )
+
+    $Present = $Row.Contains("closedByPullRequestsReferences")
+    # Scalar assignment of a dictionary value unwraps an empty array to $null
+    # inside a module function, and a missing field is already $null. Holding
+    # the value in a List keeps `[]` as `[]`, so an empty connection is not
+    # mistaken for a field the read did not carry.
+    $Raw = $null
+    if ($Present) {
+        $Held = [Collections.Generic.List[object]]::new()
+        $Held.Add($Row["closedByPullRequestsReferences"])
+        $Raw = $Held[0]
+    }
+    if (-not $Present -or $null -eq $Raw -or $Raw -isnot [Collections.IList]) {
+        return [ordered]@{ complete = $false; nodes = @() }
+    }
+    $Nodes = [Collections.Generic.List[object]]::new()
+    foreach ($Item in @($Raw)) {
+        $Zero = (
+            $Item -is [Collections.IDictionary] -and
+            [string]$Item["id"] -eq "" -and
+            $Item.Contains("number") -and
+            $Item["number"] -is [ValueType] -and
+            $Item["number"] -isnot [bool] -and
+            [double]$Item["number"] -eq 0
+        )
+        if ($Zero) {
+            $Nodes.Add([ordered]@{ node_id = ""; ref = ""; readable = $false })
+            continue
+        }
+        $NodeId = ""
+        $Ref = ""
+        $Readable = $false
+        if ($Item -is [Collections.IDictionary]) {
+            $Repository = $Item["repository"]
+            $Owner = $null
+            $Name = $null
+            if ($Repository -is [Collections.IDictionary]) {
+                $OwnerObject = $Repository["owner"]
+                if ($OwnerObject -is [Collections.IDictionary]) {
+                    $Owner = [string]$OwnerObject["login"]
+                }
+                $Name = [string]$Repository["name"]
+            }
+            $Number = $Item["number"]
+            $NodeId = [string]$Item["id"]
+            if (
+                -not [string]::IsNullOrWhiteSpace($NodeId) -and
+                $Number -is [ValueType] -and
+                $Number -isnot [bool] -and
+                [double]$Number -gt 0 -and
+                [double]$Number -eq [math]::Floor([double]$Number) -and
+                -not [string]::IsNullOrWhiteSpace($Owner) -and
+                -not [string]::IsNullOrWhiteSpace($Name)
+            ) {
+                $Readable = $true
+                $Ref = "{0}/{1}#{2}" -f $Owner, $Name, [int]$Number
+            }
+        }
+        $Nodes.Add([ordered]@{
+            node_id = $NodeId
+            ref = $Ref
+            readable = $Readable
+        })
+    }
+    return [ordered]@{
+        complete = Test-GitLoopyClosingConnectionComplete `
+            -Carrier $Carrier `
+            -Nodes $Nodes.Count
+        nodes = $Nodes.ToArray()
+    }
+}
+
+# Readable closing-pull-request ids, first-seen order, each id once. An
+# unreadable reference never asks, so it cannot cost a request.
+function Get-GitLoopyDistinctClosingIds {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()]
+        [object[]]$References
+    )
+
+    $Seen = [Collections.Generic.List[string]]::new()
+    $Have = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal
+    )
+    foreach ($Read in @($References)) {
+        if ($Read -isnot [Collections.IDictionary]) {
+            continue
+        }
+        foreach ($Node in @($Read["nodes"])) {
+            if ($Node -isnot [Collections.IDictionary] -or $Node["readable"] -ne $true) {
+                continue
+            }
+            $Id = [string]$Node["node_id"]
+            if (-not [string]::IsNullOrWhiteSpace($Id) -and $Have.Add($Id)) {
+                $Seen.Add($Id)
+            }
+        }
+    }
+    # Emit each id. `return , $string[0]` survives `@()` as one element whose
+    # value is an empty array, and binding that to `[string[]]` fails as an
+    # empty string — which would fail discovery on a Pool that asked for nothing.
+    foreach ($Id in $Seen) {
+        $Id
+    }
+}
+
+function ConvertTo-GitLoopyStateRequestBody {
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Ids
+    )
+
+    $Encoded = foreach ($Id in $Ids) {
+        '"' + ($Id.Replace('\', '\\').Replace('"', '\"')) + '"'
+    }
+    $Query = $Script:GitLoopyPullRequestStateQuery.Replace('\', '\\').Replace('"', '\"')
+    return '{"query":"' + $Query + '","variables":{"ids":[' +
+        ($Encoded -join ",") + ']}}'
+}
+
+function ConvertTo-GitLoopyPullRequestStateNode {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Id,
+        [AllowNull()]
+        [object]$Raw
+    )
+
+    if ($Raw -isnot [Collections.IDictionary]) {
+        return [ordered]@{ id = $Id; state = $null; unread = "state_node_null" }
+    }
+    $State = $Raw["state"]
+    if ($State -isnot [string] -or [string]::IsNullOrWhiteSpace($State)) {
+        return [ordered]@{ id = $Id; state = $null; unread = "state_node_null" }
+    }
+    $Lowered = $State.ToLowerInvariant()
+    if (@("open", "merged", "closed") -cnotcontains $Lowered) {
+        return [ordered]@{ id = $Id; state = $null; unread = "state_node_null" }
+    }
+    return [ordered]@{ id = $Id; state = $Lowered; unread = $null }
+}
+
+# One `nodes(ids:)` page. A response that still carries `data.nodes` is a
+# partial read even when `gh` exits non-zero for a null node. Anything without
+# that array fails only this page: the ids it carried are unread, and a page
+# another request already resolved is not.
+function Invoke-GitLoopyPullRequestStateBatch {
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Ids
+    )
+
+    $Failed = foreach ($Id in $Ids) {
+        [ordered]@{ id = $Id; state = $null; unread = "state_request_failed" }
+    }
+    $Body = ConvertTo-GitLoopyStateRequestBody -Ids $Ids
+    $Previous = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+    try {
+        $Output = @($Body | & gh api graphql --input - 2>$null)
+    }
+    catch {
+        [Console]::Error.WriteLine(
+            "git-loopy: pull-request state read failed; the references it " +
+            "carried are unread."
+        )
+        return @($Failed)
+    }
+    finally {
+        $PSNativeCommandUseErrorActionPreference = $Previous
+    }
+    $Text = [string]::Join("`n", @($Output))
+    $Parsed = $null
+    if (-not [string]::IsNullOrWhiteSpace($Text)) {
+        try {
+            $Parsed = ConvertFrom-GitLoopyJsonText -Text $Text
+        }
+        catch {
+            $Parsed = $null
+        }
+    }
+    $Nodes = $null
+    if (
+        $Parsed -is [Collections.IDictionary] -and
+        $Parsed["data"] -is [Collections.IDictionary] -and
+        $Parsed["data"]["nodes"] -is [Collections.IList]
+    ) {
+        $Nodes = @($Parsed["data"]["nodes"])
+    }
+    if ($null -eq $Nodes) {
+        [Console]::Error.WriteLine(
+            "git-loopy: pull-request state read failed; the references it " +
+            "carried are unread."
+        )
+        return @($Failed)
+    }
+    $Resolved = [Collections.Generic.List[object]]::new()
+    for ($Index = 0; $Index -lt $Ids.Count; $Index++) {
+        if ($Index -ge $Nodes.Count) {
+            $Resolved.Add([ordered]@{
+                id = $Ids[$Index]
+                state = $null
+                unread = "state_request_failed"
+            })
+            continue
+        }
+        $Resolved.Add((ConvertTo-GitLoopyPullRequestStateNode `
+            -Id $Ids[$Index] `
+            -Raw $Nodes[$Index]))
+    }
+    return $Resolved.ToArray()
+}
+
+# Distinct ids this read carried, resolved once. No ids, no request.
+function Resolve-GitLoopyPullRequestStates {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()]
+        [object[]]$References
+    )
+
+    $Ids = @(
+        Get-GitLoopyDistinctClosingIds -References $References |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+    )
+    $States = @{}
+    if ($Ids.Count -eq 0) {
+        return $States
+    }
+    $Page = $Script:GitLoopyClosingReferencePageSize
+    for ($Start = 0; $Start -lt $Ids.Count; $Start += $Page) {
+        $End = [Math]::Min($Start + $Page - 1, $Ids.Count - 1)
+        $Batch = @(
+            $Ids[$Start..$End] |
+                Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+        )
+        if ($Batch.Count -eq 0) {
+            continue
+        }
+        foreach ($Node in @(Invoke-GitLoopyPullRequestStateBatch -Ids $Batch)) {
+            $States[[string]$Node["id"]] = $Node
+        }
+    }
+    return $States
+}
+
+# Join one issue's references with the states resolved for their ids. An id
+# the state map does not carry is a failed request for that id, not an
+# admission. An unreadable reference never asks.
+function Join-GitLoopyClosingPullRequests {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$References,
+        [AllowNull()]
+        [object]$States
+    )
+
+    $Joined = [Collections.Generic.List[object]]::new()
+    foreach ($Node in @($References["nodes"])) {
+        if ($Node -isnot [Collections.IDictionary] -or $Node["readable"] -ne $true) {
+            $Joined.Add([ordered]@{
+                ref = $null
+                state = $null
+                readable = $false
+                unread = "reference_unreadable"
+            })
+            continue
+        }
+        $Found = $null
+        $Id = [string]$Node["node_id"]
+        if ($null -ne $States -and $States.Contains($Id)) {
+            $Found = $States[$Id]
+        }
+        if (
+            $null -eq $Found -or
+            [string]::IsNullOrWhiteSpace([string]$Found["state"])
+        ) {
+            $Cause = "state_request_failed"
+            if (
+                $null -ne $Found -and
+                -not [string]::IsNullOrWhiteSpace([string]$Found["unread"])
+            ) {
+                $Cause = [string]$Found["unread"]
+            }
+            $Joined.Add([ordered]@{
+                ref = [string]$Node["ref"]
+                state = $null
+                readable = $true
+                unread = $Cause
+            })
+            continue
+        }
+        $Joined.Add([ordered]@{
+            ref = [string]$Node["ref"]
+            state = [string]$Found["state"]
+            readable = $true
+        })
+    }
+    return [ordered]@{
+        complete = [bool]$References["complete"]
+        nodes = $Joined.ToArray()
+    }
+}
+
 function Get-GitLoopyGitHubPool {
     [CmdletBinding()]
     param()
@@ -2582,6 +3133,11 @@ function Get-GitLoopyGitHubPool {
     # of the order rather than an arbitrary subset of it. No consumer sorts:
     # the serial Pickup takes element 0 and trusts it.
     $Candidates = Get-GitLoopyOrderedCandidates -Candidates $Candidates
+    # Survivors are accumulated so the closing-pull-request states are one
+    # read for the collection, after the candidates exist, and none when no
+    # survivor carries a readable reference. The references themselves already
+    # rode the list.
+    $Survivors = [Collections.Generic.List[object]]::new()
 
     foreach ($Candidate in $Candidates) {
         $Body = if ($null -eq $Candidate["body"]) {
@@ -2691,7 +3247,7 @@ function Get-GitLoopyGitHubPool {
                 }
             }
         )
-        [ordered]@{
+        $Survivors.Add([ordered]@{
             number = $Number
             title = [string]$Full["title"]
             body = $FullBody
@@ -2699,12 +3255,26 @@ function Get-GitLoopyGitHubPool {
             state = [string]$Full["state"]
             url = [string]$Full["url"]
             created_at = [string]($Full["createdAt"] ?? $Full["created_at"] ?? "")
-            # The collection read carries the connection Pickup decides from.
-            # A later membership read can validate current state but cannot
-            # replace this Pool snapshot's readiness evidence.
+            # The collection read carries both connections Pickup decides from.
+            # A later view can validate current state but cannot replace this
+            # Pool snapshot's readiness evidence. Closing references follow the
+            # list the same way blockers do: membership is not a refusal, and
+            # a field the list omitted was not read.
             blocked_by = $Candidate["blockedBy"]
+            closing_references = ConvertTo-GitLoopyClosingReferences -Row $Candidate
             comments = [object[]]$Comments
-        }
+        })
+    }
+
+    $States = Resolve-GitLoopyPullRequestStates -References @(
+        $Survivors | ForEach-Object { $_["closing_references"] }
+    )
+    foreach ($Survivor in $Survivors) {
+        $Survivor["closing_pull_requests"] = Join-GitLoopyClosingPullRequests `
+            -References $Survivor["closing_references"] `
+            -States $States
+        $Survivor.Remove("closing_references")
+        $Survivor
     }
 }
 
@@ -3592,11 +4162,13 @@ function Select-GitLoopySerialPickup {
             -IssueSource $IssueSource
         if (-not $Readiness["admissible"]) {
             $Reason = [string]$Readiness["skip_reason"]
+            $PoolClass = [string]$Readiness["unbound_pool_class"]
             if ($IsPin) {
-                # §3.2 (#644): an open blocker is an answer about the Pin and
-                # spends it; an unprovable read is not, and the Pin stays live.
-                # Either way the walk moves on (§3.3).
-                $PinRead = if ($Reason -ceq "readiness_unprovable") {
+                # §3.2 (#644): a wait is an answer about the Pin and spends it,
+                # whether the wait is an open blocker or an open closing pull
+                # request. An unprovable read is not an answer, and the Pin
+                # stays live. Either way the walk moves on (§3.3).
+                $PinRead = if ($PoolClass -ceq "unresolved") {
                     "unread"
                 }
                 else {
@@ -3606,30 +4178,27 @@ function Select-GitLoopySerialPickup {
             }
             $Refused += 1
             $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
-            if ($Reason -ceq "blocked_by_open_dependency") {
+            # The class is the verdict's, so an Awaiting-merge refusal counts
+            # as a wait and an unprovable read cannot be mistaken for one.
+            # The unprovable read still skips — no Pickup may bind a candidate
+            # whose blockers or closing pull requests it never checked — but
+            # it is counted apart so the terminal rule cannot mistake it for
+            # the Pool refusing work.
+            if ($PoolClass -ceq "waiting") {
                 $Waiting += 1
             }
-            elseif ($Reason -ceq "readiness_unprovable") {
-                # Not a refusal of this candidate: a read that did not happen
-                # (#542, ADR-0047). It still skips — no Pickup may bind a
-                # candidate whose blockers it never checked — but it is counted
-                # apart so the terminal rule cannot mistake it for the Pool
-                # refusing work.
+            elseif ($PoolClass -ceq "unresolved") {
                 $UnresolvedLabels.Add($Label)
             }
-            $Blockers = [string]::Join(", ", @($Readiness["blockers"]))
-            $EventReason = if ([string]::IsNullOrEmpty($Blockers)) {
-                $Reason
-            }
-            else {
-                "${Reason}: $Blockers"
+            $EventReason = [string]$Readiness["reason"]
+            if ([string]::IsNullOrEmpty($EventReason)) {
+                $EventReason = $Reason
             }
             # The Pool exclusion line's shape, because a skip is the same kind
             # of fact for an operator: what was passed over, and why in words.
             [Console]::Error.WriteLine(
                 "git-loopy: serial Pickup skipped $Label — " +
-                $Reason.Replace('_', ' ') +
-                $(if ([string]::IsNullOrEmpty($Blockers)) { "" } else { ": $Blockers" })
+                $EventReason.Replace('_', ' ')
             )
             Write-GitLoopyPickupSkipped `
                 -Context $Context `
@@ -4819,8 +5388,8 @@ function Invoke-GitLoopyDiscoveryLoop {
             elseif ($TerminalOutcome -ceq "all_blocked") {
                 [Console]::Error.WriteLine(
                     "git-loopy: serial Pickup bound nothing: all $($Pool.Count) " +
-                    "candidate(s) in the Pool wait on open blockers; this Run is " +
-                    "waiting on blockers."
+                    "candidate(s) in the Pool wait on open blockers or on pull " +
+                    "requests to merge; this Run is waiting on them."
                 )
             }
             else {
@@ -5168,6 +5737,9 @@ Export-ModuleMember -Function @(
     "Assert-GitLoopyReadinessCapability",
     "Get-GitLoopyReadiness",
     "Get-GitLoopyCandidateReadiness",
+    "Test-GitLoopyClosingConnectionComplete",
+    "Get-GitLoopyStateRequestCount",
+    "Get-GitLoopyStateFailureScope",
     "Get-GitLoopyRepositoryFromRemoteUrl",
     "Get-GitLoopyLeaseInspection",
     "Get-GitLoopyLeaseActionDecision",
