@@ -5,7 +5,9 @@ candidate in it was refused. It ends within seconds of starting, and its
 Dashboard used to flash an empty Queue and hand the terminal back with no word
 about why, which reads as a crash. The reasons are already in the trace -- Pool
 membership, each exclusion and each refusal, and the Run's own outcome -- so
-this module folds them into the few lines an operator needs to act on.
+this module folds them into the few lines an operator needs to act on. An
+all-blocked Pool names the pull requests to merge beside the blockers outside
+the Pool (#694).
 
 The Rust Dashboard folds the same Events into the same lines over a held
 Dashboard; ``conformance/unbound-run-notice.json`` pins both, so the two
@@ -31,6 +33,10 @@ _MEMBERSHIP_UNKNOWN: Final[str] = (
 
 #: The only issue source whose Pool is defined by the ``ready-for-agent`` label.
 _LABELLED_SOURCE: Final[str] = "github"
+
+#: A candidate waiting on an open closing pull request, not on a blocker.
+#: Matched exactly, so it is never read as ``blocked_by_open_dependency``.
+_AWAITING_PULL_REQUEST_MERGE: Final[str] = "awaiting_pull_request_merge"
 
 #: The Events that mean the Run bound work: an issue bound, activated, or
 #: contributed to by a Lane.
@@ -171,7 +177,7 @@ class _Tally:
         pool = self.pool()
         lines = [
             f"The Run ended because {self.candidates(self.counted(pool), 'waits', 'wait')} "
-            "on open blockers."
+            f"on {self._waited_on()}."
         ]
         blockers = self._blockers(pool)
         if blockers:
@@ -187,6 +193,9 @@ class _Tally:
                 else "resolve them"
             )
             lines.append(f"{label}: {', '.join(blockers)} — {remedy}.")
+        groups = self._pull_request_groups()
+        if groups:
+            lines.append(self._pull_request_line(groups))
         if self.refusals is None and self.members is None:
             lines.append(_MEMBERSHIP_UNKNOWN)
             return lines
@@ -218,6 +227,58 @@ class _Tally:
             )
         return [first, _MEMBERSHIP_UNKNOWN]
 
+    def _waited_on(self) -> str:
+        """What an all-blocked Pool's recorded refusals actually wait on.
+
+        A Pool that waits only on blockers keeps the historical wording. A
+        merge-waiting candidate is not described as waiting on a blocker.
+        """
+        kinds = {_reason_kind(reason) for reason in self.recorded_skips().values()}
+        blocked = "blocked_by_open_dependency" in kinds
+        awaiting = _AWAITING_PULL_REQUEST_MERGE in kinds
+        if blocked and awaiting:
+            return "open blockers or pull requests to merge"
+        if awaiting:
+            return "pull requests to merge"
+        return "open blockers"
+
+    def _refused_in_order(self) -> list[IssueKey]:
+        """Recorded refusals in the order the notice walks them."""
+        skips = self.recorded_skips()
+        if self.refusals is not None:
+            return [issue for issue in self.refusals if issue in skips]
+        return sorted(skips, key=_issue_order)
+
+    def _pull_request_groups(self) -> list[tuple[str, list[str]]]:
+        """Each pull request to merge, with the candidates that wait on it.
+
+        Every reference is named. The inside-the-Pool test is for blockers
+        only: a pull request whose number matches a Pool member is still the
+        one to merge, and one in another repository keeps its full reference.
+        Order is first-seen, and connection order within a reason.
+        """
+        skips = self.recorded_skips()
+        groups: dict[str, list[str]] = {}
+        for issue in self._refused_in_order():
+            label = _candidate_label(issue)
+            for ref in _refs_named_by(skips[issue], _AWAITING_PULL_REQUEST_MERGE):
+                waiting = groups.setdefault(ref, [])
+                if label not in waiting:
+                    waiting.append(label)
+        return list(groups.items())
+
+    def _pull_request_line(self, groups: list[tuple[str, list[str]]]) -> str:
+        """The operator's next act: merge these, or label other work."""
+        named = ", ".join(
+            f"{ref} ({', '.join(waiting)})" for ref, waiting in groups
+        )
+        remedy = (
+            "merge them, or label other work ready-for-agent"
+            if self.issue_source == _LABELLED_SOURCE
+            else "merge them"
+        )
+        return f"Pull requests to merge: {named} — {remedy}."
+
     def _blockers(self, pool: list[IssueKey]) -> list[str]:
         """The blockers an operator has to resolve before anything can move.
 
@@ -230,8 +291,7 @@ class _Tally:
         members = set(pool)
         named: list[str] = []
         skips = self.recorded_skips()
-        issues = pool if self.refusals is not None else sorted(skips, key=_issue_order)
-        for issue in issues:
+        for issue in self._refused_in_order():
             if issue not in skips:
                 continue
             for blocker in blockers_from_skip_reason(skips[issue]):
@@ -309,11 +369,35 @@ def trace_notice(trace_path: Path, *, repository: str | None = None) -> list[str
     return unbound_run_notice(events, repository=repository)
 
 
+def _reason_kind(reason: str) -> str:
+    """The refusal kind, the text before the first colon."""
+    return reason.split(":", 1)[0].strip() or "unstated"
+
+
+def _candidate_label(issue: IssueKey) -> str:
+    """How the notice names a Pool member beside the pull request it waits on."""
+    if isinstance(issue, int):
+        return f"#{issue}"
+    return issue
+
+
+def _refs_named_by(reason: str, kind: str) -> tuple[str, ...]:
+    """The references a ``<kind>: ref, ref`` reason names, or none.
+
+    The kind is matched exactly, through the colon. An Awaiting-merge reason
+    is therefore never a blocker, and a Blocked reason is never a pull request.
+    """
+    prefix = f"{kind}:"
+    if not reason.startswith(prefix):
+        return ()
+    return tuple(part.strip() for part in reason[len(prefix):].split(",") if part.strip())
+
+
 def _reason_counts(reasons: Iterable[str]) -> str:
     """Each distinct reason kind with how many candidates it covers, most first."""
     counts: dict[str, int] = {}
     for reason in reasons:
-        kind = reason.split(":", 1)[0].strip() or "unstated"
+        kind = _reason_kind(reason)
         counts[kind] = counts.get(kind, 0) + 1
     if not counts:
         return "no refusal was recorded"
