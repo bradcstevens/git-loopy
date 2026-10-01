@@ -2209,3 +2209,124 @@ fn a_lane_issue_stamp_after_the_lane_work_boundary_does_not_restart_active_time(
         serde_json::json!(3.0)
     );
 }
+
+fn parallel(projected: &Value) -> &Value {
+    &projected["dashboard"]["header"]["parallel"]
+}
+
+/// The Integration part of the Header's `parallel` Declaration (ADR-0020, #683).
+///
+/// Absent until the Run admits or parks a contribution. A posture Event alone
+/// does not invent an empty backlog.
+#[test]
+fn the_integration_backlog_is_absent_until_the_first_admission_or_park() {
+    let projected = reduce_jsonl(
+        &[
+            r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1"}"#,
+            r#"{"ts":"2026-05-16T00:00:01.000Z","type":"wrapper.concurrency.changed","run_id":"run-1","iter":null,"configured_lane_limit":3,"effective_lane_limit":1,"pressure":"integration_backlog"}"#,
+        ],
+        IssueRef::number(42),
+    );
+    let header = parallel(&projected);
+    assert_eq!(header["availability"], serde_json::json!("available"));
+    assert_eq!(header["integration_observed"], serde_json::json!(false));
+    assert!(header["integration_wip"].is_null());
+    assert!(header["integration_high_water"].is_null());
+    assert!(header["parked_count"].is_null());
+}
+
+/// WIP is admitted-and-not-ended, against the contract's high-water of two.
+/// Parked is parked-and-not-yet-admitted. Ending a contribution leaves zero
+/// observed, not absent.
+#[test]
+fn the_integration_backlog_counts_admitted_wip_and_parked_against_two() {
+    let stamp = |ts: &str, kind: &str, id: &str, issue: i64| {
+        format!(
+            r#"{{"ts":"{ts}","type":"{kind}","run_id":"run-1","iter":null,"contribution_id":"{id}","issue":{issue},"lane_id":"lane-1"}}"#
+        )
+    };
+    let mut lines = vec![
+        r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1"}"#
+            .to_string(),
+        r#"{"ts":"2026-05-16T00:00:01.000Z","type":"wrapper.concurrency.changed","run_id":"run-1","iter":null,"configured_lane_limit":3,"effective_lane_limit":1,"pressure":"integration_backlog"}"#
+            .to_string(),
+    ];
+    let project = |lines: &[String]| {
+        let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+        parallel(&reduce_jsonl(&borrowed, IssueRef::number(42))).clone()
+    };
+
+    lines.push(stamp(
+        "2026-05-16T00:00:02.000Z",
+        "wrapper.integration.admitted",
+        "c-0001",
+        42,
+    ));
+    let admitted = project(&lines);
+    assert_eq!(admitted["integration_observed"], serde_json::json!(true));
+    assert_eq!(admitted["integration_wip"], serde_json::json!(1));
+    assert_eq!(admitted["integration_high_water"], serde_json::json!(2));
+    assert_eq!(admitted["parked_count"], serde_json::json!(0));
+
+    lines.push(stamp(
+        "2026-05-16T00:00:03.000Z",
+        "wrapper.integration.parked",
+        "c-0002",
+        43,
+    ));
+    lines.push(stamp(
+        "2026-05-16T00:00:04.000Z",
+        "wrapper.integration.admitted",
+        "c-0003",
+        44,
+    ));
+    let full = project(&lines);
+    assert_eq!(full["integration_wip"], serde_json::json!(2));
+    assert_eq!(full["parked_count"], serde_json::json!(1));
+
+    // Integrating and recovering stay in WIP: they were admitted and have not ended.
+    lines.push(stamp(
+        "2026-05-16T00:00:05.000Z",
+        "wrapper.integration.started",
+        "c-0001",
+        42,
+    ));
+    lines.push(stamp(
+        "2026-05-16T00:00:06.000Z",
+        "wrapper.integration.recovery_started",
+        "c-0003",
+        44,
+    ));
+    let working = project(&lines);
+    assert_eq!(working["integration_wip"], serde_json::json!(2));
+    assert_eq!(working["parked_count"], serde_json::json!(1));
+
+    // Admission moves a parked contribution into WIP and off the parked count.
+    lines.push(stamp(
+        "2026-05-16T00:00:07.000Z",
+        "wrapper.integration.admitted",
+        "c-0002",
+        43,
+    ));
+    let drained = project(&lines);
+    assert_eq!(drained["integration_wip"], serde_json::json!(3));
+    assert_eq!(drained["parked_count"], serde_json::json!(0));
+
+    lines.push(
+        r#"{"ts":"2026-05-16T00:00:08.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","outcome":"closed","reason":"published"}"#
+            .to_string(),
+    );
+    lines.push(
+        r#"{"ts":"2026-05-16T00:00:09.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0002","issue":43,"lane_id":"lane-1","outcome":"closed","reason":"published"}"#
+            .to_string(),
+    );
+    lines.push(
+        r#"{"ts":"2026-05-16T00:00:10.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0003","issue":44,"lane_id":"lane-1","outcome":"closed","reason":"published"}"#
+            .to_string(),
+    );
+    let empty = project(&lines);
+    assert_eq!(empty["integration_observed"], serde_json::json!(true));
+    assert_eq!(empty["integration_wip"], serde_json::json!(0));
+    assert_eq!(empty["integration_high_water"], serde_json::json!(2));
+    assert_eq!(empty["parked_count"], serde_json::json!(0));
+}

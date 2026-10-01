@@ -2351,9 +2351,10 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.7 adds optional Queue ``phase_age_seconds`` for parked and admitted.
+    # 1.8 adds the Header's Integration backlog: WIP, high-water, parked count,
+    # and the observed flag. 1.7 added optional Queue ``phase_age_seconds``.
     # 1.6 added the Execution host and the Wind-down to the Header.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.7"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.8"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -2691,7 +2692,7 @@ def _sweep_snapshot_inventory(
     assert list(header["cost"]) == fields["declaration"], where
     assert list(header["rate_card"]) == fields["declaration"], where
     # The Parallel posture is the one Header entry the Declaration device
-    # does *not* fit (ADR-0051): `availability` gates it, but eight further
+    # does *not* fit (ADR-0051): `availability` gates it, but twelve further
     # facts hang off that gate, so it declares an inventory of its own
     # rather than borrowing `declaration`'s single field.
     assert list(header["parallel"]) == fields["parallel"], where
@@ -2754,7 +2755,7 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
 
     The rolling-dispatch case is swept here too. It is deliberately not one of
     the shared cases -- only the Rust core folds a rolling stream, and replaying
-    it through Python would demand the posture reducer ADR-0051 defers to #312 --
+    it through Python would demand the posture reducer #687 owns --
     but staying private must not mean staying unasserted, and the inventory is a
     fixture-internal claim that needs no second projection to check.
     """

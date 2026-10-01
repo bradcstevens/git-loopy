@@ -1043,6 +1043,10 @@ fn the_header_shows_a_healthy_parallel_run_with_its_effective_and_configured_lan
         serial_fallback_reason: None,
         serial_required: None,
         refill_stopped: false,
+        integration_observed: false,
+        integration_wip: None,
+        integration_high_water: None,
+        parked_count: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1082,6 +1086,10 @@ fn the_header_promotes_a_parallel_degradation_with_its_reason() {
         serial_fallback_reason: None,
         serial_required: None,
         refill_stopped: false,
+        integration_observed: false,
+        integration_wip: None,
+        integration_high_water: None,
+        parked_count: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1105,6 +1113,10 @@ fn the_header_promotes_a_serial_fallback_with_its_reason() {
         serial_fallback_reason: Some("parallel-safe pool drained".to_string()),
         serial_required: None,
         refill_stopped: false,
+        integration_observed: false,
+        integration_wip: None,
+        integration_high_water: None,
+        parked_count: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1128,6 +1140,10 @@ fn the_header_states_that_lane_refill_stopped_for_serial_required_work() {
         serial_fallback_reason: None,
         serial_required: Some(2),
         refill_stopped: true,
+        integration_observed: false,
+        integration_wip: None,
+        integration_high_water: None,
+        parked_count: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1135,6 +1151,109 @@ fn the_header_states_that_lane_refill_stopped_for_serial_required_work() {
         band(&lines, "git-loopy")[1].contains("lane refill stopped: 2 serial-required"),
         "the Header explains why no further Lane starts, in:\n{}",
         lines.join("\n")
+    );
+}
+
+fn header_line(declaration: ParallelDeclaration) -> String {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.header.parallel = declaration;
+    let lines = render_lines(&view, 220, 36, TerminalCapabilities::default());
+    band(&lines, "git-loopy")[1].clone()
+}
+
+fn observed_backlog(wip: i64, parked: i64, pressure: Option<&str>) -> ParallelDeclaration {
+    ParallelDeclaration {
+        availability: "available",
+        configured_lane_limit: Some(3),
+        effective_lane_limit: Some(1),
+        pressure: pressure.map(str::to_string),
+        degraded: false,
+        degraded_reason: None,
+        serial_fallback_reason: None,
+        serial_required: None,
+        refill_stopped: false,
+        integration_observed: true,
+        integration_wip: Some(wip),
+        integration_high_water: Some(2),
+        parked_count: Some(parked),
+    }
+}
+
+/// ADR-0020's scheduler headline: lanes, Integration WIP/H, parked count, and
+/// the strongest pressure, in words. The Integration part is absent until
+/// observed, and a Parallel degrade never carries it.
+#[test]
+fn the_header_shows_the_integration_backlog_beside_every_posture_but_degraded() {
+    let headline = header_line(observed_backlog(2, 1, Some("integration_backlog")));
+    assert!(
+        headline.contains(
+            "lanes 1 of 3 · integration 2/2 · 1 parked · narrowed by integration backlog"
+        ),
+        "the scheduler headline names WIP, the parked count, and the pressure, in:\n{headline}"
+    );
+
+    let empty = header_line(observed_backlog(0, 0, None));
+    assert!(
+        empty.contains("lanes 1 of 3 · integration 0/2 · 0 parked"),
+        "an observed empty backlog renders zero, in:\n{empty}"
+    );
+    assert!(
+        !empty.contains("narrowed by"),
+        "a cleared pressure is not a narrowing, in:\n{empty}"
+    );
+
+    let mut silent = observed_backlog(2, 1, Some("integration_backlog"));
+    silent.integration_observed = false;
+    silent.integration_wip = None;
+    silent.integration_high_water = None;
+    silent.parked_count = None;
+    let before = header_line(silent);
+    assert!(
+        before.contains("lanes 1 of 3")
+            && !before.contains("integration 2/2")
+            && !before.contains("parked"),
+        "the Integration part is absent until the first admission or park, in:\n{before}"
+    );
+    assert!(
+        before.contains("narrowed by integration backlog"),
+        "the strongest pressure still renders, in:\n{before}"
+    );
+
+    let mut degraded = observed_backlog(2, 1, Some("integration_backlog"));
+    degraded.degraded = true;
+    degraded.degraded_reason = Some("host capacity exhausted".to_string());
+    let degraded_line = header_line(degraded);
+    assert!(
+        degraded_line.contains("parallel degraded: host capacity exhausted")
+            && !degraded_line.contains("integration 2/2")
+            && !degraded_line.contains("parked"),
+        "a Parallel degrade shows no Integration part, in:\n{degraded_line}"
+    );
+
+    let mut fallback = observed_backlog(1, 0, None);
+    fallback.serial_fallback_reason = Some("parallel-safe pool drained".to_string());
+    let fallback_line = header_line(fallback);
+    assert!(
+        fallback_line
+            .contains("serial fallback: parallel-safe pool drained · integration 1/2 · 0 parked"),
+        "the Integration part accompanies a serial fallback, in:\n{fallback_line}"
+    );
+
+    let mut refill = observed_backlog(2, 1, Some("rate_limit"));
+    refill.refill_stopped = true;
+    refill.serial_required = Some(2);
+    let refill_line = header_line(refill);
+    assert!(
+        refill_line.contains("lane refill stopped: 2 serial-required · integration 2/2 · 1 parked · narrowed by API rate limiting"),
+        "the Integration part accompanies a stopped refill, in:\n{refill_line}"
+    );
+
+    let mut undeclared = observed_backlog(2, 1, Some("integration_backlog"));
+    undeclared.availability = "not_declared";
+    let shell = header_line(undeclared);
+    assert!(
+        !shell.contains("lanes") && !shell.contains("integration") && !shell.contains("parallel"),
+        "a Run with no posture Event renders no posture segment, in:\n{shell}"
     );
 }
 
@@ -1150,6 +1269,10 @@ fn parallel_posture_snapshots_pin_its_responsive_priority() {
         serial_fallback_reason: None,
         serial_required: None,
         refill_stopped: false,
+        integration_observed: false,
+        integration_wip: None,
+        integration_high_water: None,
+        parked_count: None,
     };
     let degraded = ParallelDeclaration {
         availability: "available",
@@ -1161,6 +1284,10 @@ fn parallel_posture_snapshots_pin_its_responsive_priority() {
         serial_fallback_reason: None,
         serial_required: None,
         refill_stopped: false,
+        integration_observed: false,
+        integration_wip: None,
+        integration_high_water: None,
+        parked_count: None,
     };
 
     let mut healthy_view = fixture_view("parallel-lanes-and-non-closure-outcomes");

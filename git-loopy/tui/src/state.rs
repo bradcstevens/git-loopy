@@ -362,6 +362,34 @@ pub(crate) struct ParallelPosture {
     pub(crate) serial_required: Option<i64>,
     /// Whether Lane refill is currently stopped for serial-required work.
     pub(crate) refill_stopped: bool,
+    /// Set by the first admission or park, and never cleared (ADR-0020).
+    pub(crate) integration_observed: bool,
+    /// Contribution ids admitted and not yet ended.
+    admitted_open: BTreeSet<String>,
+    /// Contribution ids parked and not yet admitted.
+    parked_open: BTreeSet<String>,
+}
+
+/// The contract's fixed Integration high-water (ADR-0020): H = 2.
+const INTEGRATION_HIGH_WATER: i64 = 2;
+
+impl ParallelPosture {
+    /// Admitted contributions that have not ended, once the backlog is observed.
+    pub(crate) fn integration_wip(&self) -> Option<i64> {
+        self.integration_observed
+            .then_some(self.admitted_open.len() as i64)
+    }
+
+    /// The fixed high-water, once the backlog is observed.
+    pub(crate) fn integration_high_water(&self) -> Option<i64> {
+        self.integration_observed.then_some(INTEGRATION_HIGH_WATER)
+    }
+
+    /// Parked contributions not yet admitted, once the backlog is observed.
+    pub(crate) fn parked_count(&self) -> Option<i64> {
+        self.integration_observed
+            .then_some(self.parked_open.len() as i64)
+    }
 }
 
 /// One issue's lifecycle within a Run.
@@ -708,6 +736,7 @@ impl DashboardState {
                     return;
                 }
                 EventPayload::IntegrationParked(_) => {
+                    self.note_integration_parked(&contribution.contribution_id);
                     self.enter_integration_status(
                         &contribution.issue,
                         STATUS_PARKED,
@@ -716,6 +745,7 @@ impl DashboardState {
                     return;
                 }
                 EventPayload::IntegrationAdmitted(_) => {
+                    self.note_integration_admitted(&contribution.contribution_id);
                     self.enter_integration_status(
                         &contribution.issue,
                         STATUS_ADMITTED,
@@ -725,6 +755,7 @@ impl DashboardState {
                 }
                 EventPayload::ContributionEnd(end) => {
                     self.lane_work_finished.remove(&contribution.issue);
+                    self.note_contribution_left_integration(&contribution.contribution_id);
                     self.record_contribution_end(&contribution, end, now, now_monotonic);
                     return;
                 }
@@ -1340,6 +1371,34 @@ impl DashboardState {
             entry.issue_elapsed_seconds = row.issue_elapsed_seconds.map(|value| value.max(0.0));
             recompute_contribution_totals(entry);
         }
+    }
+
+    /// A finished contribution waiting on a full backlog. It holds a Lane and
+    /// is not yet WIP.
+    fn note_integration_parked(&mut self, contribution_id: &str) {
+        self.parallel.integration_observed = true;
+        if !self.parallel.admitted_open.contains(contribution_id) {
+            self.parallel
+                .parked_open
+                .insert(contribution_id.to_string());
+        }
+    }
+
+    /// Admission, direct or from the parked FIFO. A parked contribution leaves
+    /// the parked count and joins WIP until it ends.
+    fn note_integration_admitted(&mut self, contribution_id: &str) {
+        self.parallel.integration_observed = true;
+        self.parallel.parked_open.remove(contribution_id);
+        self.parallel
+            .admitted_open
+            .insert(contribution_id.to_string());
+    }
+
+    /// A contribution that ended is neither parked nor WIP. The observation
+    /// stays: zero after the first admission or park is an empty backlog.
+    fn note_contribution_left_integration(&mut self, contribution_id: &str) {
+        self.parallel.parked_open.remove(contribution_id);
+        self.parallel.admitted_open.remove(contribution_id);
     }
 
     /// Fold one finalized **Lane contribution**'s authoritative row

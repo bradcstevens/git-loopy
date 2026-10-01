@@ -209,15 +209,19 @@ def _undeclared_parallel() -> dict[str, Any]:
 
     The posture is folded from the four Run-scoped posture Events, and this
     Dashboard reduces none of them: the Textual renderer has no Parallel
-    surface to feed, so #312 owns the reducer that will replace this. Until
+    surface to feed, so #687 owns the reducer that will replace this. Until
     then the constant is truthful for every trace the shared Conformance
     fixture holds -- none of its cases carries a posture Event, and a Run that
     emits none has no posture, which is what `not_declared` with every detail
     absent says.
 
+    The Integration backlog fields travel with that constant so the field
+    inventory stays one list. They stay unobserved here: this oracle does not
+    fold ``wrapper.integration.admitted`` or ``.parked``.
+
     It becomes a lie the first time this Dashboard projects a live **Parallel**
-    Run, which is the moment #312 must replace it rather than extend it
-    (ADR-0051 records the debt and its successor).
+    Run, which is the moment #687 must replace it rather than extend it
+    (ADR-0051 records the debt; #687 owns the successor).
     """
     return {
         "availability": "not_declared",
@@ -229,6 +233,10 @@ def _undeclared_parallel() -> dict[str, Any]:
         "serial_fallback_reason": None,
         "serial_required": None,
         "refill_stopped": False,
+        "integration_observed": False,
+        "integration_wip": None,
+        "integration_high_water": None,
+        "parked_count": None,
     }
 
 

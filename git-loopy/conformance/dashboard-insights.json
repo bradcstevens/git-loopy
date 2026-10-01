@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.7",
+  "fixture_schema_version": "1.8",
   "wrapper_contract_version": "2.18",
   "event_schema_version": "1.3",
   "semantic_contract": {
@@ -254,7 +254,11 @@
         "degraded_reason",
         "serial_fallback_reason",
         "serial_required",
-        "refill_stopped"
+        "refill_stopped",
+        "integration_observed",
+        "integration_wip",
+        "integration_high_water",
+        "parked_count"
       ],
       "execution_host": [
         "placement",
@@ -766,7 +770,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -923,7 +931,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -1309,7 +1321,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -1480,7 +1496,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -1957,7 +1977,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -2157,7 +2181,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -2826,7 +2854,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -3024,7 +3056,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -3266,7 +3302,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -3566,7 +3606,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4103,7 +4147,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4276,7 +4324,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4678,7 +4730,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4866,7 +4922,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -5241,7 +5301,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -5398,7 +5462,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -5764,7 +5832,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -5954,7 +6026,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6390,7 +6466,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6574,7 +6654,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6796,7 +6880,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -7028,7 +7116,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -7486,7 +7578,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -7698,7 +7794,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -8011,7 +8111,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -8118,7 +8222,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -9801,7 +9909,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": true,
+                  "integration_wip": 1,
+                  "integration_high_water": 2,
+                  "parked_count": 1
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -10022,7 +10134,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": true,
+                  "integration_wip": 2,
+                  "integration_high_water": 2,
+                  "parked_count": 0
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -10243,7 +10359,11 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": 2,
-                  "refill_stopped": true
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 0,
+                  "integration_high_water": 2,
+                  "parked_count": 0
                 },
                 "execution_host": {
                   "placement": "unknown",

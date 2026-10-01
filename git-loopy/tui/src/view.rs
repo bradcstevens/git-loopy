@@ -203,6 +203,10 @@ impl Declaration {
 /// into the one place an operator learns whether, and why, a Run is not
 /// filling the Lane cap it was configured with.
 ///
+/// It also carries ADR-0020's Integration backlog: WIP against the fixed
+/// high-water of two, the parked count, and whether that backlog has been
+/// observed. Those stay absent until the first admission or park.
+///
 /// Follows the same **Insight capability** device as [`Declaration`] in shape,
 /// but not in what gates it: `availability` reports whether this Run has a
 /// posture *at all* — `not_declared` until one of the four posture Events
@@ -220,6 +224,17 @@ pub struct ParallelDeclaration {
     pub serial_fallback_reason: Option<String>,
     pub serial_required: Option<i64>,
     pub refill_stopped: bool,
+    /// Whether this Run has admitted or parked a contribution.
+    ///
+    /// False until the first `wrapper.integration.admitted` or `.parked`.
+    /// After that, a zero count is observed and empty, not absent (ADR-0020).
+    pub integration_observed: bool,
+    /// Contributions admitted and not yet ended. Absent until observed.
+    pub integration_wip: Option<i64>,
+    /// The contract's fixed Integration high-water. Absent until observed.
+    pub integration_high_water: Option<i64>,
+    /// Contributions parked and not yet admitted. Absent until observed.
+    pub parked_count: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -674,6 +689,10 @@ fn parallel_declaration(state: &DashboardState) -> ParallelDeclaration {
         serial_fallback_reason: posture.serial_fallback_reason.clone(),
         serial_required: posture.serial_required,
         refill_stopped: posture.refill_stopped,
+        integration_observed: posture.integration_observed,
+        integration_wip: posture.integration_wip(),
+        integration_high_water: posture.integration_high_water(),
+        parked_count: posture.parked_count(),
     }
 }
 
