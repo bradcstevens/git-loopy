@@ -52,7 +52,6 @@ _EVENT_SCHEMA = json.loads(
 #: that owns it. Deleting an entry is that ticket's job, and the gate forces it:
 #: a waived type any scenario emits is a failure.
 WAIVERS: dict[str, int] = {
-    "wrapper.integration.recovery_started": 685,
     "wrapper.rolling.refill_turn": 686,
 }
 
@@ -616,9 +615,89 @@ def test_only_the_python_runner_declares_contribution_events() -> None:
 
 def test_the_initial_waivers_each_name_their_producer_ticket() -> None:
     assert WAIVERS == {
-        "wrapper.integration.recovery_started": 685,
         "wrapper.rolling.refill_turn": 686,
     }
+
+
+def _recovery_attempts(events: list[dict[str, Any]]) -> dict[Any, list[tuple[int, int]]]:
+    by_issue: dict[Any, list[tuple[int, int]]] = {}
+    for event in events:
+        if event["type"] != _RECOVERY_STARTED:
+            continue
+        by_issue.setdefault(event["issue"], []).append(
+            (event["attempt"], event["max_attempts"])
+        )
+    return by_issue
+
+
+def test_recovery_started_is_one_record_per_attempt_and_never_more_than_three(
+    scenario_logs: dict[str, list[dict[str, Any]]],
+) -> None:
+    """A green Recovery emits one; an exhausted one emits 1, 2, 3 then serial_fallback.
+
+    ``max_attempts`` is the immutable K, not a count that grows with the
+    attempt. The record belongs to the contribution whose gate was red, so a
+    later Lane does not inherit the exhausted outcomes.
+    """
+    assert _recovery_attempts(scenario_logs["red-then-green-recovery"]) == {
+        42: [(1, 3)]
+    }
+
+    exhausted = scenario_logs["k-exhausted-recovery-handoff"]
+    assert _recovery_attempts(exhausted) == {42: [(1, 3), (2, 3), (3, 3)]}
+    ended = next(
+        event
+        for event in exhausted
+        if event["type"] == _END and event["issue"] == 42
+    )
+    assert ended["reason"] == "serial_fallback"
+    assert ended["published"] is False
+    # The rollup outcome keeps its underscore spelling; the issue row is the
+    # Dashboard status. An unpublished, unclosed handoff is no-progress.
+    assert ended["summary"]["closure_outcome"] == "no_progress"
+    assert ended["issues"][0]["status"] == "no-progress"
+
+
+def test_recovery_started_is_on_disk_before_the_agent_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record precedes the session it names, not a summary written after."""
+    root = tmp_path / "before-session"
+    root.mkdir()
+    (root / "AGENTS.md").write_text(
+        (tmp_path / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    seen: list[dict[str, Any]] = []
+
+    class _HeldClient(lp._ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> lp._ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            directory = str(kwargs.get("working_directory") or "")
+            if "/integrate/" not in directory:
+                return session
+            real = session.send_and_wait
+
+            async def held(prompt: str, **extra: Any) -> Any:
+                recovery = [
+                    event
+                    for event in lp._logged_events(root)
+                    if event["type"] == _RECOVERY_STARTED
+                ]
+                seen.extend(recovery)
+                return await real(prompt, **extra)
+
+            session.send_and_wait = held  # type: ignore[method-assign]
+            return session
+
+    _wire(
+        root,
+        monkeypatch,
+        [lp._make_issue(42, labels=_PARALLEL_SAFE)],
+        FakeGateRunner(outcomes=[False, True]),
+        client_cls=_HeldClient,
+    )
+    assert asyncio.run(loop_module.run(_config(1))) == 0
+    assert [(event["attempt"], event["max_attempts"]) for event in seen] == [(1, 3)]
 
 
 def test_started_and_branch_drift_follow_the_lane_cut(

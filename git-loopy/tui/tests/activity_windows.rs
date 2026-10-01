@@ -413,7 +413,8 @@ fn integration_recovery_has_its_own_window_without_inventing_its_route() {
         &mut session,
         json!({
             "type": "wrapper.integration.recovery_started", "issue": 605,
-            "lane_id": "lane-1", "contribution_id": "c-605", "attempt": 1
+            "lane_id": "lane-1", "contribution_id": "c-605",
+            "attempt": 1, "max_attempts": 3
         }),
     );
     ingest(
@@ -432,6 +433,11 @@ fn integration_recovery_has_its_own_window_without_inventing_its_route() {
     assert_eq!(windows[1]["issue"], 605);
     assert_eq!(windows[1]["route"], Value::Null);
     assert_eq!(windows[1]["context_fill"]["percentage"], 50.0);
+    assert_eq!(
+        windows[1]["recovery"],
+        json!({"attempt": 1, "max_attempts": 3})
+    );
+    assert!(render(&session).contains("recovery 1/3"));
 }
 
 #[test]

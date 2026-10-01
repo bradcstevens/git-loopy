@@ -29,6 +29,8 @@ pub(crate) const STATUS_ADMITTED: &str = "admitted";
 /// Holding Integration's serialization: the private stage is being cut,
 /// merged, and gated. Phase age starts here, not at admission.
 pub(crate) const STATUS_INTEGRATING: &str = "integrating";
+/// A Recovery attempt is in its Agent session. Phase age restarts here.
+pub(crate) const STATUS_RECOVERING: &str = "recovering";
 pub(crate) const STATUS_GONE: &str = "gone";
 pub(crate) const STATUS_NO_PROGRESS: &str = "no-progress";
 pub(crate) const STATUS_CLOSED: &str = "closed";
@@ -460,11 +462,11 @@ impl IssueLedgerEntry {
         total
     }
 
-    /// Seconds since the row entered parked, admitted, or integrating.
+    /// Seconds since the row entered parked, admitted, integrating, or recovering.
     pub(crate) fn phase_age_seconds(&self, now_monotonic: Option<f64>) -> Option<f64> {
         if !matches!(
             self.status.as_str(),
-            STATUS_PARKED | STATUS_ADMITTED | STATUS_INTEGRATING
+            STATUS_PARKED | STATUS_ADMITTED | STATUS_INTEGRATING | STATUS_RECOVERING
         ) {
             return None;
         }
@@ -780,6 +782,22 @@ impl DashboardState {
                     );
                     return;
                 }
+                EventPayload::IntegrationRecoveryStarted(started) => {
+                    // Still admitted WIP. Phase age restarts at the attempt,
+                    // and the log keeps every earlier attempt.
+                    self.enter_integration_status(
+                        &contribution.issue,
+                        STATUS_RECOVERING,
+                        now_monotonic,
+                    );
+                    self.append_lane_log(
+                        &contribution.issue,
+                        LOG_EVENT,
+                        &recovery_attempt_text(started.attempt, started.max_attempts),
+                        now,
+                    );
+                    return;
+                }
                 EventPayload::ContributionEnd(end) => {
                     self.lane_work_finished.remove(&contribution.issue);
                     self.note_contribution_left_integration(&contribution.contribution_id);
@@ -927,9 +945,11 @@ impl DashboardState {
                 // Reached only without a whole identity; an Integration Status
                 // with no contribution to attach it to changes nothing.
             }
-            EventPayload::IntegrationStarted(_) | EventPayload::IntegrationBranchObserved(_) => {
-                // Same rule: no identity, nothing to attach the phase or the
-                // drift to.
+            EventPayload::IntegrationStarted(_)
+            | EventPayload::IntegrationBranchObserved(_)
+            | EventPayload::IntegrationRecoveryStarted(_) => {
+                // Same rule: no identity, nothing to attach the phase, the
+                // drift, or the attempt to.
             }
             EventPayload::ContributionEnd(_) => {
                 // Reached only when the record carries no whole identity
@@ -1095,7 +1115,7 @@ impl DashboardState {
         entry.phase_since = None;
     }
 
-    /// Enter parked or admitted, starting that Status's phase age.
+    /// Enter parked, admitted, integrating, or recovering, starting phase age.
     fn enter_integration_status(&mut self, issue: &IssueRef, status: &str, at: Option<f64>) {
         self.insert_entry(issue.clone());
         let entry = self
@@ -1624,6 +1644,11 @@ fn auto_close_log_text(closure: &AutoClosed) -> String {
 /// Names the order as well as the issue, because "the runner took the oldest"
 /// and "the runner took the only one left" are different facts about a backlog
 /// and position alone cannot tell them apart.
+/// Held identical in the Python reader: `Recovery: attempt N/K`.
+fn recovery_attempt_text(attempt: u32, max_attempts: u32) -> String {
+    format!("Recovery: attempt {attempt}/{max_attempts}")
+}
+
 fn pickup_bound_text(pickup: &Pickup) -> String {
     let mut text = format!("Pickup: bound {}", pickup_issue_label(&pickup.issue));
     let detail = [
@@ -1889,12 +1914,20 @@ fn contribution_from_rolling(
     drift: Option<i64>,
 ) -> IssueContribution {
     let summary = end.summary.clone().unwrap_or_default();
-    let consumption = end
+    let issue_row = end
         .issues
         .iter()
-        .find(|row| row.issue == contribution.issue)
-        .and_then(|row| row.consumption.as_ref());
+        .find(|row| row.issue == contribution.issue);
+    let consumption = issue_row.and_then(|row| row.consumption.as_ref());
     let usage_observed = summary.tokens_in.is_some() || summary.tokens_out.is_some();
+    // The issue row is the Dashboard status (`no-progress`). `closure_outcome`
+    // keeps the rollup's own spelling (`no_progress`) and is only the fallback
+    // a record without an issue row already used.
+    let status = issue_row
+        .and_then(|row| row.status.clone())
+        .filter(|status| !status.is_empty())
+        .or(summary.closure_outcome.clone())
+        .unwrap_or_else(|| STATUS_NO_PROGRESS.to_string());
     IssueContribution {
         kind: "contribution",
         contribution_id: contribution.contribution_id.clone(),
@@ -1902,10 +1935,7 @@ fn contribution_from_rolling(
         lane: Some(contribution.lane_id.clone()),
         outcome: end.reason.clone(),
         duration_seconds: summary.lifecycle_seconds.map(|value| value.max(0.0)),
-        status: summary
-            .closure_outcome
-            .clone()
-            .unwrap_or_else(|| STATUS_NO_PROGRESS.to_string()),
+        status,
         active_seconds: summary.agent_seconds.unwrap_or(0.0).max(0.0),
         route,
         model: usage_observed

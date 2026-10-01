@@ -115,6 +115,19 @@ def project_run_view(
                         "lines": [
                             _log_line(line) for line in state.log(window.issue)
                         ],
+                        **(
+                            {
+                                "recovery": {
+                                    "attempt": window.recovery_attempt,
+                                    "max_attempts": window.recovery_max_attempts,
+                                }
+                            }
+                            if (
+                                window.recovery_attempt is not None
+                                and window.recovery_max_attempts is not None
+                            )
+                            else {}
+                        ),
                     }
                     for window in state.activity_windows()
                 ],

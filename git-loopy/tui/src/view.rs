@@ -19,7 +19,7 @@ use crate::state::{
     routing_preparation_text, routing_resolution_text, ContributionSummaryEntry, DashboardState,
     IssueContribution, IssueLedgerEntry, IterationRow, LogContent, LogLine, ResolvedRoute,
     RouteDelivery, RoutePreparation, SummaryEntryRef, STATUS_ACTIVE, STATUS_ADMITTED, STATUS_GONE,
-    STATUS_INTEGRATING, STATUS_PARKED, STATUS_QUEUED,
+    STATUS_INTEGRATING, STATUS_PARKED, STATUS_QUEUED, STATUS_RECOVERING,
 };
 use crate::timestamp::{Timestamp, Zone};
 
@@ -434,6 +434,16 @@ pub struct ActivityWindow {
     pub subagents: Option<usize>,
     pub live: bool,
     pub lines: Vec<LogLineView>,
+    /// Present only when both attempt and max_attempts were observed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryView>,
+}
+
+/// One Recovery attempt against its immutable bound, `N/K`.
+#[derive(Clone, Debug, Serialize)]
+pub struct RecoveryView {
+    pub attempt: u32,
+    pub max_attempts: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -574,6 +584,13 @@ pub fn project_run_view(
                         subagents: agent.subagents,
                         live: agent.live,
                         lines: log_lines(state.issue_log(&agent.issue), context),
+                        recovery: match (agent.recovery_attempt, agent.recovery_max_attempts) {
+                            (Some(attempt), Some(max_attempts)) => Some(RecoveryView {
+                                attempt,
+                                max_attempts,
+                            }),
+                            _ => None,
+                        },
                     })
                     .collect(),
             },
@@ -771,7 +788,8 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
 
 fn queue_group(status: &str) -> u8 {
     match status {
-        STATUS_ACTIVE | STATUS_PARKED | STATUS_ADMITTED | STATUS_INTEGRATING => 0,
+        STATUS_ACTIVE | STATUS_PARKED | STATUS_ADMITTED | STATUS_INTEGRATING
+        | STATUS_RECOVERING => 0,
         STATUS_QUEUED => 1,
         _ => 2,
     }

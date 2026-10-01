@@ -18,6 +18,8 @@ pub(crate) struct AgentActivity {
     pub(crate) subagents: Option<usize>,
     pub(crate) live: bool,
     pub(crate) contribution: Option<String>,
+    pub(crate) recovery_attempt: Option<u32>,
+    pub(crate) recovery_max_attempts: Option<u32>,
     subagent_calls: BTreeSet<String>,
 }
 
@@ -52,6 +54,12 @@ impl ActivityAgents {
                     .and_then(|id| self.contribution_task_types.get(id))
                     .cloned()
                     .flatten();
+                let (recovery_attempt, recovery_max_attempts) = match &event.payload {
+                    EventPayload::IntegrationRecoveryStarted(started) => {
+                        (Some(started.attempt), Some(started.max_attempts))
+                    }
+                    _ => (None, None),
+                };
                 self.windows.retain(|agent| agent.kind != "integration");
                 self.windows.push(AgentActivity {
                     kind: "integration",
@@ -63,6 +71,8 @@ impl ActivityAgents {
                     subagents: (self.subagents_available == Some(true)).then_some(0),
                     live: true,
                     contribution: scope.id.clone(),
+                    recovery_attempt,
+                    recovery_max_attempts,
                     subagent_calls: BTreeSet::new(),
                 });
             }
@@ -161,6 +171,8 @@ impl ActivityAgents {
                     subagents: (self.subagents_available == Some(true)).then_some(0),
                     live: true,
                     contribution: scope.id.clone(),
+                    recovery_attempt: None,
+                    recovery_max_attempts: None,
                     subagent_calls: BTreeSet::new(),
                 };
                 if let Some(index) = existing {

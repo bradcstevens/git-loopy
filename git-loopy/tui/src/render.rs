@@ -97,6 +97,7 @@ const fn filling(heading: &'static str, width: u16, rank: u8) -> Column {
 const QUEUE_COLUMNS: [Column; 11] = [
     fixed("Issue", 10, 0),
     // Wide enough for `integrating 0:00:00` — Status plus phase age.
+    // `recovering 0:00:00` is shorter, so it fits the same column.
     fixed("Status", 19, 1),
     fixed("Started", 12, 4),
     fixed("Active", 9, 2),
@@ -696,7 +697,7 @@ fn draw_queue(
 ///
 /// An Orchestrator that cannot measure Consumption reports `null`, which is a
 /// different fact from a measured zero and must never render as one.
-/// Status, with phase age beside parked, admitted, and integrating.
+/// Status, with phase age beside parked, admitted, integrating, and recovering.
 fn queue_status(row: &QueueRow) -> String {
     match row.phase_age_seconds {
         Some(age) => format!("{} {}", row.status, duration(age)),
@@ -1330,6 +1331,15 @@ fn activity_header(agent: &ActivityWindow, width: u16, glyphs: &Glyphs) -> Vec<S
         Some(lane) => format!("{} {}", lane_text(lane), issue_label(&agent.issue)),
         None if agent.kind == "integration" => format!("Integration {}", issue_label(&agent.issue)),
         None => issue_label(&agent.issue),
+    };
+    let identity = match &agent.recovery {
+        Some(recovery) => {
+            format!(
+                "{identity} recovery {}/{}",
+                recovery.attempt, recovery.max_attempts
+            )
+        }
+        None => identity,
     };
     wrap_facts(
         &[

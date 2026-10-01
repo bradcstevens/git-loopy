@@ -7646,6 +7646,14 @@ class _ParallelLoop:
             scope = self._contribution_iter.get(contribution.contribution_id)
             if scope is not None:
                 scope.recovery_attempts = attempt
+            # On disk before the session it names. K is immutable; the
+            # attempt is the only field that moves, and it never exceeds K.
+            self._emit_contribution_event(
+                contribution,
+                events_module.WRAPPER_INTEGRATION_RECOVERY_STARTED,
+                attempt=attempt,
+                max_attempts=_AUTO_RESOLUTION_MAX_ATTEMPTS,
+            )
             await self._run_resolution_session(
                 contribution, lane_work, stage, attempt, conflicted=conflicted
             )

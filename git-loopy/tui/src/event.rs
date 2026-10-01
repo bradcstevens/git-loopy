@@ -243,6 +243,8 @@ pub enum EventPayload {
     IntegrationStarted(IntegrationStarted),
     /// `wrapper.integration.branch_observed`
     IntegrationBranchObserved(IntegrationBranchObserved),
+    /// `wrapper.integration.recovery_started`
+    IntegrationRecoveryStarted(IntegrationRecoveryStarted),
     /// `wrapper.iteration.start`
     IterationStart,
     /// `wrapper.afk_ready.collected`
@@ -409,6 +411,19 @@ pub struct IntegrationBranchObserved {
     pub contribution_id: Option<String>,
     #[serde(default)]
     pub base_publications_since_cut: Option<i64>,
+}
+
+/// One Recovery attempt, before that attempt's Agent session.
+///
+/// `attempt` runs from 1 to `max_attempts`. `max_attempts` is the immutable
+/// bound K, not a count that grows with the attempt. A record missing either
+/// number degrades to [`EventPayload::Other`] rather than inventing N/K.
+#[derive(Clone, Debug)]
+pub struct IntegrationRecoveryStarted {
+    #[allow(dead_code)]
+    pub contribution_id: Option<String>,
+    pub attempt: u32,
+    pub max_attempts: u32,
 }
 
 /// Per-Orchestrator **Parallel mode** capabilities declared at Run start.
@@ -1220,6 +1235,7 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.integration.branch_observed" => {
             EventPayload::IntegrationBranchObserved(decode_or_default(value))
         }
+        "wrapper.integration.recovery_started" => decode_recovery_started(value),
         "wrapper.iteration.start" => EventPayload::IterationStart,
         "wrapper.afk_ready.collected" => EventPayload::AfkReadyCollected(decode_or_default(value)),
         "wrapper.pool.refreshed" => EventPayload::PoolRefreshed(decode_or_default(value)),
@@ -1280,10 +1296,10 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),
         // Only the rolling types with a producer are modelled (ADR-0044): the
         // Lane-contribution lifecycle, parking and admission (#682),
-        // Integration start and branch drift (#684), and the four
-        // Run/Iteration-scoped posture events. The
+        // Integration start and branch drift (#684), Recovery attempts
+        // (#685), and the four Run/Iteration-scoped posture events. The
         // `contribution_identity.lifecycle_types` this core does not model —
-        // `recovery_started` — still degrade to `EventPayload::Other` below.
+        // `refill_turn` — still degrade to `EventPayload::Other` below.
         "wrapper.contribution.end" => {
             EventPayload::ContributionEnd(Box::new(decode_or_default(value)))
         }
@@ -1295,6 +1311,35 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.serial.requested" => EventPayload::SerialRequested(decode_or_default(value)),
         _ => EventPayload::Other,
     }
+}
+
+/// A Recovery record is typed only when both numbers are present.
+///
+/// A missing or unordered pair is unusable telemetry, not a guessed `1/3`.
+fn decode_recovery_started(value: &Value) -> EventPayload {
+    let Some(attempt) = json_u32(value.get("attempt")) else {
+        return EventPayload::Other;
+    };
+    let Some(max_attempts) = json_u32(value.get("max_attempts")) else {
+        return EventPayload::Other;
+    };
+    if attempt < 1 || max_attempts < 1 || attempt > max_attempts {
+        return EventPayload::Other;
+    }
+    EventPayload::IntegrationRecoveryStarted(IntegrationRecoveryStarted {
+        contribution_id: value
+            .get("contribution_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string),
+        attempt,
+        max_attempts,
+    })
+}
+
+fn json_u32(value: Option<&Value>) -> Option<u32> {
+    let number = value?.as_u64()?;
+    u32::try_from(number).ok()
 }
 
 /// Decode a payload, degrading a malformed one to its neutral default.
