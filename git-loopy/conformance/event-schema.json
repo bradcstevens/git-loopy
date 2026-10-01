@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.16",
+  "contract_version": "2.18",
   "event_schema_version": "1.3",
   "insight_capabilities": {
     "names": [
@@ -349,10 +349,12 @@
       "required_when_present": ["contribution_id", "issue", "lane_id"]
     },
     "wrapper.integration.parked": {
-      "required_when_present": ["contribution_id", "issue", "lane_id"]
+      "required_when_present": ["contribution_id", "issue", "lane_id"],
+      "emitted": "Once, when a finished contribution meets a full Integration backlog (contract 2.18). The contribution keeps its Lane until it is admitted."
     },
     "wrapper.integration.admitted": {
-      "required_when_present": ["contribution_id", "issue", "lane_id"]
+      "required_when_present": ["contribution_id", "issue", "lane_id"],
+      "emitted": "Once per contribution that enters the Integration backlog (contract 2.18): immediately after wrapper.contribution.work_finished on direct admission, or after the freeing contribution's wrapper.contribution.end when drained from the parked FIFO. Never both."
     },
     "wrapper.integration.started": {
       "required_when_present": ["contribution_id", "issue", "lane_id"]

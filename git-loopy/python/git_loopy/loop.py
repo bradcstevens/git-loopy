@@ -6228,6 +6228,12 @@ class _ParallelLoop:
             self._finalize_contribution(contribution, published=False)
             return
         if disposition == rolling_scheduler.ADMITTED:
+            # Direct admission: said before the Lane is offered again, and
+            # before Integration, so the stream never reads a refill as
+            # having happened while this contribution was still waiting.
+            self._emit_contribution_event(
+                contribution, events_module.WRAPPER_INTEGRATION_ADMITTED
+            )
             # §3.9: the Lane slot is free again *now*, while this task carries
             # on through Integration (and possibly K auto-resolution sessions).
             self._capacity_freed.set()
@@ -6237,7 +6243,12 @@ class _ParallelLoop:
         # contribution's Lane is retained and its state stays in
         # `self._lane_work`. It is finalized later, from inside whichever
         # OTHER contribution's `finalize()` drains the FIFO — see
-        # `_integrate_contribution`'s recursive admission handling.
+        # `_integrate_contribution`'s recursive admission handling. The
+        # parked record is the operator's evidence that the Lane is still
+        # held; admission, when a slot frees, is a later event.
+        self._emit_contribution_event(
+            contribution, events_module.WRAPPER_INTEGRATION_PARKED
+        )
 
     def _setup_lane_worktree(self, lane_work: _LaneWork) -> None:
         """Prepare a Lane's freshly created worktree before its session (#65).
@@ -6901,6 +6912,14 @@ class _ParallelLoop:
             # A green publication is the only thing that can lift a Strike
             # drain; it must not immediately re-latch from stale Strike state.
             self._finalize_contribution(contribution, published=published)
+            # FIFO admission follows the freeing contribution's end, still
+            # inside the lock, so the freed Lane cannot be refilled between
+            # the two records. Direct admission was already said at the
+            # Lane-work boundary; this loop is only the parked FIFO.
+            for admitted in newly_admitted:
+                self._emit_contribution_event(
+                    admitted, events_module.WRAPPER_INTEGRATION_ADMITTED
+                )
         # §4.4: this finalize freed an **Integration backlog** slot, lifting
         # backpressure, and each contribution it admitted from the parked FIFO
         # released the Lane that contribution had been retaining (§4.3).

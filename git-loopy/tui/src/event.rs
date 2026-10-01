@@ -235,6 +235,10 @@ pub enum EventPayload {
     ContributionStart(ContributionStart),
     /// `wrapper.contribution.work_finished`
     ContributionWorkFinished(ContributionWorkFinished),
+    /// `wrapper.integration.parked`
+    IntegrationParked(IntegrationParked),
+    /// `wrapper.integration.admitted`
+    IntegrationAdmitted(IntegrationAdmitted),
     /// `wrapper.iteration.start`
     IterationStart,
     /// `wrapper.afk_ready.collected`
@@ -357,6 +361,26 @@ pub struct ContributionStart {
 /// here so the payload names its contribution on its own.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ContributionWorkFinished {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
+}
+
+/// A finished contribution waiting for an Integration-backlog slot.
+///
+/// The identity triple is decoded through [`Event::contribution`];
+/// `contribution_id` is repeated so the payload names its contribution.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct IntegrationParked {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
+}
+
+/// A contribution that has entered the Integration backlog.
+///
+/// Direct admission and FIFO admission share this payload. The identity
+/// triple is decoded through [`Event::contribution`].
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct IntegrationAdmitted {
     #[serde(default)]
     pub contribution_id: Option<String>,
 }
@@ -1162,6 +1186,10 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.contribution.work_finished" => {
             EventPayload::ContributionWorkFinished(decode_or_default(value))
         }
+        "wrapper.integration.parked" => EventPayload::IntegrationParked(decode_or_default(value)),
+        "wrapper.integration.admitted" => {
+            EventPayload::IntegrationAdmitted(decode_or_default(value))
+        }
         "wrapper.iteration.start" => EventPayload::IterationStart,
         "wrapper.afk_ready.collected" => EventPayload::AfkReadyCollected(decode_or_default(value)),
         "wrapper.pool.refreshed" => EventPayload::PoolRefreshed(decode_or_default(value)),
@@ -1221,10 +1249,10 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
         "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),
         // Only the rolling types with a producer are modelled (ADR-0044): the
-        // Lane-contribution lifecycle and the four Run/Iteration-scoped
-        // posture events. The `contribution_identity.lifecycle_types` and
-        // `scheduler_scoped_types` this core does not model — including every
-        // `wrapper.integration.*` type, filed to #435 — still degrade to
+        // Lane-contribution lifecycle, parking and admission (#682), and the
+        // four Run/Iteration-scoped posture events. The
+        // `contribution_identity.lifecycle_types` this core does not model —
+        // `started`, `branch_observed`, `recovery_started` — still degrade to
         // `EventPayload::Other` below, unchanged.
         "wrapper.contribution.end" => {
             EventPayload::ContributionEnd(Box::new(decode_or_default(value)))

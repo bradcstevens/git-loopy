@@ -1238,10 +1238,14 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     than at ``wrapper.contribution.end``, so a consumer pinned to 1.2 that
     times a contribution from start to end reads a different number than the
     stream means.
+
+    2.18 states the parking and admission emission rules (#682). The payloads
+    were already identity-only, so the wire axis stays at 1.3. Neither fixture
+    carried 2.17.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.3"
-    assert _EVENT_SCHEMA["contract_version"] == "2.16"
+    assert _EVENT_SCHEMA["contract_version"] == "2.18"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -2347,9 +2351,9 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.6 adds the Execution host and the Wind-down to the Header, so a
-    # consumer pinned to 1.5 projects a Header this fixture no longer matches.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.6"
+    # 1.7 adds optional Queue ``phase_age_seconds`` for parked and admitted.
+    # 1.6 added the Execution host and the Wind-down to the Header.
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.7"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -2620,6 +2624,24 @@ def _resolve_field(row: dict[str, Any], path: str) -> Any:
     return value
 
 
+def _assert_queue_row_fields(
+    row: dict[str, Any], fields: dict[str, Any], where: str
+) -> None:
+    """Required Queue fields, then any declared optional keys that this row carries.
+
+    ``phase_age_seconds`` is present only while the row is parked or admitted,
+    so it cannot be required without forcing every shared snapshot to invent one.
+    """
+    required = fields["queue_row"]
+    optional = _DASHBOARD_INSIGHTS["semantic_contract"][
+        "optional_projection_fields"
+    ]["queue_row"]
+    assert list(row)[: len(required)] == required, where
+    assert list(row)[len(required) :] == [
+        key for key in optional if key in row
+    ], where
+
+
 def _assert_route_fields(
     route: dict[str, Any], fields: dict[str, Any], where: str
 ) -> None:
@@ -2692,7 +2714,7 @@ def _sweep_snapshot_inventory(
     assert list(expected["drill_in"]["detail_header"]) == fields["detail_header"], where
 
     for row in expected["dashboard"]["queue"]["rows"]:
-        assert list(row) == fields["queue_row"], where
+        _assert_queue_row_fields(row, fields, where)
         counted["queue_rows"] += 1
         # A route is nullable where a consumption is not: the record's
         # absence is what "nothing has priced this issue yet" looks
@@ -2772,6 +2794,12 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     # rows it does carry rather than to the shared set's guards.
     assert rolling_counted["snapshots"] > 0
     assert rolling_counted["queue_rows"] > 0
+    assert any(
+        "phase_age_seconds" in row
+        for case in rolling_cases
+        for snapshot in case["snapshots"]
+        for row in snapshot["expected"]["dashboard"]["queue"]["rows"]
+    ), "the rolling case must pin phase age, or the optional field is unexercised"
 
     sample_queue = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
         "expected"

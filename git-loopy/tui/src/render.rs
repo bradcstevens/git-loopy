@@ -96,7 +96,9 @@ const fn filling(heading: &'static str, width: u16, rank: u8) -> Column {
 /// buy the pair by surrendering every Consumption figure it has.
 const QUEUE_COLUMNS: [Column; 11] = [
     fixed("Issue", 10, 0),
-    fixed("Status", 12, 1),
+    // Wide enough for `admitted 0:00:00` — Status plus phase age. The full
+    // set therefore needs four more columns than it did at width 12.
+    fixed("Status", 16, 1),
     fixed("Started", 12, 4),
     fixed("Active", 9, 2),
     fixed("Closed", 12, 9),
@@ -669,7 +671,7 @@ fn draw_queue(
         rows.iter().map(|row| {
             vec![
                 issue_label(&row.issue),
-                row.status.clone(),
+                queue_status(row),
                 wall_clock(row.started_at.as_deref(), glyphs),
                 duration(row.active_seconds),
                 wall_clock(row.closed_at.as_deref(), glyphs),
@@ -695,6 +697,14 @@ fn draw_queue(
 ///
 /// An Orchestrator that cannot measure Consumption reports `null`, which is a
 /// different fact from a measured zero and must never render as one.
+/// Status, with phase age beside parked and admitted (`parked 0:00:04`).
+fn queue_status(row: &QueueRow) -> String {
+    match row.phase_age_seconds {
+        Some(age) => format!("{} {}", row.status, duration(age)),
+        None => row.status.clone(),
+    }
+}
+
 fn tokens(value: Option<i64>, glyphs: &Glyphs) -> String {
     value.map_or_else(|| glyphs.unknown.to_string(), grouped)
 }

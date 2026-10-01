@@ -52,8 +52,6 @@ _EVENT_SCHEMA = json.loads(
 #: that owns it. Deleting an entry is that ticket's job, and the gate forces it:
 #: a waived type any scenario emits is a failure.
 WAIVERS: dict[str, int] = {
-    "wrapper.integration.parked": 682,
-    "wrapper.integration.admitted": 682,
     "wrapper.integration.started": 684,
     "wrapper.integration.branch_observed": 684,
     "wrapper.integration.recovery_started": 685,
@@ -506,8 +504,6 @@ def test_only_the_python_runner_declares_contribution_events() -> None:
 
 def test_the_initial_waivers_each_name_their_producer_ticket() -> None:
     assert WAIVERS == {
-        "wrapper.integration.parked": 682,
-        "wrapper.integration.admitted": 682,
         "wrapper.integration.started": 684,
         "wrapper.integration.branch_observed": 684,
         "wrapper.integration.recovery_started": 685,
@@ -603,6 +599,58 @@ def test_the_order_admits_run_exit_reclamation_at_any_point() -> None:
     logs["reclaimed"][-1]["reason"] = "published"
     assert gate_findings(logs, schema=schema, waivers={}) != []
     assert all(sequence[-1].startswith(_END) for sequence in complete)
+
+
+def test_a_full_backlog_parks_then_admits_from_the_fifo_after_the_freeing_end(
+    scenario_logs: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Parking keeps the Lane; FIFO admission follows the freeing contribution.end.
+
+    #42 and #44 fill the backlog and are admitted directly. #43 parks, still
+    holding its Lane, and is admitted only after the contribution whose
+    finalization freed the slot has ended. Nothing refills that Lane in between.
+    """
+    events = scenario_logs["two-lanes-park"]
+    parked = [event for event in events if event["type"] == _PARKED]
+    admitted = [event for event in events if event["type"] == _ADMITTED]
+
+    assert [event["issue"] for event in parked] == [43]
+    assert {event["issue"] for event in admitted} == {42, 43, 44}
+    for event in (*parked, *admitted):
+        assert event["contribution_id"]
+        assert event["lane_id"]
+        assert event["iter"] is None
+
+    parked_at = events.index(parked[0])
+    admitted_43 = next(event for event in admitted if event["issue"] == 43)
+    admitted_at = events.index(admitted_43)
+    assert parked_at < admitted_at
+    between = events[parked_at + 1 : admitted_at]
+    assert all(
+        event["type"] != _START or event.get("lane_id") != parked[0]["lane_id"]
+        for event in between
+    ), "the parked Lane is refilled before admission"
+    freeing = [
+        event
+        for event in between
+        if event["type"] == _END and event.get("issue") != 43
+    ]
+    assert freeing, "FIFO admission must follow the freeing contribution.end"
+    assert events.index(freeing[-1]) < admitted_at
+
+    for issue in (42, 44):
+        ordered = [
+            event["type"]
+            for event in events
+            if event.get("issue") == issue
+            and event["type"] in (_WORK_FINISHED, _PARKED, _ADMITTED, _END)
+        ]
+        assert _PARKED not in ordered
+        assert (
+            ordered.index(_WORK_FINISHED)
+            < ordered.index(_ADMITTED)
+            < ordered.index(_END)
+        )
 
 
 def test_an_unstamped_release_advance_belongs_to_the_open_contribution() -> None:

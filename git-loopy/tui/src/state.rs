@@ -22,6 +22,10 @@ use crate::timestamp::Timestamp;
 /// Issue lifecycle statuses within a Run (`CONTEXT.md` glossary).
 pub(crate) const STATUS_QUEUED: &str = "queued";
 pub(crate) const STATUS_ACTIVE: &str = "active";
+/// Finished, still holding its Lane, waiting for the Integration backlog.
+pub(crate) const STATUS_PARKED: &str = "parked";
+/// In the Integration backlog, waiting its turn.
+pub(crate) const STATUS_ADMITTED: &str = "admitted";
 pub(crate) const STATUS_GONE: &str = "gone";
 pub(crate) const STATUS_NO_PROGRESS: &str = "no-progress";
 pub(crate) const STATUS_CLOSED: &str = "closed";
@@ -367,6 +371,8 @@ pub(crate) struct IssueLedgerEntry {
     pub(crate) started_at: Option<Timestamp>,
     /// The open Active stint's start on the monotonic axis.
     pub(crate) active_since: Option<f64>,
+    /// When the row entered its current Integration Status, on the monotonic axis.
+    pub(crate) phase_since: Option<f64>,
     pub(crate) active_duration: f64,
     pub(crate) closed_at: Option<Timestamp>,
     pub(crate) issue_elapsed_seconds: Option<f64>,
@@ -395,6 +401,7 @@ impl IssueLedgerEntry {
             status: STATUS_QUEUED.to_string(),
             started_at: None,
             active_since: None,
+            phase_since: None,
             active_duration: 0.0,
             closed_at: None,
             issue_elapsed_seconds: None,
@@ -418,6 +425,16 @@ impl IssueLedgerEntry {
             total += (now - since).max(0.0);
         }
         total
+    }
+
+    /// Seconds since the row entered parked or admitted, or nothing otherwise.
+    pub(crate) fn phase_age_seconds(&self, now_monotonic: Option<f64>) -> Option<f64> {
+        if !matches!(self.status.as_str(), STATUS_PARKED | STATUS_ADMITTED) {
+            return None;
+        }
+        let since = self.phase_since?;
+        let now = now_monotonic?;
+        Some((now - since).max(0.0))
     }
 }
 
@@ -684,10 +701,26 @@ impl DashboardState {
                     return;
                 }
                 EventPayload::ContributionWorkFinished(_) => {
-                    // The Active timer stops here; the Status stays until the
-                    // Integration Statuses arrive (#682).
+                    // The Active timer stops here; Status stays active until
+                    // parking or admission names the Integration Status.
                     self.lane_work_finished.insert(contribution.issue.clone());
                     self.deactivate(&contribution.issue, now_monotonic, None);
+                    return;
+                }
+                EventPayload::IntegrationParked(_) => {
+                    self.enter_integration_status(
+                        &contribution.issue,
+                        STATUS_PARKED,
+                        now_monotonic,
+                    );
+                    return;
+                }
+                EventPayload::IntegrationAdmitted(_) => {
+                    self.enter_integration_status(
+                        &contribution.issue,
+                        STATUS_ADMITTED,
+                        now_monotonic,
+                    );
                     return;
                 }
                 EventPayload::ContributionEnd(end) => {
@@ -831,6 +864,10 @@ impl DashboardState {
             EventPayload::ContributionWorkFinished(_) => {
                 // Reached only when the record carries no whole identity
                 // (`event.contribution` was `None` above); no timer to stop.
+            }
+            EventPayload::IntegrationParked(_) | EventPayload::IntegrationAdmitted(_) => {
+                // Reached only without a whole identity; an Integration Status
+                // with no contribution to attach it to changes nothing.
             }
             EventPayload::ContributionEnd(_) => {
                 // Reached only when the record carries no whole identity
@@ -993,6 +1030,18 @@ impl DashboardState {
             entry.active_since = now_monotonic;
         }
         entry.status = STATUS_ACTIVE.to_string();
+        entry.phase_since = None;
+    }
+
+    /// Enter parked or admitted, starting that Status's phase age.
+    fn enter_integration_status(&mut self, issue: &IssueRef, status: &str, at: Option<f64>) {
+        self.insert_entry(issue.clone());
+        let entry = self
+            .ledger
+            .get_mut(issue)
+            .expect("entry inserted immediately above");
+        entry.status = status.to_string();
+        entry.phase_since = at;
     }
 
     fn mark_started(&mut self, now: Option<Timestamp>, now_monotonic: Option<f64>) {
@@ -1155,6 +1204,7 @@ impl DashboardState {
             entry.active_since = since;
         }
         entry.status = STATUS_ACTIVE.to_string();
+        entry.phase_since = None;
         for line in pending {
             push_bounded(&mut entry.log, line);
         }
@@ -1321,6 +1371,7 @@ impl DashboardState {
             .expect("entry inserted immediately above");
         entry.contributions.push(row);
         entry.status = status.clone();
+        entry.phase_since = None;
         if status == STATUS_CLOSED {
             entry.closed_at = now;
         }

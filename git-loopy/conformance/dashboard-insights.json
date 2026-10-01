@@ -1,6 +1,6 @@
 {
-  "fixture_schema_version": "1.6",
-  "wrapper_contract_version": "2.16",
+  "fixture_schema_version": "1.7",
+  "wrapper_contract_version": "2.18",
   "event_schema_version": "1.3",
   "semantic_contract": {
     "dashboard_band_order": [
@@ -367,7 +367,8 @@
         "effort_configurable"
       ],
       "queue_row": [
-        "preparation"
+        "preparation",
+        "phase_age_seconds"
       ],
       "preparation": [
         "model",
@@ -9832,9 +9833,37 @@
                 "rows": [
                   {
                     "issue": 43,
-                    "status": "active",
+                    "status": "admitted",
                     "started_at": "2026-05-15T18:00:04-06:00",
                     "active_seconds": 7.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 6.0
+                  },
+                  {
+                    "issue": 44,
+                    "status": "parked",
+                    "started_at": "2026-05-15T18:00:08-06:00",
+                    "active_seconds": 5.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 4.0
+                  },
+                  {
+                    "issue": 46,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
                     "closed_at": null,
                     "iteration_count": 0,
                     "route": null,
@@ -9844,8 +9873,202 @@
                     "premium_requests": null
                   },
                   {
+                    "issue": 42,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:03-06:00",
+                    "active_seconds": 3.0,
+                    "closed_at": "2026-05-15T18:00:18-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "windows": []
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 42,
+                "status": "closed",
+                "started_at": "2026-05-15T18:00:03-06:00",
+                "closed_at": "2026-05-15T18:00:18-06:00",
+                "issue_elapsed_seconds": null,
+                "active_seconds": 3.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0001",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "status": "closed",
+                    "active_seconds": 61.5,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 1200,
+                      "tokens_out": 340,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 42,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02.400000-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #42 (order, position 1 of 4)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05-06:00",
+                    "kind": "event",
+                    "text": "✓ commit aaaaaaaaaa  feat: 42"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:17-06:00",
+                    "kind": "event",
+                    "text": "✓ auto-closed #42"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 23,
+          "render_at_utc": "2026-05-16T00:00:19.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DD",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 19.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 3,
+                  "effective_lane_limit": 1,
+                  "pressure": "integration_backlog",
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 43,
+                    "status": "admitted",
+                    "started_at": "2026-05-15T18:00:04-06:00",
+                    "active_seconds": 7.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 7.0
+                  },
+                  {
                     "issue": 44,
-                    "status": "active",
+                    "status": "admitted",
                     "started_at": "2026-05-15T18:00:08-06:00",
                     "active_seconds": 5.0,
                     "closed_at": null,
@@ -9854,7 +10077,8 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "phase_age_seconds": 0.0
                   },
                   {
                     "issue": 46,

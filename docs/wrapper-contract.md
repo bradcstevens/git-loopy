@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.17 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.18 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1274,13 +1274,18 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   observation.
 - **Legacy traces.** Historical **Wave** logs carry `lane_issue` and no contribution identity.
   They remain readable and MUST NOT be reinterpreted as contributions.
-- **The backlog is bounded, and the bound is the whole point.** **Integration** is one serialized
+- **The backlog is bounded, and the bound is the whole point (contract 2.18).** **Integration** is one serialized
   stage, and the **Integration backlog** it consumes has a high-water mark of exactly **two** — one
   contribution integrating plus one waiter. A third finisher emits
-  `wrapper.integration.parked`, keeps its **Lane** occupied, and waits; admission is FIFO by
-  finish order, broken by ascending issue number, and a parked contribution enters the backlog on
-  `wrapper.integration.admitted`. That admission — not publication — is what frees the Lane for
-  refill, which is why a record identifies its contribution and not its Lane. A full backlog is
+  `wrapper.integration.parked` when the backlog is full, keeps its **Lane** occupied, and waits.
+  Direct admission emits `wrapper.integration.admitted` immediately after
+  `wrapper.contribution.work_finished` and before that contribution's Integration begins. A parked
+  contribution is admitted later, from the FIFO, and that `wrapper.integration.admitted` follows
+  the freeing contribution's `wrapper.contribution.end` and precedes the admitted contribution's
+  own Integration. A contribution is admitted once: directly, or after parking, never both.
+  Admission is FIFO by finish order, broken by ascending issue number. That admission — not
+  publication — is what frees the Lane for refill, which is why a record identifies its
+  contribution and not its Lane. A full backlog is
   **Integration backpressure**: **Rolling dispatch** stops *starting* new Lane work while it holds,
   and resumes the moment a slot frees. It is a refill bound, never a pause — Lanes already running
   finish normally and nothing is cancelled. This is what makes the **Lane cap** a ceiling rather
@@ -2070,7 +2075,9 @@ fixtures' content, moving every `release_version` example from `-dev.N` to
 and the Python `WRAPPER_CONTRACT_VERSION` read 2.13. Both pins then moved from
 2.12 straight to 2.14 (ADR-0065), so neither ever carried 2.13, and both have
 since advanced to 2.15 with the behavioural `contribution_events` obligation
-(§12, ADR-0065) and 2.16 with the Lane-work boundary (§12, #681).
+(§12, ADR-0065) and 2.16 with the Lane-work boundary (§12, #681). Neither
+carried 2.17 (Awaiting merge, §3.3.1), and both have since advanced to 2.18
+with parking and admission (§12, #682).
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1). Event wire compatibility is 1.3, advanced with the Lane-work boundary
 (§12), and historical streams' interpretation is unchanged.

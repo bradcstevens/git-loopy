@@ -313,7 +313,7 @@ before committing a trace to it:
   "version": "0.11.0",
   "min_event_schema_version": 1,
   "max_event_schema_version": 1,
-  "wrapper_contract_version": "2.16"
+  "wrapper_contract_version": "2.18"
 }
 ```
 

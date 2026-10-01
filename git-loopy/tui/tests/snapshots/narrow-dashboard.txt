@@ -3,8 +3,8 @@
 │active —  •  context —  •  running  •  strikes 0/3  •  routes per issue       │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ Queue ───────────────────────────────────────────────────────────────────────┐
-│Issue       Status        Started       Active     Iters   Tokens in          │
-│#42         closed        6:00:01 PM    0:00:04    1       100                │
+│Issue       Status            Started       Active     Iters   Tokens in      │
+│#42         closed            6:00:01 PM    0:00:04    1       100            │
 │                                                                              │
 │                                                                              │
 │                                                                              │

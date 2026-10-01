@@ -18,7 +18,8 @@ use crate::state::LOG_TAIL_LINES;
 use crate::state::{
     routing_preparation_text, routing_resolution_text, ContributionSummaryEntry, DashboardState,
     IssueContribution, IssueLedgerEntry, IterationRow, LogContent, LogLine, ResolvedRoute,
-    RouteDelivery, RoutePreparation, SummaryEntryRef, STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
+    RouteDelivery, RoutePreparation, SummaryEntryRef, STATUS_ACTIVE, STATUS_ADMITTED, STATUS_GONE,
+    STATUS_PARKED, STATUS_QUEUED,
 };
 use crate::timestamp::{Timestamp, Zone};
 
@@ -260,6 +261,9 @@ pub struct QueueRow {
     pub tokens_out: Option<i64>,
     pub credits: Option<f64>,
     pub premium_requests: Option<f64>,
+    /// Seconds since the row entered parked or admitted. Absent for every other Status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase_age_seconds: Option<f64>,
 }
 
 /// One issue's **Routing resolution** and the **Routing source** that chose it.
@@ -732,6 +736,8 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                     tokens_out: entry.usage_observed.then_some(entry.tokens_out),
                     credits: entry.credits.value(),
                     premium_requests: entry.premium_requests.value(),
+                    phase_age_seconds: entry
+                        .phase_age_seconds(state.monotonic_at(context.now, context.now_monotonic)),
                 },
             )
         })
@@ -744,7 +750,7 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
 
 fn queue_group(status: &str) -> u8 {
     match status {
-        STATUS_ACTIVE => 0,
+        STATUS_ACTIVE | STATUS_PARKED | STATUS_ADMITTED => 0,
         STATUS_QUEUED => 1,
         _ => 2,
     }

@@ -1819,7 +1819,7 @@ fn an_unmodelled_event_type_still_degrades_to_the_additive_fallback() {
 
     let issue_alone = serde_json::json!({
         "ts": "2026-05-16T00:00:06.000Z", "run_id": "r1", "iter": null,
-        "type": "wrapper.integration.parked", "issue": 42
+        "type": "wrapper.integration.started", "issue": 42
     });
     let mut empty_key = issue_alone.clone();
     empty_key["contribution_id"] = serde_json::json!("");
@@ -2050,6 +2050,138 @@ fn active_time_stops_at_the_lane_work_boundary_and_the_status_stays() {
     assert_eq!(
         projected["drill_in"]["detail_header"]["active_seconds"],
         serde_json::json!(3.0)
+    );
+}
+
+#[test]
+fn parking_and_admission_show_in_the_queue_with_phase_age() {
+    let parked = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.parked","run_id":"run-1","iter":null,"contribution_id":"c-0003","issue":44,"lane_id":"lane-1"}"#,
+    )
+    .expect("parked decodes");
+    assert!(
+        matches!(parked.payload, EventPayload::IntegrationParked(_)),
+        "parked is a typed payload, not the additive fallback"
+    );
+    let admitted = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.admitted","run_id":"run-1","iter":null,"contribution_id":"c-0002","issue":43,"lane_id":"lane-2"}"#,
+    )
+    .expect("admitted decodes");
+    assert!(matches!(
+        admitted.payload,
+        EventPayload::IntegrationAdmitted(_)
+    ));
+
+    let stamp = |ts: &str, kind: &str, id: &str, issue: i64, lane: &str| {
+        format!(
+            r#"{{"ts":"{ts}","type":"{kind}","run_id":"run-1","iter":null,"contribution_id":"{id}","issue":{issue},"lane_id":"{lane}"}}"#
+        )
+    };
+    let mut lines = vec![
+        r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1"}"#
+            .to_string(),
+        stamp(
+            "2026-05-16T00:00:04.000Z",
+            "wrapper.contribution.start",
+            "c-0002",
+            43,
+            "lane-2",
+        ),
+        stamp(
+            "2026-05-16T00:00:08.000Z",
+            "wrapper.contribution.start",
+            "c-0003",
+            44,
+            "lane-1",
+        ),
+        stamp(
+            "2026-05-16T00:00:11.000Z",
+            "wrapper.contribution.work_finished",
+            "c-0002",
+            43,
+            "lane-2",
+        ),
+        stamp(
+            "2026-05-16T00:00:12.000Z",
+            "wrapper.integration.admitted",
+            "c-0002",
+            43,
+            "lane-2",
+        ),
+        stamp(
+            "2026-05-16T00:00:13.000Z",
+            "wrapper.contribution.work_finished",
+            "c-0003",
+            44,
+            "lane-1",
+        ),
+        stamp(
+            "2026-05-16T00:00:14.000Z",
+            "wrapper.integration.parked",
+            "c-0003",
+            44,
+            "lane-1",
+        ),
+    ];
+    let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    for line in &borrowed {
+        state.apply(&Event::from_jsonl_line(line).expect("decodes"));
+    }
+    let at_park = view(
+        &state,
+        &context("2026-05-16T00:00:18.000Z", 0),
+        IssueRef::number(43),
+    );
+    let row_43 = queue_row(&at_park, 43);
+    let row_44 = queue_row(&at_park, 44);
+    assert_eq!(row_43["status"], serde_json::json!("admitted"));
+    assert_eq!(row_43["phase_age_seconds"], serde_json::json!(6.0));
+    assert_eq!(row_43["active_seconds"], serde_json::json!(7.0));
+    assert_eq!(row_44["status"], serde_json::json!("parked"));
+    assert_eq!(row_44["phase_age_seconds"], serde_json::json!(4.0));
+    assert_eq!(row_44["active_seconds"], serde_json::json!(5.0));
+
+    lines.push(stamp(
+        "2026-05-16T00:00:19.000Z",
+        "wrapper.integration.admitted",
+        "c-0003",
+        44,
+        "lane-1",
+    ));
+    state.apply(&Event::from_jsonl_line(lines.last().expect("just pushed")).expect("decodes"));
+    let at_admit = view(
+        &state,
+        &context("2026-05-16T00:00:19.000Z", 0),
+        IssueRef::number(44),
+    );
+    assert_eq!(
+        queue_row(&at_admit, 44)["status"],
+        serde_json::json!("admitted")
+    );
+    assert_eq!(
+        queue_row(&at_admit, 44)["phase_age_seconds"],
+        serde_json::json!(0.0)
+    );
+    assert_eq!(
+        queue_row(&at_admit, 43)["phase_age_seconds"],
+        serde_json::json!(7.0)
+    );
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"ts":"2026-05-16T00:00:30.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0003","issue":44,"lane_id":"lane-1","outcome":"closed","reason":"published"}"#,
+        )
+        .expect("end decodes"),
+    );
+    let ended = view(
+        &state,
+        &context("2026-05-16T00:00:30.000Z", 0),
+        IssueRef::number(44),
+    );
+    assert!(
+        queue_row(&ended, 44).get("phase_age_seconds").is_none(),
+        "phase age belongs only to parked and admitted"
     );
 }
 
