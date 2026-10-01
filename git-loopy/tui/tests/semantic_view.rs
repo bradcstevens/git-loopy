@@ -792,6 +792,64 @@ fn a_passed_over_issue_carries_the_reason_it_was_passed_over() {
 }
 
 #[test]
+fn an_awaiting_merge_skip_renders_distinctly_from_a_blocked_skip() {
+    // #694: the Dashboard prints a skip's reason verbatim, so waiting on a
+    // merge and waiting on a dependency cannot collapse into one line.
+    let awaiting = "awaiting_pull_request_merge: bradcstevens/git-loopy#688";
+    let blocked = "blocked_by_open_dependency: bradcstevens/git-loopy#679";
+    let awaiting_view = reduce(
+        &[serde_json::json!({
+            "ts": "2026-09-26T16:00:01.000Z",
+            "run_id": "r1",
+            "iter": 1,
+            "type": "wrapper.pickup.skipped",
+            "issue": 679,
+            "reason": awaiting,
+            "position": 1,
+            "considered": 2
+        })],
+        IssueRef::number(679),
+    );
+    let blocked_view = reduce(
+        &[serde_json::json!({
+            "ts": "2026-09-26T16:00:01.000Z",
+            "run_id": "r1",
+            "iter": 1,
+            "type": "wrapper.pickup.skipped",
+            "issue": 680,
+            "reason": blocked,
+            "position": 2,
+            "considered": 2
+        })],
+        IssueRef::number(680),
+    );
+
+    let awaiting_lines = log_texts(&awaiting_view);
+    let blocked_lines = log_texts(&blocked_view);
+    assert_ne!(awaiting_lines, blocked_lines);
+    assert_eq!(
+        awaiting_lines,
+        [format!(
+            "Pickup: skipped #679 at position 1 of 2 ({awaiting})"
+        )]
+    );
+    assert_eq!(
+        blocked_lines,
+        [format!(
+            "Pickup: skipped #680 at position 2 of 2 ({blocked})"
+        )]
+    );
+    assert!(
+        !awaiting_lines[0].contains("blocked_by_open_dependency"),
+        "an Awaiting-merge skip must not be shown as Blocked"
+    );
+    assert!(
+        !blocked_lines[0].contains("awaiting_pull_request_merge"),
+        "a Blocked skip must not be shown as Awaiting merge"
+    );
+}
+
+#[test]
 fn a_skip_lands_on_the_issue_it_passed_over_not_on_the_active_one() {
     // The record is attributable or it is worthless: a skip folded into
     // whichever issue happened to be Active would say a Run passed over the

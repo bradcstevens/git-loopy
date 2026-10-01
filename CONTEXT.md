@@ -1246,8 +1246,11 @@ _Avoid_: no-work run, empty run, idle run.
 The few lines that tell an operator why an **Unbound Run** ended (#642). Each outcome keeps its
 own reason. An empty Pool names the exclusions that emptied it; otherwise, for the github source it says
 nothing is labelled, and for any other source that the source offered nothing.
-An all-blocked Pool names the blockers outside the Pool. An all-skipped Pool counts each
-refusal kind (a **Pickup skip**, or an entry in a Rolling Run end's `refusals`) once per candidate. Telling a blocker inside the Pool from one outside it
+An all-blocked Pool names the blockers outside the Pool and the pull requests to merge,
+grouping **Awaiting merge** candidates by the pull request each one waits on. Only blockers
+are tested against the Pool; every pull request is named by its full reference. An
+all-skipped Pool counts each refusal kind (a **Pickup skip**, or an entry in a Rolling Run
+end's `refusals`) once per candidate. Telling a blocker inside the Pool from one outside it
 needs the Run's `owner/repo`. The client resolves it the way `gh` picks its default repository:
 in a fork clone that is the upstream, not `origin`. Without it, every blocker is named rather
 than risk dropping a real one. Its Pool is the `refusals` recorded on a Rolling Run's

@@ -256,8 +256,9 @@ There is one exception to exiting at the end of input. An **Unbound Run** ends
 one of those, both `--render` and attach mode are **held** (#642): a "no workable
 issues" notice names the reason, and the Dashboard stays up until the operator
 quits. The notice covers the Queue, or sits at the foot of a drill-in. It names
-the exclusions that emptied a Pool, the blockers outside the Pool, or each
-refusal kind with its count. `GIT_LOOPY_TUI_REPOSITORY` (`owner/repo`)
+the exclusions that emptied a Pool, the blockers outside the Pool, the pull
+requests to merge beside those blockers, or each refusal kind with its count.
+`GIT_LOOPY_TUI_REPOSITORY` (`owner/repo`)
 separates a blocker outside the Pool from a member. It is a private channel from
 the launcher to the helper, not operator Config. The Python attach client sets it
 to the repository `gh` reads, or removes it when none resolves. Without it,

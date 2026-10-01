@@ -6,7 +6,8 @@
 //! an empty Queue flashes up and the terminal is handed back. The reasons are
 //! already in the trace: Pool membership, each exclusion and each refusal, and
 //! the Run's own outcome. This module folds them into the few lines an operator
-//! needs to act on, and nothing else.
+//! needs to act on, and nothing else. An all-blocked Pool names the pull
+//! requests to merge beside the blockers outside the Pool (#694).
 //!
 //! It is presentation, not projection: the semantic [`crate::view::RunView`]
 //! the shared Conformance fixture pins is unchanged, and the notice rides on
@@ -36,6 +37,11 @@ pub fn unbound_run_outcomes() -> Vec<&'static str> {
 
 /// The skip reason whose detail names the open blockers.
 const BLOCKED_BY_OPEN_DEPENDENCY: &str = "blocked_by_open_dependency";
+
+/// The skip reason whose detail names the pull requests to merge.
+///
+/// Matched exactly, so it is never read as [`BLOCKED_BY_OPEN_DEPENDENCY`].
+const AWAITING_PULL_REQUEST_MERGE: &str = "awaiting_pull_request_merge";
 
 /// Said when the trace recorded no collection, so nothing can be counted.
 const MEMBERSHIP_UNKNOWN: &str =
@@ -160,8 +166,9 @@ impl UnboundRunTally {
     fn all_blocked_lines(&self) -> Vec<String> {
         let pool = self.pool();
         let mut lines = vec![format!(
-            "The Run ended because {} on open blockers.",
-            self.candidates(self.counted(&pool), "waits", "wait")
+            "The Run ended because {} on {}.",
+            self.candidates(self.counted(&pool), "waits", "wait"),
+            self.waited_on()
         )];
         let blockers = self.blockers(&pool);
         if !blockers.is_empty() {
@@ -177,6 +184,9 @@ impl UnboundRunTally {
                 "resolve them"
             };
             lines.push(format!("{label}: {} — {remedy}.", blockers.join(", ")));
+        }
+        if let Some(line) = self.pull_request_line() {
+            lines.push(line);
         }
         if self.members.is_none() {
             lines.push(MEMBERSHIP_UNKNOWN.to_string());
@@ -256,6 +266,82 @@ impl UnboundRunTally {
         }
     }
 
+    /// What an all-blocked Pool's recorded refusals actually wait on.
+    ///
+    /// A Pool that waits only on blockers keeps the historical wording. A
+    /// merge-waiting candidate is not described as waiting on a blocker.
+    fn waited_on(&self) -> &'static str {
+        let mut blocked = false;
+        let mut awaiting = false;
+        for reason in self.skips.values() {
+            match reason_kind(reason) {
+                BLOCKED_BY_OPEN_DEPENDENCY => blocked = true,
+                AWAITING_PULL_REQUEST_MERGE => awaiting = true,
+                _ => {}
+            }
+        }
+        match (blocked, awaiting) {
+            (true, true) => "open blockers or pull requests to merge",
+            (false, true) => "pull requests to merge",
+            _ => "open blockers",
+        }
+    }
+
+    /// Recorded refusals in the order the notice walks them.
+    fn refused_in_order(&self) -> Vec<&IssueRef> {
+        self.refusal_order.as_ref().map_or_else(
+            || self.skips.keys().collect(),
+            |order| {
+                order
+                    .iter()
+                    .filter(|issue| self.skips.contains_key(*issue))
+                    .collect()
+            },
+        )
+    }
+
+    /// Each pull request to merge, with the candidates that wait on it.
+    ///
+    /// Every reference is named. The inside-the-Pool test is for blockers
+    /// only: a pull request whose number matches a Pool member is still the
+    /// one to merge, and one in another repository keeps its full reference.
+    /// Order is first-seen, and connection order within a reason.
+    fn pull_request_line(&self) -> Option<String> {
+        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+        for issue in self.refused_in_order() {
+            let Some(reason) = self.skips.get(issue) else {
+                continue;
+            };
+            let label = match issue {
+                IssueRef::Number(number) => format!("#{number}"),
+                IssueRef::Path(path) => path.clone(),
+            };
+            for reference in refs_named_by(reason, AWAITING_PULL_REQUEST_MERGE) {
+                if let Some((_, waiting)) = groups.iter_mut().find(|(seen, _)| seen == reference) {
+                    if !waiting.iter().any(|seen| seen == &label) {
+                        waiting.push(label.clone());
+                    }
+                } else {
+                    groups.push((reference.to_string(), vec![label.clone()]));
+                }
+            }
+        }
+        if groups.is_empty() {
+            return None;
+        }
+        let named = groups
+            .iter()
+            .map(|(reference, waiting)| format!("{reference} ({})", waiting.join(", ")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let remedy = if self.issue_source.as_deref() == Some(LABELLED_SOURCE) {
+            "merge them, or label other work ready-for-agent"
+        } else {
+            "merge them"
+        };
+        Some(format!("Pull requests to merge: {named} — {remedy}."))
+    }
+
     /// The blockers an operator has to resolve before anything can move.
     ///
     /// A blocker inside the Pool is only a link in the chain, so it is left
@@ -265,21 +351,11 @@ impl UnboundRunTally {
     /// every one is named rather than a real root silently dropped.
     fn blockers(&self, pool: &BTreeSet<IssueRef>) -> Vec<String> {
         let mut named: Vec<String> = Vec::new();
-        let candidates: Vec<_> = self.refusal_order.as_ref().map_or_else(
-            || self.skips.keys().collect(),
-            |order| order.iter().collect(),
-        );
-        for issue in candidates {
+        for issue in self.refused_in_order() {
             let Some(reason) = self.skips.get(issue) else {
                 continue;
             };
-            let Some(detail) = reason
-                .strip_prefix(BLOCKED_BY_OPEN_DEPENDENCY)
-                .and_then(|rest| rest.strip_prefix(':'))
-            else {
-                continue;
-            };
-            for blocker in detail.split(',').map(str::trim).filter(|b| !b.is_empty()) {
+            for blocker in refs_named_by(reason, BLOCKED_BY_OPEN_DEPENDENCY) {
                 if !self.in_pool(blocker, pool) && !named.iter().any(|seen| seen == blocker) {
                     named.push(blocker.to_string());
                 }
@@ -306,12 +382,38 @@ impl UnboundRunTally {
     }
 }
 
+/// The refusal kind, the text before the first colon.
+fn reason_kind(reason: &str) -> &str {
+    let kind = reason.split(':').next().unwrap_or_default().trim();
+    if kind.is_empty() {
+        "unstated"
+    } else {
+        kind
+    }
+}
+
+/// The references a `<kind>: ref, ref` reason names.
+///
+/// The kind is matched exactly, through the colon. An Awaiting-merge reason
+/// is therefore never a blocker, and a Blocked reason is never a pull request.
+fn refs_named_by<'a>(reason: &'a str, kind: &str) -> impl Iterator<Item = &'a str> {
+    reason
+        .strip_prefix(kind)
+        .and_then(|rest| rest.strip_prefix(':'))
+        .into_iter()
+        .flat_map(|detail| {
+            detail
+                .split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+        })
+}
+
 /// Each distinct reason kind with how many candidates it covers, most first.
 fn reason_counts<'a>(reasons: impl Iterator<Item = &'a str>) -> String {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for reason in reasons {
-        let kind = reason.split(':').next().unwrap_or_default().trim();
-        let kind = if kind.is_empty() { "unstated" } else { kind };
+        let kind = reason_kind(reason);
         *counts.entry(kind).or_default() += 1;
     }
     let mut ranked: Vec<_> = counts.into_iter().collect();
