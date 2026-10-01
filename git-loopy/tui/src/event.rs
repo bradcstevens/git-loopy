@@ -897,10 +897,19 @@ pub struct AutoClosed {
     pub sha: Option<String>,
 }
 
-/// One consecutive-no-measurable-progress Strike.
+/// One Strike.
+///
+/// The Python Runner charges a Strike to the issue a Session worked, once per
+/// Session ending, and names that `issue`; `strikes` is then that issue's count
+/// and `max_strikes` its budget (ADR-0070). The shell and PowerShell
+/// Orchestrators name no issue: theirs is one Run-wide count of consecutive
+/// no-progress Iterations.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Strike {
-    /// Strikes accrued so far.
+    /// The issue charged, when the producer counts Strikes per issue.
+    #[serde(default, deserialize_with = "lenient_issue_ref")]
+    pub issue: Option<IssueRef>,
+    /// Strikes accrued so far: the issue's, or the Run's when no issue is named.
     #[serde(default, deserialize_with = "lenient_i64")]
     pub strikes: Option<i64>,
     /// The configured Strike limit.
@@ -1020,8 +1029,8 @@ pub struct ContributionSummary {
     /// as a structured sample rather than a bare token count.
     #[serde(default, deserialize_with = "lenient_context_sample")]
     pub peak_context_window: Option<ContextWindowSample>,
-    /// How this contribution moved the consecutive-Strike counter (`reset` or
-    /// `+1`).
+    /// Whether this contribution charged its issue a Strike (`+1` or `none`;
+    /// `reset` survives only in logs from before ADR-0070).
     #[serde(default)]
     pub strike_reaction: Option<String>,
     #[serde(default, deserialize_with = "lenient_i64")]
@@ -1293,6 +1302,15 @@ fn lenient_issue_refs<'de, D: Deserializer<'de>>(
 ) -> Result<Vec<IssueRef>, D::Error> {
     let refs = Vec::<Value>::deserialize(deserializer)?;
     Ok(refs.iter().filter_map(IssueRef::from_value).collect())
+}
+
+/// Decode an optional issue identity, treating a malformed one as absent
+/// rather than failing the payload it lives in.
+fn lenient_issue_ref<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<IssueRef>, D::Error> {
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.as_ref().and_then(IssueRef::from_value))
 }
 
 /// Decode a Context-fill sample that some producers report as a bare token

@@ -126,9 +126,9 @@ runner-authored work as agent progress.
 | `GIT_LOOPY_MODEL`                          | env var (default `claude-opus-5`; use a bare base id — see [`git-loopy/python/README.md`](../git-loopy/python/README.md))                            |
 | `GIT_LOOPY_ISSUE_SOURCE`                   | env var; `github` (default) or `prds`                                                                                                          |
 | `GIT_LOOPY_INCLUDE_PRS`                    | env var; `1`/`true`/`yes` to also collect `ready-for-agent` PRs (GitHub mode). Overrides `docs/agents/issue-tracker.md`; default auto-detects from that file, off unless opted in |
-| `GIT_LOOPY_MAX_NMT_STRIKES`                | env var (default `3`)                                                                                                                          |
+| `GIT_LOOPY_MAX_NMT_STRIKES`                | env var (default `3`): Strikes each issue gets before the Run skips it                                                                         |
 | Exit `0` — clean                 | empty ready-for-agent Pool **or** Iteration cap reached                                                                                         |
-| Exit `1` — aborted               | `GIT_LOOPY_MAX_NMT_STRIKES` tripped **or** preflight/setup failure (gh not authed, prompt file missing, etc.) |
+| Exit `1` — aborted               | every remaining issue skipped (`all_skipped`), each having spent its `GIT_LOOPY_MAX_NMT_STRIKES` **or** been refused at Pickup, **or** preflight/setup failure (gh not authed, prompt file missing, etc.) |
 | Observability artefacts          | `.git-loopy/logs/<iso>-<run_id>.jsonl` (replay JSONL) + `.git-loopy/runs/<iso>-<run_id>.json` (per-iteration rollup) + `.git-loopy/logs/<iso>-<run_id>.log` (stderr mirror) |
 | Terminal UX                      | Detached TTY worker + `git-loopy-tui` attach client when available, line-printer fallback otherwise; Rich-rendered iteration `Panel`s, per-iteration token + harness-billed **AI Credits** signal, run-end summary table |
 | OpenTelemetry tracing            | opt-in via `uv sync --project git-loopy/python --extra otel` + `GIT_LOOPY_OTEL_ENABLED=1` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)                            |
@@ -218,10 +218,10 @@ hand-edited. See
 | --------------------- | ---- | -------------------------------------------------------------------------------------- |
 | Clean — Pool empty    | `0`  | Start of an Iteration finds the ready-for-agent Pool empty.                            |
 | Clean — iteration cap | `0`  | Optional positional arg `N` reached without natural termination.                       |
-| **Aborted — stuck**   | `1`  | `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                 |
+| **Aborted — all skipped** | `1`  | The Pool is non-empty but no issue can be bound: each was refused at Pickup or has been charged `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) Strikes this Run. |
 | **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-git-loopy-skills` hasn't run), `gh` not authed. |
 
-The legacy `<promise>NO MORE TASKS</promise>` sentinel is now **informational only**: the wrapper counts it as a strike if the iteration made no progress, otherwise ignores it. The next iteration's collection is always the source of truth on whether work remains.
+The legacy `<promise>NO MORE TASKS</promise>` sentinel is now **informational only**: a session that declares it without progress charges its issue one Strike like any other ending, and the issue stays eligible for a retry until it has spent its `GIT_LOOPY_MAX_NMT_STRIKES` ([ADR-0070](adr/0070-a-strike-is-charged-to-the-issue.md)). With progress it is ignored. The next iteration's collection is always the source of truth on whether work remains.
 
 ## Commit-message contract
 

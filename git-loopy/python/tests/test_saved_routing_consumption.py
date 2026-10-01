@@ -113,7 +113,10 @@ def test_classification_can_discover_a_saved_static_route_without_leaderboard_ac
     assert path.read_bytes() == saved
     events = _read_events(tmp_path)
     bound = [e for e in events if e["type"] == "wrapper.pickup.bound"]
-    assert not any(e["type"] == "wrapper.strike" for e in events)
+    # A Strike is charged only by a session that ran (ADR-0070).
+    assert {e["issue"] for e in events if e["type"] == "wrapper.strike"} <= {
+        e["issue"] for e in bound
+    }
     if allowance == "0" or concurrency == "65":
         assert code == 1
         assert client.create_calls == [] and bound == [] and labels.applied == []
@@ -370,7 +373,11 @@ def test_reported_in_flight_billing_closes_admission_before_session_completion(
             call["model"], call["reasoning_effort"], call["context_tier"],
         )
         assert pickup["routing_source"] == "dynamic"
-    assert not any(e["type"] == "wrapper.strike" for e in events)
+    # Only a work session charges a Strike, and only its own issue's first
+    # (ADR-0070): the refused and interrupted routings charge nothing.
+    strikes = [e for e in events if e["type"] == "wrapper.strike"]
+    assert {e["issue"] for e in strikes} <= set(scenario["work_issues"])
+    assert all((e["strikes"], e["outcome"]) == (1, "warn") for e in strikes)
     assert events[-1]["outcome"] == "iteration_cap"
     renderer, summary, output = _make_renderer()
     dashboard = LiveRunState()

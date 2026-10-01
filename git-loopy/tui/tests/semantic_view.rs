@@ -228,6 +228,55 @@ fn a_spent_iteration_cap_stays_draining_until_its_run_ends() {
     );
 }
 
+#[test]
+fn a_per_issue_strike_count_follows_the_issue_at_stake() {
+    // ADR-0070: the Python Runner names the issue it charged, and the Header's
+    // count is that issue's budget, never a sum across issues.
+    let header = |events: &[&str]| {
+        reduce_jsonl(events, IssueRef::number(7))["dashboard"]["header"]["strikes"].clone()
+    };
+    let start = r#"{"type":"wrapper.run.start","run_id":"r1","max_nmt_strikes":3}"#;
+    let charge_7 = r#"{"type":"wrapper.strike","run_id":"r1","iter":1,"issue":7,"ending":"no_more_tasks","strikes":2,"max_strikes":3,"outcome":"warn"}"#;
+    let charge_8 = r#"{"type":"wrapper.strike","run_id":"r1","iter":2,"issue":8,"ending":"timeout","strikes":1,"max_strikes":3,"outcome":"warn"}"#;
+    let activate_7 = r#"{"type":"wrapper.issue.activated","run_id":"r1","iter":3,"issue":7}"#;
+    let activate_9 = r#"{"type":"wrapper.issue.activated","run_id":"r1","iter":3,"issue":9}"#;
+
+    assert_eq!(
+        header(&[start, charge_7]),
+        serde_json::json!({"current": 2, "limit": 3})
+    );
+    assert_eq!(
+        header(&[start, charge_7, charge_8]),
+        serde_json::json!({"current": 1, "limit": 3})
+    );
+    assert_eq!(
+        header(&[start, charge_7, charge_8, activate_7]),
+        serde_json::json!({"current": 2, "limit": 3})
+    );
+    assert_eq!(
+        header(&[start, charge_7, charge_8, activate_9]),
+        serde_json::json!({"current": 0, "limit": 3})
+    );
+}
+
+#[test]
+fn a_strike_naming_no_issue_is_the_run_wide_count() {
+    // The shell and PowerShell Orchestrators count consecutive no-progress
+    // Iterations for the whole Run and name no issue.
+    let projected = reduce_jsonl(
+        &[
+            r#"{"type":"wrapper.run.start","run_id":"r1","max_nmt_strikes":3}"#,
+            r#"{"type":"wrapper.issue.activated","run_id":"r1","iter":1,"issue":7}"#,
+            r#"{"type":"wrapper.strike","run_id":"r1","iter":1,"strikes":2,"max_strikes":3,"outcome":"warn"}"#,
+        ],
+        IssueRef::number(7),
+    );
+    assert_eq!(
+        projected["dashboard"]["header"]["strikes"],
+        serde_json::json!({"current": 2, "limit": 3})
+    );
+}
+
 /// Drive a fresh Run through a sequence of raw Events and project it.
 fn reduce(events: &[Value], drill_in: IssueRef) -> Value {
     let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));

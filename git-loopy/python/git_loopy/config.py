@@ -673,14 +673,15 @@ class RunConfig:
             meaningful for ``issue_source == "github"``.
         max_iterations: Cap on iterations. ``0`` (the default) means
             unlimited.
-        max_nmt_strikes: Consecutive no-progress iterations tolerated
-            before the loop aborts non-zero. Must be ≥ 1.
+        max_nmt_strikes: How many **Strikes** each issue gets in a Run before
+            it is skipped (ADR-0070). Every Session outcome charges its issue
+            one; the Run never stops on Strikes. Must be ≥ 1.
         demotion_threshold: How many no-progress **Lane contributions** one
             **Routed pair** may accumulate in a Run before **Demotion** replaces
             its **Measured routing** entry with the next pair up the price
             staircase (#366, ADR-0030). Counted per pair, so it is unrelated to
-            ``max_nmt_strikes`` — that one is a single Run-scoped counter every
-            Lane shares, and ends the Run. Must be ≥ 1.
+            ``max_nmt_strikes`` — that one is charged per issue, and skips
+            the issue. Must be ≥ 1.
         deny_tools: Tool names to reject at the SDK permission gate.
         deny_skills: Skill names (the ``arguments.skill`` value passed
             to the ``skill`` meta-tool) to reject.

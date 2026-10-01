@@ -592,7 +592,7 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
             .elapsed_seconds(state.monotonic_at(context.now, context.now_monotonic)),
         status: state.status.clone(),
         strikes: Strikes {
-            current: state.strikes,
+            current: state.header_strikes(),
             limit: state.max_strikes,
         },
         active_seconds: active.as_ref().map(|issue| {

@@ -469,8 +469,14 @@ pub struct DashboardState {
     inputs: RunInputs,
     pub(crate) run_id: Option<String>,
     pub(crate) status: String,
+    /// The Run-wide Strike count a producer that names no issue reports.
     pub(crate) strikes: i64,
     pub(crate) max_strikes: i64,
+    /// Each issue's Strikes, once any Strike has named its issue (ADR-0070).
+    pub(crate) issue_strikes: Option<BTreeMap<IssueRef, i64>>,
+    /// The issue the Header's Strike count follows: the one last bound, or
+    /// failing that the one last charged.
+    pub(crate) strike_focus: Option<IssueRef>,
     pub(crate) started_at: Option<Timestamp>,
     pub(crate) ended_at: Option<Timestamp>,
     /// The Run's start on the monotonic axis, paired with [`Self::started_at`].
@@ -550,6 +556,8 @@ impl DashboardState {
             status: RUN_STARTING.to_string(),
             strikes: 0,
             max_strikes: 0,
+            issue_strikes: None,
+            strike_focus: None,
             started_at: None,
             ended_at: None,
             started_monotonic: None,
@@ -796,8 +804,15 @@ impl DashboardState {
                 self.append_log_block(LOG_EVENT, &auto_close_log_text(closure), now)
             }
             EventPayload::Strike(strike) => {
-                if let Some(strikes) = strike.strikes {
-                    self.strikes = strikes;
+                match (&strike.issue, strike.strikes) {
+                    (Some(issue), Some(strikes)) => {
+                        self.issue_strikes
+                            .get_or_insert_with(BTreeMap::new)
+                            .insert(issue.clone(), strikes);
+                        self.strike_focus = Some(issue.clone());
+                    }
+                    (None, Some(strikes)) => self.strikes = strikes,
+                    _ => {}
                 }
                 if let Some(limit) = strike.max_strikes {
                     self.max_strikes = limit;
@@ -1166,6 +1181,21 @@ impl DashboardState {
         entry.credits.merge(pending_credits);
         entry.premium_requests.merge(pending_premium);
         self.active_ref = Some(issue.clone());
+        self.strike_focus = Some(issue.clone());
+    }
+
+    /// The Strike count the Header shows: the focused issue's when Strikes are
+    /// charged per issue, else the Run-wide count.
+    pub(crate) fn header_strikes(&self) -> i64 {
+        match &self.issue_strikes {
+            Some(by_issue) => self
+                .strike_focus
+                .as_ref()
+                .and_then(|issue| by_issue.get(issue))
+                .copied()
+                .unwrap_or(0),
+            None => self.strikes,
+        }
     }
 
     fn deactivate(&mut self, issue: &IssueRef, at: Option<f64>, status: Option<&str>) {

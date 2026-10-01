@@ -1434,12 +1434,14 @@ def test_loop_refuses_a_repository_without_runnable_feedback_loops(
     assert "Add at least one runnable command" in capsys.readouterr().err
 
 
-def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
-    """Three consecutive no-progress iterations abort the loop with exit 1.
+def test_an_issue_is_retried_until_its_strikes_run_out(tmp_path, monkeypatch) -> None:
+    """An issue that never progresses is worked N times, then the Run ends.
 
-    The SDK is mocked to produce no commits and no auto-closures, so
-    every iteration is a strike. With ``max_nmt_strikes=3`` the loop
-    aborts on iteration 3.
+    The SDK is mocked to produce no commits and no auto-closures, so every
+    session ends in silent no-progress and charges issue 42 one **Strike**
+    (ADR-0070). With ``max_nmt_strikes=3`` the third skips it, and the next
+    Iteration has no candidate left, so the Run ends ``all_skipped`` — never
+    ``stuck``, because no Run-wide ceiling exists to reach.
     """
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
@@ -1461,15 +1463,18 @@ def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
     )
     exit_code = asyncio.run(loop_module.run(cfg))
 
-    assert exit_code == 1, "loop must abort after max strikes"
-    # Two sessions, not three: the **Attempt lifecycle** (#412) defeats issue 42
-    # after its second silent stall, so the third Iteration has no candidate left
-    # to bind and works no issue. It still ticks the strike that aborts the Run —
-    # an unworked Iteration always did — so what the Run *charges* is unchanged
-    # and what it *spends* is one fewer session.
-    assert len(fake_client.created) == 2, (
-        f"expected 2 SDK sessions before abort; got {len(fake_client.created)}"
+    assert exit_code == 1, "a Run that can take nothing must say so"
+    assert len(fake_client.created) == 3, (
+        f"expected 3 SDK sessions before the issue is skipped; got {len(fake_client.created)}"
     )
+    emitted = _read_events(tmp_path)
+    assert [
+        (e["issue"], e["strikes"], e["max_strikes"], e["outcome"])
+        for e in emitted
+        if e["type"] == "wrapper.strike"
+    ] == [(42, 1, 3, "warn"), (42, 2, 3, "warn"), (42, 3, 3, "skip")]
+    assert emitted[-1]["type"] == "wrapper.run.end"
+    assert emitted[-1]["outcome"] == "all_skipped"
 
 
 # ---------------------------------------------------------------------------
@@ -1484,9 +1489,9 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
     strike tick, iteration.end emit, counters persist) still runs — the
     SDK failure is contained to "no progress" semantics.
 
-    Since contract 1.27 a **Strike** is charged per issue the Run gives up
-    on, not per unproductive Iteration, so a first crash spends the issue's
-    first attempt and charges nothing.
+    Since contract 2.18 every ending charges its issue one **Strike**
+    (ADR-0070), so a first crash charges the issue's first Strike and leaves
+    it two to go.
     """
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
@@ -1530,11 +1535,13 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
     types_seen = {event["type"] for event in events}
     assert "wrapper.iteration.end" in types_seen
     assert "wrapper.run.end" in types_seen
-    # ...and the crash spent the issue's first attempt without defeating it,
-    # so nothing was given up on and no Strike was charged.
-    assert "wrapper.strike" not in types_seen
+    # ...and the crash charged issue 42 its first Strike without skipping it.
+    strikes = [e for e in events if e["type"] == "wrapper.strike"]
+    assert [(e["issue"], e["ending"], e["strikes"], e["outcome"]) for e in strikes] == [
+        (42, "crash", 1, "warn"),
+    ]
     iteration_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
-    assert iteration_end["summary"]["strikes"] == 0
+    assert iteration_end["summary"]["strikes"] == 1
 
 
 def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch) -> None:
@@ -3552,10 +3559,9 @@ def test_an_agent_that_declares_no_more_tasks_does_not_escalate(
 
     The declaration is the one ending most easily said by accident, and
     answering it with the ceiling would spend the Run's most expensive pair on
-    an issue whose worker said there was nothing to do. It buys no second
-    attempt either (#412): the issue is out of contention on the strength of the
-    same declaration, so the second Iteration passes it over rather than
-    re-picking it at either pair.
+    an issue whose worker said there was nothing to do. It does buy a second
+    attempt (ADR-0070): the declaration charges the issue one **Strike** like
+    any other ending, so the second Iteration re-picks it on the same pair.
     """
     _wire_multi_issue_github(
         tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
@@ -3584,10 +3590,11 @@ def test_an_agent_that_declares_no_more_tasks_does_not_escalate(
     )
 
     assert [
-        (e["type"], e.get("routing_source")) for e in _pickup_events(tmp_path)
+        (e["type"], e.get("model"), e.get("routing_source"))
+        for e in _pickup_events(tmp_path)
     ] == [
-        ("wrapper.pickup.bound", "defaulted_no_task_type_label"),
-        ("wrapper.pickup.skipped", None),
+        ("wrapper.pickup.bound", "claude-sonnet-5", "defaulted_no_task_type_label"),
+        ("wrapper.pickup.bound", "claude-sonnet-5", "defaulted_no_task_type_label"),
     ]
 
 
@@ -3595,10 +3602,9 @@ def test_escalation_ticks_no_strike_of_its_own(tmp_path, monkeypatch) -> None:
     """Trying harder is never punished by the mechanism that aborts the Run.
 
     Escalation adds no **Strike** and clears none: an escalating Run charges
-    exactly what the same two unproductive Iterations charge without a rung. The
-    re-definition of what a Strike *counts* is a separate change (#413) to a
-    phase-1 contract section every Runner implements; this one must not
-    anticipate it, in either direction.
+    exactly what the same two unproductive Iterations charge without a rung,
+    because a Strike is charged for the ending, whichever pair it ran on
+    (ADR-0070).
     """
     def strikes_for(rung: tuple[str, str] | None, at: Path) -> list[int]:
         _wire_multi_issue_github(at, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")])
@@ -3641,8 +3647,9 @@ def test_a_twice_stalled_issue_is_skipped_and_the_run_moves_on(
 
     Issue 7 is the head of the order and stalls silently twice — once on the
     pair it routed to and once on the **Escalation rung** that stall bought it.
-    That is every attempt the Run has to offer, so the third **Pickup** passes
-    it over with a **Pickup skip** and binds the work behind it. Before this,
+    With two **Strikes** to an issue that is every attempt it gets, so the
+    third **Pickup** passes it over with a **Pickup skip** and binds the work
+    behind it. Before this,
     the same issue came back on the same pair every Iteration until the
     **Strike** ceiling ended the Run, and the issues behind it were never
     reached at all.
@@ -3661,7 +3668,7 @@ def test_a_twice_stalled_issue_is_skipped_and_the_run_moves_on(
             RunConfig(
                 issue_source="github",
                 max_iterations=3,
-                max_nmt_strikes=9,
+                max_nmt_strikes=2,
                 model="claude-sonnet-5",
                 reasoning_effort="low",
                 escalation_rung=("claude-opus-5", "max"),
@@ -3700,7 +3707,7 @@ def test_a_defeated_issue_leaves_the_pool_whole(tmp_path, monkeypatch) -> None:
             RunConfig(
                 issue_source="github",
                 max_iterations=3,
-                max_nmt_strikes=9,
+                max_nmt_strikes=2,
                 model="claude-sonnet-5",
                 reasoning_effort="low",
                 escalation_rung=("claude-opus-5", "max"),
@@ -3805,8 +3812,9 @@ def test_a_blocked_candidate_leaves_the_pool_whole_and_charges_no_strike(
     **Attempt lifecycle**: a blocked candidate stays in the **Pool** (the
     closure whitelist, the collection Event and the emptiness test all still
     see it), and -- unlike an Attempt-lifecycle skip, which follows a real
-    stall -- a readiness skip charges no **Strike** at all, because the issue
-    was never attempted.
+    stall -- a readiness skip charges the blocked issue no **Strike** at all,
+    because it was never attempted. The Strike this Iteration does charge is
+    #31's, for the session it actually ran.
     """
     _wire_multi_issue_github(
         tmp_path,
@@ -3826,7 +3834,7 @@ def test_a_blocked_candidate_leaves_the_pool_whole_and_charges_no_strike(
 
     asyncio.run(
         loop_module.run(
-            RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=9)
+            RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
         )
     )
 
@@ -3835,10 +3843,11 @@ def test_a_blocked_candidate_leaves_the_pool_whole_and_charges_no_strike(
     # Pool retention: the collection Event still names the blocked issue.
     collected = [e["issues"] for e in events if e["type"] == "wrapper.afk_ready.collected"]
     assert collected == [[7, 31]]
-    # No Strike: a readiness skip was never an attempt.
-    assert "wrapper.strike" not in types_seen
+    # No Strike for #7: a readiness skip was never an attempt.
+    assert "wrapper.strike" in types_seen
+    assert [e["issue"] for e in events if e["type"] == "wrapper.strike"] == [31]
     iteration_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
-    assert iteration_end["summary"]["strikes"] == 0
+    assert iteration_end["summary"]["strikes"] == 1
 
 
 def test_an_all_blocked_pool_ends_waiting_on_blockers(tmp_path, monkeypatch) -> None:
@@ -4020,7 +4029,8 @@ def test_the_skip_names_the_ending_that_defeated_the_issue(
             RunConfig(
                 issue_source="github",
                 max_iterations=2,
-                max_nmt_strikes=9,
+                # One Strike to an issue, so the declaration skips it at once.
+                max_nmt_strikes=1,
                 model="claude-sonnet-5",
                 reasoning_effort="low",
             )
@@ -4097,7 +4107,7 @@ def test_a_same_pair_crash_retry_says_it_is_a_retry(tmp_path, monkeypatch) -> No
             RunConfig(
                 issue_source="github",
                 max_iterations=3,
-                max_nmt_strikes=9,
+                max_nmt_strikes=2,
                 model="claude-sonnet-5",
                 reasoning_effort="low",
                 escalation_rung=("claude-opus-5", "max"),
@@ -4115,7 +4125,7 @@ def test_a_same_pair_crash_retry_says_it_is_a_retry(tmp_path, monkeypatch) -> No
 
 
 # ---------------------------------------------------------------------------
-# The Strike counts issues given up on (#413, ADR-0041)
+# A Strike is charged to the issue, and a Run never stops on Strikes (ADR-0070)
 # ---------------------------------------------------------------------------
 
 
@@ -4128,12 +4138,14 @@ def _strikes(tmp_path: Path) -> list[dict[str, Any]]:
     ]
 
 
-def test_a_no_progress_iteration_charges_no_strike(tmp_path, monkeypatch) -> None:
-    """An Iteration is not a thing a Run can give up on (#413, contract §6).
+def test_a_no_progress_iteration_charges_its_issue_one_strike(
+    tmp_path, monkeypatch
+) -> None:
+    """Every ending charges the issue it worked one Strike (contract §6).
 
-    The issue's first silent stall spends its first attempt and leaves it
-    **retrying** — still work the Run is willing to take — so the ceiling is
-    untouched. Under the old accounting this Iteration was a Strike on its own.
+    The issue's first silent stall leaves it **retrying** with two Strikes to
+    go — still work the Run is willing to take — and the record names the issue
+    and the ending, so a reader can tell whose budget was spent and on what.
     """
     _wire_multi_issue_github(
         tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
@@ -4148,19 +4160,22 @@ def test_a_no_progress_iteration_charges_no_strike(tmp_path, monkeypatch) -> Non
         == 0
     )
 
-    assert _strikes(tmp_path) == []
+    assert [
+        (s["issue"], s["ending"], s["strikes"], s["max_strikes"], s["outcome"])
+        for s in _strikes(tmp_path)
+    ] == [(7, "no_progress", 1, 3, "warn")]
     assert [
         (e["issue"], e["lifecycle_position"]) for e in _bound_pickups(tmp_path)
     ] == [(7, "fresh")]
 
 
-def test_one_strike_is_charged_per_issue_given_up_on(tmp_path, monkeypatch) -> None:
-    """Exactly one, at the ending that skips the issue — never one per Iteration.
+def test_strikes_are_counted_per_issue(tmp_path, monkeypatch) -> None:
+    """What one issue spends, no other issue loses.
 
-    Two silent stalls defeat #7 (**fresh** → **retrying** → **skipped**), and the
-    Strike lands on the second. Every later Iteration passes over the same issue
-    as a **Pickup skip** and charges nothing more, because a skipped issue is
-    given up on once and stays given up on.
+    Two silent stalls defeat #7 (**fresh** → **retrying** → **skipped**). #31
+    then starts from no Strikes at all and gets its own two, which is the whole
+    complaint ADR-0070 answers: under a Run-wide count, #7's stalls would have
+    spent the budget #31 was owed.
     """
     _wire_multi_issue_github(
         tmp_path,
@@ -4170,28 +4185,28 @@ def test_one_strike_is_charged_per_issue_given_up_on(tmp_path, monkeypatch) -> N
 
     asyncio.run(
         loop_module.run(
-            RunConfig(issue_source="github", max_iterations=4, max_nmt_strikes=9)
+            RunConfig(issue_source="github", max_iterations=4, max_nmt_strikes=2)
         )
     )
 
-    charged = _strikes(tmp_path)
-    assert [(s["strikes"], s["outcome"]) for s in charged] == [
-        (1, "warn"),
-        (2, "warn"),
-    ], f"expected one Strike per defeated issue, got {charged}"
-    # ...and the Pickups that earned them: each issue worked twice, then skipped.
+    assert [(s["issue"], s["strikes"], s["outcome"]) for s in _strikes(tmp_path)] == [
+        (7, 1, "warn"),
+        (7, 2, "skip"),
+        (31, 1, "warn"),
+        (31, 2, "skip"),
+    ]
     assert [
         (e["issue"], e["lifecycle_position"]) for e in _bound_pickups(tmp_path)
     ] == [(7, "fresh"), (7, "retrying"), (31, "fresh"), (31, "retrying")]
 
 
-def test_a_run_that_gives_up_on_enough_issues_is_stuck(tmp_path, monkeypatch) -> None:
-    """`max_nmt_strikes` is how many issues this Run may abandon (#413).
+def test_no_number_of_defeated_issues_stops_the_run(tmp_path, monkeypatch) -> None:
+    """There is no Run-wide ceiling left to reach (ADR-0070).
 
-    Two issues, a ceiling of two, and an Agent that declares the **NMT
-    sentinel** — an ending taken at its word, so each issue is defeated on its
-    first attempt. The second defeat spends the ceiling and the Run ends
-    ``stuck`` with the third issue's Iteration never run.
+    Three issues, one Strike each, and an Agent that declares the **NMT
+    sentinel** every time — so every issue is skipped on its first attempt. The
+    Run still works all three, and ends only when nothing is left to take,
+    under ``all_skipped`` rather than ``stuck``.
     """
     _wire_multi_issue_github(
         tmp_path,
@@ -4215,35 +4230,37 @@ def test_a_run_that_gives_up_on_enough_issues_is_stuck(tmp_path, monkeypatch) ->
 
     exit_code = asyncio.run(
         loop_module.run(
-            RunConfig(issue_source="github", max_iterations=0, max_nmt_strikes=2)
+            RunConfig(issue_source="github", max_iterations=0, max_nmt_strikes=1)
         )
     )
 
-    assert exit_code == loop_module.exit_code_for("stuck")
-    assert [(s["strikes"], s["outcome"]) for s in _strikes(tmp_path)] == [
-        (1, "warn"),
-        (2, "abort"),
+    assert exit_code == loop_module.exit_code_for("all_skipped")
+    assert [
+        (s["issue"], s["ending"], s["strikes"], s["outcome"]) for s in _strikes(tmp_path)
+    ] == [
+        (7, "no_more_tasks", 1, "skip"),
+        (31, "no_more_tasks", 1, "skip"),
+        (44, "no_more_tasks", 1, "skip"),
     ]
-    assert [e["issue"] for e in _bound_pickups(tmp_path)] == [7, 31]
+    assert [e["issue"] for e in _bound_pickups(tmp_path)] == [7, 31, 44]
     run_end = next(
         json.loads(raw)
         for raw in _log_lines(tmp_path)
         if json.loads(raw)["type"] == "wrapper.run.end"
     )
-    assert run_end["outcome"] == "stuck"
+    assert run_end["outcome"] == "all_skipped"
 
 
 def test_a_run_whose_every_issue_is_defeated_ends_all_skipped(
     tmp_path, monkeypatch
 ) -> None:
-    """The livelock this outcome exists to end (#413, ADR-0041).
+    """The livelock this outcome exists to end (#413, ADR-0041, ADR-0070).
 
-    One issue, an unbounded Iteration cap and a ceiling it never reaches. The
-    issue stalls twice and is **skipped**; the very next Iteration walks a Pool
-    that still holds it, binds nothing, and — charging nothing, since #413 —
-    would re-walk the same Pool forever. It ends the Run instead, under a reason
-    that is neither the empty Pool (which would be exit ``0`` and a lie) nor the
-    spent ceiling.
+    One issue, an unbounded Iteration cap and two Strikes to it. The issue
+    stalls twice and is **skipped**; the very next Iteration walks a Pool that
+    still holds it, binds nothing, and — charging nothing, since nothing was
+    worked — would re-walk the same Pool forever. It ends the Run instead, under
+    a reason that is not the empty Pool (which would be exit ``0`` and a lie).
     """
     _wire_multi_issue_github(
         tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
@@ -4251,7 +4268,7 @@ def test_a_run_whose_every_issue_is_defeated_ends_all_skipped(
 
     exit_code = asyncio.run(
         loop_module.run(
-            RunConfig(issue_source="github", max_iterations=0, max_nmt_strikes=9)
+            RunConfig(issue_source="github", max_iterations=0, max_nmt_strikes=2)
         )
     )
 
@@ -4262,7 +4279,10 @@ def test_a_run_whose_every_issue_is_defeated_ends_all_skipped(
     # Three Iterations: two that worked #7, and the one that could take nothing.
     assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 3
     assert [e["issue"] for e in _bound_pickups(tmp_path)] == [7, 7]
-    assert [(s["strikes"], s["outcome"]) for s in _strikes(tmp_path)] == [(1, "warn")]
+    assert [(s["strikes"], s["outcome"]) for s in _strikes(tmp_path)] == [
+        (1, "warn"),
+        (2, "skip"),
+    ]
 
 
 def test_an_empty_pool_still_ends_clean(tmp_path, monkeypatch) -> None:
@@ -6945,10 +6965,15 @@ def test_saved_dynamic_work_without_access_starts_no_classifier_or_fallback(
     assert path.read_bytes() == saved
     events = _read_events(tmp_path)
     assert not any(e["type"] in {
-        "wrapper.routing.resolved", "wrapper.strike", "usage.tokens",
+        "wrapper.routing.resolved", "usage.tokens",
     } for e in events)
     assert [e["issue"] for e in events if e["type"] == "wrapper.pickup.bound"] == (
         [43] if static_work else []
+    )
+    # A refusal is no ending, so it charges no Strike (ADR-0070); only the
+    # Static session that ran may have charged its own issue one.
+    assert {e["issue"] for e in events if e["type"] == "wrapper.strike"} <= (
+        {43} if static_work else set()
     )
     assert any(
         e["type"] == "wrapper.pickup.skipped" and e["issue"] == 42
@@ -7060,8 +7085,13 @@ def test_saved_routing_deadline_includes_retained_static_validation(
     assert len(client.create_calls) == (1 if static_work else 0)
     events = _read_events(tmp_path)
     assert not any(e["type"] in {
-        "wrapper.routing.resolved", "wrapper.strike", "usage.tokens",
+        "wrapper.routing.resolved", "usage.tokens",
     } for e in events)
+    # A refusal is no ending, so it charges no Strike (ADR-0070); only the
+    # Static session that ran may have charged its own issue one.
+    assert {e["issue"] for e in events if e["type"] == "wrapper.strike"} <= (
+        {43} if static_work else set()
+    )
     assert any(
         e["type"] == "wrapper.pickup.skipped" and e["issue"] == 42
         and case["expected_skip_reason"] in e["reason"]
@@ -8376,7 +8406,7 @@ def test_advancing_dynamic_work_preserves_history_without_refunding_attempts(
         loop_module.run(
             _dynamic_config(
                 max_iterations=5,
-                max_nmt_strikes=1,
+                max_nmt_strikes=2,
                 route_associations={"aa-opus": "claude-opus-5@high"},
             )
         )
@@ -8384,7 +8414,12 @@ def test_advancing_dynamic_work_preserves_history_without_refunding_attempts(
 
     assert exit_code == 1
     assert [call["model"] for call in fake_client.create_calls] == ["claude-opus-5"] * 4
-    assert len(_strikes(tmp_path)) == 1
+    # The two stalls are the issue's two Strikes; the advances between them
+    # refund neither.
+    assert [(s["strikes"], s["outcome"]) for s in _strikes(tmp_path)] == [
+        (1, "warn"),
+        (2, "skip"),
+    ]
     records = _routing_records(tmp_path)
     assert [(record["attempt"], record["lifecycle_position"]) for record in records] == [
         (1, "fresh"),
@@ -8553,13 +8588,14 @@ def test_an_explicitly_configured_rung_still_outranks_the_selector(
 def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
     tmp_path, monkeypatch, refusal, entrypoint
 ) -> None:
-    """AC4/AC8: a routing refusal is not an attempt, and not a **Strike**.
+    """AC4/AC8: a routing refusal is not an attempt, and charges no **Strike**.
 
-    The first attempt stalls and the lifecycle grants a second; the second
-    election cannot be made. Nothing may be invented to fill the gap — no stale
-    decision, no built-in default — and nothing may be charged for the session
-    that never opened: the issue is left where the lifecycle put it rather than
-    driven to ``skipped`` by a decision it never got.
+    The first attempt stalls, charging the issue its first Strike, and the
+    lifecycle grants a second; the second election cannot be made. Nothing may
+    be invented to fill the gap — no stale decision, no built-in default — and
+    nothing may be charged for the session that never opened: the issue is left
+    where the lifecycle put it rather than driven to ``skipped`` by a decision
+    it never got.
 
     The Run ends non-zero because the last Iteration bound nothing, which is the
     honest report: blocking the affected work *is* the required behaviour, and a
@@ -8597,7 +8633,9 @@ def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
     assert exit_code != 0
     assert len(fake_client.create_calls) == 1, "a refused route still opened a session"
     assert len(_routing_records(tmp_path)) == 1
-    assert _strikes(tmp_path) == []
+    assert [(s["issue"], s["ending"], s["strikes"]) for s in _strikes(tmp_path)] == [
+        (42, "no_progress", 1),
+    ]
     skipped = [
         event
         for event in (json.loads(raw) for raw in _log_lines(tmp_path))
@@ -8618,7 +8656,7 @@ def test_dynamic_attempt_exhaustion_admits_no_further_assessment(
     tmp_path, monkeypatch, ending, entrypoint
 ) -> None:
     fake_client, spied, exit_code = _dynamic_run(
-        tmp_path, monkeypatch, max_iterations=5, max_nmt_strikes=1,
+        tmp_path, monkeypatch, max_iterations=5, max_nmt_strikes=2,
         on_send=_raise_a_transport_failure if ending == "crash" else None,
         setup_entrypoint=entrypoint,
     )
@@ -8626,7 +8664,10 @@ def test_dynamic_attempt_exhaustion_admits_no_further_assessment(
     assert exit_code == 1
     assert len(fake_client.create_calls) == 2
     assert len(spied["assessments"]) == 2
-    assert len(_strikes(tmp_path)) == 1
+    assert [(s["strikes"], s["outcome"]) for s in _strikes(tmp_path)] == [
+        (1, "warn"),
+        (2, "skip"),
+    ]
     assert [record["attempt"] for record in _routing_records(tmp_path)] == [1, 2]
     assert [
         (call["model"], call["reasoning_effort"], call["context_tier"])

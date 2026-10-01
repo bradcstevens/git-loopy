@@ -1228,11 +1228,12 @@ def test_run_end_table_handles_zero_iterations() -> None:
 
 
 def test_run_end_table_final_strikes_uses_last_iteration_value() -> None:
-    """The footer's 'final strikes' value is the last iteration's strike count.
+    """A Run-wide Strike count reports the last iteration's value.
 
-    Strikes reset on progress in the wrapper contract; summing them across
-    iterations would be misleading. The footer surfaces the value that
-    actually determined whether the run aborted.
+    A producer whose Strike events name no ``issue`` keeps one Run-wide count
+    that resets on progress (the shell and PowerShell Orchestrators); summing
+    it across iterations would be misleading. The footer surfaces the value
+    that actually determined whether the run aborted.
     """
     renderer, summary, buf = _make_renderer()
     renderer.render({"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000A3"})
@@ -1252,6 +1253,57 @@ def test_run_end_table_final_strikes_uses_last_iteration_value() -> None:
     assert totals.final_strikes == 0, (
         f"final_strikes should be the last iteration's value (0), got {totals.final_strikes}"
     )
+
+
+def test_run_end_final_strikes_sums_each_issues_latest_count() -> None:
+    """Per-issue Strikes total each issue's latest count, once (ADR-0070).
+
+    Strikes charged to an issue are cumulative and never refunded, so the
+    Run's total is every issue's last reported count — not the last
+    Iteration's, which would forget the other issues, and not the sum of the
+    Iterations, which would count #42's first Strike twice.
+    """
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000A4"})
+    for iter_num, issue, strikes in ((1, 42, 1), (2, 42, 2), (3, 43, 1)):
+        renderer.render({"type": WRAPPER_ITERATION_START, "iter": iter_num, "issue": issue})
+        renderer.render(
+            {
+                "type": WRAPPER_STRIKE,
+                "issue": issue,
+                "ending": "no_progress",
+                "strikes": strikes,
+                "max_strikes": 3,
+                "outcome": "warn",
+            }
+        )
+        renderer.render({"type": WRAPPER_ITERATION_END, "iter": iter_num})
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 4, "issue": 44})
+    renderer.render({"type": WRAPPER_COMMIT_RECORDED, "sha": "deadbeef", "subject": "x"})
+    renderer.render({"type": WRAPPER_ITERATION_END, "iter": 4})
+    renderer.render({"type": WRAPPER_RUN_END, "outcome": "empty_pool"})
+
+    assert summary.totals().final_strikes == 3
+
+
+def test_a_strike_naming_its_issue_prints_that_issues_count_and_ending() -> None:
+    """The Strike line says whose Strike it is, why, and when it skipped."""
+    renderer, _summary, buf = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 42})
+    renderer.render(
+        {
+            "type": WRAPPER_STRIKE,
+            "issue": 42,
+            "ending": "timeout",
+            "strikes": 3,
+            "max_strikes": 3,
+            "outcome": "skip",
+        }
+    )
+    out = buf.getvalue()
+    assert "strike #42 3/3" in out
+    assert "(timeout)" in out
+    assert "issue skipped" in out
 
 
 def test_run_summary_totals_sum_tokens_and_costs() -> None:

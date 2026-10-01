@@ -140,6 +140,40 @@ def test_strike_updates_count_and_max() -> None:
     assert state.max_strikes == 5
 
 
+def test_strikes_charged_per_issue_follow_the_issue_in_focus() -> None:
+    """A Strike naming its issue is that issue's count, not the Run's (ADR-0070).
+
+    The header reads the issue the Run is working: a fresh issue reads 0
+    though an earlier one carries Strikes, and returning to that earlier
+    issue reads its count again.
+    """
+    state = _make_state()
+    state.render({"type": events_module.WRAPPER_RUN_START, "max_strikes": 3})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    state.render(
+        {
+            "type": events_module.WRAPPER_STRIKE,
+            "iter": 1,
+            "issue": 42,
+            "ending": "no_progress",
+            "strikes": 2,
+            "max_strikes": 3,
+            "outcome": "warn",
+        }
+    )
+    assert state.strikes == 2
+
+    state.render({"type": events_module.WRAPPER_ITERATION_END, "iter": 1})
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "iter": 2, "issue": 43})
+    assert state.strikes == 0
+    state.render({"type": events_module.WRAPPER_ITERATION_END, "iter": 2})
+
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 3})
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "iter": 3, "issue": "42"})
+    assert state.strikes == 2
+
+
 def test_wind_down_is_folded_from_the_trace_and_a_strike_lift_clears_it() -> None:
     """A Dashboard learns a revocable Strike drain only from Run Events."""
     state = _make_state()

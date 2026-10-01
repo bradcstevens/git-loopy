@@ -832,16 +832,27 @@ class Renderer:
             )
         except (TypeError, ValueError):
             strikes_value = None
-        self.summary.record_strike(strikes=strikes_value)
+        issue = event.get("issue")
+        self.summary.record_strike(strikes=strikes_value, issue=issue)
         snap = self.summary.current
-        current_strikes = snap.strikes if snap is not None else (strikes_value or 0)
+        if issue is not None and strikes_value is not None:
+            current_strikes = strikes_value
+        else:
+            current_strikes = snap.strikes if snap is not None else (strikes_value or 0)
         text = Text()
         text.append("⚠ ", style=STYLES["warning"])
         text.append("strike ", style=STYLES["warning"])
+        if issue is not None:
+            text.append(f"#{issue} ", style=STYLES["warning"])
         if max_strikes is not None:
             text.append(f"{current_strikes}/{max_strikes}", style=STYLES["warning"])
         else:
             text.append(str(current_strikes), style=STYLES["warning"])
+        ending = event.get("ending")
+        if ending:
+            text.append(f"  ({ending})", style=STYLES["meta"])
+        if event.get("outcome") == "skip":
+            text.append("  → issue skipped", style=STYLES["warning"])
         self.console.print(text)
 
     def _on_ask_user_attempted(self, event: dict[str, Any]) -> None:

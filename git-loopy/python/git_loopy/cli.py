@@ -68,7 +68,8 @@ Env vars:
   ``long_context``), without suppressing per-task-type routing.
 * ``GIT_LOOPY_ISSUE_SOURCE`` — ``github`` (default, GitHub issues backend) or
   ``prds`` (legacy local-markdown ``prds/<feature>/NNN-*.md`` backend).
-* ``GIT_LOOPY_MAX_NMT_STRIKES`` — strike threshold (integer ≥ 1).
+* ``GIT_LOOPY_MAX_NMT_STRIKES`` — Strikes each issue gets before it is skipped
+  (integer ≥ 1, ADR-0070).
 * ``GIT_LOOPY_ENABLED_SKILLS`` — presence-aware, comma-separated exact
   replacement for the configured Skill-policy base; an empty value is an
   explicit empty replacement.
@@ -145,9 +146,9 @@ __all__ = [
 _DEFAULT_MAX_NMT_STRIKES = 3
 #: How many no-progress **Lane contributions** one **Routed pair** may
 #: accumulate in a Run before **Demotion** steps its **Measured routing** entry
-#: up the price staircase (#366, ADR-0030). Shares a value with the Strike limit
-#: and nothing else: that counter is Run-scoped, shared by every Lane, and ends
-#: the Run — this one is per pair and ends nothing.
+#: up the price staircase (#366, ADR-0030). Shares a value with the Strike budget
+#: and nothing else: that one is charged per issue and skips the issue
+#: (ADR-0070) — this one is per pair and ends nothing.
 _DEFAULT_DEMOTION_THRESHOLD = 3
 # Default model used when ``GIT_LOOPY_MODEL`` is unset. A bare base id (model id and
 # reasoning effort are separate axes on the live Copilot CLI — a suffixed
@@ -438,7 +439,8 @@ def build_parser() -> argparse.ArgumentParser:
             "classifier pair.\n"
             "  GIT_LOOPY_ISSUE_SOURCE       'github' (default) or 'prds' "
             "(legacy local-markdown).\n"
-            "  GIT_LOOPY_MAX_NMT_STRIKES    Strike threshold (default: 3).\n"
+            "  GIT_LOOPY_MAX_NMT_STRIKES    Strikes each issue gets before it "
+            "is skipped (default: 3).\n"
             "  GIT_LOOPY_EXECUTION_HOST     Execution-host placement "
             "(default: local; --execution-host wins).\n"
             "  GIT_LOOPY_GITHUB_ACTIONS_CAPACITY\n"
@@ -2030,11 +2032,12 @@ def _resolve_max_nmt_strikes(
     project: Mapping[str, object],
     global_: Mapping[str, object],
 ) -> int:
-    """Resolve the strike threshold: env > project > global > default.
+    """Resolve each issue's Strike budget: env > project > global > default.
 
     A malformed or sub-1 value aborts the run (via :class:`SystemExit`) rather
-    than silently degrading — an unattended run must never quietly disable its
-    own get-a-human safety valve.
+    than silently degrading — an unattended run must never quietly disable the
+    budget that stops it re-trying an issue that keeps ending badly
+    (ADR-0070).
     """
     raw = env.get("GIT_LOOPY_MAX_NMT_STRIKES")
     if raw is not None and raw.strip():
@@ -2056,7 +2059,7 @@ def _resolve_max_nmt_strikes(
 
 
 def _validate_max_nmt_strikes(value: int, *, source: str) -> int:
-    """Reject a sub-1 strike threshold with a clear, source-attributed error."""
+    """Reject a sub-1 Strike budget with a clear, source-attributed error."""
     if value < 1:
         raise SystemExit(
             f"git-loopy: error: {source} must be ≥ 1, got {value}"
@@ -2078,8 +2081,8 @@ def _resolve_demotion_threshold(
     reinterpret the number that decides whether it edits the repository.
 
     The value is unrelated to ``max_nmt_strikes`` despite sharing its default.
-    That one is a single Run-scoped counter every **Lane** shares and which ends
-    the Run; this one is per **Routed pair** and ends nothing (ADR-0030).
+    That one is charged per issue and skips the issue (ADR-0070); this one is
+    per **Routed pair** and ends nothing (ADR-0030).
     """
     raw = env.get("GIT_LOOPY_DEMOTION_THRESHOLD")
     if raw is not None and raw.strip():

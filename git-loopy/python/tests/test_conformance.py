@@ -54,7 +54,11 @@ from git_loopy.config import (
     resolve_iteration_model,
 )
 from git_loopy.attempt_evidence import AttemptEvidenceLedger
-from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
+from git_loopy.attempt_lifecycle import (
+    DEFAULT_MAX_STRIKES,
+    AttemptLedger,
+    AttemptState,
+)
 from git_loopy.escalation import EscalationLedger
 from git_loopy.session_outcome import SessionOutcome
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
@@ -122,7 +126,6 @@ from git_loopy.ui import RunSummary
 from git_loopy.ui.renderer import Renderer
 from git_loopy.wrapper import (
     CLOSE_KEYWORD_RE,
-    NMTStrikeStateMachine,
     did_iteration_make_progress,
     extract_close_refs,
 )
@@ -536,10 +539,11 @@ def _cases_for(fixture: dict[str, Any], distribution: str) -> list[dict[str, Any
 
     A case naming no ``distributions`` is family-wide; one that names some runs
     only for the members it names. #413 forked ``progress-strikes.json`` this
-    way because the **Strike** stopped counting unproductive **Iterations** and
-    started counting **Skip**s — true of a Runner with a **Pickup** and false of
-    the two Orchestrators that have none, so the retained cases keep pinning
-    them to what they implement rather than being deleted.
+    way because the **Strike** stopped counting unproductive **Iterations** —
+    true of a Runner with a **Pickup**, which since ADR-0070 charges it to the
+    issue a Session worked, and false of the two Orchestrators that have none,
+    so the retained cases keep pinning them to what they implement rather than
+    being deleted.
     """
     return [
         case
@@ -557,19 +561,26 @@ _PYTHON_PROGRESS_STRIKES = _cases_for(_PROGRESS_STRIKES, "python")
     ids=lambda case: case["id"],
 )
 def test_progress_and_strike_fixture(case: dict[str, Any]) -> None:
-    state = NMTStrikeStateMachine(max_strikes=case["max_strikes"])
+    """The progress predicate, and that no Iteration signal is a Strike input.
+
+    The Python Runner charges a **Strike** to an issue from a **Session
+    outcome** alone (ADR-0070, pinned by ``attempt-lifecycle.json``), so the
+    ledger is given the Iteration's work and nothing else: an ending is the
+    only thing it is ever asked to observe, and an Iteration's progress
+    signals, whatever they say, reach it as no ending at all.
+    """
+    ledger = AttemptLedger(max_strikes=case["max_strikes"])
+    issue = 412
 
     for step in case["steps"]:
         signals = step["signals"]
         expected = step["expected"]
         assert did_iteration_make_progress(**signals) is expected["progress"]
-        assert (
-            state.tick(
-                **signals, issues_skipped_in_iter=step.get("issues_skipped", 0)
-            )
-            == expected["outcome"]
-        )
-        assert state.strikes == expected["strikes"]
+        ledger.observe(issue, None)
+        assert ledger.strikes(issue) == expected["strikes"]
+        assert ("aborted" if ledger.skipped(issue) else "running") == expected[
+            "outcome"
+        ]
 
 
 def test_the_progress_strike_fork_leaves_every_member_something_to_run() -> None:
@@ -577,8 +588,8 @@ def test_the_progress_strike_fork_leaves_every_member_something_to_run() -> None
 
     The fork is only honest if all three members still drive the fixture, and if
     the two accountings it separates are both *actually* pinned: a Run with a
-    **Pickup** charges nothing for an unproductive Iteration and one Strike per
-    skipped issue, and a Run without one still charges the Iteration.
+    **Pickup** charges nothing for an unproductive Iteration and never stops on
+    Strikes, and a Run without one still charges the Iteration.
     """
     for distribution in _PROGRESS_STRIKES["distributions"]:
         assert _cases_for(_PROGRESS_STRIKES, distribution), distribution
@@ -589,10 +600,19 @@ def test_the_progress_strike_fork_leaves_every_member_something_to_run() -> None
             for case in _cases_for(_PROGRESS_STRIKES, distribution)
             for step in case["steps"]
             if step["expected"]["progress"] is False
-            and step.get("issues_skipped", 0) == 0
+        }
+
+    def outcomes(distribution: str) -> set[str]:
+        return {
+            step["expected"]["outcome"]
+            for case in _cases_for(_PROGRESS_STRIKES, distribution)
+            for step in case["steps"]
         }
 
     assert strike_totals("python") == {0}
+    assert outcomes("python") == {"running"}
+    assert "aborted" in outcomes("shell")
+    assert "aborted" in outcomes("powershell")
     assert 0 not in strike_totals("shell")
     assert 0 not in strike_totals("powershell")
 
@@ -1238,10 +1258,15 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     than at ``wrapper.contribution.end``, so a consumer pinned to 1.2 that
     times a contribution from start to end reads a different number than the
     stream means.
+
+    2.18 charges each Strike to its issue (ADR-0070), and that moves the wire
+    axis to 1.4: ``wrapper.strike``'s ``strikes`` is now the named issue's
+    count rather than the Run's, so a 1.3 consumer that reads it as a
+    Run-wide ceiling shows a different number than the stream means.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.3"
-    assert _EVENT_SCHEMA["contract_version"] == "2.16"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.4"
+    assert _EVENT_SCHEMA["contract_version"] == "2.18"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1450,6 +1475,20 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         "wrapper.issue.activated": {
             "required_when_present": ["issue", "activated_at", "binding_source"],
         },
+        "wrapper.strike": {
+            "required_when_present": ["strikes", "max_strikes", "outcome"],
+            "optional": ["issue", "ending"],
+            "outcome_values": ["warn", "skip", "abort"],
+            "ending_values": [
+                "no_progress",
+                "timeout",
+                "crash",
+                "no_more_tasks",
+                "content_filtered",
+            ],
+            "strikes": _EVENT_SCHEMA["payload_contracts"]["wrapper.strike"]["strikes"],
+            "emitted": _EVENT_SCHEMA["payload_contracts"]["wrapper.strike"]["emitted"],
+        },
         "agent.output": {
             "required_when_present": ["text", "kind"],
             "kind_values": ["unclassified"],
@@ -1622,8 +1661,31 @@ def test_event_fixture_pins_rolling_contribution_contract() -> None:
 
     end = contracts["wrapper.contribution.end"]
     assert tuple(end["reason_values"]) == events_module.CONTRIBUTION_TERMINAL_REASONS
-    assert end["strike_reaction_values"] == ["reset", "+1", "none"]
+    assert end["strike_reaction_values"] == [
+        rolling_scheduler_module.STRIKE_RESET,
+        rolling_scheduler_module.STRIKE_ADD,
+        rolling_scheduler_module.STRIKE_NONE,
+    ]
     assert "strike_reaction" in end["summary_required"]
+
+
+def test_event_fixture_pins_the_strike_vocabulary_to_the_runner() -> None:
+    """ADR-0070: a Strike names the issue it was charged to and why.
+
+    The fixture's two closed sets are pinned as relationships against the
+    production declarations, so the Runner cannot grow a Strike outcome or a
+    Session ending a Dashboard has never heard of. ``abort`` is in the set
+    only for the Orchestrators that still count Strikes Run-wide; the Python
+    Runner's Strike never stops its Run.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.strike"]
+    assert tuple(contract["outcome_values"]) == events_module.STRIKE_OUTCOMES
+    assert contract["ending_values"] == [outcome.value for outcome in SessionOutcome]
+    assert set(contract["optional"]).isdisjoint(contract["required_when_present"])
+    assert events_module.STRIKE_OUTCOME_ABORT in events_module.STRIKE_OUTCOMES
+    assert "STRIKE_OUTCOME_ABORT" not in Path(loop_module.__file__).read_text(
+        encoding="utf-8"
+    )
 
 
 def test_event_fixture_pins_the_parallel_serial_fallback_contract() -> None:
@@ -4320,7 +4382,8 @@ def test_the_contract_states_a_task_type_labels_origin_is_unobservable() -> None
 def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> None:
     """The fixture note and §14.4 state one fact about the two advanced fixtures.
 
-    ``routing-resolution.json`` stays declared at 2.10. Its sentence about
+    ``routing-resolution.json`` declared that provenance at 2.10 and has since
+    moved to 2.18 for its retry cases. Its sentence about
     ``event-schema.json`` and ``dashboard-insights.json`` must name the same
     later advances the contract names, or a bump leaves the notes disagreeing,
     and the latest advance named must be the version those fixtures declare.
@@ -4357,7 +4420,7 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
 
 
 @pytest.mark.parametrize(("fixture", "expected"), [
-    ("routing-resolution.json", "2.10"),
+    ("routing-resolution.json", "2.18"),
     ("calibration-search.json", "2.5"),
 ])
 def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
@@ -4367,7 +4430,8 @@ def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
 
     Both gained measured-tier obligations at 2.5. Routing also owns 2.9's
     staged migration and preflight deadlines, and 2.10's Python-local Dynamic
-    default, no-Config refusal and exact-dimension publication; Calibration has
+    default, no-Config refusal and exact-dimension publication, and 2.18's
+    per-issue Strike accounting of its retry cases (ADR-0070); Calibration has
     not changed. Pin each decision's revision, not whichever version the header
     later reaches.
     """
@@ -4613,15 +4677,9 @@ def test_dynamic_retry_fixture(case: dict[str, Any]) -> None:
         _RESOLUTION_FOR_RETRY_CASES.reasoning_effort,
         _RESOLUTION_FOR_RETRY_CASES.context_tier,
     )
-    for initial, expected in (
-        (AttemptState.FRESH, case["after_fresh"]),
-        (AttemptState.RETRYING, case["after_retrying"]),
-    ):
-        lifecycle = AttemptLedger()
-        if initial is AttemptState.RETRYING:
-            lifecycle.observe(7, SessionOutcome.NO_PROGRESS)
-        assert lifecycle.observe(7, outcome).value == expected
-        assert lifecycle.skipped(7) is (expected == "skipped")
+    lifecycle = AttemptLedger()
+    lifecycle.observe(7, outcome)
+    assert lifecycle.strikes(7) == case["strikes_charged"]
 
 
 def test_the_dynamic_retry_fixture_classifies_every_ending_there_is() -> None:
@@ -4962,6 +5020,19 @@ def test_every_session_outcome_has_exactly_one_disposition() -> None:
     ]
 
 
+def test_the_fixture_strike_budget_default_is_the_runners() -> None:
+    """N is one number: the ledger's default and the configured default agree.
+
+    The budget is ``max_nmt_strikes`` (ADR-0070), so a ledger built without one
+    and a Run built from an unconfigured :class:`RunConfig` must both give an issue
+    the fixture's default number of Strikes.
+    """
+    assert _ATTEMPT_LIFECYCLE["max_strikes_default"] == DEFAULT_MAX_STRIKES
+    assert RunConfig.__dataclass_fields__["max_nmt_strikes"].default == (
+        DEFAULT_MAX_STRIKES
+    )
+
+
 @pytest.mark.parametrize(
     "row",
     _ATTEMPT_LIFECYCLE["dispositions"] + [_ATTEMPT_LIFECYCLE["advance_disposition"]],
@@ -4970,26 +5041,25 @@ def test_every_session_outcome_has_exactly_one_disposition() -> None:
 def test_each_ending_disposes_as_the_fixture_states(row: dict[str, Any]) -> None:
     """The ending-to-disposition table, driven through both production ledgers.
 
-    Two dials, two seams, one ending: :class:`AttemptLedger` answers whether the
-    issue advances and :class:`EscalationLedger` answers whether the pair
-    changes. Driving them from one row is what keeps them from drifting apart —
-    a crash that started escalating, or a stall that stopped, would fail here
-    rather than in whichever Run first paid for it.
+    Two dials, two seams, one ending: :class:`AttemptLedger` answers how many
+    Strikes the issue has spent and :class:`EscalationLedger` answers whether
+    the pair changes. Driving them from one row is what keeps them from drifting
+    apart — a crash that started escalating, or a stall that stopped, would fail
+    here rather than in whichever Run first paid for it. Every ending charges
+    the same Strike from every state that still has budget (ADR-0070), so the
+    charge is asked of a fresh issue and of one already retrying.
     """
     outcome = (
         None if row["ending"] is None else SessionOutcome(row["ending"])
     )
     rung = ("claude-opus-5", "max")
 
-    for start, expected in (
-        (AttemptState.FRESH, row["from_fresh"]),
-        (AttemptState.RETRYING, row["from_retrying"]),
-    ):
-        attempts = AttemptLedger()
-        if start is AttemptState.RETRYING:
+    for prior in range(DEFAULT_MAX_STRIKES):
+        attempts = AttemptLedger(max_strikes=DEFAULT_MAX_STRIKES)
+        for _ in range(prior):
             attempts.observe(412, SessionOutcome.CRASH)
-        assert attempts.state(412) is start
-        assert attempts.observe(412, outcome).value == expected
+        attempts.observe(412, outcome)
+        assert attempts.strikes(412) == prior + row["strikes_charged"]
 
     escalation = EscalationLedger(rung=rung)
     escalation.observe(412, outcome)
@@ -5006,23 +5076,29 @@ def test_attempt_lifecycle_walks(case: dict[str, Any]) -> None:
     is asked of :meth:`AttemptLedger.skipped` — the predicate a **Pickup**'s own
     admission calls — rather than recomputed from the state, so a filter that
     read the state and decided what it meant could not pass this while
-    disagreeing with production.
+    disagreeing with production. A step may name its own ``issue``, which is
+    how a case proves one issue's endings leave another's Strikes alone.
     """
-    ref = case["issue"]
     rung = (
         None if case["escalation_rung"] is None else tuple(case["escalation_rung"])
     )
-    attempts = AttemptLedger()
+    attempts = AttemptLedger(max_strikes=case["max_strikes"])
     escalation = EscalationLedger(rung=rung)
 
     for index, step in enumerate(case["steps"]):
+        ref = step.get("issue", case["issue"])
         outcome = (
             None if step["outcome"] is None else SessionOutcome(step["outcome"])
         )
         attempts.observe(ref, outcome)
         escalation.observe(ref, outcome)
 
+        assert attempts.strikes(ref) == step["strikes"], f"step {index}"
         assert attempts.state(ref).value == step["state"], f"step {index}"
+        defeated_by = attempts.defeated_by(ref)
+        assert (
+            None if defeated_by is None else defeated_by.value
+        ) == step["defeated_by"], f"step {index}"
         assert (escalation.owed(ref) == rung and rung is not None) is step[
             "owed_rung"
         ], f"step {index}"

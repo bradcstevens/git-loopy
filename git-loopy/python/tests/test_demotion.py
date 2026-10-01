@@ -1031,27 +1031,28 @@ def test_demotion_notifies_and_cannot_start_a_calibration(forbidden: str) -> Non
     assert forbidden not in _imported_modules(source)
 
 
-def test_demotion_touches_no_strike_machine() -> None:
-    """The **Strike** counter is untouched, per #366's second criterion.
+def test_demotion_touches_no_strike_ledger() -> None:
+    """The **Strike** count is untouched, per #366's second criterion.
 
-    Demotion counts what the Strike machine also counts, and the tempting
+    Demotion counts what the Strike ledger also counts, and the tempting
     economy is to read one from the other. They answer different questions over
-    different windows: Strikes end a **Run** after consecutive no-progress
-    Iterations against *one issue*, while Demotion judges a **Routed pair**
-    across every issue it worked. Sharing a counter would make a **Task type**'s
-    routing depend on which issue happened to be picked up last — and, in the
-    other direction, would let a routing decision end a Run.
+    different windows: a Strike is charged to *one issue* and skips it at the
+    ceiling (ADR-0070), while Demotion judges a **Routed pair** across every
+    issue it worked. Sharing a counter would make a **Task type**'s routing
+    depend on which issue happened to be picked up last — and, in the other
+    direction, would let a routing decision skip an issue.
 
-    Asserted on the name rather than on ``git_loopy.wrapper`` wholesale, because
-    the machine shares that module with the **Wrapper contract** itself; a
-    docstring may name it, and this module's does, but no executable line may.
+    Asserted on the names rather than on ``git_loopy.attempt_lifecycle``
+    wholesale, because a docstring may name the ledger, and this module's does,
+    but no executable line may.
     """
     source = Path(demotion.__file__)
-    assert "git_loopy.wrapper.NMTStrikeStateMachine" not in _imported_modules(source)
+    assert "git_loopy.attempt_lifecycle" not in _imported_modules(source)
+    assert "git_loopy.attempt_lifecycle.AttemptLedger" not in _imported_modules(source)
 
     tree = ast.parse(source.read_text(encoding="utf-8"))
     referenced = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {
         node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
     }
-    assert "NMTStrikeStateMachine" not in referenced
+    assert "AttemptLedger" not in referenced
     assert "record_strike" not in referenced

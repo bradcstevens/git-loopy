@@ -1,16 +1,21 @@
-"""``git_loopy.attempt_lifecycle`` — how many attempts one issue gets (#412).
+"""``git_loopy.attempt_lifecycle`` — how many Strikes one issue may take (#412, ADR-0070).
 
-A Run that cannot make progress on an issue re-picked the same issue, on the
-same pair, every **Iteration**, until the **Strike** ceiling aborted the whole
-Run. Nothing anywhere held the one fact that would have stopped it: *this Run
-has already tried this issue and it did not work*. This module is that fact.
+A Run that cannot make progress on an issue re-picked the same issue on the
+same pair, every **Iteration**, until something stopped it. Nothing anywhere
+held the one fact that would have stopped it: *this Run has already tried this
+issue and it did not work*. This module is that fact.
 
-One monotonic per-issue, per-Run state — **fresh → retrying → skipped** — moved
-by the same **Session outcome** the **Escalation rung**'s ledger reads. The two
-ledgers answer the two dials one ending turns, and they are separate because the
+Since ADR-0070 the fact is a count. Every **Session outcome** charges the issue
+it belongs to one **Strike**, and an issue that has taken ``max_strikes`` of
+them is **skipped** for the rest of the Run. The monotonic per-issue, per-Run
+lifecycle — **fresh → retrying → skipped** — is a projection of that count, so
+there is no per-ending table to drift: no Strikes is fresh, at least one short
+of the limit is retrying, and the limit is skipped.
+
+It is one of the ledgers one ending turns, and they are separate because the
 dials are: :mod:`git_loopy.escalation` decides *whether the pair changes*, and
-this module decides *whether the issue advances at all*. A crash moves this one
-and not that one; every routed issue's first stall moves both.
+this module decides *whether the issue is worked at all*. A crash charges this
+one and not that one; every routed issue's first stall moves both.
 """
 
 from __future__ import annotations
@@ -21,7 +26,7 @@ from enum import Enum
 from git_loopy.config import RoutingLifecyclePosition
 from git_loopy.session_outcome import SessionOutcome
 
-__all__ = ["AttemptState", "AttemptLedger"]
+__all__ = ["AttemptState", "AttemptLedger", "DEFAULT_MAX_STRIKES"]
 
 
 class AttemptState(Enum):
@@ -36,41 +41,48 @@ class AttemptState(Enum):
     SKIPPED = "skipped"
 
 
-#: The states in lifecycle order, so "one step forward" is an index rather than
-#: a table of pairs that could disagree with the enum.
-_ORDER: tuple[AttemptState, ...] = (
-    AttemptState.FRESH,
-    AttemptState.RETRYING,
-    AttemptState.SKIPPED,
-)
-
-#: The endings that buy the issue one more attempt before defeating it. Both are
-#: endings a *second* attempt could plausibly answer differently — a stall
-#: because the **Escalation rung** changes the pair under it, a crash because the
-#: harness is what failed and the harness is not the work. Every other member of
-#: the closed :class:`~git_loopy.session_outcome.SessionOutcome` vocabulary
-#: defeats the issue outright, stated as the complement rather than as a second
-#: list so a sixth ending cannot be silently retried by omission.
-_RETRYABLE_ENDINGS: frozenset[SessionOutcome] = frozenset(
-    {SessionOutcome.NO_PROGRESS, SessionOutcome.CRASH}
-)
+#: The default Strike limit, matching ``max_nmt_strikes``'s own default so a
+#: ledger built without a Config disposes of an issue as a default Run would.
+DEFAULT_MAX_STRIKES = 3
 
 
 @dataclass
 class AttemptLedger:
-    """Which issues this Run has already tried, and how far each one got."""
+    """Which issues this Run has already tried, and how many Strikes each took.
 
-    _states: dict[int | str, AttemptState] = field(default_factory=dict, repr=False)
+    Attributes:
+        max_strikes: How many Strikes one issue may take before this Run skips
+            it. Must be at least 1. Mirrors ``max_nmt_strikes``.
+    """
+
+    max_strikes: int = DEFAULT_MAX_STRIKES
+    _strikes: dict[int | str, int] = field(default_factory=dict, repr=False)
     _defeats: dict[int | str, SessionOutcome] = field(
         default_factory=dict, repr=False
     )
 
+    def __post_init__(self) -> None:
+        if self.max_strikes < 1:
+            raise ValueError(
+                f"max_strikes must be ≥ 1 (got {self.max_strikes!r}); "
+                "an issue could never be worked otherwise."
+            )
+
+    def strikes(self, ref: int | str) -> int:
+        """How many Strikes ``ref`` has taken this Run. An unworked issue has none."""
+        return self._strikes.get(ref, 0)
+
     def state(self, ref: int | str) -> AttemptState:
-        """Where ``ref`` sits now. An issue nobody has worked is fresh."""
-        return self._states.get(ref, AttemptState.FRESH)
+        """Where ``ref`` sits now, projected from its Strike count."""
+        strikes = self.strikes(ref)
+        if strikes == 0:
+            return AttemptState.FRESH
+        if strikes >= self.max_strikes:
+            return AttemptState.SKIPPED
+        return AttemptState.RETRYING
 
     def defeated_by(self, ref: int | str) -> SessionOutcome | None:
-        """The ending that took ``ref`` out of contention, or ``None``.
+        """The ending that charged ``ref``'s last Strike, or ``None``.
 
         Kept here rather than by the **Pickup** that reports it, because the
         ledger is the only thing that knows *which* of several endings was the
@@ -81,7 +93,7 @@ class AttemptLedger:
         return self._defeats.get(ref)
 
     def skipped(self, ref: int | str) -> bool:
-        """Whether ``ref`` is defeated and no **Pickup** may bind it again.
+        """Whether ``ref`` is out of Strikes and no **Pickup** may bind it again.
 
         The predicate rather than a comparison at the call site, for
         :meth:`~git_loopy.escalation.EscalationLedger.owed`'s reason: a filter
@@ -110,34 +122,32 @@ class AttemptLedger:
     def observe(
         self, ref: int | str, outcome: SessionOutcome | None
     ) -> AttemptState:
-        """Move ``ref`` for one ending; answer where it now sits.
+        """Charge ``ref`` one Strike for one ending; answer where it now sits.
 
-        Monotonic by construction: the state only ever indexes forward along
-        :data:`_ORDER`, clamped at the end of it, so there is no clearing rule to
-        get wrong and no ending — including the absence of one — that can put a
-        defeated issue back into contention. That is deliberate rather than
+        Monotonic by construction: the count only ever grows, and it stops at
+        ``max_strikes``, so no ending — including the absence of one — can put
+        a skipped issue back into contention. That is deliberate rather than
         convenient: an issue that advanced *once* under a Run that cannot finish
         it is the ordinary shape of a Run grinding, not evidence the Run has
         recovered, and only a fresh Run withdraws the claim.
+
+        Every ending charges the same single Strike (ADR-0070). Which ending it
+        was decides what the **Escalation rung** and the **Attempt evidence**
+        ledgers do, not how many tries the issue has left.
 
         Args:
             ref: The issue the ending belongs to.
             outcome: That session's **Session outcome**, or ``None`` where the
                 Iteration advanced its issue and so reached no ending at all.
-                An absence spends no attempt — the ledger counts *failures to
+                An absence charges nothing — the ledger counts *failures to
                 advance*, and work that lands is the opposite of one.
 
         Returns:
             Where ``ref`` now sits.
         """
-        current = self.state(ref)
-        if outcome is None:
-            return current
-        if outcome in _RETRYABLE_ENDINGS:
-            moved = _ORDER[min(_ORDER.index(current) + 1, len(_ORDER) - 1)]
-        else:
-            moved = AttemptState.SKIPPED
-        self._states[ref] = moved
-        if moved is AttemptState.SKIPPED and ref not in self._defeats:
+        if outcome is None or self.skipped(ref):
+            return self.state(ref)
+        self._strikes[ref] = self.strikes(ref) + 1
+        if self.skipped(ref):
             self._defeats[ref] = outcome
-        return moved
+        return self.state(ref)

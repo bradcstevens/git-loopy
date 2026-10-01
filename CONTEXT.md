@@ -50,7 +50,7 @@ _Avoid_: automation (too broad), tooling work, prompt engineering (a part, not t
 **Run**:
 One invocation of the git-loopy loop, identified by a `run_id`, spanning serial
 **Iterations** and/or parallel **Lane contributions** until its authorized work is
-exhausted, an **Automation stop** occurs, or the strike limit is reached.
+exhausted, it can take none of the work that remains, or an **Automation stop** occurs.
 
 **Execution host**:
 Where one **Lane contribution** executes. A Run selects one host; each contribution
@@ -230,18 +230,17 @@ as open — outranks the unknown.
 _Avoid_: poll, refresh, shallow pool, live pool.
 
 **Strike**:
-One issue this **Run** has given up on. The count is the **Attempt lifecycle**'s terminal
-position made billable: an issue charges exactly one Strike at the ending that **Skip**s it, and
-a fixed number of them ends the run. Nothing else charges — an **Iteration** that made no
-progress and a **Lane contribution** that terminated unpublished each spend an attempt without
-necessarily defeating anything, and an Iteration is not a thing a Run can give up on. Progress
-resets nothing, because the lifecycle it counts is monotonic: an issue an advance rescued was
-never given up on, and one that was is not un-given-up-on by another issue's advance. So
-`--max-nmt-strikes` reads as *how many issues this Run may abandon before it stops*. Both modes
-tick one shared count, so in **Parallel mode** reaching the limit stops refill and grants no
-further serial Iteration, then ends the run once started work has drained. A **Runner** with no
-**Pickup** has no lifecycle to charge from and keeps the original accounting — a Strike per
-no-progress Iteration, consecutive, reset by progress — which is the line
+One **Session outcome** charged to the issue whose session it was. Every ending — silent
+no-progress, timeout, crash, no more tasks, content-filtered — charges exactly one, and a session
+that advanced its issue reached no ending and charges nothing. Strikes are counted per issue, per
+**Run**: what one issue spends no other issue loses. `--max-nmt-strikes` is N, the number each
+issue gets, so it reads as *how many times this Run may try an issue that keeps ending badly*;
+the issue is retried until it holds N and is **Skip**ped then, and the **Attempt lifecycle** is
+that count's projection. Strikes are monotonic: progress refunds none, on that issue or another,
+and a skipped issue is charged nothing further. The Run never stops on Strikes — a Run that has
+skipped everything it could take ends as an **All-skipped Run** (ADR-0070). A **Runner** with no
+**Pickup** has no issue to charge and keeps the original accounting — a Strike per no-progress
+Iteration, consecutive, reset by progress, ending the Run `stuck` at the limit — which is the line
 `conformance/progress-strikes.json` forks along.
 _Avoid_: failure, miss, no-progress count.
 
@@ -252,8 +251,8 @@ timeout, crash, an explicit declaration that no tasks remain, and content-filter
 a session that advanced its issue reached none of the three that are claims about the
 work, because a commit refutes each. A timeout and a crash are facts about a session the
 Orchestrator lost, which progress does not launder. Distinct from a **Strike**,
-which is the Run's *accounting* of a result: several endings tick the same strike, and
-the ending is what says which. Distinct too from an Iteration's outcome in the Run
+which is the Run's *accounting* of a result: each ending charges its issue one, and the
+ending is what says why. Distinct too from an Iteration's outcome in the Run
 summary, which reports what the work produced rather than how the session finished.
 _Avoid_: exit code, session status, failure reason.
 
@@ -466,17 +465,18 @@ _Avoid_: quit, kill, abort.
 **Wind-down**:
 The Run-scoped state in which no new work starts, announced on the trace so a client
 attaching to a draining Run is never shown a healthy one. It has two independent axes.
-Its **cause** is closed — an operator **Stop**, the **Strike** ceiling, or a spent
-iteration cap — and a **Pool** that simply ran out is *not* one: a Run that finished the
+Its **cause** is closed — an operator **Stop**, the **Strike** ceiling of an
+**Orchestrator** that still counts Strikes Run-wide, or a spent iteration cap — and a **Pool** that simply ran out is *not* one: a Run that finished the
 work it had is not winding down. Its **stage** is an ordered, non-decreasing ladder:
 `drain` stops refill while started contributions finish and integrate, then `cancel`
 cancels the agent sessions still running, and only an operator Stop ever reaches
 `cancel`, because nothing cancels a spent cap or a Strike drain. The Run announces the
 **latch** rather than the gesture that asked for it, once per transition — so a third
-gesture announces nothing, and a Stop pressed during a Strike drain escalates rather
-than re-latching. The latch is shared but its exit is asymmetric: a green publication
-makes a Strike abort's condition false and lifts that drain, which is announced too,
-while an operator Stop and a spent cap are durable and never lift. The count of
+gesture announces nothing, and a Stop pressed during a drain already latched escalates
+it rather than re-latching. An operator Stop and a spent cap are durable and never lift.
+The Python Runner charges Strikes per issue and never drains on them (ADR-0070), so the
+revocable Strike drain it once lifted on a green publication survives only in the
+vocabulary a replayed log needs. The count of
 contributions still in flight travels with it, and a serial Run's `0` is an observed
 none rather than an unknown. A trace carrying no Wind-down says nothing about whether
 its Run was stopped, and the `interrupted` outcome is never read as one — it also covers
@@ -1146,8 +1146,9 @@ declaration is the **Agent** saying there is nothing to do — makes the next **
 issue resolve to the rung instead of its **Routed pair**, reporting the escalated **Routing
 source** so a retry at a dearer pair is never mistaken for a routed one. Escalation is **once**
 (a single rung, not a ladder), **sticky** for the rest of the **Run** so the issue does not fall
-back to the pair that already stalled on it, **strike-free** because trying harder must not be
-punished by the mechanism that aborts a **Run**, a **no-op** where the pair in force already
+back to the pair that already stalled on it, **strike-free** because the stall that bought the
+rung already charged its issue the one **Strike** it costs, and the retry is charged only by its
+own ending, a **no-op** where the pair in force already
 equals the rung — which since ADR-0056 includes the **Default pair**, so unclassified work is
 retried at what it already ran on — and per issue rather than per mode — a **Lane** and a serial
 **Iteration** read and feed one ledger. It is configurable from the **Config** file only and on
@@ -1157,14 +1158,14 @@ because progress is commit-shaped and not quality-shaped.
 _Avoid_: retry model, fallback pair (that is the **Default pair**), escalation ladder.
 
 **Attempt lifecycle**:
-How many attempts one issue gets in one **Run**, as a single monotonic state per issue: **fresh**
-(not yet worked, or worked and advancing), **retrying** (one failed attempt spent) and
-**skipped** (out of contention for the rest of the Run). Each **Session outcome** disposes of the
-issue: silent no-progress and a crash move it one step, while a timeout, an explicit
-no-more-tasks and a content-filtered turn defeat it outright — and an **Iteration** that advanced
-its issue reached no ending, so it spends no attempt and refunds none. It is the other dial the
+How many attempts one issue gets in one **Run**, as a single monotonic state per issue projected
+from its **Strikes**: **fresh** (none), **retrying** (fewer than N, the `--max-nmt-strikes`
+budget) and **skipped** (N, out of contention for the rest of the Run). Every **Session outcome**
+charges the issue one Strike, so every ending is retried until N — an operator who wants an ending
+to defeat an issue on first sight sets N to `1` — and an **Iteration** that advanced its issue
+reached no ending, so it spends no attempt and refunds none (ADR-0070). It is the other dial the
 **Escalation rung** shares an ending with: the rung decides whether the *pair* changes, this
-decides whether the issue is worked again, and the two disagree on a crash. Per Run and in memory
+decides whether the issue is worked again, and only silent no-progress turns both. Per Run and in memory
 like the rung, and for the same reason with a sharper edge — it is **never written to the
 tracker**, because a demotion there would outlive the Run that made it and would put the runner
 inside the triage state machine it is only ever a consumer of. It is what a **Routing
@@ -1200,9 +1201,8 @@ reading the one lifecycle: a serial pickup declines the candidate it had chosen 
 silently would be the indefinite passing-over that record exists to make visible. A **Lane**
 pickup, whose only decline hands the candidate straight back to the list it came from, narrows
 that list instead — one skip record per turn forever is not more visible than one, and the seam
-that defeated the issue already wrote the one. A Skip is also what charges a **Strike**: exactly
-one, at the ending that reaches this disposition, which is why the ceiling counts issues
-abandoned rather than Iterations wasted.
+that defeated the issue already wrote the one. A Skip is what the N-th **Strike** an issue is
+charged reaches: the ending that charged it is the one recorded as the defeat.
 _Avoid_: blacklist, ban, exclusion (that is a **Pool exclusion**, decided at collection).
 
 **All-skipped Run**:
@@ -1211,8 +1211,9 @@ How a **Run** ends when a **Pickup** finds the **Pool** non-empty and can bind n
 Run can end — an open native blocker or an open closing pull request (an
 **All-blocked Run**) — or any refusal is an **Unresolved readiness** one. It is not an empty Pool
 — "there is nothing to do" and "I could not take any of what there is" are different facts about
-the repository, and only the first is a finished Run — and it is not a **Strike**, because that
-**Iteration** spends no session and gives up on nothing new. It is terminal on the spot rather
+the repository, and only the first is a finished Run — and it charges no **Strike**, because that
+**Iteration** spends no session. It is also how a Run that skipped everything ends, since a Run
+never stops on Strikes. It is terminal on the spot rather
 than counted, since an Iteration that charges nothing and binds nothing would otherwise re-walk
 the same Pool and skip the same candidates for as long as the Run has **Iteration** budget. It
 is a claim about the *work* in the Pool, so only refusals that read something may establish it.
@@ -1368,10 +1369,9 @@ _Avoid_: fallback, temporary, pending, unverified (that is an **Observation** cl
 The Run-end replacement of a **Measured routing** entry whose **Routed pair** stopped making
 progress on real work. Its signal is counted per **Routed pair** from the Run's finalized
 **Lane contributions** — a contribution that reached a terminal disposition without publishing is
-a **no-progress** one — and deliberately *not* from the **Strike** counter, which is a single
-Run-scoped counter every **Lane** shares and any Lane's progress resets, so it can never carry a
-per-pair meaning; the Strike counter's own job, ending a Run that is going nowhere, is unchanged
-(ADR-0030). The threshold is **Config**, and it is an absolute bar rather than a comparison:
+a **no-progress** one — and deliberately *not* from the **Strike** count, which is charged to
+issues rather than pairs, so it can never carry a per-pair meaning; the Strike count's own job,
+skipping an issue that keeps ending badly, is unchanged (ADR-0030, ADR-0070). The threshold is **Config**, and it is an absolute bar rather than a comparison:
 nothing is claimed about which pair would have done better, only that this one is failing. It is
 evaluated and applied after the **Run** ends and never mid-Run, at the one quiescent point where
 every Lane has finalized and nothing is in flight to race it over the single tracked file — which
