@@ -1,0 +1,1002 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.17",
+  "decision_note": "A candidate that an open pull request will close when merged is **Awaiting merge**, and is not **Pickup**-admissible (Wrapper contract section 3.3.1, contract 2.17; ADR-0069, amending ADR-0047). **Readiness** widens from `every native blocked_by dependency is closed` to `nothing outside the Run stands between the candidate and its session`: no open blocked_by dependency and no open pull request that closes it. The work already exists and waits on a merge, so a session would redo it, and the fact clears itself when the pull request merges or closes.",
+  "verdict_note": "This fixture pins reasons and unbound-Pool classes, not a verdict literal. issue-readiness.json's verdicts are `ready` and `blocked`, and that fixture stays as it is; an Awaiting-merge candidate is reported by its skip reason, and is never described as **Blocked**, which names an open dependency.",
+  "skip_reasons": [
+    {
+      "reason": "blocked_by_open_dependency",
+      "names": "open_blockers",
+      "unbound_pool_class": "waiting",
+      "pin_read": "refused",
+      "note": "Unchanged from issue-readiness.json: at least one blocked_by dependency was read and is open, and the reason names every one. It outranks both others, so every candidate **Blocked** today reports exactly the reason it reports today."
+    },
+    {
+      "reason": "awaiting_pull_request_merge",
+      "names": "open_closing_pull_requests",
+      "unbound_pool_class": "waiting",
+      "pin_read": "refused",
+      "note": "At least one pull request that will close the candidate was read as open, a draft included. The reason names every open closing pull request by full owner/repo#number, in connection order, the way blocked_by_open_dependency names blockers: `awaiting_pull_request_merge: <ref>[, <ref>]`. It reports an assertion that was read, and the operator's next act is to merge or close what it names."
+    },
+    {
+      "reason": "readiness_unprovable",
+      "names": "nothing",
+      "unbound_pool_class": "unresolved",
+      "pin_read": "unread",
+      "note": "Unchanged in meaning, widened in cause: no assertion could be read. Besides an incomplete blockedBy connection or an unreadable blocker node, it now covers a closing-references connection that may be incomplete, an unreadable reference node, and a pull-request state that could not be read -- each only where the candidate's reads proved neither wait. It names nothing, and still outranks every claim about the work in the unbound-Pool rule."
+    }
+  ],
+  "unbound_pool_classes": [
+    "admitted",
+    "waiting",
+    "unresolved"
+  ],
+  "precedence": [
+    "blocked_by_open_dependency",
+    "awaiting_pull_request_merge",
+    "readiness_unprovable"
+  ],
+  "precedence_note": "A candidate reports the first reason in `precedence` its reads establish, and is admissible only when they establish none. Blocked outranks Awaiting merge, so a candidate carrying both names its blockers and only its blockers. Both proven waits outrank readiness_unprovable, in either connection: a fact that was read is never displaced by one that could not be.",
+  "read": {
+    "transport": "graphql",
+    "connection": "closedByPullRequestsReferences",
+    "hops": 1,
+    "candidate_kinds": [
+      "issue",
+      "pull_request"
+    ],
+    "reference_fields": [
+      "id",
+      "number",
+      "repository.name",
+      "repository.owner.login"
+    ],
+    "ref_format": "<repository.owner.login>/<repository.name>#<number>",
+    "state_key": "id",
+    "zero_valued_fields": [
+      "id",
+      "number"
+    ],
+    "carriers": {
+      "view": {
+        "pages_to_completion": true,
+        "page_size": 100
+      },
+      "list": {
+        "pages_to_completion": false,
+        "page_size": 100
+      }
+    },
+    "rides": [
+      "collection",
+      "membership",
+      "authoritative_re_read"
+    ],
+    "state_read": {
+      "transport": "graphql",
+      "field": "nodes(ids:)",
+      "fields": [
+        "id",
+        "state"
+      ],
+      "max_ids_per_request": 100,
+      "states": [
+        "open",
+        "merged",
+        "closed"
+      ],
+      "refusing_states": [
+        "open"
+      ]
+    },
+    "unread_causes": [
+      "reference_unreadable",
+      "state_request_failed",
+      "state_node_null"
+    ],
+    "connection_note": "GitHub records the pull request that will close an issue in a structured field, just as it records a blocked_by edge: the issue's closedByPullRequestsReferences connection, which gh issue view and gh issue list both serve as `--json closedByPullRequestsReferences` (gh 2.94.0 and later). The default connection omits pull requests closed without merging and keeps merged ones, and gh's projection of each node carries its id, number, url and repository but no state. So being in the connection proves nothing on its own, and the state is a second read (`state_read`). One hop, never traversed: a pull request's own checks, reviews, mergeability and references are never read.",
+    "carrier_note": "gh projects neither totalCount nor pageInfo for this connection, so the carrier decides completeness (open question 2). gh issue view pages the connection a hundred nodes at a time until hasNextPage is false, so a view-carried connection is complete at any length. gh issue list pages only the Issues connection and asks each issue for one page of a hundred references, so a list-carried connection of fewer than 100 nodes is complete and one of exactly 100 may have been cut short. A reference node gh rendered from null arrives as its zero value -- empty id, number 0 -- and is unreadable (`zero_valued_fields`).",
+    "rides_note": "The references are one more field on every read that already decides blocker Readiness, and each such read resolves its own states (open question 3): the section 3.1 collection read (`collection`), once its candidates are read and before the Pickup walk; each **Membership read** (`membership`), from its list call; and each authoritative re-read of one candidate (`authoritative_re_read`) -- a Lane's own Pickup validation, and the re-read a candidate gets when its **Routing preparation** starts (section 14.6). No read takes a verdict from states another read resolved, so a merge between two reads is seen by the second. The serial Pickup walk and Lane candidacy take their verdicts from the read that carried them and issue no read of their own.",
+    "state_read_note": "Only a pull request read as open refuses. A draft reports OPEN, so being a draft is never read. MERGED and CLOSED never refuse: a merged pull request can leave its issue open, and a closed one will never close it. A read collects the distinct ids its candidates carry and resolves them with GraphQL `nodes(ids:)`, at most 100 ids a request (open question 1), so its cost grows with the distinct references it carries, never with its candidates, and is nothing when no candidate carries one.",
+    "unread_note": "`unread_causes` closes why a reference was not read: `reference_unreadable` (gh rendered the node from null, so there is no id to resolve), `state_request_failed` (the request carrying its id failed -- only the ids that request carried are unread), and `state_node_null` (the request returned null for the id: the token cannot see the pull request). Each leaves the candidate's Readiness unproven unless the same candidate carries a blocker or a pull request read as open. `state_failure_cases` pins that scope with reads whose split is forced -- every request full, or every request failed -- so the count a failure leaves unread depends neither on how a member batches its ids nor on which of its requests fail."
+  },
+  "answers": [
+    {
+      "question": "more_than_100_references",
+      "asked": "One GraphQL nodes(ids:) request resolves at most 100 ids. What does `at most one extra request per read` mean for a read whose candidates carry more than 100 references?",
+      "answer": "A read resolves the distinct pull-request ids its candidates carry in ceil(distinct / 100) requests. Cost grows with the distinct references a read carries, never with its candidates; a shared pull request is resolved once, and a read carrying none makes no request. `At most one extra request per read` is the case of up to 100 distinct references. A failed request leaves unread only the ids it carried, so a candidate whose pull request another request read as open is still Awaiting merge.",
+      "pinned_by": [
+        "read.state_read.max_ids_per_request",
+        "state_request_cases",
+        "case:a-hundred-and-one-distinct-references-cost-two-requests",
+        "case:no-reference-costs-no-request",
+        "state_failure_cases",
+        "case:a-failed-request-leaves-unread-only-the-ids-it-carried",
+        "case:an-open-pull-request-outranks-an-unread-state"
+      ]
+    },
+    {
+      "question": "connection_completeness",
+      "asked": "gh's projection of closedByPullRequestsReferences carries no totalCount. What is the counterpart of the rule that makes an incomplete blockedBy connection unprovable, or why is none needed?",
+      "answer": "The carrier decides. A view-carried connection is complete, because gh issue view pages it to its end. A list-carried connection of exactly one full page, 100 nodes, is incomplete, because gh issue list requests one page and exports no pageInfo; fewer than 100 is complete. An incomplete connection, an unreadable reference node, a failed state request and a null state node each leave Readiness unproven -- readiness_unprovable -- unless the same candidate carries a blocker or a pull request read as open, which proves the refusal on its own.",
+      "pinned_by": [
+        "read.carriers",
+        "read.zero_valued_fields",
+        "read.unread_causes",
+        "completeness_cases",
+        "case:a-list-carried-full-page-is-incomplete",
+        "case:an-incomplete-connection-with-no-open-pull-request-is-unprovable",
+        "case:an-incomplete-connection-with-an-open-pull-request-awaits-merge",
+        "case:an-unreadable-reference-node-is-unprovable"
+      ]
+    },
+    {
+      "question": "authoritative_re_reads",
+      "asked": "Readiness is decided today from the serial Pickup's per-candidate re-read and from the Lane's re-read. Does each also resolve pull-request states, and at what cost?",
+      "answer": "Yes. Every read that decides blocker Readiness carries the references and resolves their states itself: the section 3.1 collection read, each Membership read, and each authoritative re-read of one candidate -- a Lane's own Pickup validation, and the re-read a candidate gets when its Routing preparation starts. A re-read of one candidate is view-carried, so its connection is complete, and its states cost one request when the candidate carries a reference and none when it carries none. No verdict is taken from states another read resolved, so a merge between two reads is seen by the second. The serial Pickup walk and Lane candidacy issue no read.",
+      "pinned_by": [
+        "read.rides",
+        "read.carriers.view",
+        "read.rides_note",
+        "case:one-reference-costs-one-request",
+        "case:no-reference-costs-no-request"
+      ]
+    },
+    {
+      "question": "unprovable_blocker_beside_open_pull_request",
+      "asked": "A candidate's blocker read is unprovable and it carries a pull request read as open. Which verdict and reason does it report, and which way does it count in the unbound-Pool rule?",
+      "answer": "awaiting_pull_request_merge, naming the open pull request, counted as waiting. The proven fact wins: whatever the unread blockers turn out to be, the candidate cannot be admitted while the pull request is open, so the truthful report is the wait an operator can end by merging it, not a read an operator must repair. The same rule holds within the closing references, and the other way round a blocker read as open outranks an unread pull-request state.",
+      "pinned_by": [
+        "precedence",
+        "unbound_pool_rule.counted_as",
+        "case:an-open-pull-request-outranks-an-unprovable-blocker-read",
+        "case:an-open-pull-request-outranks-an-unread-state",
+        "case:an-open-blocker-outranks-a-failed-state-read"
+      ]
+    }
+  ],
+  "answers_note": "Each entry of `answers` is one of #692's open questions as the operator settled it: `asked` states the question, `answer` states the ruling, and `pinned_by` names the data that holds a member to that ruling. A `pinned_by` pointer is either a dotted path to a key of this fixture (`read.state_read.max_ids_per_request`), which may name a whole case list (`state_request_cases`), or `case:<id>` for one case in any case list. The pointers trace a ruling to its data for a reader; no member evaluates them.",
+  "cases": [
+    {
+      "id": "no-blocker-and-no-closing-pull-request-is-ready",
+      "candidate": "acme/widgets#200",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": []
+      },
+      "expected": {
+        "admissible": true,
+        "skip_reason": null,
+        "reason": null,
+        "names": [],
+        "unbound_pool_class": "admitted"
+      },
+      "note": "Nothing outside the Run stands between the candidate and its session, so it is admissible exactly as it is today."
+    },
+    {
+      "id": "an-open-closing-pull-request-awaits-merge",
+      "candidate": "acme/widgets#201",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#300",
+            "state": "open",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "awaiting_pull_request_merge",
+        "reason": "awaiting_pull_request_merge: acme/widgets#300",
+        "names": [
+          "acme/widgets#300"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "The 2026-09-26 shape: the work already exists on an open pull request that will close the issue when it merges. A session would redo it, so the candidate is passed over and the reason names the pull request to merge."
+    },
+    {
+      "id": "a-draft-closing-pull-request-awaits-merge",
+      "candidate": "acme/widgets#202",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#301",
+            "state": "open",
+            "draft": true
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "awaiting_pull_request_merge",
+        "reason": "awaiting_pull_request_merge: acme/widgets#301",
+        "names": [
+          "acme/widgets#301"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "A draft is open: its state is OPEN and being a draft is a separate flag the decision never reads. Someone is still drafting the work, and an agent must not duplicate it."
+    },
+    {
+      "id": "a-merged-closing-pull-request-on-an-open-issue-is-ready",
+      "candidate": "acme/widgets#203",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#302",
+            "state": "merged",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": true,
+        "skip_reason": null,
+        "reason": null,
+        "names": [],
+        "unbound_pool_class": "admitted"
+      },
+      "note": "A merged pull request that left its issue open -- merged into a branch other than the default, or the issue reopened after the merge -- never refuses. The default connection keeps merged pull requests, so refusing on any reference would strand such an issue for good."
+    },
+    {
+      "id": "a-closed-unmerged-closing-pull-request-is-ready",
+      "candidate": "acme/widgets#204",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#303",
+            "state": "closed",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": true,
+        "skip_reason": null,
+        "reason": null,
+        "names": [],
+        "unbound_pool_class": "admitted"
+      },
+      "note": "A pull request closed without merging will never close the issue, so it never refuses. The default connection omits one, but a pull request closed between the reference read and the state read still arrives, read as closed."
+    },
+    {
+      "id": "a-closing-pull-request-in-another-repository-awaits-merge",
+      "candidate": "acme/widgets#205",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/platform#40",
+            "state": "open",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "awaiting_pull_request_merge",
+        "reason": "awaiting_pull_request_merge: acme/platform#40",
+        "names": [
+          "acme/platform#40"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "A closing pull request in another repository refuses identically, and the reason carries its full owner/repo#number -- the rule section 3.3.1 already applies to a cross-repository blocker."
+    },
+    {
+      "id": "an-open-blocker-outranks-an-open-closing-pull-request",
+      "candidate": "acme/widgets#206",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 1,
+        "nodes": [
+          {
+            "ref": "acme/widgets#150",
+            "state": "open"
+          }
+        ]
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#304",
+            "state": "open",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "blocked_by_open_dependency",
+        "reason": "blocked_by_open_dependency: acme/widgets#150",
+        "names": [
+          "acme/widgets#150"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "Both waits are proven and Blocked wins, naming its blockers only. That keeps every candidate Blocked today on exactly the reason it reports today, and gives every member one deterministic reason."
+    },
+    {
+      "id": "a-failed-state-read-is-unprovable",
+      "candidate": "acme/widgets#207",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#305",
+            "state": null,
+            "unread": "state_request_failed"
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "readiness_unprovable",
+        "reason": "readiness_unprovable",
+        "names": [],
+        "unbound_pool_class": "unresolved"
+      },
+      "note": "The reference was read, but the request for its state failed, so nothing proves the pull request open or not. Readiness is unproven, never admitted: admitting on an unreadable state would let the one outcome this decision exists to prevent through."
+    },
+    {
+      "id": "several-open-closing-pull-requests-are-named-in-connection-order",
+      "candidate": "acme/widgets#208",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#308",
+            "state": "open",
+            "draft": false
+          },
+          {
+            "ref": "acme/widgets#306",
+            "state": "merged",
+            "draft": false
+          },
+          {
+            "ref": "acme/platform#41",
+            "state": "open",
+            "draft": true
+          },
+          {
+            "ref": "acme/widgets#307",
+            "state": "open",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "awaiting_pull_request_merge",
+        "reason": "awaiting_pull_request_merge: acme/widgets#308, acme/platform#41, acme/widgets#307",
+        "names": [
+          "acme/widgets#308",
+          "acme/platform#41",
+          "acme/widgets#307"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "Every open closing pull request is named, drafts and other repositories included, in the order the connection returned them -- never sorted. The merged one is not named: it is not what the candidate waits on."
+    },
+    {
+      "id": "a-null-state-node-is-unprovable",
+      "candidate": "acme/widgets#209",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#309",
+            "state": null,
+            "unread": "state_node_null"
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "readiness_unprovable",
+        "reason": "readiness_unprovable",
+        "names": [],
+        "unbound_pool_class": "unresolved"
+      },
+      "note": "The state request succeeded but returned null for the id: the token cannot see the pull request. That is a read that failed to establish anything, not a pull request that is gone."
+    },
+    {
+      "id": "an-unreadable-reference-node-is-unprovable",
+      "candidate": "acme/widgets#210",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": null,
+            "state": null,
+            "unread": "reference_unreadable"
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "readiness_unprovable",
+        "reason": "readiness_unprovable",
+        "names": [],
+        "unbound_pool_class": "unresolved"
+      },
+      "note": "gh rendered the reference node from null, so it carries no id to resolve and no reference to name. There may be an open pull request behind it."
+    },
+    {
+      "id": "an-incomplete-connection-with-no-open-pull-request-is-unprovable",
+      "candidate": "acme/widgets#211",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": false,
+        "nodes": [
+          {
+            "ref": "acme/widgets#310",
+            "state": "merged",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "readiness_unprovable",
+        "reason": "readiness_unprovable",
+        "names": [],
+        "unbound_pool_class": "unresolved"
+      },
+      "note": "The carrier may have cut the connection short (completeness_cases), so a reference the read never saw may be open. `complete` is the carrier's verdict; the node shown stands for the page it returned."
+    },
+    {
+      "id": "an-incomplete-connection-with-an-open-pull-request-awaits-merge",
+      "candidate": "acme/widgets#212",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": false,
+        "nodes": [
+          {
+            "ref": "acme/widgets#311",
+            "state": "merged",
+            "draft": false
+          },
+          {
+            "ref": "acme/widgets#312",
+            "state": "open",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "awaiting_pull_request_merge",
+        "reason": "awaiting_pull_request_merge: acme/widgets#312",
+        "names": [
+          "acme/widgets#312"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "One pull request read as open proves the refusal on its own, whatever the rest of the connection holds."
+    },
+    {
+      "id": "an-open-pull-request-outranks-an-unread-state",
+      "candidate": "acme/widgets#213",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#313",
+            "state": null,
+            "unread": "state_request_failed"
+          },
+          {
+            "ref": "acme/widgets#314",
+            "state": "open",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "awaiting_pull_request_merge",
+        "reason": "awaiting_pull_request_merge: acme/widgets#314",
+        "names": [
+          "acme/widgets#314"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "#313 and #314 reached the state read in different requests -- a read carrying more than a hundred distinct ids makes more than one -- and only #313's failed. A failed request leaves unread only the ids it carried (state_failure_cases), so the pull request the other request read as open still proves the wait, and the reason names only what was read."
+    },
+    {
+      "id": "an-open-pull-request-outranks-an-unreadable-reference-node",
+      "candidate": "acme/widgets#214",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": null,
+            "state": null,
+            "unread": "reference_unreadable"
+          },
+          {
+            "ref": "acme/widgets#315",
+            "state": "open",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "awaiting_pull_request_merge",
+        "reason": "awaiting_pull_request_merge: acme/widgets#315",
+        "names": [
+          "acme/widgets#315"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "The unreadable reference is named by nothing; the open pull request proves the wait on its own."
+    },
+    {
+      "id": "an-open-pull-request-outranks-an-unprovable-blocker-read",
+      "candidate": "acme/widgets#215",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 1,
+        "nodes": [
+          {
+            "ref": "other-org/private#14",
+            "state": null,
+            "readable": false
+          }
+        ]
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#316",
+            "state": "open",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "awaiting_pull_request_merge",
+        "reason": "awaiting_pull_request_merge: acme/widgets#316",
+        "names": [
+          "acme/widgets#316"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "Open question 4. Whatever the unread blocker turns out to be, the candidate cannot be admitted while the pull request is open, so the proven fact wins: it reports the wait an operator can end by merging, and counts as waiting."
+    },
+    {
+      "id": "an-open-blocker-outranks-a-failed-state-read",
+      "candidate": "acme/widgets#216",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 1,
+        "nodes": [
+          {
+            "ref": "acme/widgets#151",
+            "state": "open"
+          }
+        ]
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#317",
+            "state": null,
+            "unread": "state_request_failed"
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "blocked_by_open_dependency",
+        "reason": "blocked_by_open_dependency: acme/widgets#151",
+        "names": [
+          "acme/widgets#151"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "The same rule the other way round: a blocker read as open is proven, and an unread pull-request state beside it cannot displace it."
+    },
+    {
+      "id": "an-unprovable-blocker-read-beside-a-merged-pull-request-is-unprovable",
+      "candidate": "acme/widgets#217",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 2,
+        "nodes": [
+          {
+            "ref": "acme/widgets#152",
+            "state": "closed"
+          }
+        ]
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": [
+          {
+            "ref": "acme/widgets#318",
+            "state": "merged",
+            "draft": false
+          }
+        ]
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "readiness_unprovable",
+        "reason": "readiness_unprovable",
+        "names": [],
+        "unbound_pool_class": "unresolved"
+      },
+      "note": "A merged pull request proves no wait, so it cannot outrank the incomplete blocker read beside it. The candidate reports what the blocker read failed to establish, exactly as it would with no pull request at all."
+    },
+    {
+      "id": "a-blocked-candidate-with-no-closing-pull-request-keeps-its-reason",
+      "candidate": "acme/widgets#218",
+      "candidate_kind": "issue",
+      "blocked_by": {
+        "total_count": 2,
+        "nodes": [
+          {
+            "ref": "acme/widgets#153",
+            "state": "open"
+          },
+          {
+            "ref": "acme/widgets#154",
+            "state": "closed"
+          }
+        ]
+      },
+      "closing_pull_requests": {
+        "complete": true,
+        "nodes": []
+      },
+      "expected": {
+        "admissible": false,
+        "skip_reason": "blocked_by_open_dependency",
+        "reason": "blocked_by_open_dependency: acme/widgets#153",
+        "names": [
+          "acme/widgets#153"
+        ],
+        "unbound_pool_class": "waiting"
+      },
+      "note": "A candidate no pull request closes reports exactly what issue-readiness.json has it report today."
+    },
+    {
+      "id": "a-pull-request-candidate-is-never-awaiting-merge",
+      "candidate": "acme/widgets#300",
+      "candidate_kind": "pull_request",
+      "blocked_by": null,
+      "closing_pull_requests": null,
+      "expected": {
+        "admissible": true,
+        "skip_reason": null,
+        "reason": null,
+        "names": [],
+        "unbound_pool_class": "admitted"
+      },
+      "note": "In pull-request mode a pull-request candidate is never refused by this rule, just as blockedBy does not apply to pull requests: a member reads no closing references for it and resolves no state. Its own admission is otherwise out of scope, and the other admission rules still apply to it."
+    }
+  ],
+  "completeness_cases": [
+    {
+      "id": "a-view-carried-connection-is-complete",
+      "carrier": "view",
+      "nodes": 3,
+      "complete": true
+    },
+    {
+      "id": "a-view-carried-full-page-is-complete",
+      "carrier": "view",
+      "nodes": 100,
+      "complete": true,
+      "note": "gh issue view asks for the next page whenever hasNextPage is true, so a hundred nodes is simply a hundred."
+    },
+    {
+      "id": "a-view-carried-connection-past-one-page-is-complete",
+      "carrier": "view",
+      "nodes": 150,
+      "complete": true
+    },
+    {
+      "id": "an-empty-list-carried-connection-is-complete",
+      "carrier": "list",
+      "nodes": 0,
+      "complete": true
+    },
+    {
+      "id": "a-list-carried-connection-short-of-a-page-is-complete",
+      "carrier": "list",
+      "nodes": 99,
+      "complete": true
+    },
+    {
+      "id": "a-list-carried-full-page-is-incomplete",
+      "carrier": "list",
+      "nodes": 100,
+      "complete": false,
+      "note": "gh issue list requests one page of references and exports no pageInfo, so exactly a full page is indistinguishable from a connection cut short."
+    }
+  ],
+  "state_request_cases": [
+    {
+      "id": "no-reference-costs-no-request",
+      "carried": 0,
+      "distinct": 0,
+      "requests": 0,
+      "note": "A read whose candidates carry no reference makes no state request at all."
+    },
+    {
+      "id": "one-reference-costs-one-request",
+      "carried": 1,
+      "distinct": 1,
+      "requests": 1
+    },
+    {
+      "id": "a-shared-pull-request-is-resolved-once",
+      "carried": 2,
+      "distinct": 1,
+      "requests": 1,
+      "note": "One pull request closing two candidates is one id to resolve."
+    },
+    {
+      "id": "a-hundred-distinct-references-cost-one-request",
+      "carried": 100,
+      "distinct": 100,
+      "requests": 1
+    },
+    {
+      "id": "a-hundred-and-one-distinct-references-cost-two-requests",
+      "carried": 101,
+      "distinct": 101,
+      "requests": 2,
+      "note": "Open question 1: at most 100 ids a request, so a larger read pays one request per hundred distinct ids."
+    },
+    {
+      "id": "duplicates-never-cost-a-second-request",
+      "carried": 150,
+      "distinct": 100,
+      "requests": 1,
+      "note": "Cost follows the distinct ids, never the references carried or the candidates carrying them."
+    },
+    {
+      "id": "two-hundred-and-fifty-distinct-references-cost-three-requests",
+      "carried": 250,
+      "distinct": 250,
+      "requests": 3
+    }
+  ],
+  "state_failure_cases": [
+    {
+      "id": "a-failed-request-leaves-unread-only-the-ids-it-carried",
+      "carried": 200,
+      "distinct": 200,
+      "requests": 2,
+      "failed_requests": 1,
+      "expected": {
+        "unread": 100,
+        "read": 100,
+        "unread_cause": "state_request_failed"
+      },
+      "note": "Open question 1: two hundred distinct ids fill two requests of a hundred however a member batches them, so the request that failed leaves exactly its hundred ids unread and the other hundred keep the states their request returned. A member that let one failed request unread the whole read would leave all two hundred unread."
+    },
+    {
+      "id": "two-failed-requests-of-three-leave-the-third-read",
+      "carried": 300,
+      "distinct": 300,
+      "requests": 3,
+      "failed_requests": 2,
+      "expected": {
+        "unread": 200,
+        "read": 100,
+        "unread_cause": "state_request_failed"
+      }
+    },
+    {
+      "id": "a-failed-lone-request-leaves-its-whole-read-unread",
+      "carried": 3,
+      "distinct": 2,
+      "requests": 1,
+      "failed_requests": 1,
+      "expected": {
+        "unread": 2,
+        "read": 0,
+        "unread_cause": "state_request_failed"
+      },
+      "note": "Up to a hundred distinct ids is one request, so its failure leaves unread both distinct ids the read's three references carried: the whole read, because the whole read was that one request."
+    },
+    {
+      "id": "every-failed-request-leaves-every-id-unread",
+      "carried": 250,
+      "distinct": 250,
+      "requests": 3,
+      "failed_requests": 3,
+      "expected": {
+        "unread": 250,
+        "read": 0,
+        "unread_cause": "state_request_failed"
+      }
+    }
+  ],
+  "unbound_pool_rule": {
+    "counted_as": {
+      "blocked_by_open_dependency": "waiting",
+      "awaiting_pull_request_merge": "waiting",
+      "readiness_unprovable": "unresolved",
+      "attempt_lifecycle_defeated": null,
+      "routing_refused": null
+    },
+    "outcomes": [
+      {
+        "when": "any_unresolved",
+        "outcome": "preflight_failed"
+      },
+      {
+        "when": "every_refusal_waiting",
+        "outcome": "all_blocked"
+      },
+      {
+        "when": "otherwise",
+        "outcome": "all_skipped"
+      }
+    ],
+    "note": "Each refusal of a Pool that bound nothing counts by its reason. A Readiness reason counts as its own unbound-Pool class. attempt_lifecycle_defeated and routing_refused stand for refusals that are not Readiness verdicts -- fixture-local tokens, never reasons a member emits -- and count toward neither class. The first step whose `when` holds decides the Run's end. `any_unresolved` holds when at least one refusal counts as `unresolved`, and gives preflight_failed, which still outranks both others. `every_refusal_waiting` holds when the Pool refused at least one candidate and every refusal counts as `waiting`, and gives all_blocked. `otherwise` always holds, and gives all_skipped. This is exit-codes.json's count-shaped unbound_pool_cases restated by reason, with `waiting` counting both waits."
+  },
+  "unbound_pool_cases": [
+    {
+      "id": "every-refusal-awaiting-merge-is-all-blocked",
+      "refusals": [
+        "awaiting_pull_request_merge",
+        "awaiting_pull_request_merge"
+      ],
+      "outcome": "all_blocked",
+      "note": "Every candidate waits on a pull request: a wait no work inside the Run can end."
+    },
+    {
+      "id": "awaiting-merge-beside-blocked-is-all-blocked",
+      "refusals": [
+        "awaiting_pull_request_merge",
+        "blocked_by_open_dependency"
+      ],
+      "outcome": "all_blocked",
+      "note": "Both are waits, so the Pool gives the same all_blocked exit a blocker-only Pool gives."
+    },
+    {
+      "id": "awaiting-merge-beside-a-defeated-candidate-is-all-skipped",
+      "refusals": [
+        "awaiting_pull_request_merge",
+        "attempt_lifecycle_defeated"
+      ],
+      "outcome": "all_skipped",
+      "note": "A candidate the Attempt lifecycle defeated is not waiting on anything outside the Run, so the Pool is not all waits."
+    },
+    {
+      "id": "an-unprovable-refusal-outranks-awaiting-merge",
+      "refusals": [
+        "awaiting_pull_request_merge",
+        "readiness_unprovable"
+      ],
+      "outcome": "preflight_failed",
+      "note": "readiness_unprovable keeps outranking every claim about the work, the new wait included."
+    },
+    {
+      "id": "an-unprovable-refusal-outranks-every-other-refusal",
+      "refusals": [
+        "awaiting_pull_request_merge",
+        "blocked_by_open_dependency",
+        "attempt_lifecycle_defeated",
+        "readiness_unprovable"
+      ],
+      "outcome": "preflight_failed"
+    },
+    {
+      "id": "awaiting-merge-beside-a-routing-refusal-is-all-skipped",
+      "refusals": [
+        "awaiting_pull_request_merge",
+        "routing_refused"
+      ],
+      "outcome": "all_skipped"
+    },
+    {
+      "id": "the-2026-09-26-pool-is-all-blocked",
+      "refusals": [
+        "awaiting_pull_request_merge",
+        "blocked_by_open_dependency",
+        "blocked_by_open_dependency",
+        "blocked_by_open_dependency",
+        "blocked_by_open_dependency",
+        "blocked_by_open_dependency",
+        "blocked_by_open_dependency",
+        "blocked_by_open_dependency"
+      ],
+      "outcome": "all_blocked",
+      "note": "The minimised Pool of the 2026-09-26 diagnosis: #679 awaiting #688, and #680 to #686 Blocked behind #679. Runs 01M3FDXCJSH2NBP508VM8FYYA1 and 01M3G8DFQRCM4T7TBNF02YJ54D each ended all_skipped after a session on #679; under this decision the Pool binds nothing, spends no session and ends all_blocked."
+    }
+  ],
+  "pool_note": "Awaiting merge is a **Readiness** verdict, not a **Pool exclusion**. The candidate stays in the **Pool** (section 3.1), Pickup passes it over for the next candidate in the section 3.2 order, and every Iteration reconsiders it. When the pull request merges, the issue closes and leaves the Pool; when it closes unmerged, the candidate is admissible again on the next Iteration, with no human touching the issue.",
+  "strike_note": "Being passed over as Awaiting merge MUST NOT count a **Strike**: the candidate was never attempted, so it costs nothing, exactly as a **Blocked** candidate is passed over.",
+  "pin_note": "An Awaiting-merge **Pin** is an answer about the Pin itself, so it is passed over and spent -- pin-duration.json's `refused` -- exactly as a Pin with an open blocked_by dependency is. A readiness_unprovable Pin has no answer, so it stays live (`unread`).",
+  "lane_note": "In Parallel mode, **Lane candidacy** refuses an Awaiting-merge candidate exactly as it refuses a Blocked one: no reservation, no Pickup skip, and no eviction from the scheduler cache, because the next **Membership read** is the whole of what promotes it once the pull request merges or closes. When a Rolling terminal decision ends all_blocked or all_skipped, wrapper.run.end's `refusals` names each such candidate with its full reason, pull requests included.",
+  "event_note": "No Event field changes and event_schema_version does not move: wrapper.pickup.skipped carries the reason string, and the reason string carries the references. How the **Dashboard** renders the new reason and how the **Unbound-Run notice** names the pull requests to merge land with #694.",
+  "landing_note": "A new fixture rather than new cases, a deliberate departure from #690's Seam 1. Python, shell and PowerShell already claim issue-readiness.json and exit-codes.json, and a claiming suite runs every case of its fixture (section 13.1), so appending these cases there before those members implement them would turn every claiming suite red. Both stay exactly as they are. Each Orchestrator records an **Owed waiver** on this fixture until its own ticket -- Python #695, shell #697, PowerShell #698 -- turns it into a **Fixture claim**, and the Dashboard waives it permanently. exit-codes.json's count-shaped unbound_pool_cases cannot tell an Awaiting-merge refusal from a Blocked one, so this fixture pins the rule by refusal reason."
+}

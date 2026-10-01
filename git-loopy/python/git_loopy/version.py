@@ -9,7 +9,10 @@ does this distribution implement" finds it without reading a feature module.
 from __future__ import annotations
 
 #: The Wrapper contract revision this distribution implements. `docs/wrapper-contract.md`
-#: carries the same number in its header; the two are changed together.
-WRAPPER_CONTRACT_VERSION = "2.16"
+#: carries the same number in its header; the two are changed together. A fixture of that
+#: revision this distribution does not exercise yet is owed, and
+#: `git-loopy/conformance/fixture-claims.json` records it with its tracking issue
+#: (Wrapper contract §13.1).
+WRAPPER_CONTRACT_VERSION = "2.17"
 
 __all__ = ["WRAPPER_CONTRACT_VERSION"]

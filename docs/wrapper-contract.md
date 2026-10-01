@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.16 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.17 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -172,16 +172,19 @@ A candidate the source could **not read** (a failed per-issue view, an unreadabl
 exclusion — it was never discriminated against, and reporting it as one would send the operator to
 fix headings that are probably fine. The existing warn-and-skip path continues to cover it.
 
-A candidate that is not **ready** — one carrying an open native `blocked_by` dependency, or one
-whose dependencies could not be read — is likewise NOT an exclusion (contract 2.0). The exclusion
+A candidate that is not **ready** — one carrying an open native `blocked_by` dependency, one an
+open pull request will close when merged (**Awaiting merge**, contract 2.17, #692), or one whose
+Readiness could not be read — is likewise NOT an exclusion (contract 2.0). The exclusion
 vocabulary above is **closed at those four reasons**, and readiness MUST NOT be added to it. An
-exclusion is an authoring mistake a human must fix; a blocked candidate is correctly authored work
-whose turn has not come, and it clears itself when its last blocker closes. It MUST remain in the
+exclusion is an authoring mistake a human must fix; a Blocked or Awaiting-merge candidate is
+correctly authored work whose turn has not come, and it clears itself when its last blocker closes
+or its closing pull request merges or closes. A candidate that is not ready MUST remain in the
 **Pool** — the closure whitelist, the collection Event and the emptiness test all still need to
 see it, and a Pool that is *empty* ends the Run cleanly (§10) where a Pool that is merely *waiting*
 has not run out of work. Readiness is decided at **Pickup** and at **Lane candidacy** instead
 (§3.3, §3.3.1), never here. See
-[ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md).
+[ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md) and
+[ADR-0069](adr/0069-a-candidate-awaiting-a-pull-request-merge-is-not-pickup-admissible.md).
 
 Exclusions MUST be reported as `wrapper.pool.excluded` Events (§12), before the
 `wrapper.afk_ready.collected` they explain, and MUST also reach the operator's own output rather
@@ -263,7 +266,8 @@ The pin **bypasses the order and nothing else** (ADR-0032), which is four separa
    resumes oldest-first the moment the Pin is **spent** (contract 2.14, #644), and **the first
    Pickup that reads the Pin spends it** for the rest of the invocation. A Pickup reads the Pin
    when it binds it; when it passes it over for an answer about the Pin itself — an open
-   `blocked_by` dependency, a **Lease** held elsewhere, a refused **Task type**, or an
+   `blocked_by` dependency, an open closing pull request (**Awaiting merge**, contract 2.17,
+   #692), a **Lease** held elsewhere, a refused **Task type**, or an
    authoritative read that finds it no longer eligible; or when it completes its Pool or
    Membership read (§2.1 `complete`) and the Pin is not in it. **A Pickup that could not read the
    Pin leaves it live**: an incomplete or failed read that did not show it, or an admission read
@@ -356,8 +360,9 @@ An Orchestrator running serially MUST:
   runner must resolve at Pickup to start the session, and when it is **not a second opinion on
   something a human already asserted**. Eligibility — the `ready-for-agent` label and the AFK-ready
   discriminator (§3.1) — is exactly such an assertion, and re-deciding it here would be a second
-  place for it to disagree. Readiness is not: it is a fact about the tracker's dependency graph,
-  not about how the issue was authored.
+  place for it to disagree. Readiness is not: it is a fact the tracker holds about the issue — its
+  dependency graph, and from contract 2.17 the open pull request that will close it — not about
+  how the issue was authored.
 
   The admissible set is a property of **Pickup**, not of the serial loop: it governs a **Lane**
   pickup (`binding_source: lane_pickup`) exactly as it governs this one.
@@ -397,11 +402,14 @@ again each turn.
 
 ### 3.3.1 Readiness (contract 2.0, MUST)
 
-A candidate carrying an open native `blocked_by` dependency is **not admissible**. An Orchestrator
+A candidate carrying an open native `blocked_by` dependency is **not admissible**, and from
+contract 2.17 neither is a candidate an open pull request will close when merged (**Awaiting
+merge**, below). An Orchestrator
 MUST pass it over and try the next candidate in the §3.2 order. The candidate stays in the **Pool**
 (§3.1), and being passed over MUST NOT count a **Strike** — it was never attempted, so it costs
 nothing and is reconsidered on the next **Iteration** with no human touching the issue. See
-[ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md).
+[ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md) and
+[ADR-0069](adr/0069-a-candidate-awaiting-a-pull-request-merge-is-not-pickup-admissible.md).
 
 **The read.** An Orchestrator MUST resolve readiness through the **GraphQL** `blockedBy` connection,
 not through REST. REST is documented to undercount cross-repository dependencies and to do so
@@ -413,7 +421,9 @@ requirement is on the *source of the connection*, not on which `gh` subcommand f
 **The connection rides a read already being made.** An Orchestrator MUST NOT pay a per-candidate
 round-trip for readiness. `blockedBy` MUST be requested on the §3.1 collection read and the
 **Membership read** (§9), then carried with each candidate. Thus collecting a **Pool** and
-refreshing Membership cost nothing extra however large the Pool grows.
+refreshing Membership cost nothing extra however large the Pool grows. The closing pull-request
+references ride the same reads (contract 2.17, **Awaiting merge**, below); only their states cost
+a request, and that cost is per read, never per candidate.
 
 **Pickup** (serial, §3.3) takes the readiness verdict while it walks the ordered Pool, from the
 connection the collection read carried for that candidate. It MUST NOT issue a second dependency
@@ -422,9 +432,11 @@ continuously refreshed **Membership read**, which is the only read a scheduler t
 that reserves a candidate still performs its normal Pickup validation; candidacy is a *cheaper
 refusal taken earlier*, never a replacement for that validation.
 
-A **Membership read** that could not determine a candidate's blockers leaves readiness **unknown**,
+A **Membership read** that could not determine a candidate's blockers — or, from contract 2.17,
+whether a pull request that will close it is open — leaves readiness **unknown**,
 which is not ready — matching how an incomplete read already leaves the Pool's emptiness unknown
-(§9) rather than reporting it empty.
+(§9) rather than reporting it empty. A refusal the same read did prove outranks the unknown
+(**Precedence**, below).
 
 **One hop.** An Orchestrator MUST read the candidate's own `blockedBy` connection and MUST NOT
 traverse the dependency graph further. Transitive traversal is a **non-goal**: it computes a
@@ -441,12 +453,14 @@ boundary.
 **Completeness.** `blockedBy` is a paginated connection. An Orchestrator MUST request at least
 GitHub's per-issue cap of 50 links in a single page; asking for fewer is a member defect, not an
 expected state. Where the returned nodes do not account for `totalCount`, or a node comes back
-unreadable, readiness has **not been proven** and the candidate MUST be skipped — under
-`readiness_unprovable`, never under `blocked_by_open_dependency`. The two are different facts: the
-first reports that no assertion could be read, and there may be no blocker at all; the second
-reports an open blocker that was read. Reporting an unprovable read as blocked would assert the
-very thing the read failed to establish, and would tell an operator to wait for a blocker to close
-when the wait can never end.
+unreadable, readiness has **not been proven** and the candidate MUST be skipped under
+`readiness_unprovable` — unless its reads prove a refusal that outranks it (**Precedence**,
+below) — and never under `blocked_by_open_dependency` on the strength of what went unread.
+`readiness_unprovable` and `blocked_by_open_dependency` are different facts: the first reports
+that no assertion could be read, and there may be no blocker at all; the second reports an open
+blocker that was read. Reporting an unprovable read as blocked would assert the very thing the
+read failed to establish, and would tell an operator to wait for a blocker to close when the wait
+can never end.
 
 **Reason vocabulary.** A readiness skip MUST report one reason from this closed vocabulary on its
 `wrapper.pickup.skipped` Event (§12):
@@ -454,24 +468,32 @@ when the wait can never end.
 | Reason | Meaning |
 | --- | --- |
 | `blocked_by_open_dependency` | At least one `blocked_by` dependency was read and is open |
-| `readiness_unprovable` | The `blockedBy` connection was incomplete or a node was unreadable |
+| `awaiting_pull_request_merge` | At least one pull request that will close the candidate was read as open (contract 2.17) |
+| `readiness_unprovable` | The `blockedBy` connection was incomplete or a node was unreadable, or (contract 2.17) the closing pull-request references were incomplete or a closing pull request's reference or state could not be read, and no refusal above was proven |
 
-`issue-readiness.json` pins the verdict and the reason for every case.
+A candidate whose reads establish more than one reports the first in the table's order (contract
+2.17, **Awaiting merge**, below). `issue-readiness.json` pins the verdict and the reason for every
+case it holds. `awaiting-merge.json` pins the Awaiting-merge reason, the precedence among all
+three, and the unbound-Pool rule by reason.
 
 **An unread refusal may not establish a terminal Pool fact (contract 2.7, MUST).** A Pool that bound
 nothing ends the Run under one of three reasons, and `readiness_unprovable` outranks the other two.
 Where **every** candidate was refused and **at least one** refusal was `readiness_unprovable`, the
 Run MUST end under `preflight_failed` (§10) — not `all_skipped`, and not `all_blocked`. Where every
-refusal was `blocked_by_open_dependency` the Run ends `all_blocked`, and otherwise `all_skipped`,
-both exactly as before. `conformance/exit-codes.json` pins this as `unbound_pool_cases`, so the
-family asks one rule rather than restating it per member. Where Rolling dispatch reaches
+refusal was a **wait** — `blocked_by_open_dependency`, or from contract 2.17
+`awaiting_pull_request_merge`, in any mix — the Run ends `all_blocked`, and otherwise
+`all_skipped`, both exactly as before. `conformance/exit-codes.json` pins this as
+`unbound_pool_cases`, so the family asks one rule rather than restating it per member. Those
+cases count refusals and cannot tell the two waits apart, so `awaiting-merge.json` restates the
+rule by refusal reason (contract 2.17). Where Rolling dispatch reaches
 `all_blocked` or `all_skipped` from its Pool cache, the Run's end records the candidates behind
 that claim as `refusals` (§12, contract 2.12, #643); `preflight_failed` carries none.
 
 This is §2.2's rule at the next seam down. `all_skipped` means "a labelling mistake an operator can
-fix" and `all_blocked` means "every candidate proves an open blocker" — both are claims about the
-**work**, and `readiness_unprovable` is a report about the **read**. A Pool nobody managed to read
-may be entirely ready, so either verdict would assert the thing the read failed to establish.
+fix" and `all_blocked` means "every candidate proves a wait no work inside the Run can end" — an
+open blocker, or from contract 2.17 an open pull request that will close it. Both are claims about
+the **work**, and `readiness_unprovable` is a report about the **read**. A Pool nobody managed to
+read may be entirely ready, so either verdict would assert the thing the read failed to establish.
 `preflight_failed` states what is true instead: a precondition this Run needs is not satisfied and
 an operator can repair it. Because an unprovable verdict carries no blockers by design, the ending
 MUST name the candidates whose readiness could not be read, or an operator is handed exit 1 and
@@ -489,7 +511,8 @@ came from, so a candidate that will be refused every turn would be reserved, ski
 once per scheduler turn for the rest of the Run. Refusing candidacy says the same thing once.
 
 Refusal is **not eviction**. The candidate MUST stay in the scheduler's cache, because the next
-**Membership read** is the whole of what promotes it: a blocker closing mid-Run makes it
+**Membership read** is the whole of what promotes it: a blocker closing mid-Run — or, from
+contract 2.17, a closing pull request that stops being open — makes it
 candidate-eligible on the following refresh, with no Run restarted and no human touching the issue.
 This is what separates readiness from an **Attempt-lifecycle** defeat, which nothing inside the Run
 can undo and which therefore does evict.
@@ -499,13 +522,114 @@ candidate must still carry `parallel-safe`, must still pass the Attempt-lifecycl
 scheduler's own collision guard is untouched.
 
 Because both seams read the same assertion, **both orders MUST agree**: a Lane MUST NOT reserve an
-issue a serial Iteration of the same Run already found blocked, and a serial fallback taken while
-Lane concurrency is throttled MUST NOT bind one the scheduler already refused. A candidacy refusal
-emits no Pickup skip — it is the churn this rule exists to remove — while a serial Pickup skip
-reports itself as §3.3.1 requires. A Lane's refusal of candidacy is instead recorded on the Run's
-end (contract 2.12, #643): when a Rolling terminal decision ends `all_blocked` or `all_skipped`,
-`wrapper.run.end`'s `refusals` (§12) names every survivor it refused and why, including candidates
-no Lane Pickup ever saw.
+issue a serial Iteration of the same Run already found Blocked or Awaiting merge, and a serial
+fallback taken while Lane concurrency is throttled MUST NOT bind one the scheduler already
+refused. A candidacy refusal emits no Pickup skip — it is the churn this rule exists to remove —
+while a serial Pickup skip reports itself as §3.3.1 requires. A Lane's refusal of candidacy is
+instead recorded on the Run's end (contract 2.12, #643): when a Rolling terminal decision ends
+`all_blocked` or `all_skipped`, `wrapper.run.end`'s `refusals` (§12) names every survivor it
+refused and why, including candidates no Lane Pickup ever saw.
+
+#### Awaiting merge (contract 2.17, MUST)
+
+A candidate that an open pull request will close when merged is **Awaiting merge**, and it is not
+admissible (#692,
+[ADR-0069](adr/0069-a-candidate-awaiting-a-pull-request-merge-is-not-pickup-admissible.md)). The
+work already exists: a session would redo it, and the wait clears itself when the pull request
+merges or closes. **Readiness** therefore means that nothing outside the Run stands between the
+candidate and its session — no open `blocked_by` dependency, and no open pull request that will
+close it. Awaiting merge is a Readiness verdict, not a **Pool exclusion** (§3.1), so everything
+this section requires of a Blocked candidate holds for it too: it stays in the **Pool**, costs no
+**Strike**, is reconsidered on the next **Iteration**, and is refused **Lane candidacy** without
+being evicted. It is never reported as **Blocked**, which names an open dependency.
+
+**Only a pull request read as open refuses.** The pull requests that will close an issue are its
+GraphQL `closedByPullRequestsReferences` connection, which `gh issue view` and `gh issue list` both
+serve as `--json closedByPullRequestsReferences` (`gh` 2.94.0 and later). A pull request read as
+`OPEN` refuses, a draft included: a draft reports `OPEN`, so whether it is a draft is never read.
+`MERGED` and `CLOSED` never refuse. A merged pull request can leave its issue open, and a closed one
+will never close it. The default connection omits pull requests closed without merging but keeps
+merged ones, and gh's projection of a node carries its id, number, url and repository but no
+state, so appearing in the connection proves nothing on its own. A pull-request candidate in PR
+mode (§2) is never Awaiting merge: a member reads no closing references for it and resolves no
+state, just as `blockedBy` does not apply to it.
+
+**One hop.** An Orchestrator MUST read the candidate's own connection and nothing beyond it: a
+pull request's checks, reviews, mergeability and own references are never read. A closing pull
+request in another repository refuses exactly as one in this repository does.
+
+**Every read that decides Readiness resolves its own states.** The connection MUST be requested
+wherever `blockedBy` is: on the §3.1 collection read, on each **Membership read**, and on each
+authoritative re-read of one candidate — a Lane's own Pickup validation, and the re-read a
+candidate gets when its **Routing preparation** starts (§14.6). Each such read MUST resolve the
+states of the pull requests it carries before it takes a verdict, with GraphQL `nodes(ids:)` over
+their distinct ids. One request resolves at most 100 ids, so a read carrying `d` distinct
+references makes `ceil(d / 100)` state requests. Its cost grows with the distinct references it
+carries, never with its candidates. A pull request several candidates share is resolved once, and
+a read carrying none makes no request, so "at most one extra request per read" is the case of up
+to 100 distinct references. A re-read of one candidate therefore pays one request when that
+candidate carries a reference and none when it carries none. No verdict is taken from states
+another read resolved, so a merge between two reads is seen by the second. The serial Pickup walk
+and Lane candidacy issue no read of their own. They take their verdicts from the read that carried
+them, exactly as they do for `blockedBy`.
+
+**Completeness is decided by the carrier.** gh projects neither `totalCount` nor `pageInfo` for
+this connection. `gh issue view` pages it a hundred nodes at a time until `hasNextPage` is false,
+so a view-carried connection is complete at any length. `gh issue list` pages only the Issues
+connection and asks each issue for one page of a hundred references. A list-carried connection of
+fewer than 100 nodes is therefore complete, and one of exactly 100 is **incomplete**, because it
+may have been cut short. A reference node gh rendered from `null` arrives as its zero value — an
+empty id and number `0` — and is **unreadable**.
+
+**What leaves Readiness unproven.** Each of the following leaves the candidate's Readiness
+unproven — `readiness_unprovable`, never admitted:
+
+- an incomplete connection;
+- an unreadable reference node;
+- a state request that failed, which leaves unread only the ids it carried;
+- a state request that returned `null` for an id, because the token cannot see the pull request.
+
+Admitting on an unread state would bind work that may already sit on an open pull request, which
+is the one outcome this part exists to prevent.
+
+**Precedence.** A candidate reports the first of `blocked_by_open_dependency`,
+`awaiting_pull_request_merge` and `readiness_unprovable` that its reads establish, and it is
+admissible only when they establish none. Blocked outranks Awaiting merge. So every candidate
+Blocked before contract 2.17 reports exactly the reason it reported, and a candidate carrying both
+names its blockers only. Both proven waits outrank `readiness_unprovable`, in either connection. A
+candidate whose `blockedBy` read is unprovable beside a pull request read as open is Awaiting
+merge, naming that pull request, and a blocker read as open outranks an unread pull-request state.
+A fact that was read is never displaced by one that could not be.
+
+**The reason** is `awaiting_pull_request_merge: <owner/repo#N>[, <owner/repo#N>...]`. It names
+every closing pull request read as open by its full reference, in connection order, the way
+`blocked_by_open_dependency` names blockers. It reports an assertion that was read, and the
+operator's next act is to merge or close what it names.
+
+**The family's other rules take it as a wait:**
+
+- **The Pin.** An Awaiting-merge **Pin** is an answer about the Pin itself, so it is passed over
+  and **spent** (§3.2), exactly as a Pin with an open `blocked_by` dependency is. A Pin whose
+  Readiness is unproven stays live.
+- **The unbound-Pool rule.** `awaiting_pull_request_merge` counts as a wait beside
+  `blocked_by_open_dependency` (above). A distinct ending for a Pool that waits only on merges is
+  deliberately not added: both are waits no work inside the Run can end, and each refusal's reason
+  already tells them apart.
+- **Rolling dispatch.** Lane candidacy refuses an Awaiting-merge candidate exactly as it refuses a
+  Blocked one. A Rolling terminal decision's `refusals` (§12) carries each such candidate with its
+  full reason.
+
+**No Event field.** `wrapper.pickup.skipped` carries the reason string, and the reason string
+carries the references. No Event field is added, and `event_schema_version` does not move. No
+fixture the Dashboard reads changes either. So `event-schema.json` and `dashboard-insights.json`
+keep the version pins they declare (§14.4), and the Dashboard core's `WRAPPER_CONTRACT_VERSION`
+keeps its value, as all three did at contract 2.13 (ADR-0069).
+
+`conformance/awaiting-merge.json` pins the read shape, the answers ADR-0069 records, the verdict and
+reason for every case, and the unbound-Pool rule by refusal reason. It is a new fixture rather than
+new cases in `issue-readiness.json` or `exit-codes.json`, which stay exactly as they are. Each
+Orchestrator records an **Owed waiver** on it until its own ticket turns that waiver into a
+**Fixture claim** (§13.1), and the Dashboard records a **Permanent waiver**.
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
@@ -617,7 +741,7 @@ error (exit `2`).
 | `0`  | Clean — cap reached  | The optional iteration cap `N` (§9) is reached.                      |
 | `1`  | Aborted — stuck      | The `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling is spent (§6).        |
 | `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
-| `1`  | Waiting — all blocked | Every Pickup refusal proved an open native blocker (§3.3.1).         |
+| `1`  | Waiting — all blocked | Every Pickup refusal proved a wait: an open native blocker, or an open closing pull request (§3.3.1, contract 2.17). |
 | `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), or an unread refusal left it unresolved (§3.3.1). |
 | `1`  | Stopped — operator   | The operator ended the Run deliberately (§10.1, contract 2.3).       |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
@@ -636,12 +760,14 @@ same Pool for as long as its Iteration cap allowed. A Runner without a Pickup ne
 reason and is not required to name it beyond mapping it (§10 is the family-wide termination
 matrix that `conformance/exit-codes.json` pins for every member).
 
-`all_blocked` is terminal on the same evidence: a Run cannot close a blocker without first
-starting work, and no candidate can start. It deliberately shares exit `1` with `all_skipped`.
+`all_blocked` is terminal on the same evidence: a Run cannot close a blocker, or merge a pull
+request its own Pickup refused to redo, without first starting work, and no candidate can start.
+It deliberately shares exit `1` with `all_skipped`.
 Both leave work unfinished, so an unattended caller must not treat either as the clean,
 exit-`0` empty Pool; the distinct reason is the actionable branch for a caller that can wait for
-dependency closure instead of repairing a refusal. `all_blocked` applies only when every skipped
-candidate proves an open dependency. A mixed Pool remains `all_skipped`, so waiting never hides
+dependency closure or a merge instead of repairing a refusal. `all_blocked` applies only when every
+skipped candidate proves a wait — an open dependency or, from contract 2.17, an open closing pull
+request (§3.3.1). A mixed Pool remains `all_skipped`, so waiting never hides
 work an operator can fix — except where the mix holds a refusal nobody could read, which §3.3.1
 sends to `preflight_failed` instead. Both of these reasons are claims about the *work* in the
 Pool, and neither may be established by a *read* that failed.
@@ -992,7 +1118,9 @@ consumer.
 `{"issue": <issue ref>, "reason": <skip reason>}` entry for every surviving candidate
 the terminal Membership read classified, in §3.2 selection order. A Blocked
 candidate's reason is `blocked_by_open_dependency: <owner/repo#N>, ...`, listing
-every proven open blocker exactly as a serial `wrapper.pickup.skipped` does. A
+every proven open blocker exactly as a serial `wrapper.pickup.skipped` does, and
+an Awaiting-merge candidate's is `awaiting_pull_request_merge: <owner/repo#N>, ...`,
+listing every closing pull request read as open (§3.3.1, contract 2.17). A
 candidate refused by a Lane Pickup repeats the reason that Pickup recorded,
 using the same reason vocabulary; the Pickup skip itself remains unchanged.
 No other ending carries `refusals`, including serial Iterations, `empty_pool`,
@@ -2330,7 +2458,7 @@ validation and never a substitute for one.
   candidate to be worked is prepared first. Finishing an Iteration MUST NOT
   wait for unrelated preparation. A Pickup MAY interrupt that preparation to
   free routing capacity, but MUST NOT cancel another authoritative Pickup's
-  claimed assessment. Blocked, unreadable or otherwise
+  claimed assessment. Blocked, Awaiting-merge (§3.3.1, contract 2.17), unreadable or otherwise
   ineligible candidates remain visibly pending and MUST cost no classifier or
   selector call for preparation. A missing **Task type** is classified at
   preparation *before* static applicability is checked; existing labels stay
