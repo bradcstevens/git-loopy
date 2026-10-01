@@ -98,6 +98,7 @@ _raise_open_file_limit()
 _RUN_TEST_MODULES = frozenset(
     {
         "test_conformance.py",
+        "test_contribution_events_gate.py",
         "test_iteration_end_to_end.py",
         "test_loop_parallel.py",
         "test_rate_card_run_start.py",

@@ -1227,10 +1227,14 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
 
     2.14 retires ``wrapper.pipeline.quiescent`` (ADR-0065). Nothing read it,
     so, as with ADR-0046's removal, the wire axis stays at 1.2.
+
+    2.15 makes a ``contribution_events: true`` declaration an obligation proved
+    by emitted behaviour (ADR-0065). No record changes shape, so the wire axis
+    stays at 1.2.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.14"
+    assert _EVENT_SCHEMA["contract_version"] == "2.15"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1724,6 +1728,9 @@ def _parallel_capability_producers() -> dict[str, bool]:
 
     Read from the package source rather than declared, so the manifest cannot
     stay optimistic after a producer is removed or stay stale after one lands.
+    ``contribution_events`` is deliberately absent: a source grep is a mention,
+    not a claim (ADR-0049), so that declaration is proved by what faked Parallel
+    Runs emit in ``test_contribution_events_gate.py`` (ADR-0065).
     """
     package = Path(events_module.__file__).parent
     sources = "\n".join(
@@ -1731,20 +1738,11 @@ def _parallel_capability_producers() -> dict[str, bool]:
         for path in sorted(package.rglob("*.py"))
         if path.name != "events.py"
     )
-    lifecycle_constants = [
-        name
-        for name in events_module.__all__
-        if isinstance(value := getattr(events_module, name), str)
-        and value in events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
-    ]
     return {
         "parallel_mode": (package / "rolling_scheduler.py").exists(),
         "rolling_dispatch": "RollingScheduler" in sources,
         "integration_backlog": "integration_backlog" in sources,
         "adaptive_lane_limit": "ConcurrencyController" in sources,
-        "contribution_events": any(
-            re.search(rf"\b{constant}\b", sources) for constant in lifecycle_constants
-        ),
     }
 
 
@@ -1878,15 +1876,13 @@ def test_event_fixture_pins_run_start_host_disclosures() -> None:
 def test_python_parallel_manifest_matches_the_producers_it_has() -> None:
     """A declared capability is a claim about this distribution's own code.
 
-    ``contribution_events`` is the one that matters today: the Lane-contribution
-    lifecycle literals are reserved in :mod:`git_loopy.events` but no module
-    emits them, so declaring them available would advertise a stream no replay
-    will ever contain. Derived from the source, this fails the moment the
-    declaration and the producers disagree in either direction.
+    Derived from the source, this fails the moment a structural declaration and
+    its producer disagree in either direction. ``contribution_events`` is held
+    to behaviour instead, by ``test_contribution_events_gate.py`` (ADR-0065).
     """
-    assert events_module.PYTHON_PARALLEL_CAPABILITIES == (
-        _parallel_capability_producers()
-    )
+    declared = dict(events_module.PYTHON_PARALLEL_CAPABILITIES)
+    declared.pop("contribution_events")
+    assert declared == _parallel_capability_producers()
 
 
 _ROLLING_SCHEDULER_SCOPED = tuple(
@@ -3969,6 +3965,11 @@ def _written_contract_version() -> str:
     return match["version"]
 
 
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """A dotted contract version as a comparable tuple of its parts."""
+    return tuple(int(part) for part in version.split("."))
+
+
 def _declared_fixture_contract_versions() -> dict[str, str]:
     """Every fixture's declared Wrapper contract version, by file name."""
     declared: dict[str, str] = {}
@@ -4094,12 +4095,12 @@ def test_no_fixture_claims_a_contract_version_the_contract_has_not_reached() -> 
     be conforming to a version that does not exist.
     """
     written = _written_contract_version()
-    ceiling = tuple(int(part) for part in written.split("."))
+    ceiling = _version_tuple(written)
 
     ahead = {
         name: version
         for name, version in _declared_fixture_contract_versions().items()
-        if tuple(int(part) for part in version.split(".")) > ceiling
+        if _version_tuple(version) > ceiling
     }
     assert ahead == {}, f"fixtures ahead of written contract {written}: {ahead}"
 
@@ -4314,7 +4315,8 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
 
     ``routing-resolution.json`` stays declared at 2.10. Its sentence about
     ``event-schema.json`` and ``dashboard-insights.json`` must name the same
-    later advances the contract names, or a bump leaves the notes disagreeing.
+    later advances the contract names, or a bump leaves the notes disagreeing,
+    and the latest advance named must be the version those fixtures declare.
     """
     clause = (
         "have since advanced to 2.11 with the Run-start issue source, "
@@ -4326,6 +4328,25 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
 
     assert clause in policy
     assert clause in written
+
+    # The shared clause is a prefix, so a later advance can be added to one
+    # note and not the other. Compare every advance each note names, and bind
+    # the latest to the version both advanced fixtures actually declare.
+    advance = re.compile(r"\b(2\.\d+) with\b")
+    policy_history = policy.split("carried it at 2.10", 1)[1].split(
+        "Wire compatibility", 1
+    )[0]
+    written_history = written.split("carried it at 2.10", 1)[1].split(
+        "`discriminator.json` reached", 1
+    )[0]
+    policy_advances = advance.findall(policy_history)
+    written_advances = advance.findall(written_history)
+
+    assert policy_advances == written_advances
+    declared = _declared_fixture_contract_versions()
+    latest = max(policy_advances, key=_version_tuple)
+    assert declared["event-schema.json"] == latest
+    assert declared["dashboard-insights.json"] == latest
 
 
 @pytest.mark.parametrize(("fixture", "expected"), [
@@ -4347,9 +4368,7 @@ def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
     declared = _declared_fixture_contract_versions()
 
     # Non-vacuity: the revision these fixtures name is one the contract reached.
-    assert tuple(int(p) for p in expected.split(".")) <= tuple(
-        int(p) for p in written.split(".")
-    )
+    assert _version_tuple(expected) <= _version_tuple(written)
     assert declared[fixture] == expected, (
         f"{fixture} declares contract {declared[fixture]}, not {expected}"
     )
