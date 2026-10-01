@@ -3750,7 +3750,8 @@ class _Loop:
         if outcome == "all_blocked":
             self._diag.error(
                 "serial Pickup bound nothing: all %d candidate(s) in the Pool "
-                "wait on open blockers; this Run is waiting on blockers",
+                "wait on open blockers or on pull requests to merge; this Run "
+                "is waiting on them",
                 len(pickup.considered),
             )
         else:

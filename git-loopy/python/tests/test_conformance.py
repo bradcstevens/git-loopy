@@ -75,7 +75,20 @@ from git_loopy.gh import (
     ReadStep,
     next_read_step,
 )
-from git_loopy.readiness import BlockedByRead, BlockerNode, decide_readiness
+from git_loopy.readiness import (
+    SKIP_AWAITING_PULL_REQUEST_MERGE,
+    SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
+    SKIP_READINESS_UNPROVABLE,
+    BlockedByRead,
+    BlockerNode,
+    ClosingPullRequestNode,
+    ClosingPullRequestRead,
+    Readiness,
+    closing_connection_complete,
+    decide_readiness,
+    state_failure_scope,
+    state_request_count,
+)
 from git_loopy.issue_order import (
     LABEL_PRIORITY,
     MAX_ACCEPTED_YEAR,
@@ -5364,12 +5377,10 @@ def test_readiness_fixture_drives_the_python_readiness_seam(
 # **Pickup**-admissible. ADR-0069 (amending ADR-0047), Wrapper contract section
 # 3.3.1, contract 2.17.
 #
-# Like the readiness block above when it landed, these tests pin the *fixture*:
-# its vocabularies, and that every expected result follows from its own inputs.
-# They deliberately drive no production seam. Python (#695), shell (#697) and
-# PowerShell (#698) each owe the fixture until their own ticket claims it
-# (`fixture-claims.json`), and a test here that compared it against a Runner
-# would be a claim the register does not record.
+# The tests above this production adapter pin the fixture against itself.
+# The adapter below is Python's claim (#695): it drives the production
+# Readiness decision, the unbound-Pool rule, and the read's pure halves.
+# shell (#697) and PowerShell (#698) still owe the fixture.
 # ---------------------------------------------------------------------------
 
 _AWAITING_MERGE = _load_fixture("awaiting-merge.json")
@@ -6003,6 +6014,137 @@ def test_the_contract_names_the_awaiting_merge_fixture_and_every_reason_it_pins(
     assert "#### Awaiting merge" in section
     for reason in _awaiting_merge_skip_reasons():
         assert f"`{reason}`" in section, f"§3.3.1 does not describe {reason}"
+
+
+def _awaiting_merge_blocked_by(case: Mapping[str, Any]) -> BlockedByRead:
+    connection = case["blocked_by"]
+    if connection is None:
+        return BlockedByRead.unprovable()
+    return BlockedByRead(
+        total_count=connection["total_count"],
+        nodes=tuple(
+            BlockerNode(
+                ref=node["ref"],
+                state=node["state"],
+                readable=node.get("readable", True),
+            )
+            for node in connection["nodes"]
+        ),
+    )
+
+
+def _awaiting_merge_closing(case: Mapping[str, Any]) -> ClosingPullRequestRead:
+    raw = case["closing_pull_requests"]
+    if raw is None:
+        return ClosingPullRequestRead.none()
+    return ClosingPullRequestRead(
+        complete=raw["complete"],
+        nodes=tuple(
+            ClosingPullRequestNode(
+                ref=node.get("ref"),
+                state=node.get("state"),
+                readable=node.get("unread") != "reference_unreadable",
+                unread=node.get("unread"),
+            )
+            for node in raw["nodes"]
+        ),
+    )
+
+
+def _refusal_pool_class(reason: str) -> str | None:
+    """The production verdict's class, or ``None`` for a non-Readiness refusal."""
+    if reason == SKIP_BLOCKED_BY_OPEN_DEPENDENCY:
+        return Readiness.blocked(reason, ("acme/widgets#1",)).pool_class
+    if reason == SKIP_AWAITING_PULL_REQUEST_MERGE:
+        return Readiness.blocked(
+            reason, closing_pull_requests=("acme/widgets#1",)
+        ).pool_class
+    if reason == SKIP_READINESS_UNPROVABLE:
+        return Readiness.blocked(reason).pool_class
+    return None
+
+
+def _awaiting_merge_production_outcome(refusals: Sequence[str]) -> str:
+    waiting = 0
+    unresolved = 0
+    for reason in refusals:
+        pool_class = _refusal_pool_class(reason)
+        if pool_class == "waiting":
+            waiting += 1
+        elif pool_class == "unresolved":
+            unresolved += 1
+    return unbound_pool_outcome(
+        candidates=len(refusals), waiting=waiting, unresolved=unresolved
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_fixture_drives_the_python_readiness_decision(
+    case: dict[str, Any],
+) -> None:
+    """#695: the production decision, not a second copy of the fixture's oracle."""
+    expected = case["expected"]
+    verdict = decide_readiness(
+        _awaiting_merge_blocked_by(case),
+        _awaiting_merge_closing(case),
+        candidate_kind=case["candidate_kind"],
+    )
+
+    assert verdict.admissible is expected["admissible"], case["id"]
+    assert verdict.skip_reason == expected["skip_reason"], case["id"]
+    assert verdict.refusal_reason == expected["reason"], case["id"]
+    assert list(verdict.names) == expected["names"], case["id"]
+    assert verdict.pool_class == expected["unbound_pool_class"], case["id"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["completeness_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_fixture_drives_connection_completeness(
+    case: dict[str, Any],
+) -> None:
+    assert closing_connection_complete(
+        carrier=case["carrier"], nodes=case["nodes"]
+    ) is case["complete"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["state_request_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_fixture_drives_the_state_request_count(
+    case: dict[str, Any],
+) -> None:
+    assert state_request_count(case["distinct"]) == case["requests"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["state_failure_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_fixture_drives_the_state_failure_scope(
+    case: dict[str, Any],
+) -> None:
+    assert state_failure_scope(case["distinct"], case["failed_requests"]) == case["expected"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["unbound_pool_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_fixture_drives_the_unbound_pool_rule(
+    case: dict[str, Any],
+) -> None:
+    assert _awaiting_merge_production_outcome(case["refusals"]) == case["outcome"]
 
 
 def test_the_contract_reason_table_is_in_the_fixtures_precedence_order() -> None:

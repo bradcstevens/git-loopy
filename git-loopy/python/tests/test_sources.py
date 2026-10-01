@@ -97,6 +97,7 @@ def _make_issue(
     created_at: str = "",
     comments: tuple[gh_module.Comment, ...] = (),
     blocked_by: BlockedByRead | None = None,
+    closing_references: gh_module.ClosingReferences | None = None,
 ) -> gh_module.Issue:
     return gh_module.Issue(
         number=number,
@@ -110,6 +111,9 @@ def _make_issue(
         blocked_by=blocked_by
         if blocked_by is not None
         else BlockedByRead(total_count=0, nodes=()),
+        closing_references=closing_references
+        if closing_references is not None
+        else gh_module.ClosingReferences.none(),
     )
 
 
@@ -662,6 +666,195 @@ class TestGitHubCollectPool:
         assert item.blocked_by == blockers
         assert readiness.skip_reason == SKIP_BLOCKED_BY_OPEN_DEPENDENCY
         assert gh.issue_view_calls == [42]
+        assert gh.pull_request_state_calls == []
+
+
+def _closing(*pairs: tuple[str, str]) -> gh_module.ClosingReferences:
+    return gh_module.ClosingReferences(
+        complete=True,
+        nodes=tuple(
+            gh_module.ClosingReference(node_id=node_id, ref=ref)
+            for node_id, ref in pairs
+        ),
+    )
+
+
+class TestAwaitingMergeRead:
+    def test_references_ride_the_collection_and_states_are_read_once(self) -> None:
+        """Two candidates, one shared pull request: one state read, not one each."""
+        shared = _closing(("PR_300", "acme/widgets#300"))
+        other = _closing(("PR_301", "acme/widgets#301"))
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(7, closing_references=shared),
+                _make_issue(8, closing_references=other),
+            ],
+            pull_request_states_by_id={"PR_300": "open", "PR_301": "merged"},
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        items = source.collect_pool().items
+
+        assert gh.pull_request_state_calls == [("PR_300", "PR_301")]
+        assert source.readiness(items[0]).refusal_reason == (
+            "awaiting_pull_request_merge: acme/widgets#300"
+        )
+        assert source.readiness(items[1]).admissible is True
+
+    def test_a_candidate_with_no_reference_makes_no_state_request(self) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(7)])
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [item] = source.collect_pool().items
+
+        assert gh.pull_request_state_calls == []
+        assert source.readiness(item).admissible is True
+
+    def test_the_authoritative_re_read_resolves_states_once(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[_make_issue(7, closing_references=_closing(("PR_300", "acme/widgets#300")))],
+            pull_request_states_by_id={"PR_300": "open"},
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+        [item] = source.collect_pool().items
+        gh.pull_request_state_calls.clear()
+
+        refreshed = source.refresh_for_preparation(item)
+
+        assert gh.pull_request_state_calls == [("PR_300",)]
+        assert refreshed.outcome == sources_module.PICKUP_STALE
+
+    def test_a_re_read_with_no_reference_makes_no_state_request(self) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(7)])
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+        [item] = source.collect_pool().items
+
+        assert source.refresh_for_preparation(item).outcome == sources_module.PICKUP_VALIDATED
+        assert gh.pull_request_state_calls == []
+
+    def test_a_failed_state_read_is_unprovable(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[_make_issue(7, closing_references=_closing(("PR_300", "acme/widgets#300")))],
+            pull_request_states_error=gh_module.GhError(["gh", "api", "graphql"], 1, "timeout"),
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [item] = source.collect_pool().items
+        verdict = source.readiness(item)
+
+        assert verdict.skip_reason == "readiness_unprovable"
+        assert verdict.pool_class == "unresolved"
+        assert item.ref == 7
+
+    def test_an_unreadable_reference_is_unprovable_without_a_state_request(self) -> None:
+        unread = gh_module.ClosingReferences(
+            complete=True,
+            nodes=(gh_module.ClosingReference(node_id="", ref="", readable=False),),
+        )
+        gh = FakeGitHubClient(issues=[_make_issue(7, closing_references=unread)])
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [item] = source.collect_pool().items
+
+        assert gh.pull_request_state_calls == []
+        assert source.readiness(item).skip_reason == "readiness_unprovable"
+
+    def test_a_null_state_node_is_unprovable(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[_make_issue(7, closing_references=_closing(("PR_309", "acme/widgets#309")))],
+            pull_request_states_by_id={"PR_309": None},
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [item] = source.collect_pool().items
+
+        assert source.readiness(item).skip_reason == "readiness_unprovable"
+
+    def test_a_draft_refuses_and_a_merged_pull_request_does_not(self) -> None:
+        draft = _make_issue(7, closing_references=_closing(("PR_301", "acme/widgets#301")))
+        merged = _make_issue(8, closing_references=_closing(("PR_302", "acme/widgets#302")))
+        gh = FakeGitHubClient(
+            issues=[draft, merged],
+            pull_request_states_by_id={"PR_301": "open", "PR_302": "merged"},
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        by_ref = {item.ref: source.readiness(item) for item in source.collect_pool().items}
+
+        assert by_ref[7].skip_reason == "awaiting_pull_request_merge"
+        assert by_ref[8].admissible is True
+
+    def test_an_open_blocker_still_outranks_an_open_pull_request(self) -> None:
+        blocked = BlockedByRead(
+            total_count=1,
+            nodes=(BlockerNode(ref="acme/widgets#150", state="open"),),
+        )
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(
+                    7,
+                    blocked_by=blocked,
+                    closing_references=_closing(("PR_304", "acme/widgets#304")),
+                )
+            ],
+            pull_request_states_by_id={"PR_304": "open"},
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [item] = source.collect_pool().items
+
+        assert source.readiness(item).refusal_reason == (
+            "blocked_by_open_dependency: acme/widgets#150"
+        )
+
+    def test_a_pull_request_candidate_stays_admissible(self) -> None:
+        waiting = _make_issue(7, closing_references=_closing(("PR_688", "acme/widgets#688")))
+        gh = FakeGitHubClient(
+            issues=[waiting],
+            prs=[
+                gh_module.PullRequest(
+                    number=688,
+                    title="land it",
+                    body="## Agent Brief\nship\n",
+                    labels=["ready-for-agent"],
+                    state="OPEN",
+                    url="https://github.com/acme/widgets/pull/688",
+                    head_sha="abc",
+                    head_branch="feat",
+                )
+            ],
+            pull_request_states_by_id={"PR_688": "open"},
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh, include_prs=True)
+
+        items = source.collect_pool().items
+        by_ref = {item.ref: item for item in items}
+
+        assert source.readiness(by_ref[7]).skip_reason == "awaiting_pull_request_merge"
+        assert by_ref[688].kind == "pr"
+        assert source.readiness(by_ref[688]).admissible is True
+
+    def test_a_closed_unmerged_pull_request_is_admissible_on_the_next_read(self) -> None:
+        """Closed-unmerged leaves the connection. The next collection admits it."""
+        gh = FakeGitHubClient(
+            issues=[_make_issue(7, closing_references=_closing(("PR_303", "acme/widgets#303")))],
+            pull_request_states_by_id={"PR_303": "open"},
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+        [waiting] = source.collect_pool().items
+        assert source.readiness(waiting).skip_reason == "awaiting_pull_request_merge"
+
+        gh.seed_issue(_make_issue(7))
+        [admitted] = source.collect_pool().items
+
+        assert source.readiness(admitted).admissible is True
+
+    def test_a_gh_that_cannot_serve_the_field_fails_preflight_loudly(self) -> None:
+        gh = FakeGitHubClient(gh_version=(2, 93, 0))
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        assert source.preflight() == 1
+        assert gh.issue_list_calls == []
 
     def test_re_verifies_discriminator_on_full_body(self) -> None:
         """If issue_view returns a different body lacking the discriminator, drop it."""

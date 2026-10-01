@@ -6173,6 +6173,43 @@ def test_a_blocked_pin_is_spent_by_the_serial_iteration_that_skips_it(
     assert _bindings(events)[:2] == [(41, "order"), (42, "order")]
 
 
+def test_an_awaiting_merge_pin_is_spent_by_the_serial_iteration_that_skips_it(
+    tmp_path, monkeypatch
+) -> None:
+    """An Awaiting-merge Pin is passed over and spent, like a Blocked Pin (#695)."""
+    awaiting = dataclass_replace(
+        _make_issue(44, labels=["ready-for-agent"]),
+        closing_references=gh_module.ClosingReferences(
+            complete=True,
+            nodes=(gh_module.ClosingReference(node_id="PR_90", ref="x/y#90"),),
+        ),
+    )
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent"]),
+            _make_issue(42, labels=["ready-for-agent"]),
+            awaiting,
+        ],
+        pull_request_states_by_id={"PR_90": "open"},
+    )
+
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=3)))
+
+    events = _logged_events(tmp_path)
+    skipped = [event for event in events if event["type"] == "wrapper.pickup.skipped"]
+    assert skipped[0]["issue"] == 44
+    assert skipped[0]["reason"] == "awaiting_pull_request_merge: x/y#90"
+    latches = [event["issue"] for event in events if event["type"] == "wrapper.serial.requested"]
+    assert latches[:2] == [44, 42]
+    assert _bindings(events)[:2] == [(41, "order"), (42, "order")]
+    assert not any(
+        event["type"] == "wrapper.strike" and event.get("issue") == 44
+        for event in events
+    )
+
+
 def _wire_unreadable_pin(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

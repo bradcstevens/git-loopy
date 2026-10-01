@@ -1473,3 +1473,210 @@ def test_issue_missing_blocked_by_field_is_readiness_unprovable(
     assert verdict.verdict == "blocked"
     assert verdict.skip_reason == SKIP_READINESS_UNPROVABLE
     assert verdict.blockers == ()
+
+
+def _issue_json(**extra: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "number": 7,
+        "title": "t",
+        "body": "b",
+        "labels": [],
+        "state": "OPEN",
+        "url": "https://github.com/acme/widgets/issues/7",
+        "comments": [],
+        "blockedBy": {"totalCount": 0, "nodes": []},
+    }
+    payload.update(extra)
+    return payload
+
+
+def _closing_node(node_id: str, number: int, owner: str = "acme", name: str = "widgets") -> dict[str, object]:
+    return {
+        "id": node_id,
+        "number": number,
+        "url": f"https://github.com/{owner}/{name}/pull/{number}",
+        "repository": {"name": name, "owner": {"login": owner}},
+    }
+
+
+def test_issue_list_requests_closing_pull_request_references(monkeypatch) -> None:
+    """The collection read carries the references in the call it already makes."""
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _completed(cmd, stdout=json.dumps([_issue_json(closedByPullRequestsReferences=[])]))
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue_list("ready-for-agent")
+
+    json_fields = captured["cmd"][captured["cmd"].index("--json") + 1]
+    assert "closedByPullRequestsReferences" in json_fields
+
+
+def test_issue_view_requests_closing_pull_request_references(monkeypatch) -> None:
+    """The authoritative re-read carries the same field."""
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _completed(cmd, stdout=json.dumps(_issue_json(closedByPullRequestsReferences=[])))
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue_view(7)
+
+    json_fields = captured["cmd"][captured["cmd"].index("--json") + 1]
+    assert "closedByPullRequestsReferences" in json_fields
+
+
+def test_issue_list_parses_closing_references_and_a_full_page_is_incomplete(
+    monkeypatch,
+) -> None:
+    """A list of exactly 100 nodes may be cut short. Fewer is complete."""
+    nodes = [_closing_node(f"PR_{index}", index + 1) for index in range(100)]
+
+    def fake_run(cmd, **kw):
+        return _completed(
+            cmd,
+            stdout=json.dumps([_issue_json(closedByPullRequestsReferences=nodes)]),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    page = issue_list("ready-for-agent")
+
+    closing = page.issues[0].closing_references
+    assert closing.complete is False
+    assert closing.nodes[0].ref == "acme/widgets#1"
+    assert closing.nodes[0].node_id == "PR_0"
+
+
+def test_issue_view_parses_closing_references_as_complete(monkeypatch) -> None:
+    """A view pages the connection, so a hundred nodes is still complete."""
+    nodes = [_closing_node(f"PR_{index}", index + 1) for index in range(100)]
+
+    def fake_run(cmd, **kw):
+        return _completed(cmd, stdout=json.dumps(_issue_json(closedByPullRequestsReferences=nodes)))
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue = issue_view(7)
+
+    assert issue.closing_references.complete is True
+    assert len(issue.closing_references.nodes) == 100
+
+
+def test_a_missing_closing_reference_field_is_unread_not_empty(monkeypatch) -> None:
+    """A field the response omitted is not 'no pull requests', and it does not raise."""
+
+    def fake_run(cmd, **kw):
+        return _completed(cmd, stdout=json.dumps(_issue_json()))
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue = issue_view(7)
+
+    assert issue.closing_references == gh.ClosingReferences.unread()
+
+
+def test_a_zero_value_closing_reference_is_unreadable(monkeypatch) -> None:
+    """Membership without an id is not a state, and not a refusal by itself."""
+
+    def fake_run(cmd, **kw):
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                _issue_json(
+                    closedByPullRequestsReferences=[{"id": "", "number": 0}]
+                )
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue = issue_view(7)
+
+    assert issue.closing_references.nodes == (
+        gh.ClosingReference(node_id="", ref="", readable=False),
+    )
+
+
+def test_pull_request_states_batches_at_one_hundred_and_skips_an_empty_ask(
+    monkeypatch,
+) -> None:
+    """No request when nothing was asked. 101 distinct ids cost two requests."""
+    calls: list[dict[str, Any]] = []
+
+    def fake_run(cmd, **kw):
+        if cmd[:3] == ["gh", "api", "graphql"]:
+            body = json.loads(kw["input"])
+            calls.append(body)
+            ids = body["variables"]["ids"]
+            return _completed(
+                cmd,
+                stdout=json.dumps(
+                    {"data": {"nodes": [{"id": node_id, "state": "OPEN"} for node_id in ids]}}
+                ),
+            )
+        return _completed(cmd, stdout="[]")
+
+    _install_fake_run(monkeypatch, fake_run)
+    client = SubprocessGitHubClient()
+
+    assert client.pull_request_states(()) == ()
+    assert calls == []
+    states = client.pull_request_states([f"PR_{index}" for index in range(101)])
+
+    assert len(calls) == 2
+    assert len(calls[0]["variables"]["ids"]) == 100
+    assert calls[1]["variables"]["ids"] == ["PR_100"]
+    assert calls[0]["query"].startswith("query($ids:[ID!]!)")
+    assert states[0].state == "open"
+    assert states[-1].node_id == "PR_100"
+
+
+def test_a_null_state_node_does_not_fail_the_rest_of_its_request(monkeypatch) -> None:
+    """``gh`` exits 1 for a null node while ``data.nodes`` still holds siblings."""
+
+    def fake_run(cmd, **kw):
+        return _completed(
+            cmd,
+            code=1,
+            stderr="Could not resolve to a node",
+            stdout=json.dumps(
+                {"data": {"nodes": [None, {"id": "PR_2", "state": "MERGED"}]}, "errors": []}
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    states = SubprocessGitHubClient().pull_request_states(("PR_1", "PR_2"))
+
+    assert states[0].unread == "state_node_null"
+    assert states[1].state == "merged"
+
+
+def test_a_failed_state_request_unreads_only_that_batch(monkeypatch) -> None:
+    """One failed page leaves the other page's states read."""
+    seen = {"calls": 0}
+
+    def fake_run(cmd, **kw):
+        seen["calls"] += 1
+        ids = json.loads(kw["input"])["variables"]["ids"]
+        if seen["calls"] == 1:
+            return _completed(cmd, code=1, stderr="timeout", stdout="not json")
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                {"data": {"nodes": [{"id": node_id, "state": "CLOSED"} for node_id in ids]}}
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    states = SubprocessGitHubClient().pull_request_states(
+        [f"PR_{index}" for index in range(101)]
+    )
+
+    assert all(node.unread == "state_request_failed" for node in states[:100])
+    assert states[100].state == "closed"
+
+
+def test_a_gh_below_the_readiness_floor_names_closing_pull_requests() -> None:
+    """The floor already fails at preflight. The new field is named, not silent."""
+    with pytest.raises(GhCapabilityError, match="closedByPullRequestsReferences"):
+        verify_readiness_capability((2, 93, 0))
