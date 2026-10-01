@@ -225,7 +225,11 @@ from git_loopy.denomination import (
     CostDenomination,
 )
 from git_loopy.prompt import PromptMetadataError, load_prompt
-from git_loopy.readiness import blocked_skip_reason, decide_readiness
+from git_loopy.readiness import (
+    POOL_CLASS_UNRESOLVED,
+    POOL_CLASS_WAITING,
+    decide_readiness,
+)
 from git_loopy.rate_card import RateCard
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
@@ -288,7 +292,6 @@ from git_loopy.sources import (
     RollingIssueSource,
     confirms_empty_pool,
     is_lane_candidate,
-    readiness_unresolved,
     unbound_pool_outcome,
 )
 from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
@@ -3389,20 +3392,17 @@ class _Loop:
             # **Routed pair** it will never run on.
             verdict = self._source.readiness(item)
             if not verdict.admissible:
-                assert verdict.skip_reason is not None
-                if verdict.blockers:
-                    return AdmissionRefusal(
-                        reason=blocked_skip_reason(verdict.skip_reason, verdict.blockers),
-                        waiting_on_blocker=True,
-                    )
-                # An *unprovable* readiness read is not a refusal of this
-                # candidate; it is a read that did not happen (#542, ADR-0047).
-                # It still skips — the runner may not bind a candidate whose
-                # blockers it never checked — but it is marked so the terminal
-                # classifier cannot mistake it for the Pool refusing work.
+                assert verdict.refusal_reason is not None
+                # The verdict names its own reason and class (#693). An
+                # *unprovable* read is not a refusal of this candidate; it is a
+                # read that did not happen (#542, ADR-0047). It still skips —
+                # the runner may not bind a candidate whose blockers it never
+                # checked — but its class keeps the terminal classifier from
+                # mistaking it for the Pool refusing work.
                 return AdmissionRefusal(
-                    reason=verdict.skip_reason,
-                    unresolved=readiness_unresolved(verdict),
+                    reason=verdict.refusal_reason,
+                    waiting_on_blocker=verdict.pool_class == POOL_CLASS_WAITING,
+                    unresolved=verdict.pool_class == POOL_CLASS_UNRESOLVED,
                 )
             try:
                 resolution = self._resolve_route(
@@ -5318,13 +5318,11 @@ class _ParallelLoop:
                         self._terminal_refusals = []
                         for candidate in scheduler.terminal_survivors:
                             readiness = decide_readiness(candidate.blocked_by)
-                            if readiness.blockers:
-                                assert readiness.skip_reason is not None
-                                reason = blocked_skip_reason(
-                                    readiness.skip_reason, readiness.blockers
-                                )
-                            else:
-                                reason = self._rolling_refused[candidate.ref]
+                            reason = (
+                                readiness.refusal_reason
+                                if readiness.pool_class == POOL_CLASS_WAITING
+                                else self._rolling_refused[candidate.ref]
+                            )
                             self._terminal_refusals.append(
                                 run_end_refusal(candidate.ref, reason)
                             )
@@ -6212,6 +6210,15 @@ class _ParallelLoop:
         # disposition can never contradict the ending just reported for it.
         # Re-deriving it from the completion SHA would be a second answer the
         # local runner's own commit accounting can disagree with.
+        #
+        # The Lane-work boundary (#681, ADR-0065): only a session that returned
+        # a captured outcome reaches it, so every host failure, a pre-session
+        # Stop and Run-exit reclamation have already returned above. What
+        # follows it is exactly one of admitted, parked, or an
+        # ``unchanged_branch`` end.
+        self._emit_contribution_event(
+            contribution, events_module.WRAPPER_CONTRIBUTION_WORK_FINISHED
+        )
         disposition = scheduler.finish_work(
             contribution, changed=lane_outcome.progressed
         )
@@ -7339,7 +7346,7 @@ class _ParallelLoop:
     ) -> None:
         """Finish a green landing: advance the line, close the issue, reap the branch."""
         advanced = self._advance_release_line(lane_work.item)
-        self._close_landed(lane_work.item, pre_base)
+        self._close_landed(contribution, lane_work.item, pre_base)
         if advanced is not None:
             next_line, bump_class = advanced
             self._serial._emit(
@@ -7499,7 +7506,12 @@ class _ParallelLoop:
             cause,
         )
 
-    def _close_landed(self, item: AfkReadyItem, pre_base: str) -> None:
+    def _close_landed(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        item: AfkReadyItem,
+        pre_base: str,
+    ) -> None:
         """Close a landed issue via the serial closure path + emit ``auto_close``.
 
         Reads the commits the landing added to base (``pre_base`` -> current
@@ -7507,6 +7519,13 @@ class _ParallelLoop:
         (``source.handle_completions`` -> ``gh issue close`` + the ``Closes #N``
         backstop), emitting one ``wrapper.auto_close`` per closure. Shared by the
         happy-path landing and a successful auto-resolution landing.
+
+        The closure is stamped with the landing contribution's identity, as
+        ``contribution_identity.stamped_types`` requires, so a replay reads it
+        inside that contribution's lifecycle rather than as a Run-level record.
+        The pool is ``[item]``: the closure backstop filters closing keywords
+        to it and the PR-advance backstop reads only its items, so each
+        closure here names the landing issue itself.
         """
         try:
             post_base = self._git.head_sha()
@@ -7520,10 +7539,9 @@ class _ParallelLoop:
         for completion in self._serial._handle_completions_safely(
             [item], landed, leased_pool=True
         ):
-            self._serial._emit(
+            self._emit_contribution_event(
+                contribution,
                 events_module.WRAPPER_AUTO_CLOSE,
-                iter_num=None,
-                issue=completion.ref,
                 sha=completion.sha,
                 shas=list(completion.shas),
                 lane_issue=completion.ref,

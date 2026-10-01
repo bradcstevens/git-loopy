@@ -233,6 +233,8 @@ pub enum EventPayload {
     RunStart(RunStart),
     /// `wrapper.contribution.start`
     ContributionStart(ContributionStart),
+    /// `wrapper.contribution.work_finished`
+    ContributionWorkFinished(ContributionWorkFinished),
     /// `wrapper.iteration.start`
     IterationStart,
     /// `wrapper.afk_ready.collected`
@@ -343,6 +345,20 @@ pub struct ContributionStart {
     pub contribution_id: Option<String>,
     #[serde(default)]
     pub host: Option<String>,
+}
+
+/// The **Lane contribution**'s Lane-work boundary (ADR-0065, #681).
+///
+/// Its session returned a captured outcome, so its **Lane** work is over
+/// whatever its disposition: exactly one of `wrapper.integration.admitted`,
+/// `wrapper.integration.parked`, or a `wrapper.contribution.end` with
+/// `unchanged_branch` follows. The record carries only the identity triple
+/// (decoded through [`Event::contribution`]); `contribution_id` is repeated
+/// here so the payload names its contribution on its own.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ContributionWorkFinished {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
 }
 
 /// Per-Orchestrator **Parallel mode** capabilities declared at Run start.
@@ -1143,6 +1159,9 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
     match kind {
         "wrapper.run.start" => EventPayload::RunStart(decode_or_default(value)),
         "wrapper.contribution.start" => EventPayload::ContributionStart(decode_or_default(value)),
+        "wrapper.contribution.work_finished" => {
+            EventPayload::ContributionWorkFinished(decode_or_default(value))
+        }
         "wrapper.iteration.start" => EventPayload::IterationStart,
         "wrapper.afk_ready.collected" => EventPayload::AfkReadyCollected(decode_or_default(value)),
         "wrapper.pool.refreshed" => EventPayload::PoolRefreshed(decode_or_default(value)),

@@ -1033,7 +1033,7 @@ boolean keys:
   "rolling_dispatch": true,
   "integration_backlog": true,
   "adaptive_lane_limit": true,
-  "contribution_events": false
+  "contribution_events": true
 }
 ```
 
@@ -1044,10 +1044,34 @@ fill more than one **Lane** at a time, `rolling_dispatch` whether it refills the
 toward the **Lane cap** rather than behind a barrier, `integration_backlog` whether it admits
 finished Lane branches to the bounded backlog described below, `adaptive_lane_limit` whether its
 **Effective Lane limit** reacts to **Pressure signals**, and `contribution_events` whether it emits
-the **Lane contribution** lifecycle stream. Python declares `contribution_events: false` today
-because those literals are reserved and have no producer: a Parallel Run still records legacy
-**Wave**-shaped rows, and advertising a stream no replay contains would be the same lie as reporting
-an unavailable counter as `0`.
+the **Lane contribution** lifecycle stream.
+
+**`contribution_events: true` is an obligation proved by behaviour (contract 2.15, ADR-0065).** A
+member that declares it MUST be shown — by faked Parallel **Runs** driven through its production
+loop and observed only through the Event logs they write — to emit every type in the Event-schema
+fixture's `contribution_identity.lifecycle_types` and `scheduler_scoped_types`, minus waivers. A
+waiver names the ticket that owns the missing producer; a waived type that any scenario emits fails
+the proof, so each producer ticket deletes its own waiver. A source grep is a mention, not a claim
+(ADR-0049), and is never that proof. Each contribution's emitted lifecycle, filtered to non-waived
+types, MUST also follow this order:
+
+```
+contribution.start
+  ( work_finished
+      ( end[unchanged_branch]
+      | [parked] admitted started branch_observed recovery_started{0..3}
+          ( published auto_close [release.advanced] end[published]
+          | end[serial_fallback] ) )
+  | end[checkpoint_failed | unchanged_branch | operator_stop] )
+```
+
+The order covers lifecycle types only, so stamped assistant, tool, usage, commit and Checkpoint
+records interleave freely. Run-exit reclamation may end any open contribution at any point with
+`operator_stop` or `unchanged_branch`. `wrapper.auto_close` is stamped with the landing
+contribution's triple; `wrapper.release.advanced` is Run-scoped on the wire and belongs to the open
+contribution whose issue it names. The Python Runner declares `true` and is held to it by
+`git-loopy/python/tests/test_contribution_events_gate.py`; the shell and PowerShell Orchestrators
+declare `false` and owe nothing here.
 
 `parallel_mode: false` is not one `false` among five. Refill, the backlog, adaptation, and the
 contribution stream all presuppose Parallel mode, so an Orchestrator that declares `parallel_mode`
@@ -1231,6 +1255,19 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   closure has not yet verified is *not* a contribution end. Lane-work and recovery Consumption and
   commits appear exactly once, in the originating contribution, and runner **Checkpoint** commits
   stay out of the commit total.
+- **`wrapper.contribution.work_finished` is the Lane-work boundary (contract 2.16, ADR-0065).** An
+  Orchestrator that declares `contribution_events: true` MUST emit it exactly once for every
+  contribution whose session returned a captured outcome, whatever its disposition, and before the
+  record of that disposition. It MUST be followed by exactly one of `wrapper.integration.admitted`,
+  `wrapper.integration.parked`, or a `wrapper.contribution.end` with `unchanged_branch`. A host
+  failure — a Checkpoint failure among them — a **Stop** before the session, and Run-exit
+  reclamation never reach that boundary and MUST NOT emit it; they emit only
+  `wrapper.contribution.end`. So an `unchanged_branch` end with no `work_finished` before it is a
+  host failure, not a session that produced nothing. A consumer timing a Parallel issue's Active
+  time MUST stop it here, so Active time is the contribution's Lane work and never its
+  **Integration** or **Recovery**; its later stamped records still attribute to the issue. This
+  first producer of ADR-0065's reserved types moves `event_schema_version` to 1.3: a 1.2 consumer
+  that times a contribution from start to end reads a different number than the stream means.
 - **Unknown stays unknown.** `wrapper.concurrency.changed` reports the immutable configured Lane
   cap and the current effective limit, and reports a signal the Run cannot observe as `null` —
   never an estimate and never `0`. It is emitted for an authoritative transition, not per
@@ -2031,10 +2068,12 @@ fixtures' content, moving every `release_version` example from `-dev.N` to
 `-alpha.N` and rewording `event-schema.json`'s `wrapper.release.advanced`
 `emitted` rule, but left both version pins at 2.12 while the contract header
 and the Python `WRAPPER_CONTRACT_VERSION` read 2.13. Both pins then moved from
-2.12 straight to 2.14 (ADR-0065), so neither ever carried 2.13.
+2.12 straight to 2.14 (ADR-0065), so neither ever carried 2.13, and both have
+since advanced to 2.15 with the behavioural `contribution_events` obligation
+(§12, ADR-0065) and 2.16 with the Lane-work boundary (§12, #681).
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
-(§3.1). Event wire compatibility remains 1.2, and historical streams'
-interpretation is unchanged.
+(§3.1). Event wire compatibility is 1.3, advanced with the Lane-work boundary
+(§12), and historical streams' interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run

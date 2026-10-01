@@ -37,6 +37,10 @@ from dataclasses import dataclass
 from typing import Final
 
 __all__ = [
+    "POOL_CLASS_ADMITTED",
+    "POOL_CLASS_UNRESOLVED",
+    "POOL_CLASS_WAITING",
+    "POOL_CLASSES",
     "SKIP_BLOCKED_BY_OPEN_DEPENDENCY",
     "SKIP_READINESS_UNPROVABLE",
     "READINESS_VERDICTS",
@@ -53,6 +57,32 @@ SKIP_BLOCKED_BY_OPEN_DEPENDENCY: Final[str] = "blocked_by_open_dependency"
 
 #: The ``blockedBy`` connection was incomplete, or a node came back unreadable.
 SKIP_READINESS_UNPROVABLE: Final[str] = "readiness_unprovable"
+
+#: A candidate this verdict admits: it has no place in an unbound-Pool count.
+POOL_CLASS_ADMITTED: Final[str] = "admitted"
+
+#: A candidate refused because it waits on something outside the Run. A Pool
+#: of nothing else is entitled to ``all_blocked`` (Wrapper contract §3.3.1).
+POOL_CLASS_WAITING: Final[str] = "waiting"
+
+#: A candidate whose read did not complete, so it proves nothing. One of these
+#: outranks every refusal and makes an unbound Pool ``preflight_failed`` (#542).
+POOL_CLASS_UNRESOLVED: Final[str] = "unresolved"
+
+#: The class each verdict takes in the unbound-Pool rule
+#: (:func:`git_loopy.sources.unbound_pool_outcome`). Closed.
+POOL_CLASSES: Final[tuple[str, ...]] = (
+    POOL_CLASS_ADMITTED,
+    POOL_CLASS_WAITING,
+    POOL_CLASS_UNRESOLVED,
+)
+
+#: The unbound-Pool class each blocked verdict's ``skip_reason`` takes. A new
+#: refusal kind needs an entry here and nothing in a caller (#693).
+_POOL_CLASS_BY_SKIP_REASON: Final[dict[str, str]] = {
+    SKIP_BLOCKED_BY_OPEN_DEPENDENCY: POOL_CLASS_WAITING,
+    SKIP_READINESS_UNPROVABLE: POOL_CLASS_UNRESOLVED,
+}
 
 #: Separates a refusal's kind from the blockers it names, and one blocker from
 #: the next, in a ``wrapper.pickup.skipped`` reason.
@@ -152,6 +182,12 @@ class Readiness:
     valid shapes are reached only through :meth:`ready` and :meth:`blocked` —
     the closed constructors :func:`decide_readiness` itself is pinned to.
 
+    The verdict also answers the two questions a caller used to derive from
+    its ``blockers`` (#693): :attr:`refusal_reason` is the reason a Pickup skip
+    or a Rolling Run end's ``refusals`` entry carries, and :attr:`pool_class`
+    is the class the unbound-Pool rule counts it under. Every caller asks the
+    verdict, so a new refusal kind cannot be misclassified at one of them.
+
     Attributes:
         verdict: ``"ready"`` or ``"blocked"`` — one of
             :data:`READINESS_VERDICTS`.
@@ -159,8 +195,9 @@ class Readiness:
             :data:`SKIP_READINESS_UNPROVABLE` when ``verdict`` is
             ``"blocked"``, else ``None``.
         blockers: The open blockers the read established, in the order the
-            connection returned them. Empty when ``verdict`` is ``"ready"``,
-            and also empty for ``readiness_unprovable`` — that reason reports
+            connection returned them, and never empty for
+            ``blocked_by_open_dependency``. Empty when ``verdict`` is
+            ``"ready"``, and also empty for ``readiness_unprovable`` — that reason reports
             that no assertion could be read, so there is nothing proven to
             name.
     """
@@ -174,8 +211,8 @@ class Readiness:
 
         ``ready`` never carries a reason or a blocker list; ``blocked``
         always carries one of the two closed reasons, and ``blockers`` is
-        only ever populated for :data:`SKIP_BLOCKED_BY_OPEN_DEPENDENCY` — the
-        one reason that names a proven fact rather than reporting that
+        populated for :data:`SKIP_BLOCKED_BY_OPEN_DEPENDENCY` and only for it
+        — the one reason that names a proven fact rather than reporting that
         nothing could be proven.
         """
         if self.verdict not in READINESS_VERDICTS:
@@ -186,10 +223,7 @@ class Readiness:
                     "a ready Readiness may carry no skip_reason and no blockers"
                 )
             return
-        if self.skip_reason not in (
-            SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
-            SKIP_READINESS_UNPROVABLE,
-        ):
+        if self.skip_reason not in _POOL_CLASS_BY_SKIP_REASON:
             raise ValueError(
                 f"a blocked Readiness must name a closed skip_reason, got "
                 f"{self.skip_reason!r}"
@@ -197,6 +231,10 @@ class Readiness:
         if self.blockers and self.skip_reason != SKIP_BLOCKED_BY_OPEN_DEPENDENCY:
             raise ValueError(
                 f"{self.skip_reason!r} proves nothing to name; blockers must be empty"
+            )
+        if not self.blockers and self.skip_reason == SKIP_BLOCKED_BY_OPEN_DEPENDENCY:
+            raise ValueError(
+                f"{self.skip_reason!r} asserts an open blocker; it must name one"
             )
 
     @property
@@ -207,6 +245,33 @@ class Readiness:
         independently disagree with the verdict it describes.
         """
         return self.verdict == "ready"
+
+    @property
+    def refusal_reason(self) -> str | None:
+        """The reason a refusal of this candidate records, or ``None`` if admitted.
+
+        The ``wrapper.pickup.skipped`` reason at a serial **Pickup**, and the
+        same string in a Rolling Run end's ``refusals``. An open blocker names
+        its blockers through :func:`blocked_skip_reason`; a verdict that proves
+        nothing names only its kind.
+        """
+        if self.skip_reason is None:
+            return None
+        if self.blockers:
+            return blocked_skip_reason(self.skip_reason, self.blockers)
+        return self.skip_reason
+
+    @property
+    def pool_class(self) -> str:
+        """This verdict's class in the unbound-Pool rule: one of :data:`POOL_CLASSES`.
+
+        :data:`POOL_CLASS_WAITING` and :data:`POOL_CLASS_UNRESOLVED` feed
+        :func:`git_loopy.sources.unbound_pool_outcome`'s ``waiting`` and
+        ``unresolved`` counts; :data:`POOL_CLASS_ADMITTED` feeds neither.
+        """
+        if self.skip_reason is None:
+            return POOL_CLASS_ADMITTED
+        return _POOL_CLASS_BY_SKIP_REASON[self.skip_reason]
 
     @classmethod
     def ready(cls) -> "Readiness":

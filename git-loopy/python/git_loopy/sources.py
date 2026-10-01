@@ -60,8 +60,8 @@ from git_loopy.issue_order import (
 )
 from git_loopy.issue_pin import PinnedIssue, refuse_pin
 from git_loopy.readiness import (
-    SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
-    SKIP_READINESS_UNPROVABLE,
+    POOL_CLASS_UNRESOLVED,
+    POOL_CLASS_WAITING,
     BlockedByRead,
     Readiness,
     decide_readiness,
@@ -532,9 +532,10 @@ def readiness_unresolved(readiness: Readiness) -> bool:
     a caller classifying a Pool never re-derives it from the operator-facing
     reason payload — the same discipline
     :attr:`~git_loopy.serial_pickup.AdmissionRefusal.waiting_on_blocker`
-    keeps for the opposite fact.
+    keeps for the opposite fact. It asks the verdict's own unbound-Pool class
+    (#693).
     """
-    return readiness.skip_reason == SKIP_READINESS_UNPROVABLE
+    return readiness.pool_class == POOL_CLASS_UNRESOLVED
 
 
 @dataclass(frozen=True)
@@ -616,11 +617,12 @@ def is_lane_candidate(candidate: PoolCandidate) -> bool:
 
 
 def has_proven_open_blocker(candidate: PoolCandidate) -> bool:
-    """Return whether this candidate's carried read proves an open blocker."""
-    return (
-        decide_readiness(candidate.blocked_by).skip_reason
-        == SKIP_BLOCKED_BY_OPEN_DEPENDENCY
-    )
+    """Return whether this candidate's carried read proves an open blocker.
+
+    The Rolling-dispatch ``waiting`` count in the unbound-Pool rule. Asked of
+    the verdict's own class (#693), never re-derived from its blockers.
+    """
+    return decide_readiness(candidate.blocked_by).pool_class == POOL_CLASS_WAITING
 
 
 def has_unresolved_readiness(candidate: PoolCandidate) -> bool:
@@ -629,7 +631,8 @@ def has_unresolved_readiness(candidate: PoolCandidate) -> bool:
     The sibling of :func:`has_proven_open_blocker`, and the Rolling-dispatch
     shape of :func:`readiness_unresolved`: a candidate whose **Membership
     read** could not determine its blockers is unresolved, not refused, so it
-    may not establish a terminal Pool fact (#542).
+    may not establish a terminal Pool fact (#542). Like its sibling, it asks
+    the verdict's own class (#693).
     """
     return readiness_unresolved(decide_readiness(candidate.blocked_by))
 

@@ -487,6 +487,14 @@ pub struct DashboardState {
     pub(crate) capabilities: InsightCapabilities,
     execution_host: ExecutionHostProvenance,
     contribution_hosts: BTreeMap<String, String>,
+    /// Issues whose open contribution is past its Lane-work boundary
+    /// (ADR-0065, #681).
+    ///
+    /// Keyed by issue, not contribution: a Recovery session stamps only
+    /// `lane_issue`. Its later records — Recovery usage, the landing
+    /// closure — still reach the issue's Log and Consumption, but no longer
+    /// its Active timer: a Parallel issue's Active time is its Lane work only.
+    lane_work_finished: BTreeSet<IssueRef>,
     pub(crate) wind_down: Option<WindDown>,
     pub(crate) wind_down_observed: bool,
     /// The folded `parallel` Declaration (ADR-0044).
@@ -552,6 +560,7 @@ impl DashboardState {
             capabilities: InsightCapabilities::default(),
             execution_host: ExecutionHostProvenance::default(),
             contribution_hosts: BTreeMap::new(),
+            lane_work_finished: BTreeSet::new(),
             wind_down: None,
             wind_down_observed: false,
             parallel: ParallelPosture::default(),
@@ -670,10 +679,19 @@ impl DashboardState {
         if let Some(contribution) = event.contribution.clone() {
             match &event.payload {
                 EventPayload::ContributionStart(_) => {
+                    self.lane_work_finished.remove(&contribution.issue);
                     self.lane_touch(&contribution.issue, now_monotonic, now);
                     return;
                 }
+                EventPayload::ContributionWorkFinished(_) => {
+                    // The Active timer stops here; the Status stays until the
+                    // Integration Statuses arrive (#682).
+                    self.lane_work_finished.insert(contribution.issue.clone());
+                    self.deactivate(&contribution.issue, now_monotonic, None);
+                    return;
+                }
                 EventPayload::ContributionEnd(end) => {
+                    self.lane_work_finished.remove(&contribution.issue);
                     self.record_contribution_end(&contribution, end, now, now_monotonic);
                     return;
                 }
@@ -810,6 +828,10 @@ impl DashboardState {
                 }
             }
             EventPayload::StopLifted(_) => {}
+            EventPayload::ContributionWorkFinished(_) => {
+                // Reached only when the record carries no whole identity
+                // (`event.contribution` was `None` above); no timer to stop.
+            }
             EventPayload::ContributionEnd(_) => {
                 // Reached only when the record carries no whole identity
                 // (`event.contribution` was `None` above); nothing to fold.
@@ -912,7 +934,11 @@ impl DashboardState {
         now: Option<Timestamp>,
         now_monotonic: Option<f64>,
     ) {
-        self.lane_touch(lane, now_monotonic, now);
+        if !self.lane_work_finished.contains(lane) {
+            self.lane_touch(lane, now_monotonic, now);
+        } else {
+            self.insert_entry(lane.clone());
+        }
         match &event.payload {
             EventPayload::AgentOutput(output) => {
                 self.append_lane_log(lane, &output.kind, &output.text, now)

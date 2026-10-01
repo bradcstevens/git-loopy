@@ -1939,3 +1939,83 @@ fn the_header_carries_the_execution_host_and_its_isolation_grade() {
         })
     );
 }
+
+#[test]
+fn the_lane_work_boundary_decodes_to_its_own_typed_payload() {
+    let event = Event::from_jsonl_line(
+        r#"{"type":"wrapper.contribution.work_finished","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":1}"#,
+    )
+    .expect("a Lane-work boundary decodes");
+    match &event.payload {
+        EventPayload::ContributionWorkFinished(finished) => {
+            assert_eq!(finished.contribution_id.as_deref(), Some("c-0001"));
+        }
+        other => panic!("expected a typed Lane-work boundary, got {other:?}"),
+    }
+    assert!(event.contribution.is_some(), "it carries the whole triple");
+}
+
+#[test]
+fn active_time_stops_at_the_lane_work_boundary_and_the_status_stays() {
+    let stamp = |ts: &str, kind: &str, extra: &str| {
+        format!(
+            r#"{{"ts":"{ts}","type":"{kind}","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":1{extra}}}"#
+        )
+    };
+    let lines = [
+        r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1","iter":null}"#
+            .to_string(),
+        stamp("2026-05-16T00:00:03.000Z", "wrapper.contribution.start", ""),
+        stamp("2026-05-16T00:00:06.000Z", "wrapper.contribution.work_finished", ""),
+        // Integration's own records for the same contribution: its Recovery
+        // usage and the landing closure are not Lane work (ADR-0065).
+        stamp(
+            "2026-05-16T00:00:09.000Z",
+            "usage.tokens",
+            r#","input":10,"output":5"#,
+        ),
+        stamp(
+            "2026-05-16T00:00:12.000Z",
+            "wrapper.auto_close",
+            r#","closed":true"#,
+        ),
+    ];
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let projected = reduce_jsonl(&lines, IssueRef::number(42));
+    let row = queue_row(&projected, 42);
+    assert_eq!(row["active_seconds"], serde_json::json!(3.0));
+    assert_eq!(
+        row["status"],
+        serde_json::json!("active"),
+        "the Status waits for the Integration Statuses (#682)"
+    );
+    assert_eq!(
+        projected["drill_in"]["detail_header"]["active_seconds"],
+        serde_json::json!(3.0)
+    );
+}
+
+#[test]
+fn a_lane_issue_stamp_after_the_lane_work_boundary_does_not_restart_active_time() {
+    // The production shape: a Lane or Recovery session stamps only
+    // `lane_issue`, and the landing closure carries both that stamp and the
+    // contribution triple (#681 review).
+    let triple = r#""contribution_id":"c-0001","issue":42,"lane_id":1"#;
+    let lines = [
+        r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1","iter":null}"#.to_string(),
+        format!(r#"{{"ts":"2026-05-16T00:00:03.000Z","type":"wrapper.contribution.start","run_id":"run-1","iter":null,{triple}}}"#),
+        r#"{"ts":"2026-05-16T00:00:05.000Z","type":"usage.tokens","run_id":"run-1","iter":null,"lane_issue":42,"input":1,"output":1}"#.to_string(),
+        format!(r#"{{"ts":"2026-05-16T00:00:06.000Z","type":"wrapper.contribution.work_finished","run_id":"run-1","iter":null,{triple}}}"#),
+        r#"{"ts":"2026-05-16T00:00:09.000Z","type":"usage.tokens","run_id":"run-1","iter":null,"lane_issue":42,"input":10,"output":5}"#.to_string(),
+        format!(r#"{{"ts":"2026-05-16T00:00:12.000Z","type":"wrapper.auto_close","run_id":"run-1","iter":null,"lane_issue":42,"closed":true,{triple}}}"#),
+    ];
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let projected = reduce_jsonl(&lines, IssueRef::number(42));
+    let row = queue_row(&projected, 42);
+    assert_eq!(row["active_seconds"], serde_json::json!(3.0));
+    assert_eq!(row["status"], serde_json::json!("active"));
+    assert_eq!(
+        projected["drill_in"]["detail_header"]["active_seconds"],
+        serde_json::json!(3.0)
+    );
+}
