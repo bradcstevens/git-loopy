@@ -1269,7 +1269,7 @@ git_loopy_verify_readiness_capability() {
   if _git_loopy_version_lt \
     "$installed" "$GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS"; then
     printf '%s\n' \
-      "git-loopy: gh $installed cannot read issue dependencies (blockedBy) via \`gh issue list\`/\`gh issue view --json\`; git-loopy requires gh >= $GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS. Upgrade gh: https://cli.github.com/." \
+      "git-loopy: gh $installed cannot read issue dependencies (blockedBy) or closing pull requests (closedByPullRequestsReferences) via \`gh issue list\`/\`gh issue view --json\`; git-loopy requires gh >= $GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS. Upgrade gh: https://cli.github.com/." \
       >&2
     return 1
   fi
@@ -1397,6 +1397,13 @@ _git_loopy_normalize_issue() {
     url: (.url // ""),
     created_at: (.createdAt // .created_at // ""),
     blocked_by: (.blockedBy // null),
+    closing_references: (
+      if has("closedByPullRequestsReferences")
+         and (.closedByPullRequestsReferences | type) == "array"
+      then .closedByPullRequestsReferences
+      else null
+      end
+    ),
     comments: [
       (.comments // [])[]
       | {
@@ -1465,19 +1472,28 @@ git_loopy_next_read_step() {
 # The `--json` field set every shallow issue read asks for, named once so this
 # port cannot drift from the Python reference's `_SHALLOW_ISSUE_FIELDS`, and so
 # the §3.1 collection and the authoritative per-issue view cannot drift from
-# each other. `blockedBy` (§3.3.1) rides both for that reason: **Readiness**
-# needs the connection for every candidate a **Pickup** walks, and asking for it
-# on a read the caller was always going to make costs nothing however large the
-# **Pool** grows, where a dedicated dependency call would cost one round-trip per
-# candidate. `gh` serves the field from GraphQL and pages the connection past
-# GitHub's 50-link per-issue cap itself, so the port names no page size of its
-# own; what it must not do is treat a connection it could not read as an empty
-# one, which `git_loopy_decide_readiness` refuses to do.
-GIT_LOOPY_SHALLOW_ISSUE_FIELDS="number,title,body,labels,state,url,createdAt,blockedBy"
-# `blockedBy` first shipped in gh 2.94.0. A lower version would fail inside the
-# collection read and masquerade as an empty Pool, so capability is established
-# once in preflight before the Pool exists.
+# each other. `blockedBy` and `closedByPullRequestsReferences` (§3.3.1) ride
+# both for that reason: **Readiness** needs them for every candidate a
+# **Pickup** walks, and asking for them on a read the caller was always going
+# to make costs nothing however large the **Pool** grows. `gh` serves both
+# from GraphQL. It pages `blockedBy` itself and pages
+# `closedByPullRequestsReferences` on `gh issue view`; the list asks for one
+# page. What this port must not do is treat a field it could not read as an
+# empty one, which `git_loopy_decide_readiness` refuses to do. The references
+# carry no state: membership is not a refusal, and each read that decides
+# Readiness resolves states itself.
+GIT_LOOPY_SHALLOW_ISSUE_FIELDS="number,title,body,labels,state,url,createdAt,blockedBy,closedByPullRequestsReferences"
+# `blockedBy` and `closedByPullRequestsReferences` both first shipped in gh
+# 2.94.0. A lower version rejects the unknown field inside the collection read
+# and masquerades as an empty Pool, so capability is established once in
+# preflight before the Pool exists. A missing field is never read as "no pull
+# requests".
 GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS="2.94.0"
+# `gh issue list` asks each issue for one page of this many closing references
+# and exports no pageInfo. Exactly this many nodes is a connection that may
+# have been cut short. `nodes(ids:)` accepts the same page of ids.
+GIT_LOOPY_CLOSING_REFERENCE_PAGE_SIZE=100
+GIT_LOOPY_STATE_IDS_PER_REQUEST=100
 # The label the Pool query filters on, named once so the pin's eligibility check
 # (`_git_loopy_preflight_pin`) cannot drift from the query it must agree with.
 GIT_LOOPY_READY_LABEL="ready-for-agent"
@@ -1519,78 +1535,239 @@ _git_loopy_gh_issue_list_to_completion() {
   done
 }
 
-# Convert one GraphQL `blockedBy` connection returned by gh into the Readiness
-# verdict Pickup needs. It is deliberately pure: collection carries the
-# connection, and this function performs no tracker I/O or graph traversal.
+# The unbound-Pool class a Readiness skip reason takes. One map, so Pickup's
+# count and the Awaiting-merge fixture cannot disagree about which refusal is
+# a wait. A reason that is not Readiness — a defeated attempt, a routing
+# refusal — is not a class this function names.
+git_loopy_skip_reason_pool_class() {
+  case "$1" in
+    blocked_by_open_dependency | awaiting_pull_request_merge)
+      printf 'waiting\n'
+      ;;
+    readiness_unprovable)
+      printf 'unresolved\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Whether a carried closing-reference connection was proven exhausted.
+# `gh issue view` pages to completion, so every view-carried connection is
+# complete. `gh issue list` asks for one page and exports no pageInfo, so
+# exactly a full page may have been cut short. Prints `true` or `false`.
+git_loopy_closing_connection_complete() {
+  local carrier="$1" nodes="$2"
+  case "$carrier" in
+    view) printf 'true\n' ;;
+    list)
+      if ((nodes < GIT_LOOPY_CLOSING_REFERENCE_PAGE_SIZE)); then
+        printf 'true\n'
+      else
+        printf 'false\n'
+      fi
+      ;;
+    *)
+      printf 'git-loopy: unknown closing-reference carrier: %s\n' "$carrier" >&2
+      return 1
+      ;;
+  esac
+}
+
+# How many state requests `distinct` pull-request ids cost. Zero ids cost no
+# request. Otherwise one request per page of distinct ids, rounding up.
+git_loopy_state_request_count() {
+  local distinct="$1"
+  if ((distinct <= 0)); then
+    printf '0\n'
+    return 0
+  fi
+  printf '%s\n' \
+    $(( (distinct + GIT_LOOPY_STATE_IDS_PER_REQUEST - 1) / GIT_LOOPY_STATE_IDS_PER_REQUEST ))
+}
+
+# How many distinct ids a failed state request leaves unread. A full page is
+# `GIT_LOOPY_STATE_IDS_PER_REQUEST` ids, so which request failed does not
+# change the unread count. A short read is one request; its failure leaves
+# the whole read unread.
+git_loopy_state_failure_scope() {
+  local distinct="$1" failed="$2"
+  local requests unread read_count
+  requests="$(git_loopy_state_request_count "$distinct")"
+  if ((distinct == requests * GIT_LOOPY_STATE_IDS_PER_REQUEST)); then
+    unread=$((failed * GIT_LOOPY_STATE_IDS_PER_REQUEST))
+  else
+    unread="$distinct"
+  fi
+  read_count=$((distinct - unread))
+  jq -cn \
+    --argjson unread "$unread" \
+    --argjson read "$read_count" \
+    '{unread: $unread, read: $read, unread_cause: "state_request_failed"}'
+}
+
+# Convert one GraphQL `blockedBy` connection, and the closing pull requests
+# whose states this read already resolved, into the Readiness verdict Pickup
+# needs. Pure: collection carries both reads, and this function performs no
+# tracker I/O or graph traversal.
 #
-# Emits `{verdict, admissible, skip_reason, blockers}` so the fixture adapter
-# can drive exactly the decision the serial Pickup uses.
+# `$1` is the `blockedBy` connection `gh` returned, or `null` when it was not
+# read. `$2` is the resolved closing read `{complete, nodes}` — omitted or
+# `null` is a complete empty connection, which is what a caller that only has
+# a blocker read passes. `$3` is `issue` or `pull_request`; a pull-request
+# candidate is never Awaiting merge.
+#
+# Precedence is the fixture's: an open blocker, then a pull request read as
+# open, then an unprovable read, then ready. Membership in the connection is
+# not a refusal. Emits the verdict Pickup records, including the reason string
+# and the unbound-Pool class.
 git_loopy_decide_readiness() {
   local blocked_by="$1"
-  jq -c '
-    def node_ref:
-      if (.url | type) == "string" then
-        try (
-          .url
-          | capture("^https?://[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+)/issues/(?<number>[0-9]+)$")
-          | "\(.owner)/\(.repo)#\(.number)"
-        ) catch null
+  local closing="${2-}"
+  local kind="${3:-issue}"
+  if [[ -z "$closing" || "$closing" == "null" ]]; then
+    closing='{"complete":true,"nodes":[]}'
+  fi
+  local raw skip_reason pool_class="admitted"
+  raw="$(
+    jq -c \
+      --argjson closing "$closing" \
+      --arg kind "$kind" '
+      def node_ref:
+        if (.url | type) == "string" then
+          try (
+            .url
+            | capture("^https?://[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+)/issues/(?<number>[0-9]+)$")
+            | "\(.owner)/\(.repo)#\(.number)"
+          ) catch null
+        else
+          null
+        end;
+      def readable_node:
+        type == "object"
+        and (.id? != "")
+        and ((.number? | type) == "number" and .number > 0)
+        and ((.state? | type) == "string" and .state != "")
+        and (node_ref != null);
+      def ready:
+        {
+          verdict: "ready",
+          admissible: true,
+          skip_reason: null,
+          blockers: [],
+          names: [],
+          reason: null
+        };
+      def refused($skip; $blockers; $names):
+        {
+          verdict: "blocked",
+          admissible: false,
+          skip_reason: $skip,
+          blockers: $blockers,
+          names: $names,
+          reason: (
+            if ($names | length) > 0 then
+              $skip + ": " + ($names | join(", "))
+            else
+              $skip
+            end
+          )
+        };
+      if $kind == "pull_request" or $kind == "pr" then
+        ready
       else
-        null
-      end;
-    def readable_node:
-      type == "object"
-      and (.id? != "")
-      and ((.number? | type) == "number" and .number > 0)
-      and ((.state? | type) == "string" and .state != "")
-      and (node_ref != null);
-    . as $connection
-    | (
-        if ($connection | type) == "object"
-           and (($connection.totalCount? | type) == "number")
-           and ($connection.totalCount >= 0)
-           and (($connection.totalCount | floor) == $connection.totalCount)
-           and (($connection.nodes? | type) == "array")
-        then $connection.nodes
-        else []
-        end
-      ) as $nodes
-    | [
-        $nodes[]
-        | if readable_node then
-            {readable: true, state: (.state | ascii_downcase), ref: node_ref}
+        . as $connection
+        | (
+            if ($connection | type) == "object"
+               and (($connection.totalCount? | type) == "number")
+               and ($connection.totalCount >= 0)
+               and (($connection.totalCount | floor) == $connection.totalCount)
+               and (($connection.nodes? | type) == "array")
+            then $connection.nodes
+            else []
+            end
+          ) as $nodes
+        | [
+            $nodes[]
+            | if readable_node then
+                {readable: true, state: (.state | ascii_downcase), ref: node_ref}
+              else
+                {readable: false, state: "", ref: ""}
+              end
+          ] as $read_nodes
+        | [$read_nodes[] | select(.readable and .state == "open") | .ref] as $open
+        | (
+            ($connection | type) != "object"
+            or (($connection.totalCount? | type) != "number")
+            or ($connection.totalCount < 0)
+            or (($connection.totalCount | floor) != $connection.totalCount)
+            or (($connection.nodes? | type) != "array")
+            or ($read_nodes | length) != $connection.totalCount
+            or any($read_nodes[]; .readable | not)
+          ) as $unprovable
+        | (
+            if ($closing | type) == "object"
+               and (($closing.complete | type) == "boolean")
+               and (($closing.nodes // []) | type == "array")
+            then $closing
+            else {complete: true, nodes: []}
+            end
+          ) as $closing_read
+        | [
+            $closing_read.nodes[]
+            | {
+                ref: (
+                  if (.ref | type) == "string" and .ref != "" then .ref else null end
+                ),
+                state: (
+                  if (.state | type) == "string" and .state != ""
+                  then (.state | ascii_downcase)
+                  else null
+                  end
+                ),
+                readable: (
+                  if .readable == false or .unread == "reference_unreadable"
+                  then false
+                  else true
+                  end
+                ),
+                unread: (
+                  if (.unread | type) == "string" and .unread != ""
+                  then .unread
+                  else null
+                  end
+                )
+              }
+          ] as $closing_nodes
+        | [
+            $closing_nodes[]
+            | select(.state == "open" and .ref != null)
+            | .ref
+          ] as $open_prs
+        | (
+            ($closing_read.complete | not)
+            or any($closing_nodes[];
+                .readable == false or .state == null or .unread != null)
+          ) as $closing_unprovable
+        | if ($open | length) > 0 then
+            refused("blocked_by_open_dependency"; $open; $open)
+          elif ($open_prs | length) > 0 then
+            refused("awaiting_pull_request_merge"; []; $open_prs)
+          elif $unprovable or $closing_unprovable then
+            refused("readiness_unprovable"; []; [])
           else
-            {readable: false, state: "", ref: ""}
+            ready
           end
-      ] as $read_nodes
-    | [$read_nodes[] | select(.readable and .state == "open") | .ref] as $open
-    | (
-        ($connection | type) != "object"
-        or (($connection.totalCount? | type) != "number")
-        or ($connection.totalCount < 0)
-        or (($connection.totalCount | floor) != $connection.totalCount)
-        or (($connection.nodes? | type) != "array")
-        or ($read_nodes | length) != $connection.totalCount
-        or any($read_nodes[]; .readable | not)
-      ) as $unprovable
-    | if ($open | length) > 0 then
-        {
-          verdict: "blocked",
-          admissible: false,
-          skip_reason: "blocked_by_open_dependency",
-          blockers: $open
-        }
-      elif $unprovable then
-        {
-          verdict: "blocked",
-          admissible: false,
-          skip_reason: "readiness_unprovable",
-          blockers: []
-        }
-      else
-        {verdict: "ready", admissible: true, skip_reason: null, blockers: []}
       end
-  ' <<<"$blocked_by"
+    ' <<<"$blocked_by"
+  )" || return 1
+  skip_reason="$(jq -r '.skip_reason // empty' <<<"$raw")"
+  if [[ -n "$skip_reason" ]]; then
+    pool_class="$(git_loopy_skip_reason_pool_class "$skip_reason")" || return 1
+  fi
+  jq -c --arg pool_class "$pool_class" \
+    '. + {unbound_pool_class: $pool_class}' <<<"$raw"
 }
 
 # One Pool candidate's **Readiness** verdict, from whichever read its source
@@ -1607,10 +1784,16 @@ git_loopy_decide_readiness() {
 git_loopy_candidate_readiness() {
   local candidate="$1"
   if [[ "$GIT_LOOPY_ISSUE_SOURCE" != "github" ]]; then
-    printf '{"verdict":"ready","admissible":true,"skip_reason":null,"blockers":[]}\n'
+    printf '%s\n' \
+      '{"verdict":"ready","admissible":true,"skip_reason":null,"blockers":[],"names":[],"reason":null,"unbound_pool_class":"admitted"}'
     return 0
   fi
-  git_loopy_decide_readiness "$(jq -c '.blocked_by' <<<"$candidate")"
+  # A hand-built candidate that never carried a closing read is complete and
+  # empty on that axis. Collection attaches an explicit unread read when the
+  # field was absent, so a missing field is not mistaken for no pull requests.
+  git_loopy_decide_readiness \
+    "$(jq -c '.blocked_by' <<<"$candidate")" \
+    "$(jq -c '.closing_pull_requests // null' <<<"$candidate")"
 }
 
 # Reorders a shallow candidate array into Wrapper contract §3.2 order and
@@ -1670,6 +1853,191 @@ _git_loopy_order_candidates() {
     printf 'git-loopy: issue #%s has an unusable created_at (%s); it sorts last within its priority rank.\n' \
       "$issue" "$defect" >&2
   done < <(jq -c '.[]?' <<<"$undated_json")
+}
+
+# `closedByPullRequestsReferences` as `gh` returns it: a flat array, or null
+# when the field was absent. A view-carried connection is complete at any
+# length; a list-carried one of exactly one page is not. A zero-value node is
+# unreadable. Prints `{complete, nodes: [{id, ref, readable}]}`.
+_git_loopy_parse_closing_references() {
+  local carrier="$1" raw count complete
+  raw="$(cat)"
+  count="$(
+    jq -r 'if type == "array" then length else -1 end' <<<"$raw"
+  )" || return 1
+  if ((count < 0)); then
+    printf '{"complete":false,"nodes":[]}\n'
+    return 0
+  fi
+  complete="$(git_loopy_closing_connection_complete "$carrier" "$count")" ||
+    return 1
+  jq -c --argjson complete "$complete" '
+    {
+      complete: $complete,
+      nodes: [
+        .[]
+        | if (type == "object")
+             and (.id | type) == "string" and .id != ""
+             and (.number | type) == "number" and .number > 0
+             and (.repository.owner.login | type) == "string"
+             and (.repository.name | type) == "string"
+          then
+            {
+              id: .id,
+              ref: "\(.repository.owner.login)/\(.repository.name)#\(.number)",
+              readable: true
+            }
+          else
+            {id: "", ref: "", readable: false}
+          end
+      ]
+    }
+  ' <<<"$raw"
+}
+
+_GIT_LOOPY_PULL_REQUEST_STATE_QUERY='query($ids:[ID!]!){ nodes(ids:$ids) { ... on PullRequest { id state } } }'
+
+# One `nodes(ids:)` request. A null node makes `gh` exit 1 while `data.nodes`
+# still holds the siblings; that array is a partial read. Anything without
+# `data.nodes` fails only this batch. Prints an object keyed by id.
+_git_loopy_pull_request_state_batch() {
+  local ids_json="$1" body response status=0
+  body="$(
+    jq -cn \
+      --arg query "$_GIT_LOOPY_PULL_REQUEST_STATE_QUERY" \
+      --argjson ids "$ids_json" \
+      '{query: $query, variables: {ids: $ids}}'
+  )" || return 1
+  response="$(gh api graphql --input - <<<"$body" 2>/dev/null)" || status=$?
+  jq -cn \
+    --argjson ids "$ids_json" \
+    --arg response "$response" '
+    (try ($response | fromjson) catch null) as $parsed
+    | (
+        if ($parsed | type) == "object"
+           and (($parsed.data | type) == "object")
+           and (($parsed.data.nodes | type) == "array")
+        then $parsed.data.nodes
+        else null
+        end
+      ) as $nodes
+    | if $nodes == null then
+        [ $ids[] | {key: ., value: {state: null, unread: "state_request_failed"}} ]
+      else
+        [ range(0; ($ids | length)) as $i
+          | ($ids[$i]) as $id
+          | ($nodes[$i] // null) as $node
+          | {
+              key: $id,
+              value: (
+                if ($node | type) == "object"
+                   and (($node.state | type) == "string")
+                   and (($node.state | ascii_downcase) as $state
+                     | $state == "open" or $state == "merged" or $state == "closed")
+                then {state: ($node.state | ascii_downcase), unread: null}
+                else {state: null, unread: "state_node_null"}
+                end
+              )
+            }
+        ]
+      end
+    | from_entries
+  '
+}
+
+# Distinct readable ids, one GraphQL request per page, none when there are
+# none. A failed page leaves only its ids unread. Prints an object keyed by id.
+_git_loopy_pull_request_states() {
+  local ids_json="$1" count=0 start=0 batch page merged='{}'
+  count="$(jq -r 'length' <<<"$ids_json")" || return 1
+  if ((count == 0)); then
+    printf '{}\n'
+    return 0
+  fi
+  while ((start < count)); do
+    batch="$(
+      jq -c \
+        --argjson start "$start" \
+        --argjson size "$GIT_LOOPY_STATE_IDS_PER_REQUEST" \
+        '.[$start:$start + $size]' <<<"$ids_json"
+    )" || return 1
+    page="$(_git_loopy_pull_request_state_batch "$batch")" || return 1
+    merged="$(jq -c --argjson page "$page" '. * $page' <<<"$merged")" ||
+      return 1
+    start=$((start + GIT_LOOPY_STATE_IDS_PER_REQUEST))
+  done
+  printf '%s\n' "$merged"
+}
+
+# Join this collection's view-carried references with one state read. No
+# request when no survivor carries a readable reference. Membership is not a
+# refusal: only a state read as open is.
+_git_loopy_attach_closing_states() {
+  local pool="$1"
+  local -a enriched=()
+  local item raw parsed ids states
+  if [[ "$(jq -r 'length' <<<"$pool")" == "0" ]]; then
+    printf '[]\n'
+    return 0
+  fi
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    raw="$(jq -c 'if has("closing_references") then .closing_references else null end' <<<"$item")"
+    parsed="$(_git_loopy_parse_closing_references view <<<"$raw")" || return 1
+    enriched+=("$(
+      jq -c --argjson refs "$parsed" '. + {closing_references: $refs}' <<<"$item"
+    )") || return 1
+  done < <(jq -c '.[]' <<<"$pool")
+  pool="$(
+    _git_loopy_json_object_array ${enriched[@]+"${enriched[@]}"}
+  )" || return 1
+  ids="$(
+    jq -c '
+      [ .[].closing_references.nodes[]?
+        | select(.readable == true and .id != "")
+        | .id
+      ]
+      | reduce .[] as $id ([]; if any(.[]; . == $id) then . else . + [$id] end)
+    ' <<<"$pool"
+  )" || return 1
+  states="$(_git_loopy_pull_request_states "$ids")" || return 1
+  jq -c --argjson states "$states" '
+    def joined:
+      .closing_references as $refs
+      | {
+          complete: $refs.complete,
+          nodes: [
+            $refs.nodes[]?
+            | if .readable == false or .id == "" then
+                {
+                  ref: null,
+                  state: null,
+                  readable: false,
+                  unread: "reference_unreadable"
+                }
+              else
+                ($states[.id] // {state: null, unread: "state_request_failed"})
+                  as $found
+                | if $found.state == null then
+                    {
+                      ref: .ref,
+                      state: null,
+                      readable: true,
+                      unread: ($found.unread // "state_request_failed")
+                    }
+                  else
+                    {
+                      ref: .ref,
+                      state: $found.state,
+                      readable: true,
+                      unread: null
+                    }
+                  end
+              end
+          ]
+        };
+    [ .[] | . + {closing_pull_requests: joined} ]
+  ' <<<"$pool"
 }
 
 git_loopy_collect_github_pool() {
@@ -1771,6 +2139,11 @@ git_loopy_collect_github_pool() {
   GIT_LOOPY_POOL_JSON="$(
     _git_loopy_json_object_array \
       ${pool_items[@]+"${pool_items[@]}"}
+  )" || return 1
+  # One state read for the collection, and none when no survivor carries a
+  # reference. The references already rode the list and the view.
+  GIT_LOOPY_POOL_JSON="$(
+    _git_loopy_attach_closing_states "$GIT_LOOPY_POOL_JSON"
   )" || return 1
   GIT_LOOPY_POOL_EXCLUSIONS_JSON="$(
     _git_loopy_json_object_array \
@@ -2157,36 +2530,37 @@ git_loopy_pick_serial() {
       refused=$((refused + 1))
       label="$ref"
       [[ "$ref" =~ ^[0-9]+$ ]] && label="#$ref"
-      case "$reason" in
-        blocked_by_open_dependency)
+      pool_class="$(jq -r '.unbound_pool_class // empty' <<<"$readiness")" ||
+        return "$GIT_LOOPY_PICKUP_UNBOUND"
+      case "$pool_class" in
+        waiting)
           waiting=$((waiting + 1))
           ;;
-        readiness_unprovable)
+        unresolved)
           # Not a refusal of this candidate: a read that did not happen
           # (#542, ADR-0047). It still skips — no Pickup may bind a candidate
-          # whose blockers it never checked — but it is counted apart so the
+          # whose Readiness it never proved — but it is counted apart so the
           # terminal rule cannot mistake it for the Pool refusing work.
           unresolved=$((unresolved + 1))
           unresolved_refs="${unresolved_refs:+$unresolved_refs, }$label"
           ;;
       esac
       if [[ -n "$live_pin" && "$ref" == "$live_pin" ]]; then
-        # §3.2 (#644): an open blocker is an answer about the Pin and spends
-        # it; an unprovable read is not, and the Pin stays live. Either way
-        # the walk moves on (§3.3).
-        if [[ "$reason" == "readiness_unprovable" ]]; then
+        # §3.2 (#644, ADR-0069): a proven wait is an answer about the Pin and
+        # spends it; an unprovable read is not, and the Pin stays live.
+        if [[ "$pool_class" == "unresolved" ]]; then
           _git_loopy_observe_pin_read 1 1 unread
         else
           _git_loopy_observe_pin_read 1 1 refused
         fi
       fi
-      blockers="$(jq -r '.blockers | join(", ")' <<<"$readiness")" ||
+      event_reason="$(jq -r '.reason // .skip_reason' <<<"$readiness")" ||
         return "$GIT_LOOPY_PICKUP_UNBOUND"
-      event_reason="$reason"
-      if [[ -n "$blockers" ]]; then
-        event_reason="$reason: $blockers"
+      names="$(jq -r '.names | join(", ")' <<<"$readiness")" ||
+        return "$GIT_LOOPY_PICKUP_UNBOUND"
+      if [[ -n "$names" ]]; then
         printf 'git-loopy: serial Pickup skipped %s — %s: %s\n' \
-          "$label" "${reason//_/ }" "$blockers" >&2
+          "$label" "${reason//_/ }" "$names" >&2
       else
         printf 'git-loopy: serial Pickup skipped %s — %s\n' \
           "$label" "${reason//_/ }" >&2
@@ -3396,7 +3770,7 @@ git_loopy_run_discovery() {
         printf 'git-loopy: serial Pickup bound nothing, and the readiness of some of the %s candidate(s) in the Pool could not be read (%s); an unread candidate is unknown, not refused, so this Run will not report the Pool as one it could take no work from. Check `gh auth status`, this host'"'"'s network path to the tracker, and whether those issues'"'"' blockers live in a repository this token can see, then re-run.\n' \
           "$pool_length" "$GIT_LOOPY_PICKUP_UNRESOLVED_REFS" >&2
       elif ((pickup_status == GIT_LOOPY_PICKUP_ALL_BLOCKED)); then
-        printf 'git-loopy: serial Pickup bound nothing: all %s candidate(s) in the Pool wait on open blockers; this Run is waiting on blockers.\n' \
+        printf 'git-loopy: serial Pickup bound nothing: all %s candidate(s) in the Pool wait on open blockers or on pull requests to merge; this Run is waiting on them.\n' \
           "$pool_length" >&2
       else
         printf 'git-loopy: serial Pickup bound nothing: all %s candidate(s) in the Pool were skipped; this Iteration worked no issue.\n' \

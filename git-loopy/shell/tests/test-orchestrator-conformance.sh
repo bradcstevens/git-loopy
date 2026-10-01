@@ -88,7 +88,10 @@ while IFS= read -r case_json; do
         }
     ' <<<"$case_json"
   )"
-  actual="$(git_loopy_decide_readiness "$blocked_by")"
+  actual="$(
+    git_loopy_decide_readiness "$blocked_by" |
+      jq -c '{verdict, admissible, skip_reason, blockers}'
+  )"
   expected="$(
     jq -c '.expected | {
       verdict,
@@ -133,6 +136,119 @@ case ",$GIT_LOOPY_SHALLOW_ISSUE_FIELDS," in
   *",$readiness_connection,"*) ;;
   *)
     fail "issue-readiness read: the shallow field set does not request $readiness_connection"$'\n'"fields:   $GIT_LOOPY_SHALLOW_ISSUE_FIELDS"
+    ;;
+esac
+
+# Contract 2.17 — Awaiting merge. The fixture drives the production decision,
+# the carrier-completeness rule, the state-read cost, and the unbound-Pool
+# rule. An adapter that reimplemented any of them would agree with itself
+# while Pickup walked a different verdict.
+_git_loopy_awaiting_merge_blocked_by() {
+  jq -c '
+    .blocked_by
+    | if . == null then null
+      else
+        {
+          totalCount: .total_count,
+          nodes: [
+            .nodes[]
+            | if .readable == false or .state == null then
+                {id: "", number: 0, state: "", title: "", url: ""}
+              else
+                (.ref
+                 | capture("^(?<owner>[^/]+)/(?<repo>[^#]+)#(?<number>[0-9]+)$"))
+                as $ref
+                | {
+                    id: "fixture",
+                    number: ($ref.number | tonumber),
+                    state: (.state | ascii_upcase),
+                    title: "fixture",
+                    url: ("https://github.com/\($ref.owner)/\($ref.repo)/issues/\($ref.number)")
+                  }
+              end
+          ]
+        }
+      end
+  ' <<<"$1"
+}
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  blocked_by="$(_git_loopy_awaiting_merge_blocked_by "$case_json")"
+  closing="$(jq -c '.closing_pull_requests' <<<"$case_json")"
+  kind="$(jq -r '.candidate_kind' <<<"$case_json")"
+  actual="$(
+    git_loopy_decide_readiness "$blocked_by" "$closing" "$kind" |
+      jq -c '{
+        admissible,
+        skip_reason,
+        reason,
+        names,
+        unbound_pool_class
+      }'
+  )"
+  expected="$(jq -c '.expected' <<<"$case_json")"
+  assert_equal "$expected" "$actual" "awaiting-merge fixture: $case_id"
+done < <(jq -c '.cases[]' "$conformance_dir/awaiting-merge.json")
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  carrier="$(jq -r '.carrier' <<<"$case_json")"
+  nodes="$(jq -r '.nodes' <<<"$case_json")"
+  expected="$(jq -r '.complete' <<<"$case_json")"
+  actual="$(git_loopy_closing_connection_complete "$carrier" "$nodes")"
+  assert_equal "$expected" "$actual" \
+    "awaiting-merge completeness: $case_id"
+done < <(jq -c '.completeness_cases[]' "$conformance_dir/awaiting-merge.json")
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  distinct="$(jq -r '.distinct' <<<"$case_json")"
+  expected="$(jq -r '.requests' <<<"$case_json")"
+  actual="$(git_loopy_state_request_count "$distinct")"
+  assert_equal "$expected" "$actual" \
+    "awaiting-merge state requests: $case_id"
+done < <(jq -c '.state_request_cases[]' "$conformance_dir/awaiting-merge.json")
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  distinct="$(jq -r '.distinct' <<<"$case_json")"
+  failed="$(jq -r '.failed_requests' <<<"$case_json")"
+  expected="$(jq -c '.expected' <<<"$case_json")"
+  actual="$(git_loopy_state_failure_scope "$distinct" "$failed")"
+  assert_equal "$expected" "$actual" \
+    "awaiting-merge state failure: $case_id"
+done < <(jq -c '.state_failure_cases[]' "$conformance_dir/awaiting-merge.json")
+
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  waiting=0
+  unresolved=0
+  candidates=0
+  while IFS= read -r refusal; do
+    [[ -n "$refusal" ]] || continue
+    candidates=$((candidates + 1))
+    pool_class="$(git_loopy_skip_reason_pool_class "$refusal" || true)"
+    case "$pool_class" in
+      waiting) waiting=$((waiting + 1)) ;;
+      unresolved) unresolved=$((unresolved + 1)) ;;
+    esac
+  done < <(jq -r '.refusals[]' <<<"$case_json")
+  expected="$(jq -r '.outcome' <<<"$case_json")"
+  actual="$(
+    git_loopy_unbound_pool_outcome "$candidates" "$waiting" "$unresolved"
+  )"
+  assert_equal "$expected" "$actual" \
+    "awaiting-merge unbound pool: $case_id"
+done < <(jq -c '.unbound_pool_cases[]' "$conformance_dir/awaiting-merge.json")
+
+awaiting_connection="$(
+  jq -r '.read.connection' "$conformance_dir/awaiting-merge.json"
+)"
+case ",$GIT_LOOPY_SHALLOW_ISSUE_FIELDS," in
+  *",$awaiting_connection,"*) ;;
+  *)
+    fail "awaiting-merge read: the shallow field set does not request $awaiting_connection"$'\n'"fields:   $GIT_LOOPY_SHALLOW_ISSUE_FIELDS"
     ;;
 esac
 
