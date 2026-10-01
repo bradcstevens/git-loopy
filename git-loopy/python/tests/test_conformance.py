@@ -1249,10 +1249,14 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.20 states Recovery attempts (#685): one ``recovery_started`` before each
     Agent session, ``attempt`` from 1 to immutable ``max_attempts`` K = 3.
     The payload was already declared, so the wire axis stays at 1.3.
+
+    2.21 states the refill turn (#686): one ``refill_turn`` when the turn a
+    serial Iteration earns is spent, including a zero-reservation turn.
+    The payload was already declared, so the wire axis stays at 1.3.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.3"
-    assert _EVENT_SCHEMA["contract_version"] == "2.20"
+    assert _EVENT_SCHEMA["contract_version"] == "2.21"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -2358,10 +2362,10 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.10 adds Recovery: recovering phase age, recovery N/K, and a handoff's
-    # no-progress. 1.9 added Integration start. 1.8 added the Header's
+    # 1.11 adds the spent refill turn, including a zero reservation. 1.10
+    # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.10"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.11"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -2841,6 +2845,12 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
         for snapshot in case["snapshots"]
         for row in snapshot["expected"]["dashboard"]["queue"]["rows"]
     ), "the rolling case must pin a handoff's no-progress"
+    assert any(
+        (parallel.get("refill_turn") or {}).get("reservations") == 0
+        for case in rolling_cases
+        for snapshot in case["snapshots"]
+        for parallel in [snapshot["expected"]["dashboard"]["header"]["parallel"]]
+    ), "the rolling case must pin a zero-reservation refill turn"
     assert any(
         window.get("recovery")
         for case in _DASHBOARD_INSIGHTS["activity_window_cases"]

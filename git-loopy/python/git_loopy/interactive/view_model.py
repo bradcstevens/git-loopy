@@ -220,17 +220,18 @@ def _wind_down(state: LiveRunState) -> dict[str, Any]:
 def _undeclared_parallel() -> dict[str, Any]:
     """The Header's Parallel posture, for a Run that has declared none.
 
-    The posture is folded from the four Run-scoped posture Events, and this
-    Dashboard reduces none of them: the Textual renderer has no Parallel
-    surface to feed, so #687 owns the reducer that will replace this. Until
-    then the constant is truthful for every trace the shared Conformance
-    fixture holds -- none of its cases carries a posture Event, and a Run that
-    emits none has no posture, which is what `not_declared` with every detail
-    absent says.
+    The posture is folded from the Run-scoped posture Events, including
+    ``wrapper.rolling.refill_turn``, and this Dashboard reduces none of them:
+    the Textual renderer has no Parallel surface to feed, so #687 owns the
+    reducer that will replace this. Until then the constant is truthful for
+    every trace the shared Conformance fixture holds -- none of its cases
+    carries a posture Event, and a Run that emits none has no posture, which
+    is what ``not_declared`` with every detail absent says.
 
-    The Integration backlog fields travel with that constant so the field
-    inventory stays one list. They stay unobserved here: this oracle does not
-    fold ``wrapper.integration.admitted`` or ``.parked``.
+    The Integration backlog fields, and ``refill_turn``, travel with that
+    constant so the field inventory stays one list. They stay unobserved
+    here: this oracle does not fold ``wrapper.integration.admitted``,
+    ``.parked``, or ``wrapper.rolling.refill_turn``.
 
     It becomes a lie the first time this Dashboard projects a live **Parallel**
     Run, which is the moment #687 must replace it rather than extend it
@@ -250,6 +251,7 @@ def _undeclared_parallel() -> dict[str, Any]:
         "integration_wip": None,
         "integration_high_water": None,
         "parked_count": None,
+        "refill_turn": None,
     }
 
 

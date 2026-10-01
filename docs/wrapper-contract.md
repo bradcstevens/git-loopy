@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.20 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.21 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1308,6 +1308,15 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   `wrapper.contribution.end` with `reason` `serial_fallback`. Recovery Consumption and commits are
   counted once, in the originating contribution. Persistent failure ends the contribution unpublished rather than
   publishing something the loops did not pass.
+- **The refill turn a serial Iteration earns is reported when it is spent (contract 2.21).**
+  After a serial Iteration, Rolling dispatch grants exactly one refill turn. The Orchestrator
+  MUST emit `wrapper.rolling.refill_turn` exactly once when that turn is spent, including a
+  turn that reserves nothing. It carries `reservations` (zero allowed) and `effective_lane_limit`,
+  the limit that bounded the decision — not a new authoritative transition;
+  `wrapper.concurrency.changed` owns those. A turn that is granted and never spent emits nothing:
+  the Run ends first, or a Pin whose read failed keeps serial ownership rather than spending the
+  turn. A normal reserve is not that turn and emits nothing. Without the record an operator
+  cannot tell a turn that reserved nothing from a turn that never happened.
 - **A Run that requested Parallel mode says so.** An Orchestrator that implements Parallel mode
   SHOULD carry `parallel_mode`, `lane_cap`, and `effective_lane_limit` on `wrapper.run.start`, and
   MUST emit `wrapper.parallel.serial_fallback` once per serial **Iteration** it works because it
@@ -2086,7 +2095,7 @@ since advanced to 2.15 with the behavioural `contribution_events` obligation
 (§12, ADR-0065) and 2.16 with the Lane-work boundary (§12, #681). Neither
 carried 2.17 (Awaiting merge, §3.3.1), and both have since advanced to 2.18
 with parking and admission (§12, #682), 2.19 with Integration start and
-branch drift (§12, #684), and 2.20 with Recovery attempts (§12, #685).
+branch drift (§12, #684), and 2.20 with Recovery attempts (§12, #685), and 2.21 with the refill turn (§12, #686).
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1). Event wire compatibility is 1.3, advanced with the Lane-work boundary
 (§12), and historical streams' interpretation is unchanged.

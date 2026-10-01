@@ -197,11 +197,12 @@ impl Declaration {
     }
 }
 
-/// The Header's `parallel` Declaration (ADR-0044): the four Run-scoped
+/// The Header's `parallel` Declaration (ADR-0044): the Run-scoped
 /// posture Events — `wrapper.concurrency.changed`, `wrapper.parallel.degraded`,
-/// `wrapper.parallel.serial_fallback`, `wrapper.serial.requested` — folded
-/// into the one place an operator learns whether, and why, a Run is not
-/// filling the Lane cap it was configured with.
+/// `wrapper.parallel.serial_fallback`, `wrapper.serial.requested`, and
+/// `wrapper.rolling.refill_turn` — folded into the one place an operator
+/// learns whether, and why, a Run is not filling the Lane cap it was
+/// configured with.
 ///
 /// It also carries ADR-0020's Integration backlog: WIP against the fixed
 /// high-water of two, the parked count, and whether that backlog has been
@@ -209,7 +210,7 @@ impl Declaration {
 ///
 /// Follows the same **Insight capability** device as [`Declaration`] in shape,
 /// but not in what gates it: `availability` reports whether this Run has a
-/// posture *at all* — `not_declared` until one of the four posture Events
+/// posture *at all* — `not_declared` until a posture Event
 /// arrives, `available` from then on (ADR-0063). The Run-start manifest is a
 /// producer's statement of what it could do, which is a different question
 /// from what this Run is doing.
@@ -235,6 +236,17 @@ pub struct ParallelDeclaration {
     pub integration_high_water: Option<i64>,
     /// Contributions parked and not yet admitted. Absent until observed.
     pub parked_count: Option<i64>,
+    /// The spent refill turn, until the next posture Event. Null otherwise.
+    ///
+    /// A zero `reservations` is a spent turn, not the absence of one.
+    pub refill_turn: Option<RefillTurn>,
+}
+
+/// The numbers a spent `wrapper.rolling.refill_turn` carried (#686).
+#[derive(Clone, Debug, Serialize)]
+pub struct RefillTurn {
+    pub reservations: i64,
+    pub effective_lane_limit: i64,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -712,6 +724,10 @@ fn parallel_declaration(state: &DashboardState) -> ParallelDeclaration {
         integration_wip: posture.integration_wip(),
         integration_high_water: posture.integration_high_water(),
         parked_count: posture.parked_count(),
+        refill_turn: posture.refill_turn.as_ref().map(|turn| RefillTurn {
+            reservations: turn.reservations,
+            effective_lane_limit: turn.effective_lane_limit,
+        }),
     }
 }
 

@@ -51,9 +51,8 @@ _EVENT_SCHEMA = json.loads(
 #: Declared types whose producer does not exist yet, each keyed to the ticket
 #: that owns it. Deleting an entry is that ticket's job, and the gate forces it:
 #: a waived type any scenario emits is a failure.
-WAIVERS: dict[str, int] = {
-    "wrapper.rolling.refill_turn": 686,
-}
+#: Empty: the last producer ticket, #686, deleted ``wrapper.rolling.refill_turn``.
+WAIVERS: dict[str, int] = {}
 
 _START = "wrapper.contribution.start"
 _WORK_FINISHED = "wrapper.contribution.work_finished"
@@ -614,9 +613,35 @@ def test_only_the_python_runner_declares_contribution_events() -> None:
 
 
 def test_the_initial_waivers_each_name_their_producer_ticket() -> None:
-    assert WAIVERS == {
-        "wrapper.rolling.refill_turn": 686,
-    }
+    assert WAIVERS == {}
+
+
+def test_a_spent_refill_turn_is_emitted_even_when_it_reserves_nothing(
+    scenario_logs: dict[str, list[dict[str, Any]]],
+) -> None:
+    """A serial Iteration's refill turn is a record, including a zero reservation.
+
+    Without it an operator cannot tell a turn that reserved nothing from a
+    turn that never happened (#686). A Run that never grants the turn emits
+    none, and a normal reserve is not that turn.
+    """
+    turns = [
+        event
+        for event in scenario_logs["serial-latch-empty-refill"]
+        if event["type"] == "wrapper.rolling.refill_turn"
+    ]
+    assert turns, "a spent refill turn emits wrapper.rolling.refill_turn"
+    assert any(event["reservations"] == 0 for event in turns)
+    for event in turns:
+        assert event["iter"] is None
+        assert event["reservations"] >= 0
+        assert isinstance(event["effective_lane_limit"], int)
+        assert event["effective_lane_limit"] >= 0
+    assert not [
+        event
+        for event in scenario_logs["non-rolling-degrade"]
+        if event["type"] == "wrapper.rolling.refill_turn"
+    ]
 
 
 def _recovery_attempts(events: list[dict[str, Any]]) -> dict[Any, list[tuple[int, int]]]:

@@ -345,12 +345,19 @@ pub(crate) struct IssueContribution {
     pub(crate) drift: Option<i64>,
 }
 
-/// The Header's `parallel` Declaration data, folded from the four Run-scoped
-/// posture Events ADR-0044 collapses into one Declaration rather than four
-/// fields or a band of its own.
+/// The refill turn currently occupying the Header, until the next posture Event.
+#[derive(Clone, Debug)]
+pub(crate) struct RefillTurn {
+    pub(crate) reservations: i64,
+    pub(crate) effective_lane_limit: i64,
+}
+
+/// The Header's `parallel` Declaration data, folded from the Run-scoped
+/// posture Events ADR-0044 collapses into one Declaration rather than a band
+/// of its own. `wrapper.rolling.refill_turn` is one of them (#686).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ParallelPosture {
-    /// Whether any of the four posture Events has been folded yet, which is
+    /// Whether any posture Event has been folded yet, which is
     /// what the Header's `availability` gate reports (ADR-0063).
     pub(crate) observed: bool,
     /// The immutable configured Lane cap, once a signal has named one.
@@ -375,6 +382,8 @@ pub(crate) struct ParallelPosture {
     admitted_open: BTreeSet<String>,
     /// Contribution ids parked and not yet admitted.
     parked_open: BTreeSet<String>,
+    /// Set by a spent refill turn and cleared by the next posture Event.
+    pub(crate) refill_turn: Option<RefillTurn>,
 }
 
 /// The contract's fixed Integration high-water (ADR-0020): H = 2.
@@ -396,6 +405,14 @@ impl ParallelPosture {
     pub(crate) fn parked_count(&self) -> Option<i64> {
         self.integration_observed
             .then_some(self.parked_open.len() as i64)
+    }
+}
+
+impl DashboardState {
+    /// A posture Event makes the Declaration available and ends the refill-turn phrase.
+    fn note_posture_event(&mut self) {
+        self.parallel.observed = true;
+        self.parallel.refill_turn = None;
     }
 }
 
@@ -956,7 +973,7 @@ impl DashboardState {
                 // (`event.contribution` was `None` above); nothing to fold.
             }
             EventPayload::ConcurrencyChanged(changed) => {
-                self.parallel.observed = true;
+                self.note_posture_event();
                 self.parallel.configured_lane_limit = changed
                     .configured_lane_limit
                     .or(self.parallel.configured_lane_limit);
@@ -968,26 +985,33 @@ impl DashboardState {
                 }
             }
             EventPayload::ParallelDegraded(degraded) => {
-                self.parallel.observed = true;
+                self.note_posture_event();
                 self.parallel.degraded = true;
                 self.parallel.degraded_reason = degraded.reason.clone();
                 self.parallel.configured_lane_limit =
                     degraded.lane_cap.or(self.parallel.configured_lane_limit);
             }
             EventPayload::ParallelSerialFallback(fallback) => {
-                self.parallel.observed = true;
+                self.note_posture_event();
                 self.parallel.serial_fallback_reason = fallback.reason.clone();
                 self.parallel.configured_lane_limit =
                     fallback.lane_cap.or(self.parallel.configured_lane_limit);
             }
             EventPayload::SerialRequested(requested) => {
-                self.parallel.observed = true;
+                self.note_posture_event();
                 if let Some(refill_stopped) = requested.refill_stopped {
                     self.parallel.refill_stopped = refill_stopped;
                 }
                 if let Some(seen) = requested.serial_required {
                     self.parallel.serial_required = seen;
                 }
+            }
+            EventPayload::RefillTurn(turn) => {
+                self.note_posture_event();
+                self.parallel.refill_turn = Some(RefillTurn {
+                    reservations: turn.reservations,
+                    effective_lane_limit: turn.effective_lane_limit,
+                });
             }
             EventPayload::Other
             | EventPayload::SubagentLifecycle(_)

@@ -1807,6 +1807,67 @@ fn an_iteration_scoped_record_is_not_a_contribution_however_whole_its_triple() {
 }
 
 #[test]
+fn a_zero_reservation_refill_turn_is_posture_until_the_next_posture_event() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let incomplete = Event::from_json(&serde_json::json!({
+        "type": "wrapper.rolling.refill_turn",
+        "issue": 42,
+    }))
+    .expect("an incomplete refill turn still decodes");
+    assert!(
+        matches!(incomplete.payload, EventPayload::Other),
+        "a missing count is not a zero-reservation turn"
+    );
+    let negative = Event::from_json(&serde_json::json!({
+        "type": "wrapper.rolling.refill_turn",
+        "reservations": -1,
+        "effective_lane_limit": 2,
+    }))
+    .expect("a negative count still decodes");
+    assert!(matches!(negative.payload, EventPayload::Other));
+
+    state.apply(
+        &Event::from_json(&serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "type": "wrapper.rolling.refill_turn",
+            "reservations": 0,
+            "effective_lane_limit": 2,
+        }))
+        .expect("a zero-reservation turn decodes"),
+    );
+    let projected = view(
+        &state,
+        &context("2026-05-16T00:00:02Z", 0),
+        IssueRef::number(42),
+    );
+    let parallel = &projected["dashboard"]["header"]["parallel"];
+    assert_eq!(parallel["availability"], "available");
+    assert_eq!(parallel["refill_turn"]["reservations"], 0);
+    assert_eq!(parallel["refill_turn"]["effective_lane_limit"], 2);
+
+    state.apply(
+        &Event::from_json(&serde_json::json!({
+            "ts": "2026-05-16T00:00:03.000Z",
+            "type": "wrapper.concurrency.changed",
+            "configured_lane_limit": 3,
+            "effective_lane_limit": 2,
+            "pressure": null,
+        }))
+        .expect("a later posture event decodes"),
+    );
+    let cleared = view(
+        &state,
+        &context("2026-05-16T00:00:04Z", 0),
+        IssueRef::number(42),
+    );
+    assert!(cleared["dashboard"]["header"]["parallel"]["refill_turn"].is_null());
+    assert_eq!(
+        cleared["dashboard"]["header"]["parallel"]["availability"],
+        "available"
+    );
+}
+
+#[test]
 fn an_unmodelled_event_type_still_degrades_to_the_additive_fallback() {
     // Tightening the identity must not turn a record this core does not model
     // into a decode failure: an unreadable line is a diagnostic — a record
@@ -1819,7 +1880,7 @@ fn an_unmodelled_event_type_still_degrades_to_the_additive_fallback() {
 
     let issue_alone = serde_json::json!({
         "ts": "2026-05-16T00:00:06.000Z", "run_id": "r1", "iter": null,
-        "type": "wrapper.rolling.refill_turn", "issue": 42
+        "type": "wrapper.rolling.unmodelled", "issue": 42
     });
     let mut empty_key = issue_alone.clone();
     empty_key["contribution_id"] = serde_json::json!("");

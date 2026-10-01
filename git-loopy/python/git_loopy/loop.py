@@ -5115,7 +5115,21 @@ class _ParallelLoop:
                 # pack a six-observation window into a fraction of a second.
                 self._report_concurrency_change()
 
-                for reservation in scheduler.reserve():
+                # The phase is spent inside reserve(), including a turn that
+                # reserves nothing, so the observation has to precede the call.
+                # A normal reserve is not this turn, and a turn that is granted
+                # but never spent — the Run ends, or a Pin keeps serial
+                # ownership (#430) — emits nothing.
+                spending_refill_turn = (
+                    scheduler.phase == rolling_scheduler.PHASE_ROLLING_REFILL_TURN
+                )
+                reservations = scheduler.reserve()
+                if spending_refill_turn:
+                    self._report_refill_turn(
+                        reservations=len(reservations),
+                        effective_lane_limit=scheduler.effective_limit,
+                    )
+                for reservation in reservations:
                     task = asyncio.create_task(
                         self._guarded_lane_lifecycle(reservation)
                     )
@@ -5669,6 +5683,24 @@ class _ParallelLoop:
             reason=reason,
             serial_required=serial_required,
             refill_stopped=True,
+        )
+
+    def _report_refill_turn(
+        self, *, reservations: int, effective_lane_limit: int
+    ) -> None:
+        """Say that the serial Iteration's refill turn was spent (#686).
+
+        Emitted where the turn is spent, not where it is granted. A zero
+        reservation is a spent turn: without the record an operator cannot
+        tell it from a turn that never happened. ``effective_lane_limit`` is
+        the limit that bounded the decision, not a new authoritative
+        transition — ``wrapper.concurrency.changed`` owns those.
+        """
+        self._serial._emit(
+            events_module.WRAPPER_ROLLING_REFILL_TURN,
+            iter_num=None,
+            reservations=reservations,
+            effective_lane_limit=effective_lane_limit,
         )
 
     def _collect_pool_safely(self) -> PoolCollection:

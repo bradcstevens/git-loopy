@@ -46,8 +46,8 @@ pub use view::{
     project_run_view, Activity, ActivityWindow, ConsumptionView, ContextFill, ContributionRow,
     Dashboard, DeliveryView, DetailHeader, DrillIn, ExecutionHostView, Header, IssueLog,
     IterationBreakdown, LogLineView, ParallelDeclaration, PeakContext, Queue, QueueRow,
-    RecoveryView, RunView, Strikes, Summary, SummaryRow, TerminalCapabilities, ViewContext,
-    WindDownDeclaration,
+    RecoveryView, RefillTurn, RunView, Strikes, Summary, SummaryRow, TerminalCapabilities,
+    ViewContext, WindDownDeclaration,
 };
 pub use zoneinfo::{zone_from_posix_tz, zone_from_tz_data};
 
@@ -61,4 +61,4 @@ pub const SUPPORTED_EVENT_SCHEMA_VERSION: u32 = 1;
 /// (`tests/wrapper_contract_version.rs`, ADR-0044): the Wrapper contract went
 /// to 2.0 when Continuation was decommissioned (ADR-0046), a breaking change
 /// no minor bump could honestly encode.
-pub const WRAPPER_CONTRACT_VERSION: &str = "2.20";
+pub const WRAPPER_CONTRACT_VERSION: &str = "2.21";

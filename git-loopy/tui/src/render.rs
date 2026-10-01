@@ -875,6 +875,18 @@ fn parallel_segment(header: &Header) -> Option<(u8, String)> {
         return None;
     }
 
+    // A spent refill turn takes the window until the next posture Event,
+    // including over an earlier stopped-refill or fallback fact. A zero
+    // reservation is the turn, not its absence (#686).
+    if let Some(turn) = &parallel.refill_turn {
+        let mut parts = vec![format!(
+            "refill turn: reserved {} of {}",
+            turn.reservations, turn.effective_lane_limit
+        )];
+        parts.extend(integration_headline(header));
+        return Some((4, parts.join(" · ")));
+    }
+
     // A Parallel degrade is the sentence. It never carries the Integration
     // backlog: a Run that left Parallel mode has no backlog that can fill.
     if parallel.degraded {

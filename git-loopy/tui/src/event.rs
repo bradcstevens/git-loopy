@@ -298,6 +298,8 @@ pub enum EventPayload {
     ParallelSerialFallback(ParallelSerialFallback),
     /// `wrapper.serial.requested`
     SerialRequested(SerialRequested),
+    /// `wrapper.rolling.refill_turn`
+    RefillTurn(RefillTurn),
     /// Any other Event type in the supported schema.
     Other,
 }
@@ -1179,6 +1181,17 @@ pub struct SerialRequested {
     pub refill_stopped: Option<bool>,
 }
 
+/// The refill turn a serial Iteration earns, once it is spent (#686).
+///
+/// `reservations` may be zero. A missing number is not this payload: inventing
+/// zero would make a turn that never happened look like one that reserved
+/// nothing.
+#[derive(Clone, Debug)]
+pub struct RefillTurn {
+    pub reservations: i64,
+    pub effective_lane_limit: i64,
+}
+
 impl Event {
     /// Decode one Event from its JSON representation.
     ///
@@ -1297,9 +1310,8 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         // Only the rolling types with a producer are modelled (ADR-0044): the
         // Lane-contribution lifecycle, parking and admission (#682),
         // Integration start and branch drift (#684), Recovery attempts
-        // (#685), and the four Run/Iteration-scoped posture events. The
-        // `contribution_identity.lifecycle_types` this core does not model —
-        // `refill_turn` — still degrade to `EventPayload::Other` below.
+        // (#685), the refill turn a serial Iteration spends (#686), and the
+        // other Run/Iteration-scoped posture events.
         "wrapper.contribution.end" => {
             EventPayload::ContributionEnd(Box::new(decode_or_default(value)))
         }
@@ -1309,8 +1321,31 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
             EventPayload::ParallelSerialFallback(decode_or_default(value))
         }
         "wrapper.serial.requested" => EventPayload::SerialRequested(decode_or_default(value)),
+        "wrapper.rolling.refill_turn" => decode_refill_turn(value),
         _ => EventPayload::Other,
     }
+}
+
+/// A refill turn is typed only when both numbers are present.
+///
+/// A missing count is not a zero-reservation turn: that silence is exactly
+/// what the record exists to distinguish from a turn that reserved nothing.
+fn decode_refill_turn(value: &Value) -> EventPayload {
+    let Some(reservations) = json_nonneg_i64(value.get("reservations")) else {
+        return EventPayload::Other;
+    };
+    let Some(effective_lane_limit) = json_nonneg_i64(value.get("effective_lane_limit")) else {
+        return EventPayload::Other;
+    };
+    EventPayload::RefillTurn(RefillTurn {
+        reservations,
+        effective_lane_limit,
+    })
+}
+
+fn json_nonneg_i64(value: Option<&Value>) -> Option<i64> {
+    let number = value?.as_i64()?;
+    (number >= 0).then_some(number)
 }
 
 /// A Recovery record is typed only when both numbers are present.

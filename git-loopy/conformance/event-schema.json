@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.20",
+  "contract_version": "2.21",
   "event_schema_version": "1.3",
   "insight_capabilities": {
     "names": [
@@ -463,7 +463,8 @@
       "serial_required": "How many serial-required items the peek that latched this saw. Null when nothing counted them: only the driver's own Pool peek can, and it is skipped once demand is latched. Never 0 — a latch with nothing behind it cannot happen."
     },
     "wrapper.rolling.refill_turn": {
-      "required_when_present": ["reservations", "effective_lane_limit"]
+      "required_when_present": ["reservations", "effective_lane_limit"],
+      "emitted": "Exactly once each time the scheduler spends the refill turn a serial Iteration earns, including a turn that reserves nothing (contract 2.21). reservations may be zero. effective_lane_limit is the limit that bounded that decision, not a new authoritative transition. A turn that is granted and never spent emits nothing, and a normal reserve emits nothing."
     },
     "wrapper.parallel.serial_fallback": {
       "required_when_present": [

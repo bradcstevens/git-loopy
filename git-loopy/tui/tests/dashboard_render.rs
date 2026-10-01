@@ -10,8 +10,8 @@
 use git_loopy_tui::{
     draw_frame, drive_dashboard, project_run_view, DashboardFrame, DashboardSession,
     DashboardState, DashboardSurface, Event, ExecutionHostView, Input, IssueRef,
-    ParallelDeclaration, RunInputs, RunView, Screen, TerminalCapabilities, Timestamp, ViewContext,
-    WindDownDeclaration, Zone,
+    ParallelDeclaration, RefillTurn, RunInputs, RunView, Screen, TerminalCapabilities, Timestamp,
+    ViewContext, WindDownDeclaration, Zone,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -1047,6 +1047,7 @@ fn the_header_shows_a_healthy_parallel_run_with_its_effective_and_configured_lan
         integration_wip: None,
         integration_high_water: None,
         parked_count: None,
+        refill_turn: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1090,6 +1091,7 @@ fn the_header_promotes_a_parallel_degradation_with_its_reason() {
         integration_wip: None,
         integration_high_water: None,
         parked_count: None,
+        refill_turn: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1117,6 +1119,7 @@ fn the_header_promotes_a_serial_fallback_with_its_reason() {
         integration_wip: None,
         integration_high_water: None,
         parked_count: None,
+        refill_turn: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1124,6 +1127,30 @@ fn the_header_promotes_a_serial_fallback_with_its_reason() {
         band(&lines, "git-loopy")[1].contains("serial fallback: parallel-safe pool drained"),
         "the Header carries the serial fallback reason, in:\n{}",
         lines.join("\n")
+    );
+}
+
+#[test]
+fn the_header_shows_a_spent_refill_turn_until_the_next_posture_form() {
+    let mut spent = observed_backlog(0, 0, None);
+    spent.refill_stopped = true;
+    spent.serial_required = Some(2);
+    spent.refill_turn = Some(RefillTurn {
+        reservations: 0,
+        effective_lane_limit: 2,
+    });
+    let line = header_line(spent);
+    assert!(
+        line.contains("refill turn: reserved 0 of 2"),
+        "a spent turn, including zero reservations, takes the Header, in:\n{line}"
+    );
+    assert!(
+        line.contains("integration 0/2 · 0 parked"),
+        "the Integration part accompanies the refill turn, in:\n{line}"
+    );
+    assert!(
+        !line.contains("lane refill stopped"),
+        "the refill turn takes the window from the earlier stopped-refill fact, in:\n{line}"
     );
 }
 
@@ -1144,6 +1171,7 @@ fn the_header_states_that_lane_refill_stopped_for_serial_required_work() {
         integration_wip: None,
         integration_high_water: None,
         parked_count: None,
+        refill_turn: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1176,6 +1204,7 @@ fn observed_backlog(wip: i64, parked: i64, pressure: Option<&str>) -> ParallelDe
         integration_wip: Some(wip),
         integration_high_water: Some(2),
         parked_count: Some(parked),
+        refill_turn: None,
     }
 }
 
@@ -1273,6 +1302,7 @@ fn parallel_posture_snapshots_pin_its_responsive_priority() {
         integration_wip: None,
         integration_high_water: None,
         parked_count: None,
+        refill_turn: None,
     };
     let degraded = ParallelDeclaration {
         availability: "available",
@@ -1288,6 +1318,7 @@ fn parallel_posture_snapshots_pin_its_responsive_priority() {
         integration_wip: None,
         integration_high_water: None,
         parked_count: None,
+        refill_turn: None,
     };
 
     let mut healthy_view = fixture_view("parallel-lanes-and-non-closure-outcomes");
