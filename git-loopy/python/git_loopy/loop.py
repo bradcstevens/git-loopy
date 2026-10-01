@@ -225,7 +225,11 @@ from git_loopy.denomination import (
     CostDenomination,
 )
 from git_loopy.prompt import PromptMetadataError, load_prompt
-from git_loopy.readiness import blocked_skip_reason, decide_readiness
+from git_loopy.readiness import (
+    POOL_CLASS_UNRESOLVED,
+    POOL_CLASS_WAITING,
+    decide_readiness,
+)
 from git_loopy.rate_card import RateCard
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
@@ -288,7 +292,6 @@ from git_loopy.sources import (
     RollingIssueSource,
     confirms_empty_pool,
     is_lane_candidate,
-    readiness_unresolved,
     unbound_pool_outcome,
 )
 from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
@@ -3389,20 +3392,17 @@ class _Loop:
             # **Routed pair** it will never run on.
             verdict = self._source.readiness(item)
             if not verdict.admissible:
-                assert verdict.skip_reason is not None
-                if verdict.blockers:
-                    return AdmissionRefusal(
-                        reason=blocked_skip_reason(verdict.skip_reason, verdict.blockers),
-                        waiting_on_blocker=True,
-                    )
-                # An *unprovable* readiness read is not a refusal of this
-                # candidate; it is a read that did not happen (#542, ADR-0047).
-                # It still skips — the runner may not bind a candidate whose
-                # blockers it never checked — but it is marked so the terminal
-                # classifier cannot mistake it for the Pool refusing work.
+                assert verdict.refusal_reason is not None
+                # The verdict names its own reason and class (#693). An
+                # *unprovable* read is not a refusal of this candidate; it is a
+                # read that did not happen (#542, ADR-0047). It still skips —
+                # the runner may not bind a candidate whose blockers it never
+                # checked — but its class keeps the terminal classifier from
+                # mistaking it for the Pool refusing work.
                 return AdmissionRefusal(
-                    reason=verdict.skip_reason,
-                    unresolved=readiness_unresolved(verdict),
+                    reason=verdict.refusal_reason,
+                    waiting_on_blocker=verdict.pool_class == POOL_CLASS_WAITING,
+                    unresolved=verdict.pool_class == POOL_CLASS_UNRESOLVED,
                 )
             try:
                 resolution = self._resolve_route(
@@ -5318,13 +5318,11 @@ class _ParallelLoop:
                         self._terminal_refusals = []
                         for candidate in scheduler.terminal_survivors:
                             readiness = decide_readiness(candidate.blocked_by)
-                            if readiness.blockers:
-                                assert readiness.skip_reason is not None
-                                reason = blocked_skip_reason(
-                                    readiness.skip_reason, readiness.blockers
-                                )
-                            else:
-                                reason = self._rolling_refused[candidate.ref]
+                            reason = (
+                                readiness.refusal_reason
+                                if readiness.pool_class == POOL_CLASS_WAITING
+                                else self._rolling_refused[candidate.ref]
+                            )
                             self._terminal_refusals.append(
                                 run_end_refusal(candidate.ref, reason)
                             )
