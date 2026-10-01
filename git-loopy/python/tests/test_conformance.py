@@ -1242,10 +1242,13 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.18 states the parking and admission emission rules (#682). The payloads
     were already identity-only, so the wire axis stays at 1.3. Neither fixture
     carried 2.17.
+
+    2.19 states Integration start and branch drift (#684). The payloads were
+    already declared, so the wire axis stays at 1.3.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.3"
-    assert _EVENT_SCHEMA["contract_version"] == "2.18"
+    assert _EVENT_SCHEMA["contract_version"] == "2.19"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -2351,10 +2354,10 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.8 adds the Header's Integration backlog: WIP, high-water, parked count,
-    # and the observed flag. 1.7 added optional Queue ``phase_age_seconds``.
-    # 1.6 added the Execution host and the Wind-down to the Header.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.8"
+    # 1.9 adds Integration start: integrating phase age, and drift on the
+    # drill-in contribution row. 1.8 added the Header's Integration backlog.
+    # 1.7 added optional Queue ``phase_age_seconds``.
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.9"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -2407,6 +2410,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "Outcome",
         "Duration",
         "Status",
+        "Drift",
         "Active",
         "Route",
         "Tokens in",

@@ -19,7 +19,7 @@ use crate::state::{
     routing_preparation_text, routing_resolution_text, ContributionSummaryEntry, DashboardState,
     IssueContribution, IssueLedgerEntry, IterationRow, LogContent, LogLine, ResolvedRoute,
     RouteDelivery, RoutePreparation, SummaryEntryRef, STATUS_ACTIVE, STATUS_ADMITTED, STATUS_GONE,
-    STATUS_PARKED, STATUS_QUEUED,
+    STATUS_INTEGRATING, STATUS_PARKED, STATUS_QUEUED,
 };
 use crate::timestamp::{Timestamp, Zone};
 
@@ -516,6 +516,8 @@ pub struct ContributionRow {
     pub outcome: Option<String>,
     pub duration_seconds: Option<f64>,
     pub status: String,
+    /// Publications since the Lane cut. Null is unknown, never a guessed zero.
+    pub drift: Option<i64>,
     pub active_seconds: f64,
     pub route: Option<RouteView>,
     pub consumption: ConsumptionView,
@@ -769,7 +771,7 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
 
 fn queue_group(status: &str) -> u8 {
     match status {
-        STATUS_ACTIVE | STATUS_PARKED | STATUS_ADMITTED => 0,
+        STATUS_ACTIVE | STATUS_PARKED | STATUS_ADMITTED | STATUS_INTEGRATING => 0,
         STATUS_QUEUED => 1,
         _ => 2,
     }
@@ -916,6 +918,7 @@ fn contribution_row(contribution: &IssueContribution) -> ContributionRow {
         outcome: contribution.outcome.clone(),
         duration_seconds: contribution.duration_seconds,
         status: contribution.status.clone(),
+        drift: contribution.drift,
         active_seconds: contribution.active_seconds,
         route: contribution.route.as_ref().map(RouteView::project),
         consumption: ConsumptionView {

@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.18 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.19 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1285,7 +1285,13 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   own Integration. A contribution is admitted once: directly, or after parking, never both.
   Admission is FIFO by finish order, broken by ascending issue number. That admission — not
   publication — is what frees the Lane for refill, which is why a record identifies its
-  contribution and not its Lane. A full backlog is
+  contribution and not its Lane. When a contribution takes Integration's serialization it emits
+  `wrapper.integration.started` once (contract 2.19), and immediately afterwards
+  `wrapper.integration.branch_observed`, before the private stage is cut — including when that
+  stage cannot be cut. Recovery reuses the stage and does not emit either again. The observation
+  is the number of this Run's green publications onto base since the contribution's Lane branch
+  was cut, or `null` when the Run cannot observe the cut. The publication that this contribution
+  itself then lands is not part of its own observation. A full backlog is
   **Integration backpressure**: **Rolling dispatch** stops *starting* new Lane work while it holds,
   and resumes the moment a slot frees. It is a refill bound, never a pause — Lanes already running
   finish normally and nothing is cancelled. This is what makes the **Lane cap** a ceiling rather
@@ -2077,7 +2083,8 @@ and the Python `WRAPPER_CONTRACT_VERSION` read 2.13. Both pins then moved from
 since advanced to 2.15 with the behavioural `contribution_events` obligation
 (§12, ADR-0065) and 2.16 with the Lane-work boundary (§12, #681). Neither
 carried 2.17 (Awaiting merge, §3.3.1), and both have since advanced to 2.18
-with parking and admission (§12, #682).
+with parking and admission (§12, #682) and 2.19 with Integration start and
+branch drift (§12, #684).
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1). Event wire compatibility is 1.3, advanced with the Lane-work boundary
 (§12), and historical streams' interpretation is unchanged.

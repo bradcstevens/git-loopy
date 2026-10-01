@@ -13,6 +13,6 @@ from __future__ import annotations
 #: revision this distribution does not exercise yet is owed, and
 #: `git-loopy/conformance/fixture-claims.json` records it with its tracking issue
 #: (Wrapper contract §13.1).
-WRAPPER_CONTRACT_VERSION = "2.18"
+WRAPPER_CONTRACT_VERSION = "2.19"
 
 __all__ = ["WRAPPER_CONTRACT_VERSION"]

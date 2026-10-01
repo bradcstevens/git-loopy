@@ -26,6 +26,9 @@ pub(crate) const STATUS_ACTIVE: &str = "active";
 pub(crate) const STATUS_PARKED: &str = "parked";
 /// In the Integration backlog, waiting its turn.
 pub(crate) const STATUS_ADMITTED: &str = "admitted";
+/// Holding Integration's serialization: the private stage is being cut,
+/// merged, and gated. Phase age starts here, not at admission.
+pub(crate) const STATUS_INTEGRATING: &str = "integrating";
 pub(crate) const STATUS_GONE: &str = "gone";
 pub(crate) const STATUS_NO_PROGRESS: &str = "no-progress";
 pub(crate) const STATUS_CLOSED: &str = "closed";
@@ -336,6 +339,8 @@ pub(crate) struct IssueContribution {
     pub(crate) cache_read: Option<i64>,
     pub(crate) cache_write: Option<i64>,
     pub(crate) peak_context_window: Option<ContextWindowSample>,
+    /// Publications since the Lane cut, or unknown when unobserved.
+    pub(crate) drift: Option<i64>,
 }
 
 /// The Header's `parallel` Declaration data, folded from the four Run-scoped
@@ -455,9 +460,12 @@ impl IssueLedgerEntry {
         total
     }
 
-    /// Seconds since the row entered parked or admitted, or nothing otherwise.
+    /// Seconds since the row entered parked, admitted, or integrating.
     pub(crate) fn phase_age_seconds(&self, now_monotonic: Option<f64>) -> Option<f64> {
-        if !matches!(self.status.as_str(), STATUS_PARKED | STATUS_ADMITTED) {
+        if !matches!(
+            self.status.as_str(),
+            STATUS_PARKED | STATUS_ADMITTED | STATUS_INTEGRATING
+        ) {
             return None;
         }
         let since = self.phase_since?;
@@ -540,6 +548,9 @@ pub struct DashboardState {
     /// closure — still reach the issue's Log and Consumption, but no longer
     /// its Active timer: a Parallel issue's Active time is its Lane work only.
     lane_work_finished: BTreeSet<IssueRef>,
+    /// `base_publications_since_cut` by contribution, including an observed
+    /// unknown (`None`). Absent means the stream never said.
+    branch_drift: BTreeMap<String, Option<i64>>,
     pub(crate) wind_down: Option<WindDown>,
     pub(crate) wind_down_observed: bool,
     /// The folded `parallel` Declaration (ADR-0044).
@@ -606,6 +617,7 @@ impl DashboardState {
             execution_host: ExecutionHostProvenance::default(),
             contribution_hosts: BTreeMap::new(),
             lane_work_finished: BTreeSet::new(),
+            branch_drift: BTreeMap::new(),
             wind_down: None,
             wind_down_observed: false,
             parallel: ParallelPosture::default(),
@@ -750,6 +762,21 @@ impl DashboardState {
                         &contribution.issue,
                         STATUS_ADMITTED,
                         now_monotonic,
+                    );
+                    return;
+                }
+                EventPayload::IntegrationStarted(_) => {
+                    self.enter_integration_status(
+                        &contribution.issue,
+                        STATUS_INTEGRATING,
+                        now_monotonic,
+                    );
+                    return;
+                }
+                EventPayload::IntegrationBranchObserved(observed) => {
+                    self.branch_drift.insert(
+                        contribution.contribution_id.clone(),
+                        observed.base_publications_since_cut,
                     );
                     return;
                 }
@@ -899,6 +926,10 @@ impl DashboardState {
             EventPayload::IntegrationParked(_) | EventPayload::IntegrationAdmitted(_) => {
                 // Reached only without a whole identity; an Integration Status
                 // with no contribution to attach it to changes nothing.
+            }
+            EventPayload::IntegrationStarted(_) | EventPayload::IntegrationBranchObserved(_) => {
+                // Same rule: no identity, nothing to attach the phase or the
+                // drift to.
             }
             EventPayload::ContributionEnd(_) => {
                 // Reached only when the record carries no whole identity
@@ -1420,7 +1451,12 @@ impl DashboardState {
         // escalated issue is a change between rows, so a row inheriting the
         // issue's newest pair would erase the change it exists to show.
         let route = self.iteration_routes.get(issue).cloned();
-        let row = contribution_from_rolling(contribution, end, route);
+        let drift = self
+            .branch_drift
+            .get(&contribution.contribution_id)
+            .copied()
+            .flatten();
+        let row = contribution_from_rolling(contribution, end, route, drift);
         let summary_row = contribution_summary_entry(contribution, end, &row);
         let status = row.status.clone();
         self.deactivate(issue, now_monotonic, Some(status.as_str()));
@@ -1833,6 +1869,7 @@ fn contribution_from(
         cache_read: consumption.cache_read.map(|value| value.max(0)),
         cache_write: consumption.cache_write.map(|value| value.max(0)),
         peak_context_window: row.peak_context_window,
+        drift: None,
     }
 }
 
@@ -1849,6 +1886,7 @@ fn contribution_from_rolling(
     contribution: &ContributionIdentity,
     end: &ContributionEnd,
     route: Option<ResolvedRoute>,
+    drift: Option<i64>,
 ) -> IssueContribution {
     let summary = end.summary.clone().unwrap_or_default();
     let consumption = end
@@ -1894,6 +1932,7 @@ fn contribution_from_rolling(
             .and_then(|usage| usage.cache_write)
             .map(|value| value.max(0)),
         peak_context_window: summary.peak_context_window,
+        drift,
     }
 }
 

@@ -239,6 +239,10 @@ pub enum EventPayload {
     IntegrationParked(IntegrationParked),
     /// `wrapper.integration.admitted`
     IntegrationAdmitted(IntegrationAdmitted),
+    /// `wrapper.integration.started`
+    IntegrationStarted(IntegrationStarted),
+    /// `wrapper.integration.branch_observed`
+    IntegrationBranchObserved(IntegrationBranchObserved),
     /// `wrapper.iteration.start`
     IterationStart,
     /// `wrapper.afk_ready.collected`
@@ -383,6 +387,28 @@ pub struct IntegrationParked {
 pub struct IntegrationAdmitted {
     #[serde(default)]
     pub contribution_id: Option<String>,
+}
+
+/// The contribution that has taken Integration's serialization.
+///
+/// Identity is decoded through [`Event::contribution`]. Emitted once, before
+/// the private stage is cut, and not repeated for Recovery.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct IntegrationStarted {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
+}
+
+/// Publications landed on base since this contribution's Lane was cut.
+///
+/// `None` is an observed unknown — the Run could not see the cut — not a
+/// guessed zero. The contribution's own later publication is not included.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct IntegrationBranchObserved {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
+    #[serde(default)]
+    pub base_publications_since_cut: Option<i64>,
 }
 
 /// Per-Orchestrator **Parallel mode** capabilities declared at Run start.
@@ -1190,6 +1216,10 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.integration.admitted" => {
             EventPayload::IntegrationAdmitted(decode_or_default(value))
         }
+        "wrapper.integration.started" => EventPayload::IntegrationStarted(decode_or_default(value)),
+        "wrapper.integration.branch_observed" => {
+            EventPayload::IntegrationBranchObserved(decode_or_default(value))
+        }
         "wrapper.iteration.start" => EventPayload::IterationStart,
         "wrapper.afk_ready.collected" => EventPayload::AfkReadyCollected(decode_or_default(value)),
         "wrapper.pool.refreshed" => EventPayload::PoolRefreshed(decode_or_default(value)),
@@ -1249,11 +1279,11 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
         "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),
         // Only the rolling types with a producer are modelled (ADR-0044): the
-        // Lane-contribution lifecycle, parking and admission (#682), and the
-        // four Run/Iteration-scoped posture events. The
+        // Lane-contribution lifecycle, parking and admission (#682),
+        // Integration start and branch drift (#684), and the four
+        // Run/Iteration-scoped posture events. The
         // `contribution_identity.lifecycle_types` this core does not model —
-        // `started`, `branch_observed`, `recovery_started` — still degrade to
-        // `EventPayload::Other` below, unchanged.
+        // `recovery_started` — still degrade to `EventPayload::Other` below.
         "wrapper.contribution.end" => {
             EventPayload::ContributionEnd(Box::new(decode_or_default(value)))
         }

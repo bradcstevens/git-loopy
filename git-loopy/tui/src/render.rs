@@ -96,9 +96,8 @@ const fn filling(heading: &'static str, width: u16, rank: u8) -> Column {
 /// buy the pair by surrendering every Consumption figure it has.
 const QUEUE_COLUMNS: [Column; 11] = [
     fixed("Issue", 10, 0),
-    // Wide enough for `admitted 0:00:00` — Status plus phase age. The full
-    // set therefore needs four more columns than it did at width 12.
-    fixed("Status", 16, 1),
+    // Wide enough for `integrating 0:00:00` — Status plus phase age.
+    fixed("Status", 19, 1),
     fixed("Started", 12, 4),
     fixed("Active", 9, 2),
     fixed("Closed", 12, 9),
@@ -697,7 +696,7 @@ fn draw_queue(
 ///
 /// An Orchestrator that cannot measure Consumption reports `null`, which is a
 /// different fact from a measured zero and must never render as one.
-/// Status, with phase age beside parked and admitted (`parked 0:00:04`).
+/// Status, with phase age beside parked, admitted, and integrating.
 fn queue_status(row: &QueueRow) -> String {
     match row.phase_age_seconds {
         Some(age) => format!("{} {}", row.status, duration(age)),
@@ -1395,11 +1394,14 @@ fn wrap_facts(segments: &[String], width: u16) -> Vec<String> {
 /// where an **Escalation rung** becomes visible at all: the pair is per
 /// contribution, so a stalled issue re-picked at a dearer pair reads as a
 /// change between two rows rather than as one value that quietly moved.
-const BREAKDOWN_COLUMNS: [Column; 13] = [
+const BREAKDOWN_COLUMNS: [Column; 14] = [
     fixed("Contribution", 14, 0),
     fixed("Outcome", 10, 2),
     fixed("Duration", 9, 4),
     fixed("Status", 12, 1),
+    // Drift is a drill-in fact only. Ranked to be given up before the
+    // cache split, so a narrow drill-in keeps the columns it already had.
+    fixed("Drift", 7, 14),
     fixed("Active", 9, 3),
     fixed("Route", ROUTE_WIDTH, 7),
     fixed("Tokens in", 11, 6),
@@ -1570,6 +1572,8 @@ fn draw_breakdown(
                 row.duration_seconds
                     .map_or_else(|| glyphs.unknown.to_string(), duration),
                 row.status.clone(),
+                row.drift
+                    .map_or_else(|| glyphs.unknown.to_string(), |count| count.to_string()),
                 duration(row.active_seconds),
                 route(row.route.as_ref(), None, None, routing),
                 tokens(row.consumption.tokens_in, glyphs),

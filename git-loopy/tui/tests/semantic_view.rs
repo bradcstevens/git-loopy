@@ -1819,7 +1819,7 @@ fn an_unmodelled_event_type_still_degrades_to_the_additive_fallback() {
 
     let issue_alone = serde_json::json!({
         "ts": "2026-05-16T00:00:06.000Z", "run_id": "r1", "iter": null,
-        "type": "wrapper.integration.started", "issue": 42
+        "type": "wrapper.integration.recovery_started", "issue": 42
     });
     let mut empty_key = issue_alone.clone();
     empty_key["contribution_id"] = serde_json::json!("");
@@ -2181,8 +2181,77 @@ fn parking_and_admission_show_in_the_queue_with_phase_age() {
     );
     assert!(
         queue_row(&ended, 44).get("phase_age_seconds").is_none(),
-        "phase age belongs only to parked and admitted"
+        "phase age ends when the contribution does"
     );
+}
+
+#[test]
+fn integrating_shows_phase_age_and_the_drill_in_shows_drift() {
+    let started = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.started","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+    )
+    .expect("started decodes");
+    assert!(matches!(
+        started.payload,
+        EventPayload::IntegrationStarted(_)
+    ));
+    let observed = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.branch_observed","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","base_publications_since_cut":0}"#,
+    )
+    .expect("branch_observed decodes");
+    match &observed.payload {
+        EventPayload::IntegrationBranchObserved(payload) => {
+            assert_eq!(payload.base_publications_since_cut, Some(0));
+        }
+        other => panic!("branch_observed is a typed payload, got {other:?}"),
+    }
+    let unknown = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.branch_observed","run_id":"run-1","iter":null,"contribution_id":"c-0002","issue":43,"lane_id":"lane-2","base_publications_since_cut":null}"#,
+    )
+    .expect("null drift decodes");
+    match &unknown.payload {
+        EventPayload::IntegrationBranchObserved(payload) => {
+            assert_eq!(payload.base_publications_since_cut, None);
+        }
+        other => panic!("null drift stays typed, got {other:?}"),
+    }
+
+    let lines = [
+        r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:04.000Z","type":"wrapper.contribution.start","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:08.000Z","type":"wrapper.contribution.work_finished","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:09.000Z","type":"wrapper.integration.admitted","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:09.000Z","type":"wrapper.integration.started","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:10.000Z","type":"wrapper.integration.branch_observed","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","base_publications_since_cut":0}"#,
+    ];
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    for line in lines {
+        state.apply(&Event::from_jsonl_line(line).expect("decodes"));
+    }
+    let integrating = view(
+        &state,
+        &context("2026-05-16T00:00:11.000Z", 0),
+        IssueRef::number(42),
+    );
+    let row = queue_row(&integrating, 42);
+    assert_eq!(row["status"], serde_json::json!("integrating"));
+    assert_eq!(row["phase_age_seconds"], serde_json::json!(2.0));
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"ts":"2026-05-16T00:00:12.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","outcome":"closed","reason":"published","summary":{"closure_outcome":"closed"}}"#,
+        )
+        .expect("end decodes"),
+    );
+    let ended = view(
+        &state,
+        &context("2026-05-16T00:00:12.000Z", 0),
+        IssueRef::number(42),
+    );
+    assert!(queue_row(&ended, 42).get("phase_age_seconds").is_none());
+    let contribution = &ended["drill_in"]["iteration_breakdown"]["rows"][0];
+    assert_eq!(contribution["drift"], serde_json::json!(0));
+    assert_eq!(contribution["contribution_id"], "c-0001");
 }
 
 #[test]

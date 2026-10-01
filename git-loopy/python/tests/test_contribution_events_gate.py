@@ -52,8 +52,6 @@ _EVENT_SCHEMA = json.loads(
 #: that owns it. Deleting an entry is that ticket's job, and the gate forces it:
 #: a waived type any scenario emits is a failure.
 WAIVERS: dict[str, int] = {
-    "wrapper.integration.started": 684,
-    "wrapper.integration.branch_observed": 684,
     "wrapper.integration.recovery_started": 685,
     "wrapper.rolling.refill_turn": 686,
 }
@@ -428,6 +426,120 @@ def _rate_limited_lanes_narrow(root: Path, mp: pytest.MonkeyPatch) -> None:
     asyncio.run(loop_module.run(_config(2)))
 
 
+def _drift_timeline(root: Path, mp: pytest.MonkeyPatch) -> None:
+    """#42 held in recovery until #44 is cut, #43 is admitted, and #44 parks.
+
+    A full Integration backlog stops refill, so #44 has to be cut while #43
+    is still working. #43 then fills the backlog and waits on the lock #42
+    holds; #44 finishes into that full backlog and parks. Releasing #42
+    publishes once, so #43 observes 1 and #44, admitted behind it, observes 2.
+    """
+    hold_43, hold_44, hold_resolution = (asyncio.Event() for _ in range(3))
+    resolution_started, lane_44_started, admitted_43, parked_44 = (
+        asyncio.Event() for _ in range(4)
+    )
+    real_finish_work = rolling_scheduler.RollingScheduler.finish_work
+
+    def spy_finish_work(self, contribution, **kwargs: Any) -> str:
+        disposition = real_finish_work(self, contribution, **kwargs)
+        if contribution.ref == 43 and disposition == rolling_scheduler.ADMITTED:
+            admitted_43.set()
+        if contribution.ref == 44 and disposition == rolling_scheduler.PARKED:
+            parked_44.set()
+        return disposition
+
+    mp.setattr(rolling_scheduler.RollingScheduler, "finish_work", spy_finish_work)
+
+    class _HeldClient(lp._ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> lp._ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            directory = str(kwargs.get("working_directory") or "")
+            if "/integrate/" in directory and directory.rstrip("/").endswith("issue-42"):
+                gate_on, announce = hold_resolution, resolution_started
+            elif directory.endswith("issue-43") and "/integrate/" not in directory:
+                gate_on, announce = hold_43, None
+            elif directory.endswith("issue-44") and "/integrate/" not in directory:
+                gate_on, announce = hold_44, lane_44_started
+            else:
+                return session
+            real = session.send_and_wait
+
+            async def held(prompt: str, **extra: Any) -> Any:
+                if announce is not None:
+                    announce.set()
+                await gate_on.wait()
+                return await real(prompt, **extra)
+
+            session.send_and_wait = held  # type: ignore[method-assign]
+            return session
+
+    _wire(
+        root, mp,
+        [lp._make_issue(n, labels=_PARALLEL_SAFE) for n in (42, 43, 44)],
+        FakeGateRunner(by_issue={42: [False, True]}),
+        client_cls=_HeldClient,
+    )
+
+    async def scenario() -> int:
+        run = asyncio.create_task(loop_module.run(_config(0)))
+        await asyncio.wait_for(resolution_started.wait(), timeout=5)
+        await asyncio.wait_for(lane_44_started.wait(), timeout=5)
+        hold_43.set()
+        await asyncio.wait_for(admitted_43.wait(), timeout=5)
+        hold_44.set()
+        await asyncio.wait_for(parked_44.wait(), timeout=5)
+        hold_resolution.set()
+        return await asyncio.wait_for(run, timeout=15)
+
+    assert asyncio.run(scenario()) == 0
+
+
+def _branch_observations(events: list[dict[str, Any]]) -> dict[int, int]:
+    return {
+        int(event["issue"]): event["base_publications_since_cut"]
+        for event in events
+        if event["type"] == _BRANCH_OBSERVED
+    }
+
+
+def _started_once_per_integration(events: list[dict[str, Any]]) -> bool:
+    started = [event["contribution_id"] for event in events if event["type"] == _STARTED]
+    return len(started) == 3 and len(set(started)) == 3
+
+
+def _refuse_the_stage_cut(
+    root: Path, mp: pytest.MonkeyPatch
+) -> dict[str, bool | int | None]:
+    """Fail the Integration-stage cut and report what was already on disk."""
+    fake_git, _fake_gh = _wire(
+        root, mp,
+        [lp._make_issue(42, labels=_PARALLEL_SAFE)],
+        FakeGateRunner(),
+    )
+    seen: dict[str, bool | int | None] = {}
+    real_add = fake_git.add_worktree
+
+    def add_worktree(path: Path, *, branch: str, base: str) -> Any:
+        if "/integrate/" in str(path):
+            on_disk = lp._logged_events(root)
+            started = [event for event in on_disk if event["type"] == _STARTED]
+            observed = [
+                event for event in on_disk if event["type"] == _BRANCH_OBSERVED
+            ]
+            seen["started"] = len(started) == 1
+            seen["branch_observed"] = (
+                observed[0]["base_publications_since_cut"] if observed else None
+            )
+            raise loop_module.git_module.GitError(
+                ("git", "worktree", "add"), 1, "stage cut refused"
+            )
+        return real_add(path, branch=branch, base=base)
+
+    fake_git.add_worktree = add_worktree  # type: ignore[method-assign]
+    assert asyncio.run(loop_module.run(_config(1))) == 0
+    return seen
+
+
 def _parallel_over_a_non_rolling_source(root: Path, mp: pytest.MonkeyPatch) -> None:
     """A Parallel Run whose source cannot offer Lane work degrades, and says so."""
     fake_git = lp._wire_repo(root)
@@ -504,11 +616,44 @@ def test_only_the_python_runner_declares_contribution_events() -> None:
 
 def test_the_initial_waivers_each_name_their_producer_ticket() -> None:
     assert WAIVERS == {
-        "wrapper.integration.started": 684,
-        "wrapper.integration.branch_observed": 684,
         "wrapper.integration.recovery_started": 685,
         "wrapper.rolling.refill_turn": 686,
     }
+
+
+def test_started_and_branch_drift_follow_the_lane_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``started`` once per Integration, then drift before the stage is cut.
+
+    Holding #42 in recovery until a third Lane is cut is the rolling stream's
+    shape: #42 observes 0 and publishes, #43 observes 1, #44 observes 2. A
+    stage that cannot be cut still has both records on disk before the cut
+    fails, and that observation is a count, not null — the Lane cut was seen.
+    """
+    root = tmp_path / "drift"
+    root.mkdir()
+    (root / "AGENTS.md").write_text(
+        (tmp_path / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    _drift_timeline(root, monkeypatch)
+    observed = _branch_observations(lp._logged_events(root))
+    assert observed == {42: 0, 43: 1, 44: 2}
+    assert _started_once_per_integration(lp._logged_events(root))
+
+    refused = tmp_path / "stage-refused"
+    refused.mkdir()
+    (refused / "AGENTS.md").write_text(
+        (tmp_path / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    already_on_disk = _refuse_the_stage_cut(refused, monkeypatch)
+    assert already_on_disk == {"started": True, "branch_observed": 0}
+    end = next(
+        event
+        for event in lp._logged_events(refused)
+        if event["type"] == _END
+    )
+    assert end["reason"] == "serial_fallback"
 
 
 def test_python_parallel_runs_emit_every_declared_contribution_event(

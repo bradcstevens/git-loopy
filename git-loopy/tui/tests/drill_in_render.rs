@@ -239,9 +239,9 @@ fn the_detail_header_states_the_issues_whole_lifecycle() {
 #[test]
 fn the_iteration_breakdown_carries_the_locked_columns() {
     let frame = drill_in_frame("baseline-closed-iteration", "42");
-    // The full inventory, including the 34-cell Route, needs 196 columns.
-    // Narrow-terminal column selection belongs to `responsive_render.rs`.
-    let lines = render_lines(&frame, 200, 40);
+    // The full inventory, including the 34-cell Route and Drift, needs 204
+    // columns. Narrow-terminal column selection belongs to `responsive_render.rs`.
+    let lines = render_lines(&frame, 208, 40);
     let breakdown = band(&lines, "Iteration breakdown");
 
     let expected_labels: Vec<String> = fixture()["semantic_contract"]
@@ -271,6 +271,7 @@ fn the_iteration_breakdown_carries_the_locked_columns() {
             "closed",
             "0:00:04",
             "closed",
+            "—",
             "0:00:04",
             "—",
             "100",

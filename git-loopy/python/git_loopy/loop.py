@@ -4266,6 +4266,10 @@ class _LaneWork:
     git: git_module.GitClient
     pre_sha: str | None = None
     reclaimed: bool = False
+    # Publications already on base when this Lane was cut. Drift is the
+    # later count minus this snapshot; a cut this Run did not observe has
+    # no snapshot, and the observation is null rather than a guessed zero.
+    base_publications_at_cut: int | None = None
 
 
 @dataclass
@@ -4595,6 +4599,10 @@ class _ParallelLoop:
         # never sees two merges at once — without blocking any OTHER Lane's
         # worktree setup or agent session (criteria #2/#3, ADR-0020).
         self._integration_lock = asyncio.Lock()
+        # Green publications this Run has landed on base. Snapshotted onto
+        # each Lane at its cut, so branch_observed can report how many
+        # landed between that cut and the contribution taking Integration.
+        self._base_publications = 0
         # Every in-flight Lane lifecycle task (`_run_lane_lifecycle`), tracked
         # so the driver can `asyncio.wait(..., FIRST_COMPLETED)` on the first
         # one to finish and immediately reserve into the capacity it freed —
@@ -6056,7 +6064,12 @@ class _ParallelLoop:
             return
 
         lane_work = _LaneWork(
-            item=item, branch=branch, path=path, git=wt_git, pre_sha=base
+            item=item,
+            branch=branch,
+            path=path,
+            git=wt_git,
+            pre_sha=base,
+            base_publications_at_cut=self._base_publications,
         )
 
         # Prepare the freshly created worktree before its agent session
@@ -6875,9 +6888,21 @@ class _ParallelLoop:
         """
         assert self._scheduler is not None
         async with self._integration_lock:
+            # Once per Integration, when this contribution takes the
+            # serialization — before the stage is cut, so a stage that
+            # cannot be cut still records both. Recovery reuses the stage
+            # and does not re-enter here.
+            self._emit_contribution_event(
+                contribution, events_module.WRAPPER_INTEGRATION_STARTED
+            )
             latched_before = self._scheduler.serial_latched
             abort_latched_before = self._scheduler.abort_latched
             lane_work = self._lane_work.get(contribution.contribution_id)
+            self._emit_contribution_event(
+                contribution,
+                events_module.WRAPPER_INTEGRATION_BRANCH_OBSERVED,
+                base_publications_since_cut=self._publications_since_cut(lane_work),
+            )
             if lane_work is None:  # pragma: no cover - defensive
                 self._diag.error(
                     "integration #%s: missing lane state for contribution %s",
@@ -6999,6 +7024,16 @@ class _ParallelLoop:
             iter_num=None,
             issues=[candidate.ref for candidate in candidates],
         )
+
+    def _publications_since_cut(self, lane_work: _LaneWork | None) -> int | None:
+        """Publications landed on base since this contribution's Lane was cut.
+
+        ``None`` when the cut was not observed. A guessed zero would be a
+        different fact from "this Run cannot say".
+        """
+        if lane_work is None or lane_work.base_publications_at_cut is None:
+            return None
+        return self._base_publications - lane_work.base_publications_at_cut
 
     def _emit_contribution_event(
         self,
@@ -7288,6 +7323,7 @@ class _ParallelLoop:
         self._emit_contribution_event(
             contribution, events_module.WRAPPER_INTEGRATION_PUBLISHED
         )
+        self._base_publications += 1
         self._land_lane(contribution, lane_work, pre_base)
         return True
 

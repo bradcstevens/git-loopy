@@ -400,6 +400,9 @@ def _contribution_row(
         "outcome": contribution.outcome,
         "duration_seconds": contribution.duration_seconds,
         "status": contribution.status,
+        # Folding a rolling stream stays with #687, so a live row has not
+        # observed drift. Null is that unknown, not a guessed zero.
+        "drift": None,
         "active_seconds": contribution.active_seconds,
         "route": _route(contribution.route),
         "consumption": {

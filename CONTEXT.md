@@ -423,7 +423,7 @@ An issue's lifecycle within a run: **queued** (seen, not yet worked), **active**
 (being worked now — several at once in **Parallel mode**, one per **Lane**, and left the
 moment a **Lane contribution**'s Lane work finishes), **parked** (finished, still holding
 its Lane, waiting for the **Integration backlog** to admit it), **admitted** (in the
-Integration backlog, waiting its turn) — parked and admitted each show their phase age,
+Integration backlog, waiting its turn) — parked, admitted, and integrating each show their phase age,
 the time since the row entered that Status — **integrating** (being merged and gated in its
 **Integration stage**), **recovering** (in **Recovery** after that merge or gate failed),
 **closed**

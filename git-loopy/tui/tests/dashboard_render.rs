@@ -205,9 +205,9 @@ fn the_header_band_states_the_run_at_a_glance() {
 #[test]
 fn the_queue_band_lists_every_issue_in_the_locked_columns() {
     let view = fixture_view("baseline-closed-iteration");
-    // 164 is the width at which the widened Status column still keeps every
-    // locked Queue column. 160 fitted them when Status was 12.
-    let lines = render_lines(&view, 164, 40, TerminalCapabilities::default());
+    // 167 is the width at which `integrating 0:00:00` still keeps every
+    // locked Queue column. 164 fitted them when Status was 16.
+    let lines = render_lines(&view, 167, 40, TerminalCapabilities::default());
     let queue = band(&lines, "Queue");
 
     assert_eq!(
@@ -475,7 +475,7 @@ fn the_queue_marks_delivery_without_rewriting_the_route_cell() {
 #[test]
 fn a_queue_row_shows_the_unknown_placeholder_for_every_unmeasured_cell() {
     let view = fixture_view("native-orchestrator-unavailable-capabilities");
-    let lines = render_lines(&view, 164, 40, TerminalCapabilities::default());
+    let lines = render_lines(&view, 167, 40, TerminalCapabilities::default());
     let queue = band(&lines, "Queue");
 
     // Ordering is active, then queued, then terminal history — #9 is still
@@ -961,7 +961,7 @@ fn an_unknown_cost_says_which_kind_of_unknown_it_is() {
         unable.dashboard.header.cost.availability, "unavailable",
         "the case exists precisely because the Orchestrator cannot report Cost"
     );
-    let lines = render_lines(&unable, 164, 40, TerminalCapabilities::default());
+    let lines = render_lines(&unable, 167, 40, TerminalCapabilities::default());
     let queue = band(&lines, "Queue");
     let row = cells(&queue[1]);
     assert_eq!(
@@ -975,7 +975,7 @@ fn an_unknown_cost_says_which_kind_of_unknown_it_is() {
         unbilled.dashboard.header.cost.availability, "available",
         "and this one can report Cost, but its harness billed nothing yet"
     );
-    let lines = render_lines(&unbilled, 164, 40, TerminalCapabilities::default());
+    let lines = render_lines(&unbilled, 167, 40, TerminalCapabilities::default());
     let queue = band(&lines, "Queue");
     let row = cells(&queue[1]);
     assert_eq!(

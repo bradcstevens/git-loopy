@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.18",
+  "contract_version": "2.19",
   "event_schema_version": "1.3",
   "insight_capabilities": {
     "names": [
@@ -357,7 +357,8 @@
       "emitted": "Once per contribution that enters the Integration backlog (contract 2.18): immediately after wrapper.contribution.work_finished on direct admission, or after the freeing contribution's wrapper.contribution.end when drained from the parked FIFO. Never both."
     },
     "wrapper.integration.started": {
-      "required_when_present": ["contribution_id", "issue", "lane_id"]
+      "required_when_present": ["contribution_id", "issue", "lane_id"],
+      "emitted": "Once per Integration, when the contribution takes Integration's serialization (contract 2.19), before the private stage is cut. Not repeated for Recovery."
     },
     "wrapper.integration.branch_observed": {
       "required_when_present": [
@@ -366,7 +367,8 @@
         "lane_id",
         "base_publications_since_cut"
       ],
-      "nullable": ["base_publications_since_cut"]
+      "nullable": ["base_publications_since_cut"],
+      "emitted": "Once per Integration, immediately after wrapper.integration.started and before the private stage is cut, including when the stage cannot be cut (contract 2.19). base_publications_since_cut is this Run's green publications onto base since the Lane was cut, or null when the cut was not observed. The contribution's own later publication is not included."
     },
     "wrapper.integration.recovery_started": {
       "required_when_present": [
