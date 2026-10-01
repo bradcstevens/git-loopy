@@ -1231,10 +1231,17 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.15 makes a ``contribution_events: true`` declaration an obligation proved
     by emitted behaviour (ADR-0065). No record changes shape, so the wire axis
     stays at 1.2.
+
+    2.16 gives ``wrapper.contribution.work_finished`` its producer (#681), the
+    first of ADR-0065's new producers, and *that* moves the wire axis to 1.3:
+    a Parallel issue's Active time now ends at the Lane-work boundary rather
+    than at ``wrapper.contribution.end``, so a consumer pinned to 1.2 that
+    times a contribution from start to end reads a different number than the
+    stream means.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.15"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.3"
+    assert _EVENT_SCHEMA["contract_version"] == "2.16"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]

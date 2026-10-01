@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.15 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.16 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1127,6 +1127,19 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   closure has not yet verified is *not* a contribution end. Lane-work and recovery Consumption and
   commits appear exactly once, in the originating contribution, and runner **Checkpoint** commits
   stay out of the commit total.
+- **`wrapper.contribution.work_finished` is the Lane-work boundary (contract 2.16, ADR-0065).** An
+  Orchestrator that declares `contribution_events: true` MUST emit it exactly once for every
+  contribution whose session returned a captured outcome, whatever its disposition, and before the
+  record of that disposition. It MUST be followed by exactly one of `wrapper.integration.admitted`,
+  `wrapper.integration.parked`, or a `wrapper.contribution.end` with `unchanged_branch`. A host
+  failure — a Checkpoint failure among them — a **Stop** before the session, and Run-exit
+  reclamation never reach that boundary and MUST NOT emit it; they emit only
+  `wrapper.contribution.end`. So an `unchanged_branch` end with no `work_finished` before it is a
+  host failure, not a session that produced nothing. A consumer timing a Parallel issue's Active
+  time MUST stop it here, so Active time is the contribution's Lane work and never its
+  **Integration** or **Recovery**; its later stamped records still attribute to the issue. This
+  first producer of ADR-0065's reserved types moves `event_schema_version` to 1.3: a 1.2 consumer
+  that times a contribution from start to end reads a different number than the stream means.
 - **Unknown stays unknown.** `wrapper.concurrency.changed` reports the immutable configured Lane
   cap and the current effective limit, and reports a signal the Run cannot observe as `null` —
   never an estimate and never `0`. It is emitted for an authoritative transition, not per
@@ -1929,10 +1942,10 @@ fixtures' content, moving every `release_version` example from `-dev.N` to
 and the Python `WRAPPER_CONTRACT_VERSION` read 2.13. Both pins then moved from
 2.12 straight to 2.14 (ADR-0065), so neither ever carried 2.13, and both have
 since advanced to 2.15 with the behavioural `contribution_events` obligation
-(§12, ADR-0065).
+(§12, ADR-0065) and 2.16 with the Lane-work boundary (§12, #681).
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
-(§3.1). Event wire compatibility remains 1.2, and historical streams'
-interpretation is unchanged.
+(§3.1). Event wire compatibility is 1.3, advanced with the Lane-work boundary
+(§12), and historical streams' interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run

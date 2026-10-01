@@ -419,6 +419,15 @@ def _logged_events(tmp_path: Path) -> list[dict[str, Any]]:
     return [json.loads(raw) for raw in lines]
 
 
+def _work_finished(tmp_path: Path) -> list[dict[str, Any]]:
+    """The Run's ``wrapper.contribution.work_finished`` records (#681)."""
+    return [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.contribution.work_finished"
+    ]
+
+
 def _run_id(tmp_path: Path) -> str:
     """Recover the run's ULID from the logged event envelopes.
 
@@ -2068,6 +2077,8 @@ def test_parallel_operator_stop_drains_then_cancels_only_the_lane_agent(
     assert end["reason"] == "operator_stop"
     assert end["summary"]["strike_reaction"] == "none"
     assert [event for event in events if event["type"] == "wrapper.strike"] == []
+    # Run-exit reclamation ends the contribution before its session returned.
+    assert _work_finished(tmp_path) == []
 
 
 def test_second_stop_before_lane_send_starts_no_agent_session(
@@ -2198,6 +2209,7 @@ def test_second_stop_before_host_dispatch_starts_no_host_contribution(
     assert [event for event in events if event["type"] == "wrapper.strike"] == []
     (end,) = [event for event in events if event["type"] == "wrapper.contribution.end"]
     assert end["reason"] == "operator_stop"
+    assert _work_finished(tmp_path) == []
 
 
 class _EmptyRollingSource:
@@ -2763,6 +2775,9 @@ def test_parallel_lane_checkpoint_failure_keeps_its_terminal_reason(
         if e["type"] == "wrapper.contribution.end"
     ]
     assert [e["reason"] for e in ends] == ["checkpoint_failed"]
+    # A Checkpoint failure is a host failure: the Lane-work boundary was never
+    # reached, so nothing announces it (#681).
+    assert _work_finished(tmp_path) == []
     # §3.10's retention rule is untouched: the dirty worktree is preserved.
     assert fake_git.worktree_removes == []
     assert fake_git.merge_calls == []
@@ -4783,6 +4798,19 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     assert len(reasons) == 4
     assert reasons[:2] == ["unchanged_branch", "unchanged_branch"]
     assert len(fake_git.merge_calls) == 2
+    # Only the two contributions whose host returned a captured outcome reached
+    # the Lane-work boundary; a bare ``unchanged_branch`` end is a host failure
+    # (#681).
+    finished = {event["contribution_id"] for event in _work_finished(tmp_path)}
+    failed = {
+        event["contribution_id"]
+        for event in events
+        if event["type"] == "wrapper.contribution.end"
+        and event["reason"] == "unchanged_branch"
+    }
+    assert len(finished) == 2
+    assert len(failed) == 2
+    assert finished.isdisjoint(failed)
 
 
 @dataclass
