@@ -1,6 +1,6 @@
 {
-  "fixture_schema_version": "1.6",
-  "wrapper_contract_version": "2.18",
+  "fixture_schema_version": "1.11",
+  "wrapper_contract_version": "2.22",
   "event_schema_version": "1.4",
   "semantic_contract": {
     "dashboard_band_order": [
@@ -141,6 +141,14 @@
         ]
       },
       {
+        "key": "drift",
+        "label": "Drift",
+        "scope": "issue_in_contribution",
+        "fields": [
+          "drift"
+        ]
+      },
+      {
         "key": "active_seconds",
         "label": "Active",
         "scope": "issue_agent_work_in_contribution",
@@ -254,7 +262,12 @@
         "degraded_reason",
         "serial_fallback_reason",
         "serial_required",
-        "refill_stopped"
+        "refill_stopped",
+        "integration_observed",
+        "integration_wip",
+        "integration_high_water",
+        "parked_count",
+        "refill_turn"
       ],
       "execution_host": [
         "placement",
@@ -329,6 +342,7 @@
         "outcome",
         "duration_seconds",
         "status",
+        "drift",
         "active_seconds",
         "route",
         "consumption",
@@ -367,7 +381,11 @@
         "effort_configurable"
       ],
       "queue_row": [
-        "preparation"
+        "preparation",
+        "phase_age_seconds"
+      ],
+      "activity_window": [
+        "recovery"
       ],
       "preparation": [
         "model",
@@ -423,7 +441,7 @@
       ]
     },
     "placeholders": {
-      "unknown": "—",
+      "unknown": "\u2014",
       "observed_zero": 0,
       "observed_empty": []
     },
@@ -465,50 +483,119 @@
     "routes": [
       {
         "id": "dynamic-no-dial",
-        "pickup": {"model": "plain", "effort": null, "routing_source": "dynamic"},
-        "expected": {"model": "plain", "effort": null, "source": "dynamic"},
+        "pickup": {
+          "model": "plain",
+          "effort": null,
+          "routing_source": "dynamic"
+        },
+        "expected": {
+          "model": "plain",
+          "effort": null,
+          "source": "dynamic"
+        },
         "text": "plain @ (not configurable)"
       },
       {
         "id": "dynamic-advertised-none",
-        "pickup": {"model": "plain", "effort": "none", "routing_source": "dynamic"},
-        "expected": {"model": "plain", "effort": "none", "source": "dynamic"},
+        "pickup": {
+          "model": "plain",
+          "effort": "none",
+          "routing_source": "dynamic"
+        },
+        "expected": {
+          "model": "plain",
+          "effort": "none",
+          "source": "dynamic"
+        },
         "text": "plain @ none"
       },
       {
         "id": "dynamic-no-dial-long-context",
-        "pickup": {"model": "p", "effort": null, "routing_source": "dynamic", "context_tier": "long_context"},
-        "expected": {"model": "p", "effort": null, "source": "dynamic", "context_tier": "long_context"},
+        "pickup": {
+          "model": "p",
+          "effort": null,
+          "routing_source": "dynamic",
+          "context_tier": "long_context"
+        },
+        "expected": {
+          "model": "p",
+          "effort": null,
+          "source": "dynamic",
+          "context_tier": "long_context"
+        },
         "text": "p@(not configurable)/long_context"
       },
       {
         "id": "static-deliberate-omission",
-        "pickup": {"model": "plain", "effort": null, "routing_source": "defaulted_explicit_override"},
-        "expected": {"model": "plain", "effort": null, "source": "defaulted_explicit_override"},
+        "pickup": {
+          "model": "plain",
+          "effort": null,
+          "routing_source": "defaulted_explicit_override"
+        },
+        "expected": {
+          "model": "plain",
+          "effort": null,
+          "source": "defaulted_explicit_override"
+        },
         "text": "plain @ (backend)"
       },
       {
         "id": "historical-gated-omission",
-        "pickup": {"model": "plain", "effort": null, "routing_source": "routed"},
-        "expected": {"model": "plain", "effort": null, "source": "routed"},
+        "pickup": {
+          "model": "plain",
+          "effort": null,
+          "routing_source": "routed"
+        },
+        "expected": {
+          "model": "plain",
+          "effort": null,
+          "source": "routed"
+        },
         "text": "plain @ (backend)"
       },
       {
         "id": "historical-unreported-dynamic-effort",
-        "pickup": {"model": "plain", "routing_source": "dynamic"},
-        "expected": {"model": "plain", "effort": null, "source": "dynamic"},
+        "pickup": {
+          "model": "plain",
+          "routing_source": "dynamic"
+        },
+        "expected": {
+          "model": "plain",
+          "effort": null,
+          "source": "dynamic"
+        },
         "text": "plain @ (backend)"
       },
       {
         "id": "static-observed-no-dial",
-        "pickup": {"model": "plain", "effort": null, "routing_source": "routed", "effort_configurable": false},
-        "expected": {"model": "plain", "effort": null, "source": "routed", "effort_configurable": false},
+        "pickup": {
+          "model": "plain",
+          "effort": null,
+          "routing_source": "routed",
+          "effort_configurable": false
+        },
+        "expected": {
+          "model": "plain",
+          "effort": null,
+          "source": "routed",
+          "effort_configurable": false
+        },
         "text": "plain @ (not configurable)"
       },
       {
         "id": "static-observed-deliberate-omission",
-        "pickup": {"model": "plain", "effort": null, "routing_source": "routed", "effort_configurable": true},
-        "expected": {"model": "plain", "effort": null, "source": "routed", "effort_configurable": true},
+        "pickup": {
+          "model": "plain",
+          "effort": null,
+          "routing_source": "routed",
+          "effort_configurable": true
+        },
+        "expected": {
+          "model": "plain",
+          "effort": null,
+          "source": "routed",
+          "effort_configurable": true
+        },
         "text": "plain @ (backend)"
       }
     ],
@@ -516,32 +603,56 @@
       {
         "id": "no-dial-work-and-selector",
         "state": "proposed",
-        "fields": {"effort": null, "selector_effort": null},
-        "expected_fields": {"effort": null, "selector_effort": null},
+        "fields": {
+          "effort": null,
+          "selector_effort": null
+        },
+        "expected_fields": {
+          "effort": null,
+          "selector_effort": null
+        },
         "queue_text": "p@not configurable [not binding]",
         "text": "Route proposed: p@not configurable (not bound); selector: p@not configurable"
       },
       {
         "id": "advertised-none-work-and-selector",
         "state": "proposed",
-        "fields": {"effort": "none", "selector_effort": "none"},
-        "expected_fields": {"effort": "none", "selector_effort": "none"},
+        "fields": {
+          "effort": "none",
+          "selector_effort": "none"
+        },
+        "expected_fields": {
+          "effort": "none",
+          "selector_effort": "none"
+        },
         "queue_text": "proposed p @ none [not binding]",
         "text": "Route proposed: p@none (not bound); selector: p@none"
       },
       {
         "id": "no-dial-work-advertised-none-selector",
         "state": "proposed",
-        "fields": {"effort": null, "selector_effort": "none"},
-        "expected_fields": {"effort": null, "selector_effort": "none"},
+        "fields": {
+          "effort": null,
+          "selector_effort": "none"
+        },
+        "expected_fields": {
+          "effort": null,
+          "selector_effort": "none"
+        },
         "queue_text": "p@not configurable [not binding]",
         "text": "Route proposed: p@not configurable (not bound); selector: p@none"
       },
       {
         "id": "advertised-none-work-no-dial-selector",
         "state": "proposed",
-        "fields": {"effort": "none", "selector_effort": null},
-        "expected_fields": {"effort": "none", "selector_effort": null},
+        "fields": {
+          "effort": "none",
+          "selector_effort": null
+        },
+        "expected_fields": {
+          "effort": "none",
+          "selector_effort": null
+        },
         "queue_text": "proposed p @ none [not binding]",
         "text": "Route proposed: p@none (not bound); selector: p@not configurable"
       },
@@ -556,7 +667,10 @@
       {
         "id": "historical-empty-efforts",
         "state": "proposed",
-        "fields": {"effort": "", "selector_effort": ""},
+        "fields": {
+          "effort": "",
+          "selector_effort": ""
+        },
         "expected_fields": {},
         "queue_text": "proposed p @ (bac... [not binding]",
         "text": "Route proposed: p@default (not bound); selector: p@backend default"
@@ -564,7 +678,10 @@
       {
         "id": "static-preparation-has-no-proposed-effort",
         "state": "static",
-        "fields": {"effort": null, "selector_effort": null},
+        "fields": {
+          "effort": null,
+          "selector_effort": null
+        },
         "expected_fields": {},
         "queue_text": "preparation: static [not binding]",
         "text": "Route preparation: static route applies, no selector call"
@@ -572,7 +689,10 @@
       {
         "id": "reusable-preparation-has-no-proposed-effort",
         "state": "reusable",
-        "fields": {"effort": null, "selector_effort": null},
+        "fields": {
+          "effort": null,
+          "selector_effort": null
+        },
         "expected_fields": {},
         "queue_text": "preparation: reus... [not binding]",
         "text": "Route preparation: an earlier decision is available for Pickup revalidation"
@@ -580,7 +700,10 @@
       {
         "id": "unavailable-preparation-has-no-proposed-effort",
         "state": "unavailable",
-        "fields": {"effort": null, "selector_effort": null},
+        "fields": {
+          "effort": null,
+          "selector_effort": null
+        },
         "expected_fields": {},
         "queue_text": "preparation: unav... [not binding]",
         "text": "Route not prepared; available for Pickup revalidation"
@@ -765,7 +888,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -922,7 +1050,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -1048,6 +1181,7 @@
                     "outcome": "closed",
                     "duration_seconds": 4.0,
                     "status": "closed",
+                    "drift": null,
                     "active_seconds": 4.0,
                     "route": null,
                     "consumption": {
@@ -1308,7 +1442,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -1479,7 +1618,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -1634,6 +1778,7 @@
                     "outcome": "advanced",
                     "duration_seconds": 29.0,
                     "status": "advanced",
+                    "drift": null,
                     "active_seconds": 29.0,
                     "route": null,
                     "consumption": {
@@ -1655,6 +1800,7 @@
                     "outcome": "closed",
                     "duration_seconds": 19.0,
                     "status": "closed",
+                    "drift": null,
                     "active_seconds": 19.0,
                     "route": null,
                     "consumption": {
@@ -1956,7 +2102,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -2030,7 +2181,7 @@
                   {
                     "at": "2026-05-17T09:00:09+00:00",
                     "kind": "event",
-                    "text": "✓ commit a1b2c3d4e5  fix(dashboard): pin the seam"
+                    "text": "\u2713 commit a1b2c3d4e5  fix(dashboard): pin the seam"
                   }
                 ],
                 "windows": [
@@ -2064,7 +2215,7 @@
                       {
                         "at": "2026-05-17T09:00:09+00:00",
                         "kind": "event",
-                        "text": "✓ commit a1b2c3d4e5  fix(dashboard): pin the seam"
+                        "text": "\u2713 commit a1b2c3d4e5  fix(dashboard): pin the seam"
                       }
                     ]
                   }
@@ -2103,7 +2254,7 @@
                   {
                     "at": "2026-05-17T09:00:09+00:00",
                     "kind": "event",
-                    "text": "✓ commit a1b2c3d4e5  fix(dashboard): pin the seam"
+                    "text": "\u2713 commit a1b2c3d4e5  fix(dashboard): pin the seam"
                   }
                 ]
               }
@@ -2156,7 +2307,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -2248,7 +2404,7 @@
                       {
                         "at": "2026-05-17T09:00:09+00:00",
                         "kind": "event",
-                        "text": "✓ commit a1b2c3d4e5  fix(dashboard): pin the seam"
+                        "text": "\u2713 commit a1b2c3d4e5  fix(dashboard): pin the seam"
                       }
                     ]
                   }
@@ -2305,6 +2461,7 @@
                     "outcome": "closed",
                     "duration_seconds": 19.0,
                     "status": "closed",
+                    "drift": null,
                     "active_seconds": 15.0,
                     "route": null,
                     "consumption": {
@@ -2341,7 +2498,7 @@
                   {
                     "at": "2026-05-17T09:00:09+00:00",
                     "kind": "event",
-                    "text": "✓ commit a1b2c3d4e5  fix(dashboard): pin the seam"
+                    "text": "\u2713 commit a1b2c3d4e5  fix(dashboard): pin the seam"
                   }
                 ]
               }
@@ -2825,7 +2982,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -2912,7 +3074,7 @@
                       {
                         "at": "2026-05-18T09:00:07-07:00",
                         "kind": "event",
-                        "text": "✓ commit 9f8e7d6c5b  fix(lane): repair the reproducer"
+                        "text": "\u2713 commit 9f8e7d6c5b  fix(lane): repair the reproducer"
                       }
                     ]
                   },
@@ -2970,7 +3132,7 @@
                   {
                     "at": "2026-05-18T09:00:07-07:00",
                     "kind": "event",
-                    "text": "✓ commit 9f8e7d6c5b  fix(lane): repair the reproducer"
+                    "text": "\u2713 commit 9f8e7d6c5b  fix(lane): repair the reproducer"
                   }
                 ]
               }
@@ -3023,7 +3185,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -3110,7 +3277,7 @@
                       {
                         "at": "2026-05-18T09:00:07-07:00",
                         "kind": "event",
-                        "text": "✓ commit 9f8e7d6c5b  fix(lane): repair the reproducer"
+                        "text": "\u2713 commit 9f8e7d6c5b  fix(lane): repair the reproducer"
                       }
                     ]
                   },
@@ -3186,6 +3353,7 @@
                     "outcome": "advanced",
                     "duration_seconds": 29.0,
                     "status": "advanced",
+                    "drift": null,
                     "active_seconds": 28.0,
                     "route": null,
                     "consumption": {
@@ -3212,7 +3380,7 @@
                   {
                     "at": "2026-05-18T09:00:07-07:00",
                     "kind": "event",
-                    "text": "✓ commit 9f8e7d6c5b  fix(lane): repair the reproducer"
+                    "text": "\u2713 commit 9f8e7d6c5b  fix(lane): repair the reproducer"
                   }
                 ]
               }
@@ -3265,7 +3433,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -3389,7 +3562,7 @@
                       {
                         "at": "2026-05-18T09:00:07-07:00",
                         "kind": "event",
-                        "text": "✓ commit 9f8e7d6c5b  fix(lane): repair the reproducer"
+                        "text": "\u2713 commit 9f8e7d6c5b  fix(lane): repair the reproducer"
                       }
                     ]
                   },
@@ -3486,6 +3659,7 @@
                     "outcome": "advanced",
                     "duration_seconds": 29.0,
                     "status": "advanced",
+                    "drift": null,
                     "active_seconds": 28.0,
                     "route": null,
                     "consumption": {
@@ -3512,7 +3686,7 @@
                   {
                     "at": "2026-05-18T09:00:07-07:00",
                     "kind": "event",
-                    "text": "✓ commit 9f8e7d6c5b  fix(lane): repair the reproducer"
+                    "text": "\u2713 commit 9f8e7d6c5b  fix(lane): repair the reproducer"
                   }
                 ]
               }
@@ -3565,7 +3739,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -3691,7 +3870,7 @@
                       {
                         "at": "2026-05-18T09:01:14-07:00",
                         "kind": "event",
-                        "text": "✓ auto-closed #314  (a1b2c3d4e5)"
+                        "text": "\u2713 auto-closed #314  (a1b2c3d4e5)"
                       }
                     ]
                   },
@@ -3720,7 +3899,7 @@
                       {
                         "at": "2026-05-18T09:00:07-07:00",
                         "kind": "event",
-                        "text": "✓ commit 9f8e7d6c5b  fix(lane): repair the reproducer"
+                        "text": "\u2713 commit 9f8e7d6c5b  fix(lane): repair the reproducer"
                       }
                     ]
                   },
@@ -3859,6 +4038,7 @@
                     "outcome": "advanced",
                     "duration_seconds": 29.0,
                     "status": "advanced",
+                    "drift": null,
                     "active_seconds": 28.0,
                     "route": null,
                     "consumption": {
@@ -3885,7 +4065,7 @@
                   {
                     "at": "2026-05-18T09:00:07-07:00",
                     "kind": "event",
-                    "text": "✓ commit 9f8e7d6c5b  fix(lane): repair the reproducer"
+                    "text": "\u2713 commit 9f8e7d6c5b  fix(lane): repair the reproducer"
                   }
                 ]
               }
@@ -4102,7 +4282,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4275,7 +4460,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4401,6 +4591,7 @@
                     "outcome": "gone",
                     "duration_seconds": 19.0,
                     "status": "gone",
+                    "drift": null,
                     "active_seconds": 19.0,
                     "route": null,
                     "consumption": {
@@ -4677,7 +4868,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4865,7 +5061,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4952,7 +5153,7 @@
                       {
                         "at": "2026-05-21T07:00:07-05:00",
                         "kind": "event",
-                        "text": "✓ commit c0ffee1d2e  fix(billing): read the bill the Lane was handed"
+                        "text": "\u2713 commit c0ffee1d2e  fix(billing): read the bill the Lane was handed"
                       }
                     ]
                   },
@@ -5028,6 +5229,7 @@
                     "outcome": "advanced",
                     "duration_seconds": 28.0,
                     "status": "advanced",
+                    "drift": null,
                     "active_seconds": 27.0,
                     "route": null,
                     "consumption": {
@@ -5054,7 +5256,7 @@
                   {
                     "at": "2026-05-21T07:00:07-05:00",
                     "kind": "event",
-                    "text": "✓ commit c0ffee1d2e  fix(billing): read the bill the Lane was handed"
+                    "text": "\u2713 commit c0ffee1d2e  fix(billing): read the bill the Lane was handed"
                   }
                 ]
               }
@@ -5240,7 +5442,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -5397,7 +5604,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -5523,6 +5735,7 @@
                     "outcome": "closed",
                     "duration_seconds": 4.0,
                     "status": "closed",
+                    "drift": null,
                     "active_seconds": 4.0,
                     "route": null,
                     "consumption": {
@@ -5763,7 +5976,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -5953,7 +6171,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6389,7 +6612,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6573,7 +6801,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6711,6 +6944,7 @@
                     "outcome": "no-progress",
                     "duration_seconds": 4.0,
                     "status": "no-progress",
+                    "drift": null,
                     "active_seconds": 4.0,
                     "route": {
                       "model": "gpt-5.4-mini",
@@ -6795,7 +7029,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6938,6 +7177,7 @@
                     "outcome": "no-progress",
                     "duration_seconds": 4.0,
                     "status": "no-progress",
+                    "drift": null,
                     "active_seconds": 4.0,
                     "route": {
                       "model": "gpt-5.4-mini",
@@ -7027,7 +7267,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -7196,6 +7441,7 @@
                     "outcome": "no-progress",
                     "duration_seconds": 4.0,
                     "status": "no-progress",
+                    "drift": null,
                     "active_seconds": 4.0,
                     "route": {
                       "model": "gpt-5.4-mini",
@@ -7222,6 +7468,7 @@
                     "outcome": "closed",
                     "duration_seconds": 4.5,
                     "status": "closed",
+                    "drift": null,
                     "active_seconds": 4.0,
                     "route": {
                       "model": "claude-opus-5",
@@ -7485,7 +7732,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -7618,6 +7870,7 @@
                     "outcome": "advanced",
                     "duration_seconds": 2.5,
                     "status": "advanced",
+                    "drift": null,
                     "active_seconds": 2.0,
                     "route": {
                       "model": "gpt-5.4-mini",
@@ -7697,7 +7950,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -7844,6 +8102,7 @@
                     "outcome": "advanced",
                     "duration_seconds": 2.5,
                     "status": "advanced",
+                    "drift": null,
                     "active_seconds": 2.0,
                     "route": {
                       "model": "gpt-5.4-mini",
@@ -7870,6 +8129,7 @@
                     "outcome": "closed",
                     "duration_seconds": 3.5,
                     "status": "closed",
+                    "drift": null,
                     "active_seconds": 3.0,
                     "route": null,
                     "consumption": {
@@ -8010,7 +8270,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -8117,7 +8382,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -8839,7 +9109,9 @@
           "issue": 605,
           "lane_id": "lane-1",
           "contribution_id": "c-605",
-          "iter": null
+          "iter": null,
+          "attempt": 1,
+          "max_attempts": 3
         },
         {
           "ts": "2026-09-20T10:00:00Z",
@@ -8878,7 +9150,17 @@
               },
               "subagents": 0,
               "live": true,
-              "lines": []
+              "lines": [
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Recovery: attempt 1/3"
+                }
+              ],
+              "recovery": {
+                "attempt": 1,
+                "max_attempts": 3
+              }
             }
           ]
         },
@@ -8902,7 +9184,17 @@
               },
               "subagents": 0,
               "live": false,
-              "lines": []
+              "lines": [
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Recovery: attempt 1/3"
+                }
+              ],
+              "recovery": {
+                "attempt": 1,
+                "max_attempts": 3
+              }
             }
           ]
         }
@@ -8999,7 +9291,9 @@
           "issue": 605,
           "lane_id": "lane-1",
           "contribution_id": "c-605",
-          "iter": null
+          "iter": null,
+          "attempt": 1,
+          "max_attempts": 3
         },
         {
           "ts": "2026-09-20T10:00:00Z",
@@ -9075,8 +9369,17 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #605"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Recovery: attempt 1/3"
                 }
-              ]
+              ],
+              "recovery": {
+                "attempt": 1,
+                "max_attempts": 3
+              }
             }
           ]
         },
@@ -9137,8 +9440,17 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #605"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Recovery: attempt 1/3"
                 }
-              ]
+              ],
+              "recovery": {
+                "attempt": 1,
+                "max_attempts": 3
+              }
             }
           ]
         }
@@ -9751,9 +10063,304 @@
             "peak_context_window": 41000,
             "strike_reaction": "none"
           }
+        },
+        {
+          "ts": "2026-05-16T00:00:33.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0005",
+          "issue": 47,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:34.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.work_finished",
+          "contribution_id": "c-0005",
+          "issue": 47,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:35.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.admitted",
+          "contribution_id": "c-0005",
+          "issue": 47,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:36.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.started",
+          "contribution_id": "c-0005",
+          "issue": 47,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:37.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.branch_observed",
+          "base_publications_since_cut": 3,
+          "contribution_id": "c-0005",
+          "issue": 47,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:38.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.recovery_started",
+          "attempt": 1,
+          "max_attempts": 3,
+          "contribution_id": "c-0005",
+          "issue": 47,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:39.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.recovery_started",
+          "attempt": 2,
+          "max_attempts": 3,
+          "contribution_id": "c-0005",
+          "issue": 47,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:40.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.integration.recovery_started",
+          "attempt": 3,
+          "max_attempts": 3,
+          "contribution_id": "c-0005",
+          "issue": 47,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:41.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "published": false,
+          "reason": "serial_fallback",
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 100,
+            "tokens_out": 20,
+            "observed_tokens": 120,
+            "commits": 1,
+            "closures": 0,
+            "closure_outcome": "no_progress",
+            "recovery_attempts": 3,
+            "agent_seconds": 10.0,
+            "lifecycle_seconds": 20.0,
+            "peak_context_window": 1000,
+            "strike_reaction": "+1"
+          },
+          "issues": [
+            {
+              "issue": 47,
+              "status": "no-progress"
+            }
+          ],
+          "contribution_id": "c-0005",
+          "issue": 47,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:41.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.rolling.refill_turn",
+          "reservations": 0,
+          "effective_lane_limit": 1
         }
       ],
       "snapshots": [
+        {
+          "after_event_count": 14,
+          "render_at_utc": "2026-05-16T00:00:10.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DD",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 10.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 3,
+                  "effective_lane_limit": 2,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false,
+                  "integration_observed": true,
+                  "integration_wip": 1,
+                  "integration_high_water": 2,
+                  "parked_count": 0,
+                  "refill_turn": null
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 42,
+                    "status": "integrating",
+                    "started_at": "2026-05-15T18:00:03-06:00",
+                    "active_seconds": 3.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 1.0
+                  },
+                  {
+                    "issue": 43,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:04-06:00",
+                    "active_seconds": 6.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 44,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:08-06:00",
+                    "active_seconds": 2.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 46,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "windows": []
+              },
+              "summary": {
+                "rows": []
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 42,
+                "status": "integrating",
+                "started_at": "2026-05-15T18:00:03-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 3.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 42,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02.400000-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #42 (order, position 1 of 4)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05-06:00",
+                    "kind": "event",
+                    "text": "\u2713 commit aaaaaaaaaa  feat: 42"
+                  }
+                ]
+              }
+            }
+          }
+        },
         {
           "after_event_count": 22,
           "render_at_utc": "2026-05-16T00:00:18.000Z",
@@ -9800,7 +10407,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": null,
-                  "refill_stopped": false
+                  "refill_stopped": false,
+                  "integration_observed": true,
+                  "integration_wip": 1,
+                  "integration_high_water": 2,
+                  "parked_count": 1,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -9832,7 +10444,7 @@
                 "rows": [
                   {
                     "issue": 43,
-                    "status": "active",
+                    "status": "admitted",
                     "started_at": "2026-05-15T18:00:04-06:00",
                     "active_seconds": 7.0,
                     "closed_at": null,
@@ -9841,11 +10453,12 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "phase_age_seconds": 6.0
                   },
                   {
                     "issue": 44,
-                    "status": "active",
+                    "status": "parked",
                     "started_at": "2026-05-15T18:00:08-06:00",
                     "active_seconds": 5.0,
                     "closed_at": null,
@@ -9854,7 +10467,8 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "phase_age_seconds": 4.0
                   },
                   {
                     "issue": 46,
@@ -9935,6 +10549,7 @@
                     "outcome": "published",
                     "duration_seconds": 94.25,
                     "status": "closed",
+                    "drift": 0,
                     "active_seconds": 61.5,
                     "route": null,
                     "consumption": {
@@ -9961,12 +10576,500 @@
                   {
                     "at": "2026-05-15T18:00:05-06:00",
                     "kind": "event",
-                    "text": "✓ commit aaaaaaaaaa  feat: 42"
+                    "text": "\u2713 commit aaaaaaaaaa  feat: 42"
                   },
                   {
                     "at": "2026-05-15T18:00:17-06:00",
                     "kind": "event",
-                    "text": "✓ auto-closed #42"
+                    "text": "\u2713 auto-closed #42"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 23,
+          "render_at_utc": "2026-05-16T00:00:19.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DD",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 19.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 3,
+                  "effective_lane_limit": 1,
+                  "pressure": "integration_backlog",
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false,
+                  "integration_observed": true,
+                  "integration_wip": 2,
+                  "integration_high_water": 2,
+                  "parked_count": 0,
+                  "refill_turn": null
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 43,
+                    "status": "admitted",
+                    "started_at": "2026-05-15T18:00:04-06:00",
+                    "active_seconds": 7.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 7.0
+                  },
+                  {
+                    "issue": 44,
+                    "status": "admitted",
+                    "started_at": "2026-05-15T18:00:08-06:00",
+                    "active_seconds": 5.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 0.0
+                  },
+                  {
+                    "issue": 46,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 42,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:03-06:00",
+                    "active_seconds": 3.0,
+                    "closed_at": "2026-05-15T18:00:18-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "windows": []
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 42,
+                "status": "closed",
+                "started_at": "2026-05-15T18:00:03-06:00",
+                "closed_at": "2026-05-15T18:00:18-06:00",
+                "issue_elapsed_seconds": null,
+                "active_seconds": 3.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0001",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "status": "closed",
+                    "drift": 0,
+                    "active_seconds": 61.5,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 1200,
+                      "tokens_out": 340,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 42,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02.400000-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #42 (order, position 1 of 4)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05-06:00",
+                    "kind": "event",
+                    "text": "\u2713 commit aaaaaaaaaa  feat: 42"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:17-06:00",
+                    "kind": "event",
+                    "text": "\u2713 auto-closed #42"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 26,
+          "render_at_utc": "2026-05-16T00:00:22.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DD",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 22.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 3,
+                  "effective_lane_limit": 1,
+                  "pressure": "integration_backlog",
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false,
+                  "integration_observed": true,
+                  "integration_wip": 2,
+                  "integration_high_water": 2,
+                  "parked_count": 0,
+                  "refill_turn": null
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 43,
+                    "status": "recovering",
+                    "started_at": "2026-05-15T18:00:04-06:00",
+                    "active_seconds": 7.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 0.0
+                  },
+                  {
+                    "issue": 44,
+                    "status": "admitted",
+                    "started_at": "2026-05-15T18:00:08-06:00",
+                    "active_seconds": 5.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 3.0
+                  },
+                  {
+                    "issue": 46,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 42,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:03-06:00",
+                    "active_seconds": 3.0,
+                    "closed_at": "2026-05-15T18:00:18-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "windows": [
+                  {
+                    "kind": "integration",
+                    "lane": null,
+                    "issue": 43,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": null,
+                    "live": true,
+                    "lines": [
+                      {
+                        "at": "2026-05-15T18:00:03.400000-06:00",
+                        "kind": "event",
+                        "text": "Pickup: bound #43 (order, position 1 of 3)"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:22-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 1/3"
+                      }
+                    ],
+                    "recovery": {
+                      "attempt": 1,
+                      "max_attempts": 3
+                    }
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 42,
+                "status": "closed",
+                "started_at": "2026-05-15T18:00:03-06:00",
+                "closed_at": "2026-05-15T18:00:18-06:00",
+                "issue_elapsed_seconds": null,
+                "active_seconds": 3.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0001",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "status": "closed",
+                    "drift": 0,
+                    "active_seconds": 61.5,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 1200,
+                      "tokens_out": 340,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 42,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02.400000-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #42 (order, position 1 of 4)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05-06:00",
+                    "kind": "event",
+                    "text": "\u2713 commit aaaaaaaaaa  feat: 42"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:17-06:00",
+                    "kind": "event",
+                    "text": "\u2713 auto-closed #42"
                   }
                 ]
               }
@@ -10019,7 +11122,12 @@
                   "degraded_reason": null,
                   "serial_fallback_reason": null,
                   "serial_required": 2,
-                  "refill_stopped": true
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 0,
+                  "integration_high_water": 2,
+                  "parked_count": 0,
+                  "refill_turn": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -10128,8 +11236,17 @@
                         "at": "2026-05-15T18:00:03.400000-06:00",
                         "kind": "event",
                         "text": "Pickup: bound #43 (order, position 1 of 3)"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:22-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 1/3"
                       }
-                    ]
+                    ],
+                    "recovery": {
+                      "attempt": 1,
+                      "max_attempts": 3
+                    }
                   }
                 ]
               },
@@ -10242,6 +11359,7 @@
                     "outcome": "published",
                     "duration_seconds": 94.25,
                     "status": "closed",
+                    "drift": 0,
                     "active_seconds": 61.5,
                     "route": null,
                     "consumption": {
@@ -10263,6 +11381,7 @@
                     "outcome": "published",
                     "duration_seconds": 94.25,
                     "status": "closed",
+                    "drift": null,
                     "active_seconds": 61.5,
                     "route": null,
                     "consumption": {
@@ -10289,12 +11408,781 @@
                   {
                     "at": "2026-05-15T18:00:05-06:00",
                     "kind": "event",
-                    "text": "✓ commit aaaaaaaaaa  feat: 42"
+                    "text": "\u2713 commit aaaaaaaaaa  feat: 42"
                   },
                   {
                     "at": "2026-05-15T18:00:17-06:00",
                     "kind": "event",
-                    "text": "✓ auto-closed #42"
+                    "text": "\u2713 auto-closed #42"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 44,
+          "render_at_utc": "2026-05-16T00:00:41.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DD",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 41.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 3,
+                  "effective_lane_limit": 1,
+                  "pressure": "integration_backlog",
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 2,
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 0,
+                  "integration_high_water": 2,
+                  "parked_count": 0,
+                  "refill_turn": null
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 46,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 42,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:03-06:00",
+                    "active_seconds": 3.0,
+                    "closed_at": "2026-05-15T18:00:32-06:00",
+                    "iteration_count": 2,
+                    "route": null,
+                    "tokens_in": 2400,
+                    "tokens_out": 680,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 43,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:04-06:00",
+                    "active_seconds": 7.0,
+                    "closed_at": "2026-05-15T18:00:24-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 44,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:08-06:00",
+                    "active_seconds": 5.0,
+                    "closed_at": "2026-05-15T18:00:30-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 47,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:33-06:00",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 100,
+                    "tokens_out": 20,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "windows": [
+                  {
+                    "kind": "integration",
+                    "lane": null,
+                    "issue": 47,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": null,
+                    "live": false,
+                    "lines": [
+                      {
+                        "at": "2026-05-15T18:00:38-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 1/3"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:39-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 2/3"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:40-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 3/3"
+                      }
+                    ],
+                    "recovery": {
+                      "attempt": 3,
+                      "max_attempts": 3
+                    }
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 2,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "serial_fallback",
+                    "duration_seconds": 20.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 100,
+                    "tokens_out": 20,
+                    "observed_tokens": 120,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 42,
+                "status": "closed",
+                "started_at": "2026-05-15T18:00:03-06:00",
+                "closed_at": "2026-05-15T18:00:32-06:00",
+                "issue_elapsed_seconds": null,
+                "active_seconds": 3.0,
+                "iteration_count": 2
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0001",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "status": "closed",
+                    "drift": 0,
+                    "active_seconds": 61.5,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 1200,
+                      "tokens_out": 340,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0004",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "status": "closed",
+                    "drift": null,
+                    "active_seconds": 61.5,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 1200,
+                      "tokens_out": 340,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 42,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02.400000-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #42 (order, position 1 of 4)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05-06:00",
+                    "kind": "event",
+                    "text": "\u2713 commit aaaaaaaaaa  feat: 42"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:17-06:00",
+                    "kind": "event",
+                    "text": "\u2713 auto-closed #42"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 45,
+          "render_at_utc": "2026-05-16T00:00:41.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DD",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 41.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 3,
+                  "effective_lane_limit": 1,
+                  "pressure": "integration_backlog",
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 2,
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 0,
+                  "integration_high_water": 2,
+                  "parked_count": 0,
+                  "refill_turn": {
+                    "reservations": 0,
+                    "effective_lane_limit": 1
+                  }
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 46,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 42,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:03-06:00",
+                    "active_seconds": 3.0,
+                    "closed_at": "2026-05-15T18:00:32-06:00",
+                    "iteration_count": 2,
+                    "route": null,
+                    "tokens_in": 2400,
+                    "tokens_out": 680,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 43,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:04-06:00",
+                    "active_seconds": 7.0,
+                    "closed_at": "2026-05-15T18:00:24-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 44,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:08-06:00",
+                    "active_seconds": 5.0,
+                    "closed_at": "2026-05-15T18:00:30-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 47,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:33-06:00",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 100,
+                    "tokens_out": 20,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "windows": [
+                  {
+                    "kind": "integration",
+                    "lane": null,
+                    "issue": 47,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": null,
+                    "live": false,
+                    "lines": [
+                      {
+                        "at": "2026-05-15T18:00:38-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 1/3"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:39-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 2/3"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:40-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 3/3"
+                      }
+                    ],
+                    "recovery": {
+                      "attempt": 3,
+                      "max_attempts": 3
+                    }
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 2,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "serial_fallback",
+                    "duration_seconds": 20.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 100,
+                    "tokens_out": 20,
+                    "observed_tokens": 120,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 42,
+                "status": "closed",
+                "started_at": "2026-05-15T18:00:03-06:00",
+                "closed_at": "2026-05-15T18:00:32-06:00",
+                "issue_elapsed_seconds": null,
+                "active_seconds": 3.0,
+                "iteration_count": 2
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0001",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "status": "closed",
+                    "drift": 0,
+                    "active_seconds": 61.5,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 1200,
+                      "tokens_out": 340,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0004",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "status": "closed",
+                    "drift": null,
+                    "active_seconds": 61.5,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 1200,
+                      "tokens_out": 340,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 42,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02.400000-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #42 (order, position 1 of 4)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05-06:00",
+                    "kind": "event",
+                    "text": "\u2713 commit aaaaaaaaaa  feat: 42"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:17-06:00",
+                    "kind": "event",
+                    "text": "\u2713 auto-closed #42"
                   }
                 ]
               }

@@ -51,14 +51,8 @@ _EVENT_SCHEMA = json.loads(
 #: Declared types whose producer does not exist yet, each keyed to the ticket
 #: that owns it. Deleting an entry is that ticket's job, and the gate forces it:
 #: a waived type any scenario emits is a failure.
-WAIVERS: dict[str, int] = {
-    "wrapper.integration.parked": 682,
-    "wrapper.integration.admitted": 682,
-    "wrapper.integration.started": 684,
-    "wrapper.integration.branch_observed": 684,
-    "wrapper.integration.recovery_started": 685,
-    "wrapper.rolling.refill_turn": 686,
-}
+#: Empty: the last producer ticket, #686, deleted ``wrapper.rolling.refill_turn``.
+WAIVERS: dict[str, int] = {}
 
 _START = "wrapper.contribution.start"
 _WORK_FINISHED = "wrapper.contribution.work_finished"
@@ -430,6 +424,120 @@ def _rate_limited_lanes_narrow(root: Path, mp: pytest.MonkeyPatch) -> None:
     asyncio.run(loop_module.run(_config(2)))
 
 
+def _drift_timeline(root: Path, mp: pytest.MonkeyPatch) -> None:
+    """#42 held in recovery until #44 is cut, #43 is admitted, and #44 parks.
+
+    A full Integration backlog stops refill, so #44 has to be cut while #43
+    is still working. #43 then fills the backlog and waits on the lock #42
+    holds; #44 finishes into that full backlog and parks. Releasing #42
+    publishes once, so #43 observes 1 and #44, admitted behind it, observes 2.
+    """
+    hold_43, hold_44, hold_resolution = (asyncio.Event() for _ in range(3))
+    resolution_started, lane_44_started, admitted_43, parked_44 = (
+        asyncio.Event() for _ in range(4)
+    )
+    real_finish_work = rolling_scheduler.RollingScheduler.finish_work
+
+    def spy_finish_work(self, contribution, **kwargs: Any) -> str:
+        disposition = real_finish_work(self, contribution, **kwargs)
+        if contribution.ref == 43 and disposition == rolling_scheduler.ADMITTED:
+            admitted_43.set()
+        if contribution.ref == 44 and disposition == rolling_scheduler.PARKED:
+            parked_44.set()
+        return disposition
+
+    mp.setattr(rolling_scheduler.RollingScheduler, "finish_work", spy_finish_work)
+
+    class _HeldClient(lp._ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> lp._ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            directory = str(kwargs.get("working_directory") or "")
+            if "/integrate/" in directory and directory.rstrip("/").endswith("issue-42"):
+                gate_on, announce = hold_resolution, resolution_started
+            elif directory.endswith("issue-43") and "/integrate/" not in directory:
+                gate_on, announce = hold_43, None
+            elif directory.endswith("issue-44") and "/integrate/" not in directory:
+                gate_on, announce = hold_44, lane_44_started
+            else:
+                return session
+            real = session.send_and_wait
+
+            async def held(prompt: str, **extra: Any) -> Any:
+                if announce is not None:
+                    announce.set()
+                await gate_on.wait()
+                return await real(prompt, **extra)
+
+            session.send_and_wait = held  # type: ignore[method-assign]
+            return session
+
+    _wire(
+        root, mp,
+        [lp._make_issue(n, labels=_PARALLEL_SAFE) for n in (42, 43, 44)],
+        FakeGateRunner(by_issue={42: [False, True]}),
+        client_cls=_HeldClient,
+    )
+
+    async def scenario() -> int:
+        run = asyncio.create_task(loop_module.run(_config(0)))
+        await asyncio.wait_for(resolution_started.wait(), timeout=5)
+        await asyncio.wait_for(lane_44_started.wait(), timeout=5)
+        hold_43.set()
+        await asyncio.wait_for(admitted_43.wait(), timeout=5)
+        hold_44.set()
+        await asyncio.wait_for(parked_44.wait(), timeout=5)
+        hold_resolution.set()
+        return await asyncio.wait_for(run, timeout=15)
+
+    assert asyncio.run(scenario()) == 0
+
+
+def _branch_observations(events: list[dict[str, Any]]) -> dict[int, int]:
+    return {
+        int(event["issue"]): event["base_publications_since_cut"]
+        for event in events
+        if event["type"] == _BRANCH_OBSERVED
+    }
+
+
+def _started_once_per_integration(events: list[dict[str, Any]]) -> bool:
+    started = [event["contribution_id"] for event in events if event["type"] == _STARTED]
+    return len(started) == 3 and len(set(started)) == 3
+
+
+def _refuse_the_stage_cut(
+    root: Path, mp: pytest.MonkeyPatch
+) -> dict[str, bool | int | None]:
+    """Fail the Integration-stage cut and report what was already on disk."""
+    fake_git, _fake_gh = _wire(
+        root, mp,
+        [lp._make_issue(42, labels=_PARALLEL_SAFE)],
+        FakeGateRunner(),
+    )
+    seen: dict[str, bool | int | None] = {}
+    real_add = fake_git.add_worktree
+
+    def add_worktree(path: Path, *, branch: str, base: str) -> Any:
+        if "/integrate/" in str(path):
+            on_disk = lp._logged_events(root)
+            started = [event for event in on_disk if event["type"] == _STARTED]
+            observed = [
+                event for event in on_disk if event["type"] == _BRANCH_OBSERVED
+            ]
+            seen["started"] = len(started) == 1
+            seen["branch_observed"] = (
+                observed[0]["base_publications_since_cut"] if observed else None
+            )
+            raise loop_module.git_module.GitError(
+                ("git", "worktree", "add"), 1, "stage cut refused"
+            )
+        return real_add(path, branch=branch, base=base)
+
+    fake_git.add_worktree = add_worktree  # type: ignore[method-assign]
+    assert asyncio.run(loop_module.run(_config(1))) == 0
+    return seen
+
+
 def _parallel_over_a_non_rolling_source(root: Path, mp: pytest.MonkeyPatch) -> None:
     """A Parallel Run whose source cannot offer Lane work degrades, and says so."""
     fake_git = lp._wire_repo(root)
@@ -505,14 +613,151 @@ def test_only_the_python_runner_declares_contribution_events() -> None:
 
 
 def test_the_initial_waivers_each_name_their_producer_ticket() -> None:
-    assert WAIVERS == {
-        "wrapper.integration.parked": 682,
-        "wrapper.integration.admitted": 682,
-        "wrapper.integration.started": 684,
-        "wrapper.integration.branch_observed": 684,
-        "wrapper.integration.recovery_started": 685,
-        "wrapper.rolling.refill_turn": 686,
+    assert WAIVERS == {}
+
+
+def test_a_spent_refill_turn_is_emitted_even_when_it_reserves_nothing(
+    scenario_logs: dict[str, list[dict[str, Any]]],
+) -> None:
+    """A serial Iteration's refill turn is a record, including a zero reservation.
+
+    Without it an operator cannot tell a turn that reserved nothing from a
+    turn that never happened (#686). A Run that never grants the turn emits
+    none, and a normal reserve is not that turn.
+    """
+    turns = [
+        event
+        for event in scenario_logs["serial-latch-empty-refill"]
+        if event["type"] == "wrapper.rolling.refill_turn"
+    ]
+    assert turns, "a spent refill turn emits wrapper.rolling.refill_turn"
+    assert any(event["reservations"] == 0 for event in turns)
+    for event in turns:
+        assert event["iter"] is None
+        assert event["reservations"] >= 0
+        assert isinstance(event["effective_lane_limit"], int)
+        assert event["effective_lane_limit"] >= 0
+    assert not [
+        event
+        for event in scenario_logs["non-rolling-degrade"]
+        if event["type"] == "wrapper.rolling.refill_turn"
+    ]
+
+
+def _recovery_attempts(events: list[dict[str, Any]]) -> dict[Any, list[tuple[int, int]]]:
+    by_issue: dict[Any, list[tuple[int, int]]] = {}
+    for event in events:
+        if event["type"] != _RECOVERY_STARTED:
+            continue
+        by_issue.setdefault(event["issue"], []).append(
+            (event["attempt"], event["max_attempts"])
+        )
+    return by_issue
+
+
+def test_recovery_started_is_one_record_per_attempt_and_never_more_than_three(
+    scenario_logs: dict[str, list[dict[str, Any]]],
+) -> None:
+    """A green Recovery emits one; an exhausted one emits 1, 2, 3 then serial_fallback.
+
+    ``max_attempts`` is the immutable K, not a count that grows with the
+    attempt. The record belongs to the contribution whose gate was red, so a
+    later Lane does not inherit the exhausted outcomes.
+    """
+    assert _recovery_attempts(scenario_logs["red-then-green-recovery"]) == {
+        42: [(1, 3)]
     }
+
+    exhausted = scenario_logs["k-exhausted-recovery-handoff"]
+    assert _recovery_attempts(exhausted) == {42: [(1, 3), (2, 3), (3, 3)]}
+    ended = next(
+        event
+        for event in exhausted
+        if event["type"] == _END and event["issue"] == 42
+    )
+    assert ended["reason"] == "serial_fallback"
+    assert ended["published"] is False
+    # The rollup outcome keeps its underscore spelling; the issue row is the
+    # Dashboard status. An unpublished, unclosed handoff is no-progress.
+    assert ended["summary"]["closure_outcome"] == "no_progress"
+    assert ended["issues"][0]["status"] == "no-progress"
+
+
+def test_recovery_started_is_on_disk_before_the_agent_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record precedes the session it names, not a summary written after."""
+    root = tmp_path / "before-session"
+    root.mkdir()
+    (root / "AGENTS.md").write_text(
+        (tmp_path / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    seen: list[dict[str, Any]] = []
+
+    class _HeldClient(lp._ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> lp._ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            directory = str(kwargs.get("working_directory") or "")
+            if "/integrate/" not in directory:
+                return session
+            real = session.send_and_wait
+
+            async def held(prompt: str, **extra: Any) -> Any:
+                recovery = [
+                    event
+                    for event in lp._logged_events(root)
+                    if event["type"] == _RECOVERY_STARTED
+                ]
+                seen.extend(recovery)
+                return await real(prompt, **extra)
+
+            session.send_and_wait = held  # type: ignore[method-assign]
+            return session
+
+    _wire(
+        root,
+        monkeypatch,
+        [lp._make_issue(42, labels=_PARALLEL_SAFE)],
+        FakeGateRunner(outcomes=[False, True]),
+        client_cls=_HeldClient,
+    )
+    assert asyncio.run(loop_module.run(_config(1))) == 0
+    assert [(event["attempt"], event["max_attempts"]) for event in seen] == [(1, 3)]
+
+
+def test_started_and_branch_drift_follow_the_lane_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``started`` once per Integration, then drift before the stage is cut.
+
+    Holding #42 in recovery until a third Lane is cut is the rolling stream's
+    shape: #42 observes 0 and publishes, #43 observes 1, #44 observes 2. A
+    stage that cannot be cut still has both records on disk before the cut
+    fails, and that observation is a count, not null — the Lane cut was seen.
+    """
+    root = tmp_path / "drift"
+    root.mkdir()
+    (root / "AGENTS.md").write_text(
+        (tmp_path / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    _drift_timeline(root, monkeypatch)
+    observed = _branch_observations(lp._logged_events(root))
+    assert observed == {42: 0, 43: 1, 44: 2}
+    assert _started_once_per_integration(lp._logged_events(root))
+
+    refused = tmp_path / "stage-refused"
+    refused.mkdir()
+    (refused / "AGENTS.md").write_text(
+        (tmp_path / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    already_on_disk = _refuse_the_stage_cut(refused, monkeypatch)
+    assert already_on_disk == {"started": True, "branch_observed": 0}
+    end = next(
+        event
+        for event in lp._logged_events(refused)
+        if event["type"] == _END
+    )
+    assert end["reason"] == "serial_fallback"
 
 
 def test_python_parallel_runs_emit_every_declared_contribution_event(
@@ -603,6 +848,58 @@ def test_the_order_admits_run_exit_reclamation_at_any_point() -> None:
     logs["reclaimed"][-1]["reason"] = "published"
     assert gate_findings(logs, schema=schema, waivers={}) != []
     assert all(sequence[-1].startswith(_END) for sequence in complete)
+
+
+def test_a_full_backlog_parks_then_admits_from_the_fifo_after_the_freeing_end(
+    scenario_logs: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Parking keeps the Lane; FIFO admission follows the freeing contribution.end.
+
+    #42 and #44 fill the backlog and are admitted directly. #43 parks, still
+    holding its Lane, and is admitted only after the contribution whose
+    finalization freed the slot has ended. Nothing refills that Lane in between.
+    """
+    events = scenario_logs["two-lanes-park"]
+    parked = [event for event in events if event["type"] == _PARKED]
+    admitted = [event for event in events if event["type"] == _ADMITTED]
+
+    assert [event["issue"] for event in parked] == [43]
+    assert {event["issue"] for event in admitted} == {42, 43, 44}
+    for event in (*parked, *admitted):
+        assert event["contribution_id"]
+        assert event["lane_id"]
+        assert event["iter"] is None
+
+    parked_at = events.index(parked[0])
+    admitted_43 = next(event for event in admitted if event["issue"] == 43)
+    admitted_at = events.index(admitted_43)
+    assert parked_at < admitted_at
+    between = events[parked_at + 1 : admitted_at]
+    assert all(
+        event["type"] != _START or event.get("lane_id") != parked[0]["lane_id"]
+        for event in between
+    ), "the parked Lane is refilled before admission"
+    freeing = [
+        event
+        for event in between
+        if event["type"] == _END and event.get("issue") != 43
+    ]
+    assert freeing, "FIFO admission must follow the freeing contribution.end"
+    assert events.index(freeing[-1]) < admitted_at
+
+    for issue in (42, 44):
+        ordered = [
+            event["type"]
+            for event in events
+            if event.get("issue") == issue
+            and event["type"] in (_WORK_FINISHED, _PARKED, _ADMITTED, _END)
+        ]
+        assert _PARKED not in ordered
+        assert (
+            ordered.index(_WORK_FINISHED)
+            < ordered.index(_ADMITTED)
+            < ordered.index(_END)
+        )
 
 
 def test_an_unstamped_release_advance_belongs_to_the_open_contribution() -> None:

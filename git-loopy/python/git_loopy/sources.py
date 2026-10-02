@@ -63,6 +63,7 @@ from git_loopy.readiness import (
     POOL_CLASS_UNRESOLVED,
     POOL_CLASS_WAITING,
     BlockedByRead,
+    ClosingPullRequestRead,
     Readiness,
     decide_readiness,
 )
@@ -367,6 +368,11 @@ class AfkReadyItem:
             when the item reaches **Pickup**; carrying this fact prevents that
             decision from repeating the read. PR and PRDs items retain the
             unprovable default because they have no such connection.
+        closing_pull_requests: The closing pull requests the same collection
+            read carried, states resolved once for that read (#695). A
+            candidate no reference was read on keeps the complete empty
+            default, so it is not Awaiting merge and not unprovable on this
+            axis. A pull-request candidate is never refused by this field.
     """
 
     ref: int | str
@@ -377,6 +383,9 @@ class AfkReadyItem:
     labels: tuple[str, ...] = ()
     created_at: str = ""
     blocked_by: BlockedByRead = field(default_factory=BlockedByRead.unprovable)
+    closing_pull_requests: ClosingPullRequestRead = field(
+        default_factory=ClosingPullRequestRead.none
+    )
 
 
 @dataclass(frozen=True)
@@ -490,8 +499,9 @@ def unbound_pool_outcome(
     reports that *no assertion could be read*, so a walk holding one has not
     established that its Pool cannot be worked — the candidate may be perfectly
     ready. ``all_skipped`` means "I could not take any of what there is" and
-    ``all_blocked`` means "every candidate proves an open blocker"; both are
-    claims about the *work*, and a failed read is a claim about the *read*.
+    ``all_blocked`` means "every refusal is a wait" — an open blocker or a
+    pull request to merge; both are claims about the *work*, and a failed
+    read is a claim about the *read*.
     Reporting either would assert the very thing the read failed to establish,
     and — because :attr:`~git_loopy.readiness.Readiness.blockers` is
     deliberately empty for that verdict — would do it with nothing named for an
@@ -508,7 +518,8 @@ def unbound_pool_outcome(
 
     Args:
         candidates: How many candidates the walk refused in total.
-        waiting: How many of them proved an open native blocker.
+        waiting: How many of them proved a wait outside the Run: an open
+            blocker, or a pull request to merge.
         unresolved: How many of them refused only because their readiness read
             did not complete.
 
@@ -1118,7 +1129,7 @@ class GitHubIssueSource:
         )
         self._report_undated(undated)
 
-        items: list[AfkReadyItem] = []
+        survivors: list[gh_module.Issue] = []
         unread = False
         for issue in ordered:
             try:
@@ -1147,16 +1158,27 @@ class GitHubIssueSource:
                     PoolExclusion(ref=full.number, title=full.title, reason=reason)
                 )
                 continue
-            items.append(
-                AfkReadyItem(
-                    ref=full.number,
-                    title=full.title,
-                    rendered_block=_format_github_issue_block(full),
-                    labels=tuple(full.labels),
-                    created_at=full.created_at,
-                    blocked_by=full.blocked_by,
-                )
+            survivors.append(full)
+        # One state read for the collection, and none when no survivor carries
+        # a reference. The references themselves already rode the list and the
+        # view. States are not membership.
+        states = self._closing_states(
+            tuple(full.closing_references for full in survivors)
+        )
+        items = [
+            AfkReadyItem(
+                ref=full.number,
+                title=full.title,
+                rendered_block=_format_github_issue_block(full),
+                labels=tuple(full.labels),
+                created_at=full.created_at,
+                blocked_by=full.blocked_by,
+                closing_pull_requests=gh_module.closing_pull_request_read(
+                    full.closing_references, states
+                ),
             )
+            for full in survivors
+        ]
 
         if self._include_prs:
             items.extend(self._collect_afk_ready_prs())
@@ -1268,7 +1290,9 @@ class GitHubIssueSource:
             )
             return Pickup(outcome=PICKUP_UNAVAILABLE)
 
-        readiness = decide_readiness(full.blocked_by)
+        states = self._closing_states((full.closing_references,))
+        closing = gh_module.closing_pull_request_read(full.closing_references, states)
+        readiness = decide_readiness(full.blocked_by, closing)
         if readiness_unresolved(readiness):
             return Pickup(outcome=PICKUP_UNAVAILABLE)
 
@@ -1292,6 +1316,7 @@ class GitHubIssueSource:
                 labels=labels,
                 created_at=full.created_at,
                 blocked_by=full.blocked_by,
+                closing_pull_requests=closing,
             ),
         )
 
@@ -1490,9 +1515,50 @@ class GitHubIssueSource:
         whose blockers were never checked.
         """
         ref = item.ref
-        if item.kind == "pr" or not isinstance(ref, int):
+        if not isinstance(ref, int):
             return Readiness.ready()
-        return decide_readiness(item.blocked_by)
+        # A pull-request candidate is never Awaiting merge. The decision
+        # short-circuits on kind, so a PR stays admissible while the issue it
+        # closes waits on its own open pull request.
+        kind = "pull_request" if item.kind == "pr" else "issue"
+        return decide_readiness(
+            item.blocked_by,
+            item.closing_pull_requests,
+            candidate_kind=kind,
+        )
+
+    def _closing_states(
+        self, references: Sequence[gh_module.ClosingReferences]
+    ) -> dict[str, gh_module.PullRequestStateNode]:
+        """Resolve closing-pull-request states once for this read.
+
+        No request when no candidate carries a readable reference. A failed
+        call marks only the ids this read asked unread; it does not admit
+        them and it does not fail the whole Pool as if every candidate were
+        unreadable.
+        """
+        ids = gh_module.distinct_closing_ids(references)
+        if not ids:
+            return {}
+        try:
+            nodes = self._gh.pull_request_states(ids)
+        except gh_module.GhError as exc:
+            self._diag.warning("pull-request state read failed: %s", exc)
+            return {
+                node_id: gh_module.PullRequestStateNode(
+                    node_id=node_id, state=None, unread="state_request_failed"
+                )
+                for node_id in ids
+            }
+        found = {node.node_id: node for node in nodes}
+        for node_id in ids:
+            found.setdefault(
+                node_id,
+                gh_module.PullRequestStateNode(
+                    node_id=node_id, state=None, unread="state_request_failed"
+                ),
+            )
+        return found
 
     def _detect_pr_advances(
         self, pool: list[AfkReadyItem]

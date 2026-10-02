@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.18 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.22 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -690,7 +690,7 @@ wrapper closure. (PR mode: a PR head-SHA advance also counts as progress.)
 What a **Strike** counts depends on whether the Runner has a **Pickup** (§14.3), because only a
 Runner that binds one issue per Iteration can have an **Attempt lifecycle** to charge from:
 
-- **A Runner with a Pickup** (contract 2.18, ADR-0070) MUST charge **one Strike to the issue a
+- **A Runner with a Pickup** (contract 2.22, ADR-0070) MUST charge **one Strike to the issue a
   session worked for every Session outcome** that session reaches (§14.3) — silent no-progress,
   timeout, crash, no more tasks, or content-filtered. A session that advanced its issue reached no
   ending and MUST charge nothing. Strikes are counted **per issue, per Run**: one issue's Strikes
@@ -752,13 +752,13 @@ Exit code `3` is retired. It used to mean a Run that continued past a Dashboard
 fault. The Run now outlives its client, so a client fault is not a Run outcome
 and the code must not be reused (`exit-codes.json` `retired`, #459).
 
-A Runner with a **Pickup** (§14.3) never ends `stuck` (§6, contract 2.18). It MUST report a Run
+A Runner with a **Pickup** (§14.3) never ends `stuck` (§6, contract 2.22). It MUST report a Run
 that could bind none of the Pool as `all_skipped`, and MUST NOT report that as the exit-`0` empty
 queue: "there is nothing to do" and "I could not take any of what there is" are different facts
 about the repository, and only the first is a finished Run. The `all_skipped` reason is required
 from contract 1.27 because an Iteration that binds nothing reaches no Session outcome and charges
 no Strike — so without a terminal reason of its own, a Run every one of whose candidates is
-defeated would re-walk the same Pool for as long as its Iteration cap allowed. From contract 2.18
+defeated would re-walk the same Pool for as long as its Iteration cap allowed. From contract 2.22
 it is also the only way a Run that has skipped everything ends, because the Run never stops on
 Strikes. A Runner without a Pickup never reaches this
 reason and is not required to name it beyond mapping it (§10 is the family-wide termination
@@ -793,7 +793,7 @@ The Stop itself takes **two stages** (ADR-0043), driven by the same gesture repe
    once; every started contribution and **Integration** operation runs to completion and
    integrates. The latch is durable — a later publication MUST NOT resume refill, which is what
    distinguished it from the revocable drain a spent **Strike** ceiling latched before a Runner
-   with a Pickup stopped draining on Strikes (§6, contract 2.18).
+   with a Pickup stopped draining on Strikes (§6, contract 2.22).
 2. The second cancels the agent sessions still running, **salvaging** each one's workspace as a
    **Checkpoint** first. Cancellation is *requested*, never awaited.
 
@@ -871,19 +871,19 @@ failures only: they emit no special Event and do not change the worker's own Run
 Contract-2.4 puts **Wind-down** on the wire. A Run emits
 `wrapper.stop.requested` when it latches a drain or escalates it to cancellation:
 `cause` is one of `operator_stop`, `strike_limit`, or `iteration_cap` (a Runner with a
-Pickup produces no `strike_limit` from contract 2.18, §6); `stage` is
+Pickup produces no `strike_limit` from contract 2.22, §6); `stage` is
 the ordered ladder `drain`, then `cancel`; and `draining` is the observed number
 of contributions still in flight (`0` for a serial Run). Only `operator_stop` may
 emit `cancel`. The Event records the true latch, not an input gesture, so each
 transition emits once and a third Stop gesture emits nothing. A green publication
 may clear only a Strike drain; that transition emits `wrapper.stop.lifted` with
 `cause: "strike_limit"` and its observed `draining` count. No Runner produces it
-from contract 2.18, since none drains on Strikes and lifts; it stays declared so
+from contract 2.22, since none drains on Strikes and lifts; it stays declared so
 a replayed log still reads. Dashboard consumers
 derive their stopped state from these Events: a trace that predates them is
 unknown, and `wrapper.run.end` with `outcome: "interrupted"` is not a Stop.
 
-Contract 2.18 (ADR-0070) names whose **Strike** a `wrapper.strike` is. It
+Contract 2.22 (ADR-0070) names whose **Strike** a `wrapper.strike` is. It
 carries `strikes`, `max_strikes` and `outcome` (`warn`, `skip` or `abort`). A
 Runner with a Pickup (§6) MUST add the `issue` it charged and the `ending`, the
 **Session outcome** that charged it; `strikes` is then that issue's count and
@@ -1294,13 +1294,24 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   observation.
 - **Legacy traces.** Historical **Wave** logs carry `lane_issue` and no contribution identity.
   They remain readable and MUST NOT be reinterpreted as contributions.
-- **The backlog is bounded, and the bound is the whole point.** **Integration** is one serialized
+- **The backlog is bounded, and the bound is the whole point (contract 2.18).** **Integration** is one serialized
   stage, and the **Integration backlog** it consumes has a high-water mark of exactly **two** — one
   contribution integrating plus one waiter. A third finisher emits
-  `wrapper.integration.parked`, keeps its **Lane** occupied, and waits; admission is FIFO by
-  finish order, broken by ascending issue number, and a parked contribution enters the backlog on
-  `wrapper.integration.admitted`. That admission — not publication — is what frees the Lane for
-  refill, which is why a record identifies its contribution and not its Lane. A full backlog is
+  `wrapper.integration.parked` when the backlog is full, keeps its **Lane** occupied, and waits.
+  Direct admission emits `wrapper.integration.admitted` immediately after
+  `wrapper.contribution.work_finished` and before that contribution's Integration begins. A parked
+  contribution is admitted later, from the FIFO, and that `wrapper.integration.admitted` follows
+  the freeing contribution's `wrapper.contribution.end` and precedes the admitted contribution's
+  own Integration. A contribution is admitted once: directly, or after parking, never both.
+  Admission is FIFO by finish order, broken by ascending issue number. That admission — not
+  publication — is what frees the Lane for refill, which is why a record identifies its
+  contribution and not its Lane. When a contribution takes Integration's serialization it emits
+  `wrapper.integration.started` once (contract 2.19), and immediately afterwards
+  `wrapper.integration.branch_observed`, before the private stage is cut — including when that
+  stage cannot be cut. Recovery reuses the stage and does not emit either again. The observation
+  is the number of this Run's green publications onto base since the contribution's Lane branch
+  was cut, or `null` when the Run cannot observe the cut. The publication that this contribution
+  itself then lands is not part of its own observation. A full backlog is
   **Integration backpressure**: **Rolling dispatch** stops *starting* new Lane work while it holds,
   and resumes the moment a slot frees. It is a refill bound, never a pause — Lanes already running
   finish normally and nothing is cancelled. This is what makes the **Lane cap** a ceiling rather
@@ -1311,10 +1322,21 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   nothing to undo. `wrapper.integration.branch_observed` reports how many publications landed since
   that branch was cut, or `null` when the Run cannot observe it. A conflicting or failing
   contribution gets bounded runner-driven recovery in the same stage: each attempt emits
-  `wrapper.integration.recovery_started` with its `attempt` and the immutable `max_attempts`, and
-  attempts MUST NOT exceed three. Recovery Consumption and commits are counted once, in the
-  originating contribution. Persistent failure ends the contribution unpublished rather than
+  `wrapper.integration.recovery_started` once, before that attempt's Agent session, with its
+  `attempt` (from 1) and the immutable `max_attempts` (K = 3) (contract 2.20). Attempts MUST NOT
+  exceed three, and an exhausted contribution emits three such records, then
+  `wrapper.contribution.end` with `reason` `serial_fallback`. Recovery Consumption and commits are
+  counted once, in the originating contribution. Persistent failure ends the contribution unpublished rather than
   publishing something the loops did not pass.
+- **The refill turn a serial Iteration earns is reported when it is spent (contract 2.21).**
+  After a serial Iteration, Rolling dispatch grants exactly one refill turn. The Orchestrator
+  MUST emit `wrapper.rolling.refill_turn` exactly once when that turn is spent, including a
+  turn that reserves nothing. It carries `reservations` (zero allowed) and `effective_lane_limit`,
+  the limit that bounded the decision — not a new authoritative transition;
+  `wrapper.concurrency.changed` owns those. A turn that is granted and never spent emits nothing:
+  the Run ends first, or a Pin whose read failed keeps serial ownership rather than spending the
+  turn. A normal reserve is not that turn and emits nothing. Without the record an operator
+  cannot tell a turn that reserved nothing from a turn that never happened.
 - **A Run that requested Parallel mode says so.** An Orchestrator that implements Parallel mode
   SHOULD carry `parallel_mode`, `lane_cap`, and `effective_lane_limit` on `wrapper.run.start`, and
   MUST emit `wrapper.parallel.serial_fallback` once per serial **Iteration** it works because it
@@ -1618,11 +1640,11 @@ run-wide default:
   Orchestrator with more than one pickup seam MUST feed and read one ledger from all of them.
   A mid-session switch is still forbidden — escalation is a **second pickup**, which is why it is
   stated here and not in the bullet above.
-- **Give an issue a bounded number of attempts (contract 1.26, 2.18).** An Orchestrator MUST hold
+- **Give an issue a bounded number of attempts (contract 1.26, 2.22).** An Orchestrator MUST hold
   one monotonic per-issue, per-**Run** **Attempt lifecycle** — `fresh` → `retrying` → `skipped`,
   the states [`attempt-lifecycle.json`](../git-loopy/conformance/attempt-lifecycle.json)
   declares — as the projection of that issue's **Strikes** (§6): `fresh` at none, `retrying` at
-  fewer than N (`GIT_LOOPY_MAX_NMT_STRIKES`), and `skipped` at N. From contract 2.18 every one of
+  fewer than N (`GIT_LOOPY_MAX_NMT_STRIKES`), and `skipped` at N. From contract 2.22 every one of
   the five **Session outcomes** charges one Strike and so moves the issue one step, as that
   fixture's table states (ADR-0070); before it, a timeout, an explicit no-more-tasks and a
   content-filtered turn moved it straight to `skipped`. An Iteration that advanced its issue
@@ -1649,7 +1671,7 @@ run-wide default:
   afterwards. The lifecycle is what a resolution's **lifecycle position** reports (`fresh` is
   `fresh`; everything past it is `retrying`), which is how a same-pair crash retry reads as a
   retry at all.
-  **The lifecycle is what the Strikes count (contract 2.18, ADR-0070).** An Orchestrator with a
+  **The lifecycle is what the Strikes count (contract 2.22, ADR-0070).** An Orchestrator with a
   Pickup MUST charge one **Strike** to an issue for each Session outcome a session on it reaches,
   and the ending that charges the N-th is the one recorded as its defeat. It MUST charge nothing
   for an Iteration that bound nothing, and nothing further once the issue is `skipped`. Because
@@ -2081,7 +2103,7 @@ stay on the deferred legacy path. 2.10 also adds the optional
 `effort_configurable` Pickup fact, Static execution authorized by a remote
 host's own listing (§14.3), and exact-dimension Route publication with its
 migration and capacity refresh (§14.5). `routing-resolution.json` declared
-that provenance at 2.10 and moved to 2.18 when its retry cases took per-issue
+that provenance at 2.10 and moved to 2.22 when its retry cases took per-issue
 Strikes (§6, ADR-0070); `event-schema.json` and `dashboard-insights.json`
 carried it at 2.10 and have since advanced to 2.11 with the Run-start issue
 source, 2.12 with Run-end refusals and 2.14 with the retirement of
@@ -2092,8 +2114,12 @@ fixtures' content, moving every `release_version` example from `-dev.N` to
 and the Python `WRAPPER_CONTRACT_VERSION` read 2.13. Both pins then moved from
 2.12 straight to 2.14 (ADR-0065), so neither ever carried 2.13, and both have
 since advanced to 2.15 with the behavioural `contribution_events` obligation
-(§12, ADR-0065), 2.16 with the Lane-work boundary (§12, #681) and 2.18 with
-the per-issue Strike record (§6, ADR-0070).
+(§12, ADR-0065) and 2.16 with the Lane-work boundary (§12, #681). Neither
+carried 2.17 (Awaiting merge, §3.3.1), and both have since advanced to 2.18
+with parking and admission (§12, #682), 2.19 with Integration start and
+branch drift (§12, #684), 2.20 with Recovery attempts (§12, #685), 2.21 with
+the refill turn (§12, #686) and 2.22 with the per-issue Strike record (§6,
+ADR-0070).
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1). Event wire compatibility is 1.4, advanced with the per-issue Strike
 record (§6), and historical streams' interpretation is unchanged.

@@ -8,10 +8,11 @@ at **Pickup**: the runner passes it over and tries the next candidate. See
 and Wrapper contract §3.3.1.
 
 This module is the **pure, I/O-free readiness seam** the contract requires: it
-turns one ``blockedBy`` connection read into a verdict, and nothing else. It is
-driven directly by ``conformance/issue-readiness.json`` — every case that
-fixture pins is a case this module decides, not a case the GitHub adapter
-(:mod:`git_loopy.gh`) reproduces its own copy of.
+turns one ``blockedBy`` connection and one closing-pull-request read into a
+verdict, and nothing else. ``issue-readiness.json`` drives the blocker axis
+with no closing reference. ``awaiting-merge.json`` drives the widened
+decision, including a pull request to merge (ADR-0069). The GitHub adapter
+(:mod:`git_loopy.gh`) reads; it does not decide.
 
 Design notes:
 
@@ -37,26 +38,46 @@ from dataclasses import dataclass
 from typing import Final
 
 __all__ = [
+    "CLOSING_REFERENCE_PAGE_SIZE",
     "POOL_CLASS_ADMITTED",
     "POOL_CLASS_UNRESOLVED",
     "POOL_CLASS_WAITING",
     "POOL_CLASSES",
+    "SKIP_AWAITING_PULL_REQUEST_MERGE",
     "SKIP_BLOCKED_BY_OPEN_DEPENDENCY",
     "SKIP_READINESS_UNPROVABLE",
+    "STATE_IDS_PER_REQUEST",
     "READINESS_VERDICTS",
     "BlockerNode",
     "BlockedByRead",
+    "ClosingPullRequestNode",
+    "ClosingPullRequestRead",
     "Readiness",
     "blocked_skip_reason",
     "blockers_from_skip_reason",
+    "closing_connection_complete",
     "decide_readiness",
+    "state_failure_scope",
+    "state_request_count",
 ]
 
 #: At least one ``blocked_by`` dependency was read and is open.
 SKIP_BLOCKED_BY_OPEN_DEPENDENCY: Final[str] = "blocked_by_open_dependency"
 
-#: The ``blockedBy`` connection was incomplete, or a node came back unreadable.
+#: At least one pull request that will close the candidate was read open.
+SKIP_AWAITING_PULL_REQUEST_MERGE: Final[str] = "awaiting_pull_request_merge"
+
+#: No assertion could be read: an incomplete connection, an unreadable node,
+#: or a pull-request state the read did not return.
 SKIP_READINESS_UNPROVABLE: Final[str] = "readiness_unprovable"
+
+#: ``gh issue list`` asks for one page of closing references and exports no
+#: ``pageInfo``. Exactly this many nodes is a connection that may be cut short.
+CLOSING_REFERENCE_PAGE_SIZE: Final[int] = 100
+
+#: ``nodes(ids:)`` accepts at most this many ids. A larger read pays one
+#: request per page of distinct ids, and a failure unread only that page.
+STATE_IDS_PER_REQUEST: Final[int] = 100
 
 #: A candidate this verdict admits: it has no place in an unbound-Pool count.
 POOL_CLASS_ADMITTED: Final[str] = "admitted"
@@ -81,6 +102,7 @@ POOL_CLASSES: Final[tuple[str, ...]] = (
 #: refusal kind needs an entry here and nothing in a caller (#693).
 _POOL_CLASS_BY_SKIP_REASON: Final[dict[str, str]] = {
     SKIP_BLOCKED_BY_OPEN_DEPENDENCY: POOL_CLASS_WAITING,
+    SKIP_AWAITING_PULL_REQUEST_MERGE: POOL_CLASS_WAITING,
     SKIP_READINESS_UNPROVABLE: POOL_CLASS_UNRESOLVED,
 }
 
@@ -166,6 +188,54 @@ class BlockedByRead:
 
 
 @dataclass(frozen=True)
+class ClosingPullRequestNode:
+    """One closing pull request after its state was resolved, or not.
+
+    Attributes:
+        ref: Full ``owner/repo#number``, or ``None`` when the reference node
+            itself was unreadable. Connection order is the tuple order.
+        state: ``"open"``, ``"merged"``, or ``"closed"``, or ``None`` when the
+            state was not read. A draft is ``"open"``.
+        readable: ``False`` when the reference node came back unreadable, so
+            there is no id whose state could be asked.
+        unread: Why ``state`` is absent when the reference was carried:
+            ``state_request_failed``, ``state_node_null``, or
+            ``reference_unreadable``. ``None`` when the state was read.
+    """
+
+    ref: str | None
+    state: str | None
+    readable: bool = True
+    unread: str | None = None
+
+
+@dataclass(frozen=True)
+class ClosingPullRequestRead:
+    """One candidate's closing pull requests, states resolved.
+
+    A read that carried no reference is :meth:`none`: complete and empty, so
+    it changes no verdict. A connection that was not read at all is incomplete
+    with no nodes — not an empty one.
+
+    Attributes:
+        complete: Whether the reference connection was proven exhausted.
+            ``gh issue view`` pages to completion, so a view-carried connection
+            is complete. A list-carried page of exactly
+            :data:`CLOSING_REFERENCE_PAGE_SIZE` is not.
+        nodes: The references in connection order, each with the state the
+            state read returned or the unread cause that replaced it.
+    """
+
+    complete: bool
+    nodes: tuple[ClosingPullRequestNode, ...] = ()
+
+    @classmethod
+    def none(cls) -> "ClosingPullRequestRead":
+        """A candidate no closing pull request was read on. Ready on this axis."""
+        return cls(complete=True)
+
+
+@dataclass(frozen=True)
 class Readiness:
     """The verdict one :class:`BlockedByRead` decides — a closed type, not
     three independent primitives (#438 finding 3).
@@ -192,19 +262,24 @@ class Readiness:
         verdict: ``"ready"`` or ``"blocked"`` — one of
             :data:`READINESS_VERDICTS`.
         skip_reason: One of :data:`SKIP_BLOCKED_BY_OPEN_DEPENDENCY` /
+            :data:`SKIP_AWAITING_PULL_REQUEST_MERGE` /
             :data:`SKIP_READINESS_UNPROVABLE` when ``verdict`` is
             ``"blocked"``, else ``None``.
         blockers: The open blockers the read established, in the order the
             connection returned them, and never empty for
             ``blocked_by_open_dependency``. Empty when ``verdict`` is
-            ``"ready"``, and also empty for ``readiness_unprovable`` — that reason reports
-            that no assertion could be read, so there is nothing proven to
-            name.
+            ``"ready"``, and also empty for every other reason — an Awaiting
+            merge names its pull requests on :attr:`closing_pull_requests`,
+            not here.
+        closing_pull_requests: The open closing pull requests, in connection
+            order, and never empty for ``awaiting_pull_request_merge``. Empty
+            for every other verdict.
     """
 
     verdict: str
     skip_reason: str | None = None
     blockers: tuple[str, ...] = ()
+    closing_pull_requests: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Refuse the states three independent fields used to permit.
@@ -218,9 +293,9 @@ class Readiness:
         if self.verdict not in READINESS_VERDICTS:
             raise ValueError(f"not a closed Readiness verdict: {self.verdict!r}")
         if self.verdict == "ready":
-            if self.skip_reason is not None or self.blockers:
+            if self.skip_reason is not None or self.blockers or self.closing_pull_requests:
                 raise ValueError(
-                    "a ready Readiness may carry no skip_reason and no blockers"
+                    "a ready Readiness may carry no skip_reason and no names"
                 )
             return
         if self.skip_reason not in _POOL_CLASS_BY_SKIP_REASON:
@@ -228,13 +303,22 @@ class Readiness:
                 f"a blocked Readiness must name a closed skip_reason, got "
                 f"{self.skip_reason!r}"
             )
-        if self.blockers and self.skip_reason != SKIP_BLOCKED_BY_OPEN_DEPENDENCY:
+        if self.skip_reason == SKIP_BLOCKED_BY_OPEN_DEPENDENCY:
+            if not self.blockers or self.closing_pull_requests:
+                raise ValueError(
+                    f"{self.skip_reason!r} names its open blockers and nothing else"
+                )
+            return
+        if self.skip_reason == SKIP_AWAITING_PULL_REQUEST_MERGE:
+            if not self.closing_pull_requests or self.blockers:
+                raise ValueError(
+                    f"{self.skip_reason!r} names its open closing pull requests "
+                    "and nothing else"
+                )
+            return
+        if self.blockers or self.closing_pull_requests:
             raise ValueError(
-                f"{self.skip_reason!r} proves nothing to name; blockers must be empty"
-            )
-        if not self.blockers and self.skip_reason == SKIP_BLOCKED_BY_OPEN_DEPENDENCY:
-            raise ValueError(
-                f"{self.skip_reason!r} asserts an open blocker; it must name one"
+                f"{self.skip_reason!r} proves nothing to name"
             )
 
     @property
@@ -257,9 +341,23 @@ class Readiness:
         """
         if self.skip_reason is None:
             return None
-        if self.blockers:
-            return blocked_skip_reason(self.skip_reason, self.blockers)
+        if self.names:
+            return blocked_skip_reason(self.skip_reason, self.names)
         return self.skip_reason
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """The references this refusal names, in the order the reason writes them.
+
+        Open blockers for :data:`SKIP_BLOCKED_BY_OPEN_DEPENDENCY`, open closing
+        pull requests for :data:`SKIP_AWAITING_PULL_REQUEST_MERGE`, and nothing
+        for a verdict that proves no wait.
+        """
+        if self.skip_reason == SKIP_BLOCKED_BY_OPEN_DEPENDENCY:
+            return self.blockers
+        if self.skip_reason == SKIP_AWAITING_PULL_REQUEST_MERGE:
+            return self.closing_pull_requests
+        return ()
 
     @property
     def pool_class(self) -> str:
@@ -279,41 +377,131 @@ class Readiness:
         return cls(verdict="ready")
 
     @classmethod
-    def blocked(cls, skip_reason: str, blockers: tuple[str, ...] = ()) -> "Readiness":
+    def blocked(
+        cls,
+        skip_reason: str,
+        blockers: tuple[str, ...] = (),
+        closing_pull_requests: tuple[str, ...] = (),
+    ) -> "Readiness":
         """The one inadmissible verdict, naming why and (if provable) whom."""
-        return cls(verdict="blocked", skip_reason=skip_reason, blockers=blockers)
+        return cls(
+            verdict="blocked",
+            skip_reason=skip_reason,
+            blockers=blockers,
+            closing_pull_requests=closing_pull_requests,
+        )
 
 
-def decide_readiness(read: BlockedByRead) -> Readiness:
-    """Decide one candidate's **Readiness** from its ``blockedBy`` read.
+def decide_readiness(
+    read: BlockedByRead,
+    closing: ClosingPullRequestRead | None = None,
+    *,
+    candidate_kind: str = "issue",
+) -> Readiness:
+    """Decide one candidate's **Readiness** from the reads it was given.
 
-    Pure: no clock, no I/O, no ``gh``. The whole decision is the ``read`` it is
-    given, which is what lets ``conformance/issue-readiness.json`` drive it
-    directly rather than through a GitHub-shaped adapter.
+    Pure: no clock, no I/O, no ``gh``. ``closing`` defaults to a complete
+    empty connection, so a caller that only has a ``blockedBy`` read — and
+    ``issue-readiness.json`` — keeps the answer it has today.
 
-    Order of decision, matching the fixture:
+    A pull-request candidate is never Awaiting merge. The rule does not read
+    either connection for one.
 
-    1. Any node the read positively found **open** makes the candidate
-       **blocked**, reason :data:`SKIP_BLOCKED_BY_OPEN_DEPENDENCY`, naming
-       every open blocker found — checked *first* so a proven open blocker
-       outranks an incomplete or unreadable read (see the module docstring).
-    2. Otherwise, an incomplete connection (fewer nodes than ``total_count``)
-       or an unreadable node means readiness was never proven: **blocked**,
-       reason :data:`SKIP_READINESS_UNPROVABLE`, naming no blockers — there is
-       nothing proven to name.
-    3. Otherwise every node was read, none is open: **ready**.
+    Order of decision, matching ``awaiting-merge.json``:
+
+    1. Any blocker the read positively found **open** outranks every other
+       fact, including an open closing pull request and a failed state read.
+    2. Any closing pull request read **open** — a draft included — is
+       Awaiting merge, and outranks an unread state, an unreadable reference,
+       an incomplete connection, and an unprovable blocker read.
+    3. Otherwise an incomplete or unreadable blocker connection, an incomplete
+       closing connection, an unreadable reference, or an unread state is
+       ``readiness_unprovable``.
+    4. Otherwise every node was read and none is a wait: **ready**.
 
     Args:
         read: The candidate's ``blockedBy`` connection, one hop, already read.
+        closing: The candidate's closing pull requests with states resolved.
+            ``None`` is a complete empty connection.
+        candidate_kind: ``"issue"`` or ``"pull_request"`` / ``"pr"``. A
+            pull-request candidate is ready without consulting either read.
 
     Returns:
         The verdict, whether it is admissible, and why not.
     """
+    if candidate_kind in ("pull_request", "pr"):
+        return Readiness.ready()
+    if closing is None:
+        closing = ClosingPullRequestRead.none()
     open_blockers = tuple(node.ref for node in read.nodes if node.state == "open")
     if open_blockers:
         return Readiness.blocked(SKIP_BLOCKED_BY_OPEN_DEPENDENCY, open_blockers)
-    incomplete = read.total_count is None or len(read.nodes) < read.total_count
-    unreadable = any(not node.readable for node in read.nodes)
-    if incomplete or unreadable:
+    open_pull_requests = tuple(
+        node.ref
+        for node in closing.nodes
+        if node.state == "open" and node.ref
+    )
+    if open_pull_requests:
+        return Readiness.blocked(
+            SKIP_AWAITING_PULL_REQUEST_MERGE,
+            closing_pull_requests=open_pull_requests,
+        )
+    blocker_incomplete = read.total_count is None or len(read.nodes) < read.total_count
+    blocker_unreadable = any(not node.readable for node in read.nodes)
+    closing_unreadable = any(
+        not node.readable or node.state is None or node.unread is not None
+        for node in closing.nodes
+    )
+    if (
+        blocker_incomplete
+        or blocker_unreadable
+        or not closing.complete
+        or closing_unreadable
+    ):
         return Readiness.blocked(SKIP_READINESS_UNPROVABLE)
     return Readiness.ready()
+
+
+def closing_connection_complete(*, carrier: str, nodes: int) -> bool:
+    """Whether a carried closing-reference connection was proven exhausted.
+
+    ``gh issue view`` pages until ``hasNextPage`` is false, so every
+    view-carried connection is complete. ``gh issue list`` asks for one page
+    and exports no ``pageInfo``, so exactly a full page is indistinguishable
+    from a connection cut short.
+    """
+    if carrier == "view":
+        return True
+    if carrier == "list":
+        return nodes < CLOSING_REFERENCE_PAGE_SIZE
+    raise ValueError(f"unknown closing-reference carrier: {carrier}")
+
+
+def state_request_count(distinct: int) -> int:
+    """How many state requests ``distinct`` pull-request ids cost.
+
+    Zero ids cost no request. Otherwise one request per
+    :data:`STATE_IDS_PER_REQUEST` distinct ids, rounding up.
+    """
+    if distinct <= 0:
+        return 0
+    return (distinct + STATE_IDS_PER_REQUEST - 1) // STATE_IDS_PER_REQUEST
+
+
+def state_failure_scope(distinct: int, failed_requests: int) -> dict[str, int | str]:
+    """How many distinct ids a failed state request leaves unread.
+
+    A full page is :data:`STATE_IDS_PER_REQUEST` ids, so which request failed
+    does not change the unread count. A short read is one request; its
+    failure leaves the whole read unread.
+    """
+    requests = state_request_count(distinct)
+    every_request_full = distinct == requests * STATE_IDS_PER_REQUEST
+    unread = (
+        failed_requests * STATE_IDS_PER_REQUEST if every_request_full else distinct
+    )
+    return {
+        "unread": unread,
+        "read": distinct - unread,
+        "unread_cause": "state_request_failed",
+    }

@@ -102,7 +102,8 @@ const QUEUE_HEADINGS: [&str; 11] = [
 
 #[test]
 fn a_wide_terminal_still_carries_every_queue_column() {
-    let lines = render_lines(&fixture_frame(Screen::Dashboard), 160, 40);
+    // Status carries phase age (`integrating 0:00:00`), so the full set needs 167.
+    let lines = render_lines(&fixture_frame(Screen::Dashboard), 167, 40);
     assert_eq!(cells(&band(&lines, "Queue")[0]), QUEUE_HEADINGS);
 }
 

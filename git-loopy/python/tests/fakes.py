@@ -21,6 +21,7 @@ from git_loopy.gh import (
     Issue,
     IssueListPage,
     PullRequest,
+    PullRequestStateNode,
     RateLimitCounter,
     Repo,
 )
@@ -755,6 +756,8 @@ class FakeGitHubClient:
         route_label_errors: Mapping[int, RouteDeliveryError] | None = None,
         pr_view_errors: Mapping[int, GhError] | None = None,
         gh_version: tuple[int, int, int] = MIN_GH_VERSION_FOR_READINESS,
+        pull_request_states_by_id: Mapping[str, str | None] | None = None,
+        pull_request_states_error: GhError | None = None,
     ) -> None:
         self.authed = authed
         self.gh_version_value = gh_version
@@ -785,6 +788,10 @@ class FakeGitHubClient:
             route_label_errors or {}
         )
         self._pr_view_errors: dict[int, GhError] = dict(pr_view_errors or {})
+        self._pull_request_states: dict[str, str | None] = dict(
+            pull_request_states_by_id or {}
+        )
+        self.pull_request_states_error = pull_request_states_error
         # Read/write spies.
         self.issue_list_calls: list[tuple[str, str]] = []
         self.issue_view_calls: list[int] = []
@@ -796,6 +803,7 @@ class FakeGitHubClient:
         self._route_comments: dict[int, list[str]] = {}
         self.pr_list_calls: list[tuple[str, str]] = []
         self.pr_view_calls: list[int] = []
+        self.pull_request_state_calls: list[tuple[str, ...]] = []
         # The 429 **Pressure signal** (#309, #219 §6), counted by the same
         # `gh.RateLimitCounter` production uses. Injecting a `GhError` whose
         # stderr carries GitHub's real throttling wording is therefore all a
@@ -854,6 +862,38 @@ class FakeGitHubClient:
             if _state_matches(issue.state, state)
         )
         return IssueListPage(issues=issues, complete=self.issue_list_complete)
+
+    def pull_request_states(
+        self, ids: Sequence[str]
+    ) -> tuple[PullRequestStateNode, ...]:
+        """Scripted pull-request states. One call per source read, not per id.
+
+        An id with no scripted state is unread, so a forgotten script cannot
+        admit a candidate. ``None`` is a null node. A scripted error fails
+        the whole call, which the source marks unread for every id it asked.
+        """
+        self.pull_request_state_calls.append(tuple(ids))
+        if self.pull_request_states_error is not None:
+            self._fail(self.pull_request_states_error)
+        nodes: list[PullRequestStateNode] = []
+        for node_id in ids:
+            if node_id not in self._pull_request_states:
+                nodes.append(
+                    PullRequestStateNode(
+                        node_id=node_id, state=None, unread="state_request_failed"
+                    )
+                )
+                continue
+            state = self._pull_request_states[node_id]
+            if state is None:
+                nodes.append(
+                    PullRequestStateNode(
+                        node_id=node_id, state=None, unread="state_node_null"
+                    )
+                )
+                continue
+            nodes.append(PullRequestStateNode(node_id=node_id, state=state))
+        return tuple(nodes)
 
     def issue_view(self, number: int) -> Issue:
         self.issue_view_calls.append(number)

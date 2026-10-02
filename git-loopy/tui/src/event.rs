@@ -235,6 +235,16 @@ pub enum EventPayload {
     ContributionStart(ContributionStart),
     /// `wrapper.contribution.work_finished`
     ContributionWorkFinished(ContributionWorkFinished),
+    /// `wrapper.integration.parked`
+    IntegrationParked(IntegrationParked),
+    /// `wrapper.integration.admitted`
+    IntegrationAdmitted(IntegrationAdmitted),
+    /// `wrapper.integration.started`
+    IntegrationStarted(IntegrationStarted),
+    /// `wrapper.integration.branch_observed`
+    IntegrationBranchObserved(IntegrationBranchObserved),
+    /// `wrapper.integration.recovery_started`
+    IntegrationRecoveryStarted(IntegrationRecoveryStarted),
     /// `wrapper.iteration.start`
     IterationStart,
     /// `wrapper.afk_ready.collected`
@@ -288,6 +298,8 @@ pub enum EventPayload {
     ParallelSerialFallback(ParallelSerialFallback),
     /// `wrapper.serial.requested`
     SerialRequested(SerialRequested),
+    /// `wrapper.rolling.refill_turn`
+    RefillTurn(RefillTurn),
     /// Any other Event type in the supported schema.
     Other,
 }
@@ -359,6 +371,61 @@ pub struct ContributionStart {
 pub struct ContributionWorkFinished {
     #[serde(default)]
     pub contribution_id: Option<String>,
+}
+
+/// A finished contribution waiting for an Integration-backlog slot.
+///
+/// The identity triple is decoded through [`Event::contribution`];
+/// `contribution_id` is repeated so the payload names its contribution.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct IntegrationParked {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
+}
+
+/// A contribution that has entered the Integration backlog.
+///
+/// Direct admission and FIFO admission share this payload. The identity
+/// triple is decoded through [`Event::contribution`].
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct IntegrationAdmitted {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
+}
+
+/// The contribution that has taken Integration's serialization.
+///
+/// Identity is decoded through [`Event::contribution`]. Emitted once, before
+/// the private stage is cut, and not repeated for Recovery.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct IntegrationStarted {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
+}
+
+/// Publications landed on base since this contribution's Lane was cut.
+///
+/// `None` is an observed unknown — the Run could not see the cut — not a
+/// guessed zero. The contribution's own later publication is not included.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct IntegrationBranchObserved {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
+    #[serde(default)]
+    pub base_publications_since_cut: Option<i64>,
+}
+
+/// One Recovery attempt, before that attempt's Agent session.
+///
+/// `attempt` runs from 1 to `max_attempts`. `max_attempts` is the immutable
+/// bound K, not a count that grows with the attempt. A record missing either
+/// number degrades to [`EventPayload::Other`] rather than inventing N/K.
+#[derive(Clone, Debug)]
+pub struct IntegrationRecoveryStarted {
+    #[allow(dead_code)]
+    pub contribution_id: Option<String>,
+    pub attempt: u32,
+    pub max_attempts: u32,
 }
 
 /// Per-Orchestrator **Parallel mode** capabilities declared at Run start.
@@ -1123,6 +1190,17 @@ pub struct SerialRequested {
     pub refill_stopped: Option<bool>,
 }
 
+/// The refill turn a serial Iteration earns, once it is spent (#686).
+///
+/// `reservations` may be zero. A missing number is not this payload: inventing
+/// zero would make a turn that never happened look like one that reserved
+/// nothing.
+#[derive(Clone, Debug)]
+pub struct RefillTurn {
+    pub reservations: i64,
+    pub effective_lane_limit: i64,
+}
+
 impl Event {
     /// Decode one Event from its JSON representation.
     ///
@@ -1171,6 +1249,15 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.contribution.work_finished" => {
             EventPayload::ContributionWorkFinished(decode_or_default(value))
         }
+        "wrapper.integration.parked" => EventPayload::IntegrationParked(decode_or_default(value)),
+        "wrapper.integration.admitted" => {
+            EventPayload::IntegrationAdmitted(decode_or_default(value))
+        }
+        "wrapper.integration.started" => EventPayload::IntegrationStarted(decode_or_default(value)),
+        "wrapper.integration.branch_observed" => {
+            EventPayload::IntegrationBranchObserved(decode_or_default(value))
+        }
+        "wrapper.integration.recovery_started" => decode_recovery_started(value),
         "wrapper.iteration.start" => EventPayload::IterationStart,
         "wrapper.afk_ready.collected" => EventPayload::AfkReadyCollected(decode_or_default(value)),
         "wrapper.pool.refreshed" => EventPayload::PoolRefreshed(decode_or_default(value)),
@@ -1230,11 +1317,10 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
         "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),
         // Only the rolling types with a producer are modelled (ADR-0044): the
-        // Lane-contribution lifecycle and the four Run/Iteration-scoped
-        // posture events. The `contribution_identity.lifecycle_types` and
-        // `scheduler_scoped_types` this core does not model — including every
-        // `wrapper.integration.*` type, filed to #435 — still degrade to
-        // `EventPayload::Other` below, unchanged.
+        // Lane-contribution lifecycle, parking and admission (#682),
+        // Integration start and branch drift (#684), Recovery attempts
+        // (#685), the refill turn a serial Iteration spends (#686), and the
+        // other Run/Iteration-scoped posture events.
         "wrapper.contribution.end" => {
             EventPayload::ContributionEnd(Box::new(decode_or_default(value)))
         }
@@ -1244,8 +1330,60 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
             EventPayload::ParallelSerialFallback(decode_or_default(value))
         }
         "wrapper.serial.requested" => EventPayload::SerialRequested(decode_or_default(value)),
+        "wrapper.rolling.refill_turn" => decode_refill_turn(value),
         _ => EventPayload::Other,
     }
+}
+
+/// A refill turn is typed only when both numbers are present.
+///
+/// A missing count is not a zero-reservation turn: that silence is exactly
+/// what the record exists to distinguish from a turn that reserved nothing.
+fn decode_refill_turn(value: &Value) -> EventPayload {
+    let Some(reservations) = json_nonneg_i64(value.get("reservations")) else {
+        return EventPayload::Other;
+    };
+    let Some(effective_lane_limit) = json_nonneg_i64(value.get("effective_lane_limit")) else {
+        return EventPayload::Other;
+    };
+    EventPayload::RefillTurn(RefillTurn {
+        reservations,
+        effective_lane_limit,
+    })
+}
+
+fn json_nonneg_i64(value: Option<&Value>) -> Option<i64> {
+    let number = value?.as_i64()?;
+    (number >= 0).then_some(number)
+}
+
+/// A Recovery record is typed only when both numbers are present.
+///
+/// A missing or unordered pair is unusable telemetry, not a guessed `1/3`.
+fn decode_recovery_started(value: &Value) -> EventPayload {
+    let Some(attempt) = json_u32(value.get("attempt")) else {
+        return EventPayload::Other;
+    };
+    let Some(max_attempts) = json_u32(value.get("max_attempts")) else {
+        return EventPayload::Other;
+    };
+    if attempt < 1 || max_attempts < 1 || attempt > max_attempts {
+        return EventPayload::Other;
+    }
+    EventPayload::IntegrationRecoveryStarted(IntegrationRecoveryStarted {
+        contribution_id: value
+            .get("contribution_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string),
+        attempt,
+        max_attempts,
+    })
+}
+
+fn json_u32(value: Option<&Value>) -> Option<u32> {
+    let number = value?.as_u64()?;
+    u32::try_from(number).ok()
 }
 
 /// Decode a payload, degrading a malformed one to its neutral default.

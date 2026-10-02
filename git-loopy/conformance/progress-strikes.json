@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "contract_version": "2.18",
+  "contract_version": "2.22",
   "note": "Fixture schema 3 retires the step-level `issues_skipped` count that schema 2 added; the per-case `distributions` selector stays. An adapter runs only the cases naming its distribution, and a case that names none is family-wide. The fork exists because a Runner with a **Pickup** charges a **Strike** to the *issue* a Session worked, once per Session ending, and never to an Iteration (ADR-0070) -- so an unproductive Iteration charges it nothing here and its Run never stops on Strikes; that per-issue accounting is pinned by `attempt-lifecycle.json`, and its cases here pin only that the progress predicate is no Strike input. The shell and PowerShell Orchestrators have no Pickup and therefore no lifecycle to charge from, so they keep counting consecutive no-progress Iterations and abort at the limit. Their cases are retained rather than deleted precisely so those two members stay pinned to the accounting they actually implement.",
   "distributions": ["python", "shell", "powershell"],
   "cases": [

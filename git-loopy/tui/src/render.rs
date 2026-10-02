@@ -96,7 +96,9 @@ const fn filling(heading: &'static str, width: u16, rank: u8) -> Column {
 /// buy the pair by surrendering every Consumption figure it has.
 const QUEUE_COLUMNS: [Column; 11] = [
     fixed("Issue", 10, 0),
-    fixed("Status", 12, 1),
+    // Wide enough for `integrating 0:00:00` — Status plus phase age.
+    // `recovering 0:00:00` is shorter, so it fits the same column.
+    fixed("Status", 19, 1),
     fixed("Started", 12, 4),
     fixed("Active", 9, 2),
     fixed("Closed", 12, 9),
@@ -669,7 +671,7 @@ fn draw_queue(
         rows.iter().map(|row| {
             vec![
                 issue_label(&row.issue),
-                row.status.clone(),
+                queue_status(row),
                 wall_clock(row.started_at.as_deref(), glyphs),
                 duration(row.active_seconds),
                 wall_clock(row.closed_at.as_deref(), glyphs),
@@ -695,6 +697,14 @@ fn draw_queue(
 ///
 /// An Orchestrator that cannot measure Consumption reports `null`, which is a
 /// different fact from a measured zero and must never render as one.
+/// Status, with phase age beside parked, admitted, integrating, and recovering.
+fn queue_status(row: &QueueRow) -> String {
+    match row.phase_age_seconds {
+        Some(age) => format!("{} {}", row.status, duration(age)),
+        None => row.status.clone(),
+    }
+}
+
 fn tokens(value: Option<i64>, glyphs: &Glyphs) -> String {
     value.map_or_else(|| glyphs.unknown.to_string(), grouped)
 }
@@ -865,20 +875,20 @@ fn parallel_segment(header: &Header) -> Option<(u8, String)> {
         return None;
     }
 
-    // Healthy capacity yields to declarative notes; an interrupted dispatch
-    // takes their place because the operator needs its cause to steer the Run.
-    if let Some(reason) = parallel.serial_fallback_reason.as_deref() {
-        return Some((4, format!("serial fallback: {reason}")));
+    // A spent refill turn takes the window until the next posture Event,
+    // including over an earlier stopped-refill or fallback fact. A zero
+    // reservation is the turn, not its absence (#686).
+    if let Some(turn) = &parallel.refill_turn {
+        let mut parts = vec![format!(
+            "refill turn: reserved {} of {}",
+            turn.reservations, turn.effective_lane_limit
+        )];
+        parts.extend(integration_headline(header));
+        return Some((4, parts.join(" · ")));
     }
 
-    if parallel.refill_stopped {
-        let serial_required = parallel
-            .serial_required
-            .map(|count| format!("{count} serial-required"))
-            .unwrap_or_else(|| "serial-required work".to_string());
-        return Some((4, format!("lane refill stopped: {serial_required}")));
-    }
-
+    // A Parallel degrade is the sentence. It never carries the Integration
+    // backlog: a Run that left Parallel mode has no backlog that can fill.
     if parallel.degraded {
         return Some((
             4,
@@ -889,14 +899,74 @@ fn parallel_segment(header: &Header) -> Option<(u8, String)> {
         ));
     }
 
-    match (
-        parallel.effective_lane_limit,
-        parallel.configured_lane_limit,
-    ) {
-        (Some(effective), Some(configured)) => {
-            Some((7, format!("lanes {effective} of {configured}")))
+    // Healthy capacity yields to declarative notes; an interrupted dispatch
+    // takes their place because the operator needs its cause to steer the Run.
+    // The Integration part accompanies whichever of those forms renders.
+    let base = if let Some(reason) = parallel.serial_fallback_reason.as_deref() {
+        Some(format!("serial fallback: {reason}"))
+    } else if parallel.refill_stopped {
+        let serial_required = parallel
+            .serial_required
+            .map(|count| format!("{count} serial-required"))
+            .unwrap_or_else(|| "serial-required work".to_string());
+        Some(format!("lane refill stopped: {serial_required}"))
+    } else {
+        match (
+            parallel.effective_lane_limit,
+            parallel.configured_lane_limit,
+        ) {
+            (Some(effective), Some(configured)) => {
+                Some(format!("lanes {effective} of {configured}"))
+            }
+            _ => None,
         }
-        _ => None,
+    };
+
+    let mut parts = Vec::new();
+    if let Some(base) = base {
+        parts.push(base);
+    }
+    parts.extend(integration_headline(header));
+    if parts.is_empty() {
+        return None;
+    }
+    let rank = if parallel.serial_fallback_reason.is_some() || parallel.refill_stopped {
+        4
+    } else {
+        7
+    };
+    Some((rank, parts.join(" · ")))
+}
+
+/// Integration WIP against the fixed high-water, the parked count, and the
+/// strongest active pressure (ADR-0020).
+///
+/// The Integration half is absent until the first admission or park. After
+/// that, zero is an observed empty backlog. A cleared pressure is not a
+/// narrowing; a pressure this renderer cannot name renders unknown.
+fn integration_headline(header: &Header) -> Vec<String> {
+    let parallel = &header.parallel;
+    let mut parts = Vec::new();
+    if parallel.integration_observed {
+        let wip = parallel.integration_wip.unwrap_or(0);
+        let high_water = parallel.integration_high_water.unwrap_or(2);
+        let parked = parallel.parked_count.unwrap_or(0);
+        parts.push(format!("integration {wip}/{high_water}"));
+        parts.push(format!("{parked} parked"));
+    }
+    if let Some(pressure) = parallel.pressure.as_deref() {
+        parts.push(format!("narrowed by {}", pressure_words(pressure)));
+    }
+    parts
+}
+
+fn pressure_words(pressure: &str) -> &'static str {
+    match pressure {
+        "integration_backlog" => "integration backlog",
+        "rate_limit" => "API rate limiting",
+        "credit" => "AI-credit burn",
+        "host" => "host/setup pressure",
+        _ => "unknown",
     }
 }
 
@@ -1274,6 +1344,15 @@ fn activity_header(agent: &ActivityWindow, width: u16, glyphs: &Glyphs) -> Vec<S
         None if agent.kind == "integration" => format!("Integration {}", issue_label(&agent.issue)),
         None => issue_label(&agent.issue),
     };
+    let identity = match &agent.recovery {
+        Some(recovery) => {
+            format!(
+                "{identity} recovery {}/{}",
+                recovery.attempt, recovery.max_attempts
+            )
+        }
+        None => identity,
+    };
     wrap_facts(
         &[
             identity,
@@ -1337,11 +1416,14 @@ fn wrap_facts(segments: &[String], width: u16) -> Vec<String> {
 /// where an **Escalation rung** becomes visible at all: the pair is per
 /// contribution, so a stalled issue re-picked at a dearer pair reads as a
 /// change between two rows rather than as one value that quietly moved.
-const BREAKDOWN_COLUMNS: [Column; 13] = [
+const BREAKDOWN_COLUMNS: [Column; 14] = [
     fixed("Contribution", 14, 0),
     fixed("Outcome", 10, 2),
     fixed("Duration", 9, 4),
     fixed("Status", 12, 1),
+    // Drift is a drill-in fact only. Ranked to be given up before the
+    // cache split, so a narrow drill-in keeps the columns it already had.
+    fixed("Drift", 7, 14),
     fixed("Active", 9, 3),
     fixed("Route", ROUTE_WIDTH, 7),
     fixed("Tokens in", 11, 6),
@@ -1512,6 +1594,8 @@ fn draw_breakdown(
                 row.duration_seconds
                     .map_or_else(|| glyphs.unknown.to_string(), duration),
                 row.status.clone(),
+                row.drift
+                    .map_or_else(|| glyphs.unknown.to_string(), |count| count.to_string()),
                 duration(row.active_seconds),
                 route(row.route.as_ref(), None, None, routing),
                 tokens(row.consumption.tokens_in, glyphs),

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "contract_version": "2.18",
+  "contract_version": "2.22",
   "attempt_states": [
     "fresh",
     "retrying",

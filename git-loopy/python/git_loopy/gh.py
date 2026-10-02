@@ -81,13 +81,21 @@ from typing import (
     TYPE_CHECKING,
     Callable,
     Final,
+    Mapping,
     Protocol,
     Sequence,
     runtime_checkable,
 )
 from urllib.parse import quote
 
-from git_loopy.readiness import BlockedByRead, BlockerNode
+from git_loopy.readiness import (
+    STATE_IDS_PER_REQUEST,
+    BlockedByRead,
+    BlockerNode,
+    ClosingPullRequestNode,
+    ClosingPullRequestRead,
+    closing_connection_complete,
+)
 from git_loopy.route_publication import RouteDeliveryError
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; see SubprocessLabelClient
@@ -237,7 +245,8 @@ def next_read_step(limit: int, rows: int) -> ReadStep:
 #: seam used to issue paid a full round-trip *per candidate considered*, not
 #: merely per candidate dispatched.
 _SHALLOW_ISSUE_FIELDS: Final[str] = (
-    "number,title,body,labels,state,url,createdAt,blockedBy"
+    "number,title,body,labels,state,url,createdAt,blockedBy,"
+    "closedByPullRequestsReferences"
 )
 
 #: The PR-surface analogue, named for the same reason. PR mode is opt-in and
@@ -259,7 +268,14 @@ _RATE_LIMIT_MARKERS: Final[tuple[str, ...]] = (
 # Readiness (#438, ADR-0047, Wrapper contract §3.3.1)                         #
 # --------------------------------------------------------------------------- #
 
-#: The oldest ``gh`` release this reads the ``blockedBy`` connection against.
+#: The oldest ``gh`` release this reads **Readiness** against.
+#:
+#: ``blockedBy`` and ``closedByPullRequestsReferences`` both landed in
+#: ``gh issue list`` / ``gh issue view --json`` at v2.94.0 (#438, #695). The
+#: view query pages ``closedByPullRequestsReferences`` until ``hasNextPage``
+#: is false; the list query asks for one page of 100 and exports no
+#: ``pageInfo``. A ``gh`` below this floor cannot serve either field, and a
+#: missing field is never read as "no pull requests".
 #:
 #: Evidence (#438 finding 2): ``gh issue list``/``gh issue view --json`` only
 #: gained ``blockedBy`` (and ``blocking``, ``parent``, ``subIssues``,
@@ -341,7 +357,8 @@ def verify_readiness_capability(version: tuple[int, int, int]) -> None:
         installed = ".".join(str(part) for part in version)
         required = ".".join(str(part) for part in MIN_GH_VERSION_FOR_READINESS)
         raise GhCapabilityError(
-            f"gh {installed} cannot read issue dependencies (blockedBy) via "
+            f"gh {installed} cannot read issue dependencies (blockedBy) or "
+            f"closing pull requests (closedByPullRequestsReferences) via "
             f"`gh issue list`/`gh issue view --json`; git-loopy requires "
             f"gh >= {required}. Upgrade gh: https://cli.github.com/."
         )
@@ -362,6 +379,216 @@ _EMPTY_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead(total_count=0, nodes=())
 #: ``readiness_unprovable`` without overloading a real GraphQL connection
 #: (#438 finding 4, ADR-0047).
 _UNPROVABLE_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead.unprovable()
+
+#: ``gh api graphql`` query that resolves pull-request states by node id.
+#: ``nodes(ids:)`` returns siblings beside a null the token cannot see, and
+#: ``gh`` exits 1 for that null while ``data.nodes`` still carries the rest.
+_PULL_REQUEST_STATE_QUERY: Final[str] = (
+    "query($ids:[ID!]!){ nodes(ids:$ids) { ... on PullRequest { id state } } }"
+)
+
+
+@dataclass(frozen=True)
+class ClosingReference:
+    """One closing pull request as the issue read carried it, before its state.
+
+    The issue read has no state. Membership is not a refusal.
+
+    Attributes:
+        node_id: The pull request's GraphQL node id, empty when unreadable.
+        ref: Full ``owner/repo#number``, empty when unreadable.
+        readable: ``False`` for ``gh``'s zero-value node (empty id, number 0).
+    """
+
+    node_id: str
+    ref: str
+    readable: bool = True
+
+
+@dataclass(frozen=True)
+class ClosingReferences:
+    """The closing-pull-request references one issue read carried.
+
+    A field the response omitted is :meth:`unread`, never an empty connection.
+    A constructed :class:`Issue` defaults to :meth:`none` so a test double
+    that never set the field is not unprovable.
+    """
+
+    complete: bool
+    nodes: tuple[ClosingReference, ...] = ()
+
+    @classmethod
+    def none(cls) -> "ClosingReferences":
+        """No closing pull request was carried. Complete, so it refuses nothing."""
+        return cls(complete=True)
+
+    @classmethod
+    def unread(cls) -> "ClosingReferences":
+        """The field was absent. Not an empty connection."""
+        return cls(complete=False)
+
+
+@dataclass(frozen=True)
+class PullRequestStateNode:
+    """One pull request's state, or why that state was not read.
+
+    Attributes:
+        node_id: The id that was asked.
+        state: ``"open"``, ``"merged"``, or ``"closed"``, or ``None`` when unread.
+        unread: ``state_request_failed`` or ``state_node_null`` when ``state``
+            is absent. ``None`` when the state was read.
+    """
+
+    node_id: str
+    state: str | None
+    unread: str | None = None
+
+
+def distinct_closing_ids(
+    references: Sequence[ClosingReferences],
+) -> tuple[str, ...]:
+    """Readable closing-pull-request ids, first-seen order, duplicates once."""
+    seen: list[str] = []
+    for read in references:
+        for node in read.nodes:
+            if node.readable and node.node_id and node.node_id not in seen:
+                seen.append(node.node_id)
+    return tuple(seen)
+
+
+def closing_pull_request_read(
+    references: ClosingReferences,
+    states: Mapping[str, PullRequestStateNode],
+) -> ClosingPullRequestRead:
+    """Join one issue's references with the states resolved for their ids.
+
+    An id the state map does not carry is a failed request for that id, not
+    an admission. An unreadable reference never asks.
+    """
+    nodes: list[ClosingPullRequestNode] = []
+    for reference in references.nodes:
+        if not reference.readable:
+            nodes.append(
+                ClosingPullRequestNode(
+                    ref=None,
+                    state=None,
+                    readable=False,
+                    unread="reference_unreadable",
+                )
+            )
+            continue
+        found = states.get(reference.node_id)
+        if found is None or found.state is None:
+            unread = found.unread if found is not None and found.unread else "state_request_failed"
+            nodes.append(
+                ClosingPullRequestNode(
+                    ref=reference.ref,
+                    state=None,
+                    readable=True,
+                    unread=unread,
+                )
+            )
+            continue
+        nodes.append(
+            ClosingPullRequestNode(ref=reference.ref, state=found.state, readable=True)
+        )
+    return ClosingPullRequestRead(complete=references.complete, nodes=tuple(nodes))
+
+
+def _parse_closing_references(
+    raw: object, cmd: Sequence[str], *, carrier: str
+) -> ClosingReferences:
+    """Parse ``closedByPullRequestsReferences`` as ``gh`` actually returns it.
+
+    A flat array, not a connection: no ``totalCount``, no ``pageInfo``. A
+    list of exactly :data:`CLOSING_REFERENCE_PAGE_SIZE` nodes is incomplete;
+    a view is complete however long, because ``gh issue view`` pages it.
+    """
+    if not isinstance(raw, list):
+        raise GhError(
+            list(cmd),
+            0,
+            "gh closedByPullRequestsReferences JSON malformed: expected an array, "
+            f"got {type(raw).__name__}",
+        )
+    nodes: list[ClosingReference] = []
+    for item in raw:
+        if (
+            isinstance(item, dict)
+            and item.get("id") == ""
+            and item.get("number") == 0
+        ):
+            nodes.append(ClosingReference(node_id="", ref="", readable=False))
+            continue
+        if not isinstance(item, dict):
+            raise GhError(
+                list(cmd),
+                0,
+                "gh closedByPullRequestsReferences node malformed: "
+                f"expected an object, got {type(item).__name__}",
+            )
+        try:
+            node_id = str(item["id"])
+            number = item["number"]
+            repository = item["repository"]
+            owner = str(repository["owner"]["login"])
+            name = str(repository["name"])
+        except (KeyError, TypeError) as exc:
+            raise GhError(
+                list(cmd),
+                0,
+                f"gh closedByPullRequestsReferences node malformed: {exc}",
+            ) from exc
+        nodes.append(
+            ClosingReference(
+                node_id=node_id,
+                ref=f"{owner}/{name}#{number}",
+            )
+        )
+    return ClosingReferences(
+        complete=closing_connection_complete(carrier=carrier, nodes=len(nodes)),
+        nodes=tuple(nodes),
+    )
+
+
+def _graphql_nodes(raw: str) -> list[object] | None:
+    """``data.nodes`` from a GraphQL response, or ``None`` when it is not there.
+
+    A null node makes ``gh`` exit 1 while ``data.nodes`` still holds the
+    siblings. That array is a partial read. Anything else is a failed request.
+    """
+    try:
+        parsed = json.loads(raw) if raw.strip() else None
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    data = parsed.get("data")
+    if not isinstance(data, dict):
+        return None
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list):
+        return None
+    return nodes
+
+
+def _pull_request_state_node(node_id: str, raw: object) -> PullRequestStateNode:
+    """One ``nodes(ids:)`` element. Null, or not a pull request, is unread."""
+    if not isinstance(raw, dict):
+        return PullRequestStateNode(
+            node_id=node_id, state=None, unread="state_node_null"
+        )
+    state = raw.get("state")
+    if not isinstance(state, str) or not state:
+        return PullRequestStateNode(
+            node_id=node_id, state=None, unread="state_node_null"
+        )
+    lowered = state.lower()
+    if lowered not in ("open", "merged", "closed"):
+        return PullRequestStateNode(
+            node_id=node_id, state=None, unread="state_node_null"
+        )
+    return PullRequestStateNode(node_id=node_id, state=lowered)
 
 
 def _parse_blocked_by_connection(
@@ -588,6 +815,12 @@ class Issue:
             omitted or returned ``null`` is a connection never read at all,
             not an empty one, and maps instead to the sentinel that decides
             ``readiness_unprovable`` (ADR-0047, #438 finding 1).
+        closing_references: The issue's ``closedByPullRequestsReferences``
+            as this read carried them (#695, ADR-0069). No state: membership
+            is not a refusal. A field the response omitted is
+            :meth:`ClosingReferences.unread`, never an empty connection. A
+            constructed issue defaults to :meth:`ClosingReferences.none` so a
+            test double that never set the field is not unprovable.
     """
 
     number: int
@@ -599,6 +832,7 @@ class Issue:
     created_at: str = ""
     comments: tuple[Comment, ...] = field(default=())
     blocked_by: BlockedByRead = field(default_factory=lambda: _EMPTY_BLOCKED_BY)
+    closing_references: ClosingReferences = field(default_factory=ClosingReferences.none)
 
 
 @dataclass(frozen=True)
@@ -729,7 +963,7 @@ def _parse_json(raw: str, cmd: Sequence[str]) -> object:
         ) from exc
 
 
-def _parse_issue(data: object, cmd: Sequence[str]) -> Issue:
+def _parse_issue(data: object, cmd: Sequence[str], *, carrier: str = "view") -> Issue:
     """Convert one ``gh`` issue JSON object into an :class:`Issue`.
 
     Any unexpected shape (missing required key, wrong type) is surfaced as a
@@ -764,6 +998,15 @@ def _parse_issue(data: object, cmd: Sequence[str]) -> Issue:
             if blocked_by_raw is not None
             else _UNPROVABLE_BLOCKED_BY
         )
+        if (
+            "closedByPullRequestsReferences" not in data
+            or data["closedByPullRequestsReferences"] is None
+        ):
+            closing_references = ClosingReferences.unread()
+        else:
+            closing_references = _parse_closing_references(
+                data["closedByPullRequestsReferences"], cmd, carrier=carrier
+            )
         return Issue(
             number=int(data["number"]),
             title=str(data["title"]),
@@ -774,6 +1017,7 @@ def _parse_issue(data: object, cmd: Sequence[str]) -> Issue:
             created_at=str(data.get("createdAt") or data.get("created_at") or ""),
             comments=tuple(comments),
             blocked_by=blocked_by,
+            closing_references=closing_references,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise GhError(
@@ -884,6 +1128,18 @@ class GitHubClient(Protocol):
 
     def issue_view(self, number: int) -> Issue:
         """Fetch one issue including its ``comments``."""
+        ...
+
+    def pull_request_states(
+        self, ids: Sequence[str]
+    ) -> tuple[PullRequestStateNode, ...]:
+        """Resolve pull-request states for ``ids``.
+
+        Empty ``ids`` performs no I/O. At most :data:`STATE_IDS_PER_REQUEST`
+        ids a request. A failed request marks only that request's ids unread.
+        A null node is unread as ``state_node_null`` and does not fail the
+        rest of its request, even when ``gh`` exits non-zero for it.
+        """
         ...
 
     def issue_close(self, number: int, comment: str) -> None:
@@ -1109,7 +1365,9 @@ class SubprocessGitHubClient:
                     "expected JSON array from gh issue list, got "
                     f"{type(parsed).__name__}",
                 )
-            issues = tuple(_parse_issue(item, [_GH_BIN, *cmd]) for item in parsed)
+            issues = tuple(
+                _parse_issue(item, [_GH_BIN, *cmd], carrier="list") for item in parsed
+            )
             step = next_read_step(limit=limit, rows=len(issues))
             if step.next_limit is None:
                 return IssueListPage(issues=issues, complete=step.authoritative)
@@ -1137,6 +1395,67 @@ class SubprocessGitHubClient:
         raw = self._checked(cmd)
         parsed = _parse_json(raw, [_GH_BIN, *cmd])
         return _parse_issue(parsed, [_GH_BIN, *cmd])
+
+    def pull_request_states(
+        self, ids: Sequence[str]
+    ) -> tuple[PullRequestStateNode, ...]:
+        """Resolve pull-request states by node id, one request per hundred.
+
+        Uses ``gh api graphql --input -`` so ``variables.ids`` is a list of
+        ids, not a string. A response that still carries ``data.nodes`` is a
+        partial read even when ``gh`` exits 1 for a null node. A response
+        with no ``data.nodes`` fails only that batch.
+        """
+        if not ids:
+            return ()
+        resolved: list[PullRequestStateNode] = []
+        for start in range(0, len(ids), STATE_IDS_PER_REQUEST):
+            batch = tuple(ids[start : start + STATE_IDS_PER_REQUEST])
+            resolved.extend(self._pull_request_state_batch(batch))
+        return tuple(resolved)
+
+    def _pull_request_state_batch(
+        self, ids: Sequence[str]
+    ) -> tuple[PullRequestStateNode, ...]:
+        body = json.dumps(
+            {"query": _PULL_REQUEST_STATE_QUERY, "variables": {"ids": list(ids)}}
+        )
+        cmd = [_GH_BIN, "api", "graphql", "--input", "-"]
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                input=body,
+            )
+        except FileNotFoundError as exc:
+            raise GhError(cmd, 127, "gh not found on PATH") from exc
+        if completed.returncode != 0:
+            self._rate_limited.record(
+                GhError(cmd, completed.returncode, _stderr_tail(completed.stderr))
+            )
+        nodes = _graphql_nodes(completed.stdout)
+        if nodes is None:
+            return tuple(
+                PullRequestStateNode(
+                    node_id=node_id, state=None, unread="state_request_failed"
+                )
+                for node_id in ids
+            )
+        resolved: list[PullRequestStateNode] = []
+        for index, node_id in enumerate(ids):
+            if index >= len(nodes):
+                resolved.append(
+                    PullRequestStateNode(
+                        node_id=node_id, state=None, unread="state_request_failed"
+                    )
+                )
+                continue
+            resolved.append(_pull_request_state_node(node_id, nodes[index]))
+        return tuple(resolved)
 
     def issue_close(self, number: int, comment: str) -> None:
         """Close an issue with a wrap-up comment, then verify the close landed.

@@ -18,7 +18,8 @@ use crate::state::LOG_TAIL_LINES;
 use crate::state::{
     routing_preparation_text, routing_resolution_text, ContributionSummaryEntry, DashboardState,
     IssueContribution, IssueLedgerEntry, IterationRow, LogContent, LogLine, ResolvedRoute,
-    RouteDelivery, RoutePreparation, SummaryEntryRef, STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
+    RouteDelivery, RoutePreparation, SummaryEntryRef, STATUS_ACTIVE, STATUS_ADMITTED, STATUS_GONE,
+    STATUS_INTEGRATING, STATUS_PARKED, STATUS_QUEUED, STATUS_RECOVERING,
 };
 use crate::timestamp::{Timestamp, Zone};
 
@@ -196,15 +197,20 @@ impl Declaration {
     }
 }
 
-/// The Header's `parallel` Declaration (ADR-0044): the four Run-scoped
+/// The Header's `parallel` Declaration (ADR-0044): the Run-scoped
 /// posture Events — `wrapper.concurrency.changed`, `wrapper.parallel.degraded`,
-/// `wrapper.parallel.serial_fallback`, `wrapper.serial.requested` — folded
-/// into the one place an operator learns whether, and why, a Run is not
-/// filling the Lane cap it was configured with.
+/// `wrapper.parallel.serial_fallback`, `wrapper.serial.requested`, and
+/// `wrapper.rolling.refill_turn` — folded into the one place an operator
+/// learns whether, and why, a Run is not filling the Lane cap it was
+/// configured with.
+///
+/// It also carries ADR-0020's Integration backlog: WIP against the fixed
+/// high-water of two, the parked count, and whether that backlog has been
+/// observed. Those stay absent until the first admission or park.
 ///
 /// Follows the same **Insight capability** device as [`Declaration`] in shape,
 /// but not in what gates it: `availability` reports whether this Run has a
-/// posture *at all* — `not_declared` until one of the four posture Events
+/// posture *at all* — `not_declared` until a posture Event
 /// arrives, `available` from then on (ADR-0063). The Run-start manifest is a
 /// producer's statement of what it could do, which is a different question
 /// from what this Run is doing.
@@ -219,6 +225,28 @@ pub struct ParallelDeclaration {
     pub serial_fallback_reason: Option<String>,
     pub serial_required: Option<i64>,
     pub refill_stopped: bool,
+    /// Whether this Run has admitted or parked a contribution.
+    ///
+    /// False until the first `wrapper.integration.admitted` or `.parked`.
+    /// After that, a zero count is observed and empty, not absent (ADR-0020).
+    pub integration_observed: bool,
+    /// Contributions admitted and not yet ended. Absent until observed.
+    pub integration_wip: Option<i64>,
+    /// The contract's fixed Integration high-water. Absent until observed.
+    pub integration_high_water: Option<i64>,
+    /// Contributions parked and not yet admitted. Absent until observed.
+    pub parked_count: Option<i64>,
+    /// The spent refill turn, until the next posture Event. Null otherwise.
+    ///
+    /// A zero `reservations` is a spent turn, not the absence of one.
+    pub refill_turn: Option<RefillTurn>,
+}
+
+/// The numbers a spent `wrapper.rolling.refill_turn` carried (#686).
+#[derive(Clone, Debug, Serialize)]
+pub struct RefillTurn {
+    pub reservations: i64,
+    pub effective_lane_limit: i64,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -260,6 +288,9 @@ pub struct QueueRow {
     pub tokens_out: Option<i64>,
     pub credits: Option<f64>,
     pub premium_requests: Option<f64>,
+    /// Seconds since the row entered parked or admitted. Absent for every other Status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase_age_seconds: Option<f64>,
 }
 
 /// One issue's **Routing resolution** and the **Routing source** that chose it.
@@ -415,6 +446,16 @@ pub struct ActivityWindow {
     pub subagents: Option<usize>,
     pub live: bool,
     pub lines: Vec<LogLineView>,
+    /// Present only when both attempt and max_attempts were observed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryView>,
+}
+
+/// One Recovery attempt against its immutable bound, `N/K`.
+#[derive(Clone, Debug, Serialize)]
+pub struct RecoveryView {
+    pub attempt: u32,
+    pub max_attempts: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -497,6 +538,8 @@ pub struct ContributionRow {
     pub outcome: Option<String>,
     pub duration_seconds: Option<f64>,
     pub status: String,
+    /// Publications since the Lane cut. Null is unknown, never a guessed zero.
+    pub drift: Option<i64>,
     pub active_seconds: f64,
     pub route: Option<RouteView>,
     pub consumption: ConsumptionView,
@@ -553,6 +596,13 @@ pub fn project_run_view(
                         subagents: agent.subagents,
                         live: agent.live,
                         lines: log_lines(state.issue_log(&agent.issue), context),
+                        recovery: match (agent.recovery_attempt, agent.recovery_max_attempts) {
+                            (Some(attempt), Some(max_attempts)) => Some(RecoveryView {
+                                attempt,
+                                max_attempts,
+                            }),
+                            _ => None,
+                        },
                     })
                     .collect(),
             },
@@ -670,6 +720,14 @@ fn parallel_declaration(state: &DashboardState) -> ParallelDeclaration {
         serial_fallback_reason: posture.serial_fallback_reason.clone(),
         serial_required: posture.serial_required,
         refill_stopped: posture.refill_stopped,
+        integration_observed: posture.integration_observed,
+        integration_wip: posture.integration_wip(),
+        integration_high_water: posture.integration_high_water(),
+        parked_count: posture.parked_count(),
+        refill_turn: posture.refill_turn.as_ref().map(|turn| RefillTurn {
+            reservations: turn.reservations,
+            effective_lane_limit: turn.effective_lane_limit,
+        }),
     }
 }
 
@@ -732,6 +790,8 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                     tokens_out: entry.usage_observed.then_some(entry.tokens_out),
                     credits: entry.credits.value(),
                     premium_requests: entry.premium_requests.value(),
+                    phase_age_seconds: entry
+                        .phase_age_seconds(state.monotonic_at(context.now, context.now_monotonic)),
                 },
             )
         })
@@ -744,7 +804,8 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
 
 fn queue_group(status: &str) -> u8 {
     match status {
-        STATUS_ACTIVE => 0,
+        STATUS_ACTIVE | STATUS_PARKED | STATUS_ADMITTED | STATUS_INTEGRATING
+        | STATUS_RECOVERING => 0,
         STATUS_QUEUED => 1,
         _ => 2,
     }
@@ -891,6 +952,7 @@ fn contribution_row(contribution: &IssueContribution) -> ContributionRow {
         outcome: contribution.outcome.clone(),
         duration_seconds: contribution.duration_seconds,
         status: contribution.status.clone(),
+        drift: contribution.drift,
         active_seconds: contribution.active_seconds,
         route: contribution.route.as_ref().map(RouteView::project),
         consumption: ConsumptionView {

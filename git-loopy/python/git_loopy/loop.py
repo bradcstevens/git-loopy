@@ -3705,7 +3705,8 @@ class _Loop:
         if outcome == "all_blocked":
             self._diag.error(
                 "serial Pickup bound nothing: all %d candidate(s) in the Pool "
-                "wait on open blockers; this Run is waiting on blockers",
+                "wait on open blockers or on pull requests to merge; this Run "
+                "is waiting on them",
                 len(pickup.considered),
             )
         else:
@@ -4232,6 +4233,10 @@ class _LaneWork:
     git: git_module.GitClient
     pre_sha: str | None = None
     reclaimed: bool = False
+    # Publications already on base when this Lane was cut. Drift is the
+    # later count minus this snapshot; a cut this Run did not observe has
+    # no snapshot, and the observation is null rather than a guessed zero.
+    base_publications_at_cut: int | None = None
 
 
 @dataclass
@@ -4565,6 +4570,10 @@ class _ParallelLoop:
         # never sees two merges at once — without blocking any OTHER Lane's
         # worktree setup or agent session (criteria #2/#3, ADR-0020).
         self._integration_lock = asyncio.Lock()
+        # Green publications this Run has landed on base. Snapshotted onto
+        # each Lane at its cut, so branch_observed can report how many
+        # landed between that cut and the contribution taking Integration.
+        self._base_publications = 0
         # Every in-flight Lane lifecycle task (`_run_lane_lifecycle`), tracked
         # so the driver can `asyncio.wait(..., FIRST_COMPLETED)` on the first
         # one to finish and immediately reserve into the capacity it freed —
@@ -5069,7 +5078,21 @@ class _ParallelLoop:
                 # pack a six-observation window into a fraction of a second.
                 self._report_concurrency_change()
 
-                for reservation in scheduler.reserve():
+                # The phase is spent inside reserve(), including a turn that
+                # reserves nothing, so the observation has to precede the call.
+                # A normal reserve is not this turn, and a turn that is granted
+                # but never spent — the Run ends, or a Pin keeps serial
+                # ownership (#430) — emits nothing.
+                spending_refill_turn = (
+                    scheduler.phase == rolling_scheduler.PHASE_ROLLING_REFILL_TURN
+                )
+                reservations = scheduler.reserve()
+                if spending_refill_turn:
+                    self._report_refill_turn(
+                        reservations=len(reservations),
+                        effective_lane_limit=scheduler.effective_limit,
+                    )
+                for reservation in reservations:
                     task = asyncio.create_task(
                         self._guarded_lane_lifecycle(reservation)
                     )
@@ -5608,6 +5631,24 @@ class _ParallelLoop:
             refill_stopped=True,
         )
 
+    def _report_refill_turn(
+        self, *, reservations: int, effective_lane_limit: int
+    ) -> None:
+        """Say that the serial Iteration's refill turn was spent (#686).
+
+        Emitted where the turn is spent, not where it is granted. A zero
+        reservation is a spent turn: without the record an operator cannot
+        tell it from a turn that never happened. ``effective_lane_limit`` is
+        the limit that bounded the decision, not a new authoritative
+        transition — ``wrapper.concurrency.changed`` owns those.
+        """
+        self._serial._emit(
+            events_module.WRAPPER_ROLLING_REFILL_TURN,
+            iter_num=None,
+            reservations=reservations,
+            effective_lane_limit=effective_lane_limit,
+        )
+
     def _collect_pool_safely(self) -> PoolCollection:
         """Peek the full AFK-ready pool for the serial-required demand check.
 
@@ -6001,7 +6042,12 @@ class _ParallelLoop:
             return
 
         lane_work = _LaneWork(
-            item=item, branch=branch, path=path, git=wt_git, pre_sha=base
+            item=item,
+            branch=branch,
+            path=path,
+            git=wt_git,
+            pre_sha=base,
+            base_publications_at_cut=self._base_publications,
         )
 
         # Prepare the freshly created worktree before its agent session
@@ -6173,6 +6219,12 @@ class _ParallelLoop:
             self._finalize_contribution(contribution, published=False)
             return
         if disposition == rolling_scheduler.ADMITTED:
+            # Direct admission: said before the Lane is offered again, and
+            # before Integration, so the stream never reads a refill as
+            # having happened while this contribution was still waiting.
+            self._emit_contribution_event(
+                contribution, events_module.WRAPPER_INTEGRATION_ADMITTED
+            )
             # §3.9: the Lane slot is free again *now*, while this task carries
             # on through Integration (and possibly K auto-resolution sessions).
             self._capacity_freed.set()
@@ -6182,7 +6234,12 @@ class _ParallelLoop:
         # contribution's Lane is retained and its state stays in
         # `self._lane_work`. It is finalized later, from inside whichever
         # OTHER contribution's `finalize()` drains the FIFO — see
-        # `_integrate_contribution`'s recursive admission handling.
+        # `_integrate_contribution`'s recursive admission handling. The
+        # parked record is the operator's evidence that the Lane is still
+        # held; admission, when a slot frees, is a later event.
+        self._emit_contribution_event(
+            contribution, events_module.WRAPPER_INTEGRATION_PARKED
+        )
 
     def _setup_lane_worktree(self, lane_work: _LaneWork) -> None:
         """Prepare a Lane's freshly created worktree before its session (#65).
@@ -6809,8 +6866,20 @@ class _ParallelLoop:
         """
         assert self._scheduler is not None
         async with self._integration_lock:
+            # Once per Integration, when this contribution takes the
+            # serialization — before the stage is cut, so a stage that
+            # cannot be cut still records both. Recovery reuses the stage
+            # and does not re-enter here.
+            self._emit_contribution_event(
+                contribution, events_module.WRAPPER_INTEGRATION_STARTED
+            )
             latched_before = self._scheduler.serial_latched
             lane_work = self._lane_work.get(contribution.contribution_id)
+            self._emit_contribution_event(
+                contribution,
+                events_module.WRAPPER_INTEGRATION_BRANCH_OBSERVED,
+                base_publications_since_cut=self._publications_since_cut(lane_work),
+            )
             if lane_work is None:  # pragma: no cover - defensive
                 self._diag.error(
                     "integration #%s: missing lane state for contribution %s",
@@ -6838,6 +6907,14 @@ class _ParallelLoop:
                     serial_required=None,
                 )
             self._finalize_contribution(contribution, published=published)
+            # FIFO admission follows the freeing contribution's end, still
+            # inside the lock, so the freed Lane cannot be refilled between
+            # the two records. Direct admission was already said at the
+            # Lane-work boundary; this loop is only the parked FIFO.
+            for admitted in newly_admitted:
+                self._emit_contribution_event(
+                    admitted, events_module.WRAPPER_INTEGRATION_ADMITTED
+                )
         # §4.4: this finalize freed an **Integration backlog** slot, lifting
         # backpressure, and each contribution it admitted from the parked FIFO
         # released the Lane that contribution had been retaining (§4.3).
@@ -6918,6 +6995,16 @@ class _ParallelLoop:
             iter_num=None,
             issues=[candidate.ref for candidate in candidates],
         )
+
+    def _publications_since_cut(self, lane_work: _LaneWork | None) -> int | None:
+        """Publications landed on base since this contribution's Lane was cut.
+
+        ``None`` when the cut was not observed. A guessed zero would be a
+        different fact from "this Run cannot say".
+        """
+        if lane_work is None or lane_work.base_publications_at_cut is None:
+            return None
+        return self._base_publications - lane_work.base_publications_at_cut
 
     def _emit_contribution_event(
         self,
@@ -7185,6 +7272,7 @@ class _ParallelLoop:
         self._emit_contribution_event(
             contribution, events_module.WRAPPER_INTEGRATION_PUBLISHED
         )
+        self._base_publications += 1
         self._land_lane(contribution, lane_work, pre_base)
         return True
 
@@ -7507,6 +7595,14 @@ class _ParallelLoop:
             scope = self._contribution_iter.get(contribution.contribution_id)
             if scope is not None:
                 scope.recovery_attempts = attempt
+            # On disk before the session it names. K is immutable; the
+            # attempt is the only field that moves, and it never exceeds K.
+            self._emit_contribution_event(
+                contribution,
+                events_module.WRAPPER_INTEGRATION_RECOVERY_STARTED,
+                attempt=attempt,
+                max_attempts=_AUTO_RESOLUTION_MAX_ATTEMPTS,
+            )
             await self._run_resolution_session(
                 contribution, lane_work, stage, attempt, conflicted=conflicted
             )

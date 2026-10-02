@@ -841,6 +841,64 @@ fn a_passed_over_issue_carries_the_reason_it_was_passed_over() {
 }
 
 #[test]
+fn an_awaiting_merge_skip_renders_distinctly_from_a_blocked_skip() {
+    // #694: the Dashboard prints a skip's reason verbatim, so waiting on a
+    // merge and waiting on a dependency cannot collapse into one line.
+    let awaiting = "awaiting_pull_request_merge: bradcstevens/git-loopy#688";
+    let blocked = "blocked_by_open_dependency: bradcstevens/git-loopy#679";
+    let awaiting_view = reduce(
+        &[serde_json::json!({
+            "ts": "2026-09-26T16:00:01.000Z",
+            "run_id": "r1",
+            "iter": 1,
+            "type": "wrapper.pickup.skipped",
+            "issue": 679,
+            "reason": awaiting,
+            "position": 1,
+            "considered": 2
+        })],
+        IssueRef::number(679),
+    );
+    let blocked_view = reduce(
+        &[serde_json::json!({
+            "ts": "2026-09-26T16:00:01.000Z",
+            "run_id": "r1",
+            "iter": 1,
+            "type": "wrapper.pickup.skipped",
+            "issue": 680,
+            "reason": blocked,
+            "position": 2,
+            "considered": 2
+        })],
+        IssueRef::number(680),
+    );
+
+    let awaiting_lines = log_texts(&awaiting_view);
+    let blocked_lines = log_texts(&blocked_view);
+    assert_ne!(awaiting_lines, blocked_lines);
+    assert_eq!(
+        awaiting_lines,
+        [format!(
+            "Pickup: skipped #679 at position 1 of 2 ({awaiting})"
+        )]
+    );
+    assert_eq!(
+        blocked_lines,
+        [format!(
+            "Pickup: skipped #680 at position 2 of 2 ({blocked})"
+        )]
+    );
+    assert!(
+        !awaiting_lines[0].contains("blocked_by_open_dependency"),
+        "an Awaiting-merge skip must not be shown as Blocked"
+    );
+    assert!(
+        !blocked_lines[0].contains("awaiting_pull_request_merge"),
+        "a Blocked skip must not be shown as Awaiting merge"
+    );
+}
+
+#[test]
 fn a_skip_lands_on_the_issue_it_passed_over_not_on_the_active_one() {
     // The record is attributable or it is worthless: a skip folded into
     // whichever issue happened to be Active would say a Run passed over the
@@ -1798,6 +1856,67 @@ fn an_iteration_scoped_record_is_not_a_contribution_however_whole_its_triple() {
 }
 
 #[test]
+fn a_zero_reservation_refill_turn_is_posture_until_the_next_posture_event() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let incomplete = Event::from_json(&serde_json::json!({
+        "type": "wrapper.rolling.refill_turn",
+        "issue": 42,
+    }))
+    .expect("an incomplete refill turn still decodes");
+    assert!(
+        matches!(incomplete.payload, EventPayload::Other),
+        "a missing count is not a zero-reservation turn"
+    );
+    let negative = Event::from_json(&serde_json::json!({
+        "type": "wrapper.rolling.refill_turn",
+        "reservations": -1,
+        "effective_lane_limit": 2,
+    }))
+    .expect("a negative count still decodes");
+    assert!(matches!(negative.payload, EventPayload::Other));
+
+    state.apply(
+        &Event::from_json(&serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "type": "wrapper.rolling.refill_turn",
+            "reservations": 0,
+            "effective_lane_limit": 2,
+        }))
+        .expect("a zero-reservation turn decodes"),
+    );
+    let projected = view(
+        &state,
+        &context("2026-05-16T00:00:02Z", 0),
+        IssueRef::number(42),
+    );
+    let parallel = &projected["dashboard"]["header"]["parallel"];
+    assert_eq!(parallel["availability"], "available");
+    assert_eq!(parallel["refill_turn"]["reservations"], 0);
+    assert_eq!(parallel["refill_turn"]["effective_lane_limit"], 2);
+
+    state.apply(
+        &Event::from_json(&serde_json::json!({
+            "ts": "2026-05-16T00:00:03.000Z",
+            "type": "wrapper.concurrency.changed",
+            "configured_lane_limit": 3,
+            "effective_lane_limit": 2,
+            "pressure": null,
+        }))
+        .expect("a later posture event decodes"),
+    );
+    let cleared = view(
+        &state,
+        &context("2026-05-16T00:00:04Z", 0),
+        IssueRef::number(42),
+    );
+    assert!(cleared["dashboard"]["header"]["parallel"]["refill_turn"].is_null());
+    assert_eq!(
+        cleared["dashboard"]["header"]["parallel"]["availability"],
+        "available"
+    );
+}
+
+#[test]
 fn an_unmodelled_event_type_still_degrades_to_the_additive_fallback() {
     // Tightening the identity must not turn a record this core does not model
     // into a decode failure: an unreadable line is a diagnostic — a record
@@ -1810,7 +1929,7 @@ fn an_unmodelled_event_type_still_degrades_to_the_additive_fallback() {
 
     let issue_alone = serde_json::json!({
         "ts": "2026-05-16T00:00:06.000Z", "run_id": "r1", "iter": null,
-        "type": "wrapper.integration.parked", "issue": 42
+        "type": "wrapper.rolling.unmodelled", "issue": 42
     });
     let mut empty_key = issue_alone.clone();
     empty_key["contribution_id"] = serde_json::json!("");
@@ -2045,6 +2164,346 @@ fn active_time_stops_at_the_lane_work_boundary_and_the_status_stays() {
 }
 
 #[test]
+fn parking_and_admission_show_in_the_queue_with_phase_age() {
+    let parked = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.parked","run_id":"run-1","iter":null,"contribution_id":"c-0003","issue":44,"lane_id":"lane-1"}"#,
+    )
+    .expect("parked decodes");
+    assert!(
+        matches!(parked.payload, EventPayload::IntegrationParked(_)),
+        "parked is a typed payload, not the additive fallback"
+    );
+    let admitted = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.admitted","run_id":"run-1","iter":null,"contribution_id":"c-0002","issue":43,"lane_id":"lane-2"}"#,
+    )
+    .expect("admitted decodes");
+    assert!(matches!(
+        admitted.payload,
+        EventPayload::IntegrationAdmitted(_)
+    ));
+
+    let stamp = |ts: &str, kind: &str, id: &str, issue: i64, lane: &str| {
+        format!(
+            r#"{{"ts":"{ts}","type":"{kind}","run_id":"run-1","iter":null,"contribution_id":"{id}","issue":{issue},"lane_id":"{lane}"}}"#
+        )
+    };
+    let mut lines = vec![
+        r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1"}"#
+            .to_string(),
+        stamp(
+            "2026-05-16T00:00:04.000Z",
+            "wrapper.contribution.start",
+            "c-0002",
+            43,
+            "lane-2",
+        ),
+        stamp(
+            "2026-05-16T00:00:08.000Z",
+            "wrapper.contribution.start",
+            "c-0003",
+            44,
+            "lane-1",
+        ),
+        stamp(
+            "2026-05-16T00:00:11.000Z",
+            "wrapper.contribution.work_finished",
+            "c-0002",
+            43,
+            "lane-2",
+        ),
+        stamp(
+            "2026-05-16T00:00:12.000Z",
+            "wrapper.integration.admitted",
+            "c-0002",
+            43,
+            "lane-2",
+        ),
+        stamp(
+            "2026-05-16T00:00:13.000Z",
+            "wrapper.contribution.work_finished",
+            "c-0003",
+            44,
+            "lane-1",
+        ),
+        stamp(
+            "2026-05-16T00:00:14.000Z",
+            "wrapper.integration.parked",
+            "c-0003",
+            44,
+            "lane-1",
+        ),
+    ];
+    let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    for line in &borrowed {
+        state.apply(&Event::from_jsonl_line(line).expect("decodes"));
+    }
+    let at_park = view(
+        &state,
+        &context("2026-05-16T00:00:18.000Z", 0),
+        IssueRef::number(43),
+    );
+    let row_43 = queue_row(&at_park, 43);
+    let row_44 = queue_row(&at_park, 44);
+    assert_eq!(row_43["status"], serde_json::json!("admitted"));
+    assert_eq!(row_43["phase_age_seconds"], serde_json::json!(6.0));
+    assert_eq!(row_43["active_seconds"], serde_json::json!(7.0));
+    assert_eq!(row_44["status"], serde_json::json!("parked"));
+    assert_eq!(row_44["phase_age_seconds"], serde_json::json!(4.0));
+    assert_eq!(row_44["active_seconds"], serde_json::json!(5.0));
+
+    lines.push(stamp(
+        "2026-05-16T00:00:19.000Z",
+        "wrapper.integration.admitted",
+        "c-0003",
+        44,
+        "lane-1",
+    ));
+    state.apply(&Event::from_jsonl_line(lines.last().expect("just pushed")).expect("decodes"));
+    let at_admit = view(
+        &state,
+        &context("2026-05-16T00:00:19.000Z", 0),
+        IssueRef::number(44),
+    );
+    assert_eq!(
+        queue_row(&at_admit, 44)["status"],
+        serde_json::json!("admitted")
+    );
+    assert_eq!(
+        queue_row(&at_admit, 44)["phase_age_seconds"],
+        serde_json::json!(0.0)
+    );
+    assert_eq!(
+        queue_row(&at_admit, 43)["phase_age_seconds"],
+        serde_json::json!(7.0)
+    );
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"ts":"2026-05-16T00:00:30.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0003","issue":44,"lane_id":"lane-1","outcome":"closed","reason":"published"}"#,
+        )
+        .expect("end decodes"),
+    );
+    let ended = view(
+        &state,
+        &context("2026-05-16T00:00:30.000Z", 0),
+        IssueRef::number(44),
+    );
+    assert!(
+        queue_row(&ended, 44).get("phase_age_seconds").is_none(),
+        "phase age ends when the contribution does"
+    );
+}
+
+#[test]
+fn integrating_shows_phase_age_and_the_drill_in_shows_drift() {
+    let started = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.started","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+    )
+    .expect("started decodes");
+    assert!(matches!(
+        started.payload,
+        EventPayload::IntegrationStarted(_)
+    ));
+    let observed = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.branch_observed","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","base_publications_since_cut":0}"#,
+    )
+    .expect("branch_observed decodes");
+    match &observed.payload {
+        EventPayload::IntegrationBranchObserved(payload) => {
+            assert_eq!(payload.base_publications_since_cut, Some(0));
+        }
+        other => panic!("branch_observed is a typed payload, got {other:?}"),
+    }
+    let unknown = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.branch_observed","run_id":"run-1","iter":null,"contribution_id":"c-0002","issue":43,"lane_id":"lane-2","base_publications_since_cut":null}"#,
+    )
+    .expect("null drift decodes");
+    match &unknown.payload {
+        EventPayload::IntegrationBranchObserved(payload) => {
+            assert_eq!(payload.base_publications_since_cut, None);
+        }
+        other => panic!("null drift stays typed, got {other:?}"),
+    }
+
+    let lines = [
+        r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:04.000Z","type":"wrapper.contribution.start","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:08.000Z","type":"wrapper.contribution.work_finished","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:09.000Z","type":"wrapper.integration.admitted","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:09.000Z","type":"wrapper.integration.started","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:10.000Z","type":"wrapper.integration.branch_observed","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","base_publications_since_cut":0}"#,
+    ];
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    for line in lines {
+        state.apply(&Event::from_jsonl_line(line).expect("decodes"));
+    }
+    let integrating = view(
+        &state,
+        &context("2026-05-16T00:00:11.000Z", 0),
+        IssueRef::number(42),
+    );
+    let row = queue_row(&integrating, 42);
+    assert_eq!(row["status"], serde_json::json!("integrating"));
+    assert_eq!(row["phase_age_seconds"], serde_json::json!(2.0));
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"ts":"2026-05-16T00:00:12.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","outcome":"closed","reason":"published","summary":{"closure_outcome":"closed"}}"#,
+        )
+        .expect("end decodes"),
+    );
+    let ended = view(
+        &state,
+        &context("2026-05-16T00:00:12.000Z", 0),
+        IssueRef::number(42),
+    );
+    assert!(queue_row(&ended, 42).get("phase_age_seconds").is_none());
+    let contribution = &ended["drill_in"]["iteration_breakdown"]["rows"][0];
+    assert_eq!(contribution["drift"], serde_json::json!(0));
+    assert_eq!(contribution["contribution_id"], "c-0001");
+}
+
+#[test]
+fn recovering_shows_phase_age_and_a_handoff_is_no_progress() {
+    let started = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.recovery_started","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","attempt":2,"max_attempts":3}"#,
+    )
+    .expect("recovery_started decodes");
+    match &started.payload {
+        EventPayload::IntegrationRecoveryStarted(payload) => {
+            assert_eq!(payload.attempt, 2);
+            assert_eq!(payload.max_attempts, 3);
+        }
+        other => panic!("recovery_started is a typed payload, got {other:?}"),
+    }
+    let partial = Event::from_jsonl_line(
+        r#"{"type":"wrapper.integration.recovery_started","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","attempt":1}"#,
+    )
+    .expect("a partial attempt still decodes");
+    assert!(
+        matches!(partial.payload, EventPayload::Other),
+        "a missing max_attempts must not invent N/K"
+    );
+
+    let lines = [
+        r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:01.000Z","type":"wrapper.afk_ready.collected","issues":[42,99]}"#,
+        r#"{"ts":"2026-05-16T00:00:04.000Z","type":"wrapper.contribution.start","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:08.000Z","type":"wrapper.contribution.work_finished","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:09.000Z","type":"wrapper.integration.admitted","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:09.000Z","type":"wrapper.integration.started","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1"}"#,
+        r#"{"ts":"2026-05-16T00:00:10.000Z","type":"wrapper.integration.recovery_started","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","attempt":1,"max_attempts":3}"#,
+        r#"{"ts":"2026-05-16T00:00:12.000Z","type":"wrapper.integration.recovery_started","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","attempt":2,"max_attempts":3}"#,
+    ];
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    for line in lines {
+        state.apply(&Event::from_jsonl_line(line).expect("decodes"));
+    }
+    let recovering = view(
+        &state,
+        &context("2026-05-16T00:00:13.000Z", 0),
+        IssueRef::number(42),
+    );
+    let row = queue_row(&recovering, 42);
+    assert_eq!(row["status"], serde_json::json!("recovering"));
+    assert_eq!(row["phase_age_seconds"], serde_json::json!(1.0));
+    assert_eq!(
+        queue_issues(&recovering)[..2],
+        [serde_json::json!(42), serde_json::json!(99)],
+        "recovering stays with the work in flight, ahead of queued"
+    );
+    let window = &recovering["dashboard"]["activity"]["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .find(|window| window["kind"] == "integration")
+        .expect("integration window");
+    assert_eq!(
+        window["recovery"],
+        serde_json::json!({"attempt": 2, "max_attempts": 3})
+    );
+    let texts: Vec<_> = window["lines"]
+        .as_array()
+        .expect("lines")
+        .iter()
+        .map(|line| line["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        texts,
+        ["Recovery: attempt 1/3", "Recovery: attempt 2/3"],
+        "each attempt takes the window; earlier attempts stay in the Log"
+    );
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"ts":"2026-05-16T00:00:14.000Z","type":"agent.output","lane_issue":42,"text":"still red"}"#,
+        )
+        .expect("lane output decodes"),
+    );
+    let held = view(
+        &state,
+        &context("2026-05-16T00:00:14.000Z", 0),
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        queue_row(&held, 42)["status"],
+        serde_json::json!("recovering"),
+        "a Recovery session's lane stamp must not reopen the row as active"
+    );
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"ts":"2026-05-16T00:00:15.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","published":false,"reason":"serial_fallback","summary":{"closure_outcome":"no_progress"},"issues":[{"issue":42,"status":"no-progress"}]}"#,
+        )
+        .expect("end decodes"),
+    );
+    let handed = view(
+        &state,
+        &context("2026-05-16T00:00:15.000Z", 0),
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        queue_row(&handed, 42)["status"],
+        serde_json::json!("no-progress")
+    );
+    assert!(queue_row(&handed, 42).get("phase_age_seconds").is_none());
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"ts":"2026-05-16T00:00:16.000Z","type":"agent.output","lane_issue":42,"text":"late"}"#,
+        )
+        .expect("late lane output decodes"),
+    );
+    let untouched = view(
+        &state,
+        &context("2026-05-16T00:00:16.000Z", 0),
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        queue_row(&untouched, 42)["status"],
+        serde_json::json!("no-progress"),
+        "a lane touch does not reopen a handoff"
+    );
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"ts":"2026-05-16T00:00:17.000Z","type":"wrapper.issue.activated","issue":42}"#,
+        )
+        .expect("serial activation decodes"),
+    );
+    let reopened = view(
+        &state,
+        &context("2026-05-16T00:00:17.000Z", 0),
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        queue_row(&reopened, 42)["status"],
+        serde_json::json!("active")
+    );
+}
+
+#[test]
 fn a_lane_issue_stamp_after_the_lane_work_boundary_does_not_restart_active_time() {
     // The production shape: a Lane or Recovery session stamps only
     // `lane_issue`, and the landing closure carries both that stamp and the
@@ -2067,4 +2526,123 @@ fn a_lane_issue_stamp_after_the_lane_work_boundary_does_not_restart_active_time(
         projected["drill_in"]["detail_header"]["active_seconds"],
         serde_json::json!(3.0)
     );
+}
+
+fn parallel(projected: &Value) -> &Value {
+    &projected["dashboard"]["header"]["parallel"]
+}
+
+/// The Integration part of the Header's `parallel` Declaration (ADR-0020, #683).
+///
+/// Absent until the Run admits or parks a contribution. A posture Event alone
+/// does not invent an empty backlog.
+#[test]
+fn the_integration_backlog_is_absent_until_the_first_admission_or_park() {
+    let projected = reduce_jsonl(
+        &[
+            r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1"}"#,
+            r#"{"ts":"2026-05-16T00:00:01.000Z","type":"wrapper.concurrency.changed","run_id":"run-1","iter":null,"configured_lane_limit":3,"effective_lane_limit":1,"pressure":"integration_backlog"}"#,
+        ],
+        IssueRef::number(42),
+    );
+    let header = parallel(&projected);
+    assert_eq!(header["availability"], serde_json::json!("available"));
+    assert_eq!(header["integration_observed"], serde_json::json!(false));
+    assert!(header["integration_wip"].is_null());
+    assert!(header["integration_high_water"].is_null());
+    assert!(header["parked_count"].is_null());
+}
+
+/// WIP is admitted-and-not-ended, against the contract's high-water of two.
+/// Parked is parked-and-not-yet-admitted. Ending a contribution leaves zero
+/// observed, not absent.
+#[test]
+fn the_integration_backlog_counts_admitted_wip_and_parked_against_two() {
+    let stamp = |ts: &str, kind: &str, id: &str, issue: i64| {
+        format!(
+            r#"{{"ts":"{ts}","type":"{kind}","run_id":"run-1","iter":null,"contribution_id":"{id}","issue":{issue},"lane_id":"lane-1"}}"#
+        )
+    };
+    let mut lines = vec![
+        r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1"}"#
+            .to_string(),
+        r#"{"ts":"2026-05-16T00:00:01.000Z","type":"wrapper.concurrency.changed","run_id":"run-1","iter":null,"configured_lane_limit":3,"effective_lane_limit":1,"pressure":"integration_backlog"}"#
+            .to_string(),
+    ];
+    let project = |lines: &[String]| {
+        let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+        parallel(&reduce_jsonl(&borrowed, IssueRef::number(42))).clone()
+    };
+
+    lines.push(stamp(
+        "2026-05-16T00:00:02.000Z",
+        "wrapper.integration.admitted",
+        "c-0001",
+        42,
+    ));
+    let admitted = project(&lines);
+    assert_eq!(admitted["integration_observed"], serde_json::json!(true));
+    assert_eq!(admitted["integration_wip"], serde_json::json!(1));
+    assert_eq!(admitted["integration_high_water"], serde_json::json!(2));
+    assert_eq!(admitted["parked_count"], serde_json::json!(0));
+
+    lines.push(stamp(
+        "2026-05-16T00:00:03.000Z",
+        "wrapper.integration.parked",
+        "c-0002",
+        43,
+    ));
+    lines.push(stamp(
+        "2026-05-16T00:00:04.000Z",
+        "wrapper.integration.admitted",
+        "c-0003",
+        44,
+    ));
+    let full = project(&lines);
+    assert_eq!(full["integration_wip"], serde_json::json!(2));
+    assert_eq!(full["parked_count"], serde_json::json!(1));
+
+    // Integrating and recovering stay in WIP: they were admitted and have not ended.
+    lines.push(stamp(
+        "2026-05-16T00:00:05.000Z",
+        "wrapper.integration.started",
+        "c-0001",
+        42,
+    ));
+    lines.push(
+        r#"{"ts":"2026-05-16T00:00:06.000Z","type":"wrapper.integration.recovery_started","run_id":"run-1","iter":null,"contribution_id":"c-0003","issue":44,"lane_id":"lane-1","attempt":1,"max_attempts":3}"#
+            .to_string(),
+    );
+    let working = project(&lines);
+    assert_eq!(working["integration_wip"], serde_json::json!(2));
+    assert_eq!(working["parked_count"], serde_json::json!(1));
+
+    // Admission moves a parked contribution into WIP and off the parked count.
+    lines.push(stamp(
+        "2026-05-16T00:00:07.000Z",
+        "wrapper.integration.admitted",
+        "c-0002",
+        43,
+    ));
+    let drained = project(&lines);
+    assert_eq!(drained["integration_wip"], serde_json::json!(3));
+    assert_eq!(drained["parked_count"], serde_json::json!(0));
+
+    lines.push(
+        r#"{"ts":"2026-05-16T00:00:08.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0001","issue":42,"lane_id":"lane-1","outcome":"closed","reason":"published"}"#
+            .to_string(),
+    );
+    lines.push(
+        r#"{"ts":"2026-05-16T00:00:09.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0002","issue":43,"lane_id":"lane-1","outcome":"closed","reason":"published"}"#
+            .to_string(),
+    );
+    lines.push(
+        r#"{"ts":"2026-05-16T00:00:10.000Z","type":"wrapper.contribution.end","run_id":"run-1","iter":null,"contribution_id":"c-0003","issue":44,"lane_id":"lane-1","outcome":"closed","reason":"published"}"#
+            .to_string(),
+    );
+    let empty = project(&lines);
+    assert_eq!(empty["integration_observed"], serde_json::json!(true));
+    assert_eq!(empty["integration_wip"], serde_json::json!(0));
+    assert_eq!(empty["integration_high_water"], serde_json::json!(2));
+    assert_eq!(empty["parked_count"], serde_json::json!(0));
 }

@@ -1,6 +1,6 @@
 {
   "fixture_schema_version": 1,
-  "description": "The Unbound-Run notice (#642): the lines that tell an operator why a Run ended without binding any issue. Only a Run that ended with one of unbound_run_outcomes, and never bound, activated or contributed to an issue, earns one. The Rust Dashboard draws these lines over a held Dashboard and adds its caller's quit hint. The Python attach client prints them after the Dashboard or line printer returns.",
+  "description": "The Unbound-Run notice (#642, #694): the lines that tell an operator why a Run ended without binding any issue. Only a Run that ended with one of unbound_run_outcomes, and never bound, activated or contributed to an issue, earns one. An all-blocked Pool names the pull requests to merge beside the blockers outside the Pool, and groups Awaiting-merge candidates by the pull request each one waits on. The Rust Dashboard draws these lines over a held Dashboard and adds its caller's quit hint. The Python attach client prints them after the Dashboard or line printer returns.",
   "inputs": {
     "repository": "The Run's owner/repo as gh resolves its default repository for the non-interactive Run worker: GH_REPO, else a remote gh-resolved marks, else the first remote on a host gh is signed in to, ranked upstream, github, origin, then the rest by name. Null when none resolves. It is what separates a blocker inside the Pool from one outside it: skip reasons carry full owner/repo#N references, while Pool members are bare numbers. Without it no blocker can be proven inside the Pool, so every blocker is named.",
     "repository_channel": {
@@ -8,7 +8,7 @@
       "note": "How a launching client hands the repository to the Rust helper: an environment variable rather than an option, so an older helper that predates it still attaches (ADR-0052). Both the Python launcher and the helper binary assert their constant against this name."
     },
     "membership": "Contract 2.12, #643. A present wrapper.run.end refusals list defines the Pool and its skip reasons, ahead of any collection; malformed entries are ignored without losing the outcome. Otherwise the latest wrapper.afk_ready.collected defines Pool membership. A wrapper.pool.refreshed Membership read lists only candidates eligible to take, and is authority for nothing (ADR-0042), so it is never read as the Pool. A Run whose trace records neither refusals nor a collection has unknown membership: the notice counts nothing and says so. Only the github source's candidates are called ready-for-agent issues; every other source's, or an undeclared one's, are candidates.",
-    "skip_reason": "A candidate refused for open blockers carries the reason '<skip_reason>: <owner/repo#N>, <owner/repo#N>' — readiness.blocked_skip_reason produces it, and the Python adapter pins every such reason in this fixture against that producer."
+    "skip_reason": "A candidate refused for open blockers carries 'blocked_by_open_dependency: <owner/repo#N>, <owner/repo#N>' — readiness.blocked_skip_reason produces it, and the Python adapter pins every such reason in this fixture against that producer. A candidate Awaiting merge carries 'awaiting_pull_request_merge: <owner/repo#N>, <owner/repo#N>'. The notice reads that prefix as the pull requests to merge, never as blockers, and does not apply the inside-the-Pool test to them."
   },
   "unbound_run_outcomes": [
     "empty_pool",
@@ -1302,6 +1302,211 @@
         }
       ],
       "notice": null
+    },
+    {
+      "id": "all_blocked_names_the_pull_requests_to_merge_beside_the_blockers",
+      "contract_version": "2.17",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "ts": "2026-09-26T16:00:00.000Z",
+          "run_id": "r1",
+          "iter": null,
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "ts": "2026-09-26T16:00:04.000Z",
+          "run_id": "r1",
+          "iter": 1,
+          "excluded": 0,
+          "issues": [
+            679,
+            680,
+            681,
+            688
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-26T16:00:04.000Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 4,
+          "issue": 679,
+          "position": 1,
+          "reason": "awaiting_pull_request_merge: bradcstevens/git-loopy#688"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-26T16:00:04.000Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 4,
+          "issue": 680,
+          "position": 2,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#679"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-26T16:00:04.000Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 4,
+          "issue": 681,
+          "position": 3,
+          "reason": "awaiting_pull_request_merge: bradcstevens/git-loopy#688, other/repo#12"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "ts": "2026-09-26T16:00:04.000Z",
+          "run_id": "r1",
+          "iter": 1,
+          "considered": 4,
+          "issue": 688,
+          "position": 4,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#430, bradcstevens/git-loopy#688"
+        },
+        {
+          "type": "wrapper.run.end",
+          "ts": "2026-09-26T16:00:04.100Z",
+          "run_id": "r1",
+          "iter": null,
+          "iterations_run": 1,
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 4 ready-for-agent issues wait on open blockers or pull requests to merge.",
+        "Blockers outside the Pool: bradcstevens/git-loopy#430 — resolve them, or label other work ready-for-agent.",
+        "Pull requests to merge: bradcstevens/git-loopy#688 (#679, #681), other/repo#12 (#681) — merge them, or label other work ready-for-agent."
+      ]
+    },
+    {
+      "id": "rolling_all_blocked_names_the_pull_requests_to_merge_from_refusals",
+      "contract_version": "2.17",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "issues": [
+            1
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "issue": 1,
+          "reason": "blocked_by_open_dependency: stale/repo#1"
+        },
+        {
+          "type": "wrapper.run.end",
+          "outcome": "all_blocked",
+          "refusals": [
+            {
+              "issue": 679,
+              "reason": "awaiting_pull_request_merge: bradcstevens/git-loopy#688"
+            },
+            {
+              "issue": 680,
+              "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#679, other/repo#9"
+            },
+            {
+              "issue": 682,
+              "reason": "awaiting_pull_request_merge: bradcstevens/git-loopy#688, other/repo#12"
+            },
+            {
+              "issue": 688,
+              "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#688"
+            }
+          ]
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 4 ready-for-agent issues wait on open blockers or pull requests to merge.",
+        "Blockers outside the Pool: other/repo#9 — resolve them, or label other work ready-for-agent.",
+        "Pull requests to merge: bradcstevens/git-loopy#688 (#679, #682), other/repo#12 (#682) — merge them, or label other work ready-for-agent."
+      ]
+    },
+    {
+      "id": "all_blocked_names_the_pull_request_when_every_blocker_is_inside_the_pool",
+      "contract_version": "2.17",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "issues": [
+            679,
+            680
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "issue": 679,
+          "reason": "awaiting_pull_request_merge: bradcstevens/git-loopy#688"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "issue": 680,
+          "reason": "blocked_by_open_dependency: bradcstevens/git-loopy#679"
+        },
+        {
+          "type": "wrapper.run.end",
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 2 ready-for-agent issues wait on open blockers or pull requests to merge.",
+        "Pull requests to merge: bradcstevens/git-loopy#688 (#679) — merge them, or label other work ready-for-agent."
+      ]
+    },
+    {
+      "id": "all_blocked_names_only_the_pull_requests_to_merge",
+      "contract_version": "2.17",
+      "repository": "bradcstevens/git-loopy",
+      "events": [
+        {
+          "type": "wrapper.run.start",
+          "issue_source": "github"
+        },
+        {
+          "type": "wrapper.afk_ready.collected",
+          "issues": [
+            679,
+            681
+          ]
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "issue": 679,
+          "reason": "awaiting_pull_request_merge: bradcstevens/git-loopy#688"
+        },
+        {
+          "type": "wrapper.pickup.skipped",
+          "issue": 681,
+          "reason": "awaiting_pull_request_merge: bradcstevens/git-loopy#688, other/repo#12"
+        },
+        {
+          "type": "wrapper.run.end",
+          "outcome": "all_blocked"
+        }
+      ],
+      "notice": [
+        "No workable issues: this Run bound nothing and ended all_blocked.",
+        "The Run ended because all 2 ready-for-agent issues wait on pull requests to merge.",
+        "Pull requests to merge: bradcstevens/git-loopy#688 (#679, #681), other/repo#12 (#681) — merge them, or label other work ready-for-agent."
+      ]
     }
   ]
 }

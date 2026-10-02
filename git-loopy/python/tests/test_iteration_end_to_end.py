@@ -1489,7 +1489,7 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
     strike tick, iteration.end emit, counters persist) still runs — the
     SDK failure is contained to "no progress" semantics.
 
-    Since contract 2.18 every ending charges its issue one **Strike**
+    Since contract 2.22 every ending charges its issue one **Strike**
     (ADR-0070), so a first crash charges the issue's first Strike and leaves
     it two to go.
     """
@@ -3882,6 +3882,94 @@ def test_an_all_blocked_pool_ends_waiting_on_blockers(tmp_path, monkeypatch) -> 
     run_end = next(event for event in events if event["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "all_blocked"
     assert run_end["iterations_run"] == 1
+
+
+def test_an_awaiting_merge_head_and_its_blocked_follower_end_all_blocked(
+    tmp_path, monkeypatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The 2026-09-26 shape: an open closing pull request, and a candidate Blocked by it.
+
+    Pickup passes the head over, names the pull request, charges no Strike and
+    starts no session. The follower is Blocked exactly as it is today. The
+    Pool is all waits, so the Run ends ``all_blocked`` and the notice names
+    the pull request to merge.
+    """
+    from git_loopy.unbound_run_notice import unbound_run_notice
+
+    awaiting = dataclass_replace(
+        _dated(679, "2026-09-01T00:00:00Z"),
+        closing_references=gh_module.ClosingReferences(
+            complete=True,
+            nodes=(
+                gh_module.ClosingReference(node_id="PR_688", ref="acme/widgets#688"),
+            ),
+        ),
+    )
+    blocked = _dated(
+        680,
+        "2026-09-02T00:00:00Z",
+        blocked_by=BlockedByRead(
+            total_count=1,
+            nodes=(BlockerNode(ref="x/y#679", state="open"),),
+        ),
+    )
+    fake_client, fake_gh = _wire_multi_issue_github(
+        tmp_path, monkeypatch, [awaiting, blocked]
+    )
+    fake_gh._pull_request_states["PR_688"] = "open"
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=5))
+    )
+
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    assert exit_code == loop_module.exit_code_for("all_blocked")
+    assert fake_client.created == []
+    assert not any(event["type"] == "wrapper.strike" for event in events)
+    assert not any(event["type"] == "wrapper.pickup.bound" for event in events)
+    skips = [event for event in events if event["type"] == "wrapper.pickup.skipped"]
+    assert [event["issue"] for event in skips] == [679, 680]
+    assert skips[0]["reason"] == "awaiting_pull_request_merge: acme/widgets#688"
+    assert skips[1]["reason"] == "blocked_by_open_dependency: x/y#679"
+    notice = unbound_run_notice(events, repository="x/y")
+    assert notice is not None
+    assert any("acme/widgets#688" in line for line in notice)
+    assert "pull requests to merge" in capsys.readouterr().err
+
+
+def test_a_closed_unmerged_pull_request_is_admissible_on_the_next_run(
+    tmp_path, monkeypatch
+) -> None:
+    """Closing the pull request unmerged drops it from the connection.
+
+    The next Iteration's collection no longer sees a reference, so the
+    candidate that was passed over is admissible and a session starts.
+    """
+    awaiting = dataclass_replace(
+        _dated(679, "2026-09-01T00:00:00Z"),
+        closing_references=gh_module.ClosingReferences(
+            complete=True,
+            nodes=(
+                gh_module.ClosingReference(node_id="PR_303", ref="acme/widgets#303"),
+            ),
+        ),
+    )
+    fake_client, fake_gh = _wire_multi_issue_github(tmp_path, monkeypatch, [awaiting])
+    fake_gh._pull_request_states["PR_303"] = "open"
+
+    first = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+    assert first == loop_module.exit_code_for("all_blocked")
+    assert fake_client.created == []
+
+    fake_gh.seed_issue(_dated(679, "2026-09-01T00:00:00Z"))
+    second = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert second == 0
+    assert len(fake_client.created) == 1
 
 
 def test_a_blocked_and_unroutable_pool_remains_all_skipped(

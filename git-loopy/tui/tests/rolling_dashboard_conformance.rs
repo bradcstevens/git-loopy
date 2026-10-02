@@ -14,7 +14,7 @@
 //! family vocabulary — every shared snapshot carries it and Python projects it
 //! (ADR-0051) — but the rolling *stream* is a Rust obligation: replaying
 //! thirty-four Events with a live posture through Python would demand the
-//! posture reducer #312 owns, which is exactly why ADR-0051 rejects folding
+//! posture reducer #687 owns, which is exactly why ADR-0051 rejects folding
 //! this case into `cases`. Keeping it out is also what keeps Python's
 //! undeclared constant truthful. `rolling_stream_cases` already models this
 //! per-key/per-distribution split (ADR-0045), so the same shape is reused here

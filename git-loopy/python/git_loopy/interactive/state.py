@@ -402,6 +402,8 @@ class ActivityWindow:
     subagent_ids: set[str] = field(default_factory=set)
     subagents_observed: bool = False
     live: bool = True
+    recovery_attempt: int | None = None
+    recovery_max_attempts: int | None = None
 
 
 @dataclass(frozen=True)
@@ -920,7 +922,7 @@ class LiveRunState:
             if issue is not None:
                 self._finish_activity_contribution(self._normalize_ref(issue), event)
         elif etype == _INTEGRATION_RECOVERY_STARTED:
-            self._start_integration_window(event)
+            self._start_integration_window(event, now)
         elif etype == _INTEGRATION_PUBLISHED:
             window = self._activity_integration
             issue = event.get("issue")
@@ -1716,7 +1718,7 @@ class LiveRunState:
         elif identity in window.subagent_ids:
             window.subagent_ids.discard(identity)
 
-    def _start_integration_window(self, event: Mapping[str, Any]) -> None:
+    def _start_integration_window(self, event: Mapping[str, Any], now: float) -> None:
         issue = event.get("issue")
         if issue is None:
             return
@@ -1726,6 +1728,7 @@ class LiveRunState:
             if isinstance(contribution_id, str)
             else None
         )
+        attempt, max_attempts = _recovery_pair(event)
         self._activity_integration = ActivityWindow(
             kind="integration",
             lane=None,
@@ -1734,7 +1737,15 @@ class LiveRunState:
             route=None,
             contribution_id=contribution_id if isinstance(contribution_id, str) else None,
             subagents_observed=self.subagents_available is True,
+            recovery_attempt=attempt,
+            recovery_max_attempts=max_attempts,
         )
+        # Each attempt takes the window over. Earlier attempts stay in the
+        # issue Log, so a second record appends rather than replacing the line.
+        if attempt is not None and max_attempts is not None:
+            self._record_pickup_line(
+                issue, f"Recovery: attempt {attempt}/{max_attempts}", now
+            )
 
     # -- ledger (issue #25) -------------------------------------------------
 
@@ -2369,6 +2380,27 @@ def _log_commit_text(event: Mapping[str, Any]) -> str:
         lines = str(subject).splitlines()
         text += f"  {lines[0] if lines else str(subject)}"
     return text
+
+
+def _recovery_pair(event: Mapping[str, Any]) -> tuple[int | None, int | None]:
+    """Both numbers, or neither. A partial record must not invent N/K.
+
+    Held identical to the Rust reader's ``decode_recovery_started``: attempt
+    runs from 1 to the immutable bound, and a missing or unordered pair is
+    unusable telemetry.
+    """
+    attempt = event.get("attempt")
+    max_attempts = event.get("max_attempts")
+    if (
+        isinstance(attempt, bool)
+        or isinstance(max_attempts, bool)
+        or not isinstance(attempt, int)
+        or not isinstance(max_attempts, int)
+    ):
+        return None, None
+    if attempt < 1 or max_attempts < 1 or attempt > max_attempts:
+        return None, None
+    return attempt, max_attempts
 
 
 def _log_pickup_bound_text(event: Mapping[str, Any]) -> str:

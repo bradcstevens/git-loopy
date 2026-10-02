@@ -115,6 +115,19 @@ def project_run_view(
                         "lines": [
                             _log_line(line) for line in state.log(window.issue)
                         ],
+                        **(
+                            {
+                                "recovery": {
+                                    "attempt": window.recovery_attempt,
+                                    "max_attempts": window.recovery_max_attempts,
+                                }
+                            }
+                            if (
+                                window.recovery_attempt is not None
+                                and window.recovery_max_attempts is not None
+                            )
+                            else {}
+                        ),
                     }
                     for window in state.activity_windows()
                 ],
@@ -207,17 +220,22 @@ def _wind_down(state: LiveRunState) -> dict[str, Any]:
 def _undeclared_parallel() -> dict[str, Any]:
     """The Header's Parallel posture, for a Run that has declared none.
 
-    The posture is folded from the four Run-scoped posture Events, and this
-    Dashboard reduces none of them: the Textual renderer has no Parallel
-    surface to feed, so #312 owns the reducer that will replace this. Until
-    then the constant is truthful for every trace the shared Conformance
-    fixture holds -- none of its cases carries a posture Event, and a Run that
-    emits none has no posture, which is what `not_declared` with every detail
-    absent says.
+    The posture is folded from the Run-scoped posture Events, including
+    ``wrapper.rolling.refill_turn``, and this Dashboard reduces none of them:
+    the Textual renderer has no Parallel surface to feed, so #687 owns the
+    reducer that will replace this. Until then the constant is truthful for
+    every trace the shared Conformance fixture holds -- none of its cases
+    carries a posture Event, and a Run that emits none has no posture, which
+    is what ``not_declared`` with every detail absent says.
+
+    The Integration backlog fields, and ``refill_turn``, travel with that
+    constant so the field inventory stays one list. They stay unobserved
+    here: this oracle does not fold ``wrapper.integration.admitted``,
+    ``.parked``, or ``wrapper.rolling.refill_turn``.
 
     It becomes a lie the first time this Dashboard projects a live **Parallel**
-    Run, which is the moment #312 must replace it rather than extend it
-    (ADR-0051 records the debt and its successor).
+    Run, which is the moment #687 must replace it rather than extend it
+    (ADR-0051 records the debt; #687 owns the successor).
     """
     return {
         "availability": "not_declared",
@@ -229,6 +247,11 @@ def _undeclared_parallel() -> dict[str, Any]:
         "serial_fallback_reason": None,
         "serial_required": None,
         "refill_stopped": False,
+        "integration_observed": False,
+        "integration_wip": None,
+        "integration_high_water": None,
+        "parked_count": None,
+        "refill_turn": None,
     }
 
 
@@ -392,6 +415,9 @@ def _contribution_row(
         "outcome": contribution.outcome,
         "duration_seconds": contribution.duration_seconds,
         "status": contribution.status,
+        # Folding a rolling stream stays with #687, so a live row has not
+        # observed drift. Null is that unknown, not a guessed zero.
+        "drift": None,
         "active_seconds": contribution.active_seconds,
         "route": _route(contribution.route),
         "consumption": {

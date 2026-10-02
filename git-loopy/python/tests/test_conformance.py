@@ -79,7 +79,20 @@ from git_loopy.gh import (
     ReadStep,
     next_read_step,
 )
-from git_loopy.readiness import BlockedByRead, BlockerNode, decide_readiness
+from git_loopy.readiness import (
+    SKIP_AWAITING_PULL_REQUEST_MERGE,
+    SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
+    SKIP_READINESS_UNPROVABLE,
+    BlockedByRead,
+    BlockerNode,
+    ClosingPullRequestNode,
+    ClosingPullRequestRead,
+    Readiness,
+    closing_connection_complete,
+    decide_readiness,
+    state_failure_scope,
+    state_request_count,
+)
 from git_loopy.issue_order import (
     LABEL_PRIORITY,
     MAX_ACCEPTED_YEAR,
@@ -1259,14 +1272,29 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     times a contribution from start to end reads a different number than the
     stream means.
 
-    2.18 charges each Strike to its issue (ADR-0070), and that moves the wire
+    2.18 states the parking and admission emission rules (#682). The payloads
+    were already identity-only, so the wire axis stays at 1.3. Neither fixture
+    carried 2.17.
+
+    2.19 states Integration start and branch drift (#684). The payloads were
+    already declared, so the wire axis stays at 1.3.
+
+    2.20 states Recovery attempts (#685): one ``recovery_started`` before each
+    Agent session, ``attempt`` from 1 to immutable ``max_attempts`` K = 3.
+    The payload was already declared, so the wire axis stays at 1.3.
+
+    2.21 states the refill turn (#686): one ``refill_turn`` when the turn a
+    serial Iteration earns is spent, including a zero-reservation turn.
+    The payload was already declared, so the wire axis stays at 1.3.
+
+    2.22 charges each Strike to its issue (ADR-0070), and that moves the wire
     axis to 1.4: ``wrapper.strike``'s ``strikes`` is now the named issue's
     count rather than the Run's, so a 1.3 consumer that reads it as a
     Run-wide ceiling shows a different number than the stream means.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.4"
-    assert _EVENT_SCHEMA["contract_version"] == "2.18"
+    assert _EVENT_SCHEMA["contract_version"] == "2.22"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -2409,9 +2437,10 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.6 adds the Execution host and the Wind-down to the Header, so a
-    # consumer pinned to 1.5 projects a Header this fixture no longer matches.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.6"
+    # 1.11 adds the spent refill turn, including a zero reservation. 1.10
+    # added Recovery. 1.9 added Integration start. 1.8 added the Header's
+    # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.11"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -2464,6 +2493,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "Outcome",
         "Duration",
         "Status",
+        "Drift",
         "Active",
         "Route",
         "Tokens in",
@@ -2501,6 +2531,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "live",
         "lines",
     ]
+    assert contract["optional_projection_fields"]["activity_window"] == ["recovery"]
     assert contract["activity_window_inventory"]["kinds"] == [
         "serial",
         "lane",
@@ -2682,6 +2713,43 @@ def _resolve_field(row: dict[str, Any], path: str) -> Any:
     return value
 
 
+def _assert_activity_window_fields(
+    window: dict[str, Any], fields: dict[str, Any], where: str
+) -> None:
+    """Required Activity-window fields, then recovery when both numbers were seen.
+
+    ``recovery`` is absent until a ``recovery_started`` carried both ``attempt``
+    and ``max_attempts``. A partial record must not invent N/K, so the field
+    cannot be required on every window.
+    """
+    required = fields["activity_window"]
+    optional = _DASHBOARD_INSIGHTS["semantic_contract"][
+        "optional_projection_fields"
+    ]["activity_window"]
+    assert list(window)[: len(required)] == required, where
+    assert list(window)[len(required) :] == [
+        key for key in optional if key in window
+    ], where
+
+
+def _assert_queue_row_fields(
+    row: dict[str, Any], fields: dict[str, Any], where: str
+) -> None:
+    """Required Queue fields, then any declared optional keys that this row carries.
+
+    ``phase_age_seconds`` is present only while the row is parked or admitted,
+    so it cannot be required without forcing every shared snapshot to invent one.
+    """
+    required = fields["queue_row"]
+    optional = _DASHBOARD_INSIGHTS["semantic_contract"][
+        "optional_projection_fields"
+    ]["queue_row"]
+    assert list(row)[: len(required)] == required, where
+    assert list(row)[len(required) :] == [
+        key for key in optional if key in row
+    ], where
+
+
 def _assert_route_fields(
     route: dict[str, Any], fields: dict[str, Any], where: str
 ) -> None:
@@ -2731,7 +2799,7 @@ def _sweep_snapshot_inventory(
     assert list(header["cost"]) == fields["declaration"], where
     assert list(header["rate_card"]) == fields["declaration"], where
     # The Parallel posture is the one Header entry the Declaration device
-    # does *not* fit (ADR-0051): `availability` gates it, but eight further
+    # does *not* fit (ADR-0051): `availability` gates it, but twelve further
     # facts hang off that gate, so it declares an inventory of its own
     # rather than borrowing `declaration`'s single field.
     assert list(header["parallel"]) == fields["parallel"], where
@@ -2743,7 +2811,7 @@ def _sweep_snapshot_inventory(
     assert list(header["wind_down"]) == fields["wind_down"], where
     assert list(expected["dashboard"]["activity"]) == fields["activity"], where
     for window in expected["dashboard"]["activity"]["windows"]:
-        assert list(window) == fields["activity_window"], where
+        _assert_activity_window_fields(window, fields, where)
         assert list(window["context_fill"]) == fields["context_fill"], where
         if window["route"] is not None:
             _assert_route_fields(window["route"], fields, where)
@@ -2754,7 +2822,7 @@ def _sweep_snapshot_inventory(
     assert list(expected["drill_in"]["detail_header"]) == fields["detail_header"], where
 
     for row in expected["dashboard"]["queue"]["rows"]:
-        assert list(row) == fields["queue_row"], where
+        _assert_queue_row_fields(row, fields, where)
         counted["queue_rows"] += 1
         # A route is nullable where a consumption is not: the record's
         # absence is what "nothing has priced this issue yet" looks
@@ -2794,7 +2862,7 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
 
     The rolling-dispatch case is swept here too. It is deliberately not one of
     the shared cases -- only the Rust core folds a rolling stream, and replaying
-    it through Python would demand the posture reducer ADR-0051 defers to #312 --
+    it through Python would demand the posture reducer #687 owns --
     but staying private must not mean staying unasserted, and the inventory is a
     fixture-internal claim that needs no second projection to check.
     """
@@ -2834,6 +2902,36 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     # rows it does carry rather than to the shared set's guards.
     assert rolling_counted["snapshots"] > 0
     assert rolling_counted["queue_rows"] > 0
+    assert any(
+        "phase_age_seconds" in row
+        for case in rolling_cases
+        for snapshot in case["snapshots"]
+        for row in snapshot["expected"]["dashboard"]["queue"]["rows"]
+    ), "the rolling case must pin phase age, or the optional field is unexercised"
+    assert any(
+        row.get("status") == "recovering"
+        for case in rolling_cases
+        for snapshot in case["snapshots"]
+        for row in snapshot["expected"]["dashboard"]["queue"]["rows"]
+    ), "the rolling case must pin recovering"
+    assert any(
+        row.get("status") == "no-progress"
+        for case in rolling_cases
+        for snapshot in case["snapshots"]
+        for row in snapshot["expected"]["dashboard"]["queue"]["rows"]
+    ), "the rolling case must pin a handoff's no-progress"
+    assert any(
+        (parallel.get("refill_turn") or {}).get("reservations") == 0
+        for case in rolling_cases
+        for snapshot in case["snapshots"]
+        for parallel in [snapshot["expected"]["dashboard"]["header"]["parallel"]]
+    ), "the rolling case must pin a zero-reservation refill turn"
+    assert any(
+        window.get("recovery")
+        for case in _DASHBOARD_INSIGHTS["activity_window_cases"]
+        for snapshot in case["snapshots"]
+        for window in snapshot["expected"]
+    ), "an Integration-window case must pin the Recovery attempt"
 
     sample_queue = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
         "expected"
@@ -4383,7 +4481,7 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
     """The fixture note and §14.4 state one fact about the two advanced fixtures.
 
     ``routing-resolution.json`` declared that provenance at 2.10 and has since
-    moved to 2.18 for its retry cases. Its sentence about
+    moved to 2.22 for its retry cases. Its sentence about
     ``event-schema.json`` and ``dashboard-insights.json`` must name the same
     later advances the contract names, or a bump leaves the notes disagreeing,
     and the latest advance named must be the version those fixtures declare.
@@ -4420,7 +4518,7 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
 
 
 @pytest.mark.parametrize(("fixture", "expected"), [
-    ("routing-resolution.json", "2.18"),
+    ("routing-resolution.json", "2.22"),
     ("calibration-search.json", "2.5"),
 ])
 def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
@@ -4430,7 +4528,7 @@ def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
 
     Both gained measured-tier obligations at 2.5. Routing also owns 2.9's
     staged migration and preflight deadlines, and 2.10's Python-local Dynamic
-    default, no-Config refusal and exact-dimension publication, and 2.18's
+    default, no-Config refusal and exact-dimension publication, and 2.22's
     per-issue Strike accounting of its retry cases (ADR-0070); Calibration has
     not changed. Pin each decision's revision, not whichever version the header
     later reaches.
@@ -5355,12 +5453,10 @@ def test_readiness_fixture_drives_the_python_readiness_seam(
 # **Pickup**-admissible. ADR-0069 (amending ADR-0047), Wrapper contract section
 # 3.3.1, contract 2.17.
 #
-# Like the readiness block above when it landed, these tests pin the *fixture*:
-# its vocabularies, and that every expected result follows from its own inputs.
-# They deliberately drive no production seam. Python (#695), shell (#697) and
-# PowerShell (#698) each owe the fixture until their own ticket claims it
-# (`fixture-claims.json`), and a test here that compared it against a Runner
-# would be a claim the register does not record.
+# The tests above this production adapter pin the fixture against itself.
+# The adapter below is Python's claim (#695): it drives the production
+# Readiness decision, the unbound-Pool rule, and the read's pure halves.
+# shell (#697) and PowerShell (#698) still owe the fixture.
 # ---------------------------------------------------------------------------
 
 _AWAITING_MERGE = _load_fixture("awaiting-merge.json")
@@ -5994,6 +6090,137 @@ def test_the_contract_names_the_awaiting_merge_fixture_and_every_reason_it_pins(
     assert "#### Awaiting merge" in section
     for reason in _awaiting_merge_skip_reasons():
         assert f"`{reason}`" in section, f"§3.3.1 does not describe {reason}"
+
+
+def _awaiting_merge_blocked_by(case: Mapping[str, Any]) -> BlockedByRead:
+    connection = case["blocked_by"]
+    if connection is None:
+        return BlockedByRead.unprovable()
+    return BlockedByRead(
+        total_count=connection["total_count"],
+        nodes=tuple(
+            BlockerNode(
+                ref=node["ref"],
+                state=node["state"],
+                readable=node.get("readable", True),
+            )
+            for node in connection["nodes"]
+        ),
+    )
+
+
+def _awaiting_merge_closing(case: Mapping[str, Any]) -> ClosingPullRequestRead:
+    raw = case["closing_pull_requests"]
+    if raw is None:
+        return ClosingPullRequestRead.none()
+    return ClosingPullRequestRead(
+        complete=raw["complete"],
+        nodes=tuple(
+            ClosingPullRequestNode(
+                ref=node.get("ref"),
+                state=node.get("state"),
+                readable=node.get("unread") != "reference_unreadable",
+                unread=node.get("unread"),
+            )
+            for node in raw["nodes"]
+        ),
+    )
+
+
+def _refusal_pool_class(reason: str) -> str | None:
+    """The production verdict's class, or ``None`` for a non-Readiness refusal."""
+    if reason == SKIP_BLOCKED_BY_OPEN_DEPENDENCY:
+        return Readiness.blocked(reason, ("acme/widgets#1",)).pool_class
+    if reason == SKIP_AWAITING_PULL_REQUEST_MERGE:
+        return Readiness.blocked(
+            reason, closing_pull_requests=("acme/widgets#1",)
+        ).pool_class
+    if reason == SKIP_READINESS_UNPROVABLE:
+        return Readiness.blocked(reason).pool_class
+    return None
+
+
+def _awaiting_merge_production_outcome(refusals: Sequence[str]) -> str:
+    waiting = 0
+    unresolved = 0
+    for reason in refusals:
+        pool_class = _refusal_pool_class(reason)
+        if pool_class == "waiting":
+            waiting += 1
+        elif pool_class == "unresolved":
+            unresolved += 1
+    return unbound_pool_outcome(
+        candidates=len(refusals), waiting=waiting, unresolved=unresolved
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_fixture_drives_the_python_readiness_decision(
+    case: dict[str, Any],
+) -> None:
+    """#695: the production decision, not a second copy of the fixture's oracle."""
+    expected = case["expected"]
+    verdict = decide_readiness(
+        _awaiting_merge_blocked_by(case),
+        _awaiting_merge_closing(case),
+        candidate_kind=case["candidate_kind"],
+    )
+
+    assert verdict.admissible is expected["admissible"], case["id"]
+    assert verdict.skip_reason == expected["skip_reason"], case["id"]
+    assert verdict.refusal_reason == expected["reason"], case["id"]
+    assert list(verdict.names) == expected["names"], case["id"]
+    assert verdict.pool_class == expected["unbound_pool_class"], case["id"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["completeness_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_fixture_drives_connection_completeness(
+    case: dict[str, Any],
+) -> None:
+    assert closing_connection_complete(
+        carrier=case["carrier"], nodes=case["nodes"]
+    ) is case["complete"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["state_request_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_fixture_drives_the_state_request_count(
+    case: dict[str, Any],
+) -> None:
+    assert state_request_count(case["distinct"]) == case["requests"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["state_failure_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_fixture_drives_the_state_failure_scope(
+    case: dict[str, Any],
+) -> None:
+    assert state_failure_scope(case["distinct"], case["failed_requests"]) == case["expected"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _AWAITING_MERGE["unbound_pool_cases"],
+    ids=lambda case: case["id"],
+)
+def test_awaiting_merge_fixture_drives_the_unbound_pool_rule(
+    case: dict[str, Any],
+) -> None:
+    assert _awaiting_merge_production_outcome(case["refusals"]) == case["outcome"]
 
 
 def test_the_contract_reason_table_is_in_the_fixtures_precedence_order() -> None:

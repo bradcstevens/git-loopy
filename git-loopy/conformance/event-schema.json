@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.18",
+  "contract_version": "2.22",
   "event_schema_version": "1.4",
   "insight_capabilities": {
     "names": [
@@ -357,13 +357,16 @@
       "required_when_present": ["contribution_id", "issue", "lane_id"]
     },
     "wrapper.integration.parked": {
-      "required_when_present": ["contribution_id", "issue", "lane_id"]
+      "required_when_present": ["contribution_id", "issue", "lane_id"],
+      "emitted": "Once, when a finished contribution meets a full Integration backlog (contract 2.18). The contribution keeps its Lane until it is admitted."
     },
     "wrapper.integration.admitted": {
-      "required_when_present": ["contribution_id", "issue", "lane_id"]
+      "required_when_present": ["contribution_id", "issue", "lane_id"],
+      "emitted": "Once per contribution that enters the Integration backlog (contract 2.18): immediately after wrapper.contribution.work_finished on direct admission, or after the freeing contribution's wrapper.contribution.end when drained from the parked FIFO. Never both."
     },
     "wrapper.integration.started": {
-      "required_when_present": ["contribution_id", "issue", "lane_id"]
+      "required_when_present": ["contribution_id", "issue", "lane_id"],
+      "emitted": "Once per Integration, when the contribution takes Integration's serialization (contract 2.19), before the private stage is cut. Not repeated for Recovery."
     },
     "wrapper.integration.branch_observed": {
       "required_when_present": [
@@ -372,7 +375,8 @@
         "lane_id",
         "base_publications_since_cut"
       ],
-      "nullable": ["base_publications_since_cut"]
+      "nullable": ["base_publications_since_cut"],
+      "emitted": "Once per Integration, immediately after wrapper.integration.started and before the private stage is cut, including when the stage cannot be cut (contract 2.19). base_publications_since_cut is this Run's green publications onto base since the Lane was cut, or null when the cut was not observed. The contribution's own later publication is not included."
     },
     "wrapper.integration.recovery_started": {
       "required_when_present": [
@@ -381,7 +385,8 @@
         "lane_id",
         "attempt",
         "max_attempts"
-      ]
+      ],
+      "emitted": "Once per Recovery attempt, before that attempt's Agent session (contract 2.20). attempt runs from 1 to the immutable max_attempts, K = 3. Never more than three. An exhausted contribution emits three, then wrapper.contribution.end with reason serial_fallback."
     },
     "wrapper.integration.published": {
       "required_when_present": ["contribution_id", "issue", "lane_id"]
@@ -428,7 +433,7 @@
         "strike_reaction"
       ],
       "strike_reaction_values": ["reset", "+1", "none"],
-      "strike_reaction_note": "+1 when the contribution's ending charged its issue a Strike, none otherwise. A publication charges nothing and refunds nothing: a Strike is never reset (ADR-0070), so reset is only what a log written before contract 2.18 carries.",
+      "strike_reaction_note": "+1 when the contribution's ending charged its issue a Strike, none otherwise. A publication charges nothing and refunds nothing: a Strike is never reset (ADR-0070), so reset is only what a log written before contract 2.22 carries.",
       "emitted": "The authoritative finalized Parallel row and Strike transition. A publication that has not yet verified its closure is not a contribution end.",
       "counted_once": "Lane-work and recovery Consumption and commits appear exactly once, in the originating contribution. Runner Checkpoint commits are excluded from the commit total.",
       "retired": ["cost_usd"],
@@ -467,7 +472,8 @@
       "serial_required": "How many serial-required items the peek that latched this saw. Null when nothing counted them: only the driver's own Pool peek can, and it is skipped once demand is latched. Never 0 — a latch with nothing behind it cannot happen."
     },
     "wrapper.rolling.refill_turn": {
-      "required_when_present": ["reservations", "effective_lane_limit"]
+      "required_when_present": ["reservations", "effective_lane_limit"],
+      "emitted": "Exactly once each time the scheduler spends the refill turn a serial Iteration earns, including a turn that reserves nothing (contract 2.21). reservations may be zero. effective_lane_limit is the limit that bounded that decision, not a new authoritative transition. A turn that is granted and never spent emits nothing, and a normal reserve emits nothing."
     },
     "wrapper.parallel.serial_fallback": {
       "required_when_present": [
