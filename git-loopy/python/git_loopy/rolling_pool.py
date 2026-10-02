@@ -438,6 +438,7 @@ class RollingPool:
                     labels=item.labels,
                     created_at=item.created_at,
                     blocked_by=item.blocked_by,
+                    closing_pull_requests=item.closing_pull_requests,
                 ),
                 quarantined=True,
                 not_before=self.clock() + retry_after,

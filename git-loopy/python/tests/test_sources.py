@@ -27,6 +27,8 @@ from git_loopy.sources import (
     IssueSource,
     PoolCandidate,
     PrdsIssueSource,
+    has_proven_open_blocker,
+    has_unresolved_readiness,
     is_afk_ready,
     is_lane_candidate,
     is_pr_afk_ready,
@@ -855,6 +857,160 @@ class TestAwaitingMergeRead:
 
         assert source.preflight() == 1
         assert gh.issue_list_calls == []
+
+
+class TestAwaitingMergeMembership:
+    """Parallel reads resolve closing pull requests the way collection does (#696)."""
+
+    def test_references_ride_the_membership_list_and_states_are_read_once(self) -> None:
+        """The list carries the references. One state read covers the Pool."""
+        shared = _closing(("PR_300", "acme/widgets#300"))
+        other = _closing(("PR_301", "acme/widgets#301"))
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(8, closing_references=other),
+                _make_issue(7, closing_references=shared),
+            ],
+            pull_request_states_by_id={"PR_300": "open", "PR_301": "merged"},
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        snapshot = source.shallow_membership()
+
+        assert gh.issue_view_calls == []
+        assert gh.issue_list_calls == [("ready-for-agent", "open")]
+        assert gh.pull_request_state_calls == [("PR_300", "PR_301")]
+        by_ref = {candidate.ref: candidate for candidate in snapshot.candidates}
+        assert decide_readiness(
+            by_ref[7].blocked_by, by_ref[7].closing_pull_requests
+        ).refusal_reason == "awaiting_pull_request_merge: acme/widgets#300"
+        assert (
+            decide_readiness(
+                by_ref[8].blocked_by, by_ref[8].closing_pull_requests
+            ).admissible
+            is True
+        )
+
+    def test_a_membership_read_with_no_reference_makes_no_state_request(self) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(7)])
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [candidate] = source.shallow_membership().candidates
+
+        assert gh.pull_request_state_calls == []
+        assert (
+            decide_readiness(
+                candidate.blocked_by, candidate.closing_pull_requests
+            ).admissible
+            is True
+        )
+
+    def test_the_lane_re_read_resolves_states_once(self) -> None:
+        """A Lane's authoritative re-read does not borrow the list's states."""
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(
+                    7,
+                    labels=["ready-for-agent", "parallel-safe"],
+                    closing_references=_closing(("PR_300", "acme/widgets#300")),
+                )
+            ],
+            pull_request_states_by_id={"PR_300": "open"},
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+        source.shallow_membership()
+        gh.pull_request_state_calls.clear()
+
+        pickup = source.pickup(7)
+
+        assert gh.issue_view_calls == [7]
+        assert gh.pull_request_state_calls == [("PR_300",)]
+        assert pickup.outcome == sources_module.PICKUP_STALE
+
+    def test_a_lane_re_read_with_no_reference_makes_no_state_request(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[_make_issue(7, labels=["ready-for-agent", "parallel-safe"])]
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        pickup = source.pickup(7)
+
+        assert pickup.outcome == sources_module.PICKUP_VALIDATED
+        assert gh.pull_request_state_calls == []
+
+    def test_a_failed_membership_state_read_is_unprovable(self) -> None:
+        """A state the Membership read could not prove neither waits nor admits."""
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(
+                    7,
+                    labels=["ready-for-agent", "parallel-safe"],
+                    closing_references=_closing(("PR_300", "acme/widgets#300")),
+                )
+            ],
+            pull_request_states_error=gh_module.GhError(
+                ["gh", "api", "graphql"], 1, "timeout"
+            ),
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [candidate] = source.shallow_membership().candidates
+        verdict = decide_readiness(
+            candidate.blocked_by, candidate.closing_pull_requests
+        )
+
+        assert verdict.skip_reason == "readiness_unprovable"
+        assert verdict.pool_class == "unresolved"
+        assert is_lane_candidate(candidate) is False
+        assert has_unresolved_readiness(candidate) is True
+        assert has_proven_open_blocker(candidate) is False
+
+    def test_a_failed_lane_re_read_state_is_unavailable_not_stale(self) -> None:
+        """An unread state is not a refusal, so the Lane does not drop the candidate."""
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(
+                    7,
+                    labels=["ready-for-agent", "parallel-safe"],
+                    closing_references=_closing(("PR_300", "acme/widgets#300")),
+                )
+            ],
+            pull_request_states_error=gh_module.GhError(
+                ["gh", "api", "graphql"], 1, "timeout"
+            ),
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        pickup = source.pickup(7)
+
+        assert gh.pull_request_state_calls == [("PR_300",)]
+        assert pickup.outcome == sources_module.PICKUP_UNAVAILABLE
+
+    def test_a_membership_read_promotes_a_pull_request_that_closed_unmerged(
+        self,
+    ) -> None:
+        """Closed-unmerged leaves the connection. The next Membership read admits."""
+        gh = FakeGitHubClient(
+            issues=[
+                _make_issue(
+                    7,
+                    labels=["ready-for-agent", "parallel-safe"],
+                    closing_references=_closing(("PR_303", "acme/widgets#303")),
+                )
+            ],
+            pull_request_states_by_id={"PR_303": "open"},
+        )
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+        [waiting] = source.shallow_membership().candidates
+        assert is_lane_candidate(waiting) is False
+
+        gh.seed_issue(
+            _make_issue(7, labels=["ready-for-agent", "parallel-safe"])
+        )
+        [admitted] = source.shallow_membership().candidates
+
+        assert is_lane_candidate(admitted) is True
+        assert has_proven_open_blocker(admitted) is False
 
     def test_re_verifies_discriminator_on_full_body(self) -> None:
         """If issue_view returns a different body lacking the discriminator, drop it."""

@@ -23,7 +23,12 @@ from git_loopy.sources import (
     PICKUP_UNAVAILABLE,
     PICKUP_VALIDATED,
 )
-from git_loopy.readiness import BlockedByRead, BlockerNode
+from git_loopy.readiness import (
+    BlockedByRead,
+    BlockerNode,
+    ClosingPullRequestNode,
+    ClosingPullRequestRead,
+)
 
 
 def _silent_logger() -> logging.Logger:
@@ -34,12 +39,20 @@ def _silent_logger() -> logging.Logger:
     return logger
 
 
+def _awaiting(ref: str = "x/y#90") -> ClosingPullRequestRead:
+    return ClosingPullRequestRead(
+        complete=True,
+        nodes=(ClosingPullRequestNode(ref=ref, state="open"),),
+    )
+
+
 def _candidate(
     ref: int,
     *,
     title: str = "",
     parallel_safe: bool = True,
     blocked_by: BlockedByRead | None = None,
+    closing_pull_requests: ClosingPullRequestRead | None = None,
 ) -> PoolCandidate:
     labels = ("ready-for-agent",) + (("parallel-safe",) if parallel_safe else ())
     return PoolCandidate(
@@ -47,6 +60,7 @@ def _candidate(
         title=title or f"issue {ref}",
         labels=labels,
         blocked_by=blocked_by or BlockedByRead(total_count=0),
+        closing_pull_requests=closing_pull_requests or ClosingPullRequestRead.none(),
     )
 
 
@@ -247,6 +261,33 @@ class TestTake:
         assert source.pickup_calls == [7]
         assert pool.candidate_refs == (31,)
 
+    def test_an_awaiting_merge_candidate_is_not_reserved_and_stays_cached(self) -> None:
+        """Awaiting merge is refused before reservation, and the cache keeps it."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        waiting = _candidate(31, closing_pull_requests=_awaiting())
+        source = ScriptedSource(
+            [
+                MembershipSnapshot(
+                    candidates=(waiting, _candidate(7)),
+                    complete=True,
+                )
+            ]
+        )
+        pool = _pool(
+            source,
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        take = pool.take()
+
+        assert take.item is not None and take.item.ref == 7
+        assert source.pickup_calls == [7]
+        assert pool.candidate_refs == (31,)
+
     def test_a_refresh_promotes_a_candidate_after_its_blocker_closes(self) -> None:
         """Readiness changes on a refresh, without restarting the Run."""
         from git_loopy.rolling_pool import is_parallel_safe
@@ -280,6 +321,38 @@ class TestTake:
         take = pool.take()
 
         assert take.item is not None and take.item.ref == 31
+        assert source.membership_calls == 2
+
+    def test_a_refresh_promotes_a_candidate_after_its_pull_request_closes(
+        self,
+    ) -> None:
+        """Closed-unmerged leaves the connection. The next read admits it."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        source = ScriptedSource(
+            [
+                MembershipSnapshot(
+                    candidates=(
+                        _candidate(31, closing_pull_requests=_awaiting("x/y#90")),
+                    ),
+                    complete=True,
+                ),
+                MembershipSnapshot(candidates=(_candidate(31),), complete=True),
+            ]
+        )
+        pool = _pool(
+            source,
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        pool.service(refillable=1)
+        take = pool.take()
+
+        assert take.item is not None and take.item.ref == 31
+        assert source.pickup_calls == [31]
         assert source.membership_calls == 2
 
     def test_an_unprovable_membership_read_is_not_lane_candidacy(self) -> None:
@@ -440,6 +513,106 @@ class TestTerminalOutcome:
 
         assert pool.confirm_terminal_outcome() == "all_blocked"
         assert source.membership_calls == 2
+
+    def test_a_pool_waiting_on_blockers_or_pull_requests_ends_all_blocked(
+        self,
+    ) -> None:
+        """Every refusal is a wait, in either mix. That is all_blocked."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        blocked = _candidate(
+            31,
+            blocked_by=BlockedByRead(
+                total_count=1,
+                nodes=(BlockerNode(ref="x/y#7", state="open"),),
+            ),
+        )
+        awaiting = _candidate(7, closing_pull_requests=_awaiting("x/y#90"))
+        source = ScriptedSource(
+            [MembershipSnapshot(candidates=(blocked, awaiting), complete=True)]
+        )
+        pool = _pool(
+            source,
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        assert pool.confirm_terminal_outcome() == "all_blocked"
+        assert [candidate.ref for candidate in pool.terminal_survivors] == [31, 7]
+
+    def test_an_unread_pull_request_state_is_not_a_wait_and_is_not_reserved(
+        self,
+    ) -> None:
+        """A failed state read neither admits the candidate nor calls the Pool waiting."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        unread = ClosingPullRequestRead(
+            complete=True,
+            nodes=(
+                ClosingPullRequestNode(
+                    ref="x/y#90",
+                    state=None,
+                    unread="state_request_failed",
+                ),
+            ),
+        )
+        source = ScriptedSource(
+            [
+                MembershipSnapshot(
+                    candidates=(
+                        _candidate(31, closing_pull_requests=unread),
+                        _candidate(7),
+                    ),
+                    complete=True,
+                )
+            ]
+        )
+        pool = _pool(
+            source,
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        take = pool.take()
+
+        assert take.item is not None and take.item.ref == 7
+        assert source.pickup_calls == [7]
+        assert pool.candidate_refs == (31,)
+
+    def test_an_unread_pull_request_state_ends_preflight_failed(self) -> None:
+        """A failed state read is not a wait, so the Pool is not all_blocked."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        unread = ClosingPullRequestRead(
+            complete=True,
+            nodes=(
+                ClosingPullRequestNode(
+                    ref="x/y#90",
+                    state=None,
+                    unread="state_request_failed",
+                ),
+            ),
+        )
+        pool = _pool(
+            ScriptedSource(
+                [
+                    MembershipSnapshot(
+                        candidates=(_candidate(31, closing_pull_requests=unread),),
+                        complete=True,
+                    )
+                ]
+            ),
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        assert pool.confirm_terminal_outcome() == "preflight_failed"
 
     def test_an_unprovable_read_never_calls_a_waiting_pool_all_skipped(self) -> None:
         """A dependency read failure is a failed read, not a refusal (#542).
@@ -1449,6 +1622,31 @@ class TestLaneFirstRead:
         taken = pool.take()
 
         assert taken.item is not None and taken.item.ref == 31
+        assert reads == [(True, True, "refused")]
+
+    def test_a_walk_passing_an_awaiting_merge_pin_over_reports_it_refused(
+        self,
+    ) -> None:
+        """An Awaiting-merge Pin is passed over and spent, never reserved."""
+        from git_loopy.sources import is_lane_candidate
+
+        source = ScriptedSource([
+            MembershipSnapshot(
+                candidates=(
+                    _candidate(7, closing_pull_requests=_awaiting("x/y#90")),
+                    _candidate(31),
+                ),
+                complete=True,
+            )
+        ])
+        pool, reads = self._recording_pool(source, eligible=is_lane_candidate)
+        pool.start()
+
+        taken = pool.take()
+
+        assert taken.item is not None and taken.item.ref == 31
+        assert source.pickup_calls == [31]
+        assert pool.candidate_refs == (7,)
         assert reads == [(True, True, "refused")]
 
     def test_a_walk_passing_an_unread_pin_over_reports_it_unread(self) -> None:

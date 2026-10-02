@@ -228,7 +228,6 @@ from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.readiness import (
     POOL_CLASS_UNRESOLVED,
     POOL_CLASS_WAITING,
-    decide_readiness,
 )
 from git_loopy.rate_card import RateCard
 from git_loopy.release_version import (
@@ -290,6 +289,7 @@ from git_loopy.sources import (
     PoolCollection,
     PrdsIssueSource,
     RollingIssueSource,
+    candidate_readiness,
     confirms_empty_pool,
     is_lane_candidate,
     unbound_pool_outcome,
@@ -5340,7 +5340,7 @@ class _ParallelLoop:
                     if terminal_outcome in ("all_blocked", "all_skipped"):
                         self._terminal_refusals = []
                         for candidate in scheduler.terminal_survivors:
-                            readiness = decide_readiness(candidate.blocked_by)
+                            readiness = candidate_readiness(candidate)
                             reason = (
                                 readiness.refusal_reason
                                 if readiness.pool_class == POOL_CLASS_WAITING

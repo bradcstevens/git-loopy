@@ -603,6 +603,12 @@ class PoolCandidate:
             :attr:`AfkReadyItem.blocked_by`: a record whose blockers were never
             read has not established that there are none, and the type a
             candidacy predicate reads directly is the wrong place to assume it.
+        closing_pull_requests: The closing pull requests the same Membership
+            read carried, states resolved once for that read. A record that
+            never set the field is a complete empty connection, matching
+            :attr:`AfkReadyItem.closing_pull_requests`: a test double that
+            did not mention a pull request is not unprovable. An unread
+            connection is an incomplete read, never this default.
     """
 
     ref: int | str
@@ -610,6 +616,19 @@ class PoolCandidate:
     labels: tuple[str, ...] = ()
     created_at: str = ""
     blocked_by: BlockedByRead = field(default_factory=BlockedByRead.unprovable)
+    closing_pull_requests: ClosingPullRequestRead = field(
+        default_factory=ClosingPullRequestRead.none
+    )
+
+
+def candidate_readiness(candidate: PoolCandidate) -> Readiness:
+    """The verdict the Membership record already carries. No new read.
+
+    Lane candidacy, the Rolling waiting count, and a Rolling Run end's
+    ``refusals`` all ask this, so none of them re-derives a reason or a class
+    from the blockers or the pull requests themselves (#693, #696).
+    """
+    return decide_readiness(candidate.blocked_by, candidate.closing_pull_requests)
 
 
 def is_lane_candidate(candidate: PoolCandidate) -> bool:
@@ -618,22 +637,25 @@ def is_lane_candidate(candidate: PoolCandidate) -> bool:
     The human's **Parallel-safe** assertion and the tracker's **Readiness**
     fact are independent candidacy predicates. Keeping their composition beside
     the Membership record means every Rolling-dispatch caller applies the same
-    pure decision to the blocker connection the **Membership read** carried.
+    pure decision to the blocker connection and the closing pull requests the
+    **Membership read** carried.
     """
     return (
         isinstance(candidate.ref, int)
         and LABEL_PARALLEL_SAFE in candidate.labels
-        and decide_readiness(candidate.blocked_by).admissible
+        and candidate_readiness(candidate).admissible
     )
 
 
 def has_proven_open_blocker(candidate: PoolCandidate) -> bool:
-    """Return whether this candidate's carried read proves an open blocker.
+    """Return whether this candidate's carried read proves a wait.
 
     The Rolling-dispatch ``waiting`` count in the unbound-Pool rule. Asked of
-    the verdict's own class (#693), never re-derived from its blockers.
+    the verdict's own class (#693), never re-derived from its blockers or its
+    pull requests. An open blocker and an open closing pull request are both
+    that class.
     """
-    return decide_readiness(candidate.blocked_by).pool_class == POOL_CLASS_WAITING
+    return candidate_readiness(candidate).pool_class == POOL_CLASS_WAITING
 
 
 def has_unresolved_readiness(candidate: PoolCandidate) -> bool:
@@ -641,11 +663,12 @@ def has_unresolved_readiness(candidate: PoolCandidate) -> bool:
 
     The sibling of :func:`has_proven_open_blocker`, and the Rolling-dispatch
     shape of :func:`readiness_unresolved`: a candidate whose **Membership
-    read** could not determine its blockers is unresolved, not refused, so it
-    may not establish a terminal Pool fact (#542). Like its sibling, it asks
-    the verdict's own class (#693).
+    read** could not determine its blockers, or a closing pull request's
+    state, is unresolved, not refused, so it may not establish a terminal
+    Pool fact (#542). Like its sibling, it asks the verdict's own class
+    (#693).
     """
-    return readiness_unresolved(decide_readiness(candidate.blocked_by))
+    return readiness_unresolved(candidate_readiness(candidate))
 
 
 @dataclass(frozen=True)
@@ -1229,6 +1252,12 @@ class GitHubIssueSource:
             pin=self._ordering_pin,
         )
         self._report_undated(undated)
+        # One state read for the Membership read, and none when no candidate
+        # carries a reference. The references rode the list. States are not
+        # membership, and a verdict is never taken from another read's states.
+        states = self._closing_states(
+            tuple(issue.closing_references for issue in ordered)
+        )
         candidates = tuple(
             PoolCandidate(
                 ref=issue.number,
@@ -1236,6 +1265,9 @@ class GitHubIssueSource:
                 labels=tuple(issue.labels),
                 created_at=issue.created_at,
                 blocked_by=issue.blocked_by,
+                closing_pull_requests=gh_module.closing_pull_request_read(
+                    issue.closing_references, states
+                ),
             )
             for issue in ordered
         )
@@ -1361,9 +1393,11 @@ class GitHubIssueSource:
         Applies #219 §2.10 verbatim: the issue must still be open, still carry
         ``ready-for-agent`` *and* ``parallel-safe``, still satisfy the
         AFK-ready body discriminator, and still be **Ready**. The same read
-        supplies the comments, blockers, and rendered prompt block, so a
-        **Lane** never dispatches from membership that a cheap refresh happened
-        to observe some seconds ago.
+        supplies the comments, blockers, closing pull requests, and rendered
+        prompt block, so a **Lane** never dispatches from membership that a
+        cheap refresh happened to observe some seconds ago. This read resolves
+        its own pull-request states: a merge between the Membership read and
+        this one is seen here, and a read that proves nothing does not admit.
 
         Returns:
             A :class:`Pickup` whose ``outcome`` is ``"validated"`` (dispatchable),
@@ -1382,6 +1416,15 @@ class GitHubIssueSource:
             )
             return Pickup(outcome=PICKUP_UNAVAILABLE)
 
+        states = self._closing_states((full.closing_references,))
+        closing = gh_module.closing_pull_request_read(full.closing_references, states)
+        readiness = decide_readiness(full.blocked_by, closing)
+        # An unread state is not a refusal. Quarantine and retry, the same
+        # way a failed view does, so a Lane never reserves work this read
+        # could not prove and never drops it as if it had been refused.
+        if readiness_unresolved(readiness):
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+
         labels = tuple(full.labels)
         if (
             full.state.upper() != "OPEN"
@@ -1390,7 +1433,7 @@ class GitHubIssueSource:
             or not is_afk_ready(
                 full.body or "", title=full.title, labels=labels
             )
-            or not decide_readiness(full.blocked_by).admissible
+            or not readiness.admissible
         ):
             return Pickup(outcome=PICKUP_STALE)
 
@@ -1403,6 +1446,7 @@ class GitHubIssueSource:
                 labels=labels,
                 created_at=full.created_at,
                 blocked_by=full.blocked_by,
+                closing_pull_requests=closing,
             ),
         )
 

@@ -394,6 +394,7 @@ def _make_issue(
     labels: list[str],
     body: str = _AFK_BODY,
     blocked_by: BlockedByRead | None = None,
+    closing_references: gh_module.ClosingReferences | None = None,
 ) -> gh_module.Issue:
     return gh_module.Issue(
         number=number,
@@ -406,6 +407,16 @@ def _make_issue(
         blocked_by=blocked_by
         if blocked_by is not None
         else BlockedByRead(total_count=0),
+        closing_references=closing_references
+        if closing_references is not None
+        else gh_module.ClosingReferences.none(),
+    )
+
+
+def _open_closing(node_id: str, ref: str) -> gh_module.ClosingReferences:
+    return gh_module.ClosingReferences(
+        complete=True,
+        nodes=(gh_module.ClosingReference(node_id=node_id, ref=ref),),
     )
 
 
@@ -6641,6 +6652,7 @@ def _run_parallel_safe_pin(
     *,
     first_43: gh_module.Issue,
     hidden: int | None = None,
+    **gh_kwargs: Any,
 ) -> list[tuple[int, str]]:
     """``--issue 43`` over parallel-safe #41-#43; #43 reads normally once #41 is viewed."""
     monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
@@ -6657,6 +6669,7 @@ def _run_parallel_safe_pin(
         trigger=41,
         change=[_make_issue(43, labels=_PARALLEL_SAFE)],
         hidden=hidden,
+        **gh_kwargs,
     )
     asyncio.run(
         asyncio.wait_for(
@@ -6681,6 +6694,30 @@ def test_a_parallel_safe_pin_the_lane_walk_passes_over_as_blocked_is_spent(
 
     assert (43, "order") in bindings
     assert (43, "pin") not in bindings
+
+
+def test_an_awaiting_merge_parallel_safe_pin_is_spent_by_the_lane_walk(
+    tmp_path, monkeypatch
+) -> None:
+    """An Awaiting-merge Pin is passed over and spent, never reserved (#696)."""
+    bindings = _run_parallel_safe_pin(
+        tmp_path,
+        monkeypatch,
+        first_43=_make_issue(
+            43,
+            labels=_PARALLEL_SAFE,
+            closing_references=_open_closing("PR_90", "x/y#90"),
+        ),
+        pull_request_states_by_id={"PR_90": "open"},
+    )
+
+    events = _logged_events(tmp_path)
+    assert (43, "order") in bindings
+    assert (43, "pin") not in bindings
+    assert not any(
+        event["type"] == "wrapper.pickup.skipped" and event["issue"] == 43
+        for event in events
+    )
 
 
 def test_a_parallel_safe_pin_absent_from_a_complete_read_is_spent(
@@ -7347,6 +7384,62 @@ def test_rolling_terminal_end_records_ordered_refusals_and_notice(
             "Blockers outside the Pool: x/y#7, other/repo#9 — resolve them, "
             "or label other work ready-for-agent.",
         ]
+
+
+def test_a_rolling_pool_waiting_on_pull_requests_names_them_and_ends_all_blocked(
+    tmp_path, monkeypatch
+) -> None:
+    """Awaiting merge is a wait. The Run names the pull requests and skips no Pickup."""
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe"],
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="x/y#7", state="open"),),
+                ),
+            ),
+            _make_issue(
+                43,
+                labels=["ready-for-agent", "parallel-safe"],
+                closing_references=_open_closing("PR_90", "x/y#90"),
+            ),
+        ],
+        client_cls=_NoProgressFakeClient,
+        pull_request_states_by_id={"PR_90": "open"},
+    )
+
+    exit_code = asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(
+                RunConfig(
+                    model="claude-opus-4.8-max",
+                    issue_source="github",
+                    max_iterations=0,
+                    max_nmt_strikes=3,
+                    verbosity=0,
+                    render_reasoning=False,
+                )
+            ),
+            timeout=30,
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    end = next(event for event in events if event["type"] == "wrapper.run.end")
+    assert exit_code == loop_module.exit_code_for("all_blocked")
+    assert end["outcome"] == "all_blocked"
+    assert end["refusals"] == [
+        {"issue": 42, "reason": "blocked_by_open_dependency: x/y#7"},
+        {"issue": 43, "reason": "awaiting_pull_request_merge: x/y#90"},
+    ]
+    assert not any(event["type"] == "wrapper.pickup.skipped" for event in events)
+    assert not any(event["type"] == "wrapper.pickup.bound" for event in events)
+    assert not any(event["type"] == "wrapper.contribution.start" for event in events)
 
 
 @pytest.mark.parametrize("parallel_safe_43", [False, True], ids=["serial", "mixed"])
