@@ -362,6 +362,31 @@ teardown and is never changed by it.
 
 ---
 
+## A candidate awaiting a pull-request merge
+
+**Pickup** decides **Readiness** from the `blockedBy` connection and the
+`closedByPullRequestsReferences` connection collection already carried. Both
+ride `gh issue list` and the authoritative `gh issue view`. Pull-request
+states are resolved in `gh api graphql` requests of at most 100 distinct ids,
+and in no request when no candidate carries a readable reference. Membership in the
+connection is not a refusal: only a pull request read as open is. A draft is
+open. A merged or closed pull request is not. A pull-request candidate is
+never Awaiting merge.
+
+The skip is `awaiting_pull_request_merge: owner/repo#N`, naming every open
+closing pull request in connection order. The candidate stays in the **Pool**
+and charges no **Strike**. An open blocker outranks an open pull request. A
+failed state read, a node the token cannot see, or a missing
+`closedByPullRequestsReferences` field is `readiness_unprovable` — never a
+wait, and never "no pull requests". `gh` older than 2.94.0 cannot serve the
+field and fails at preflight.
+
+An Awaiting-merge **Pin** is passed over and spent. A Pool whose every refusal
+is a wait ends `all_blocked`. The diagnostic says the Pool waits on open
+blockers or on pull requests to merge.
+
+---
+
 ## Exit codes
 
 | Exit | Meaning | When |
@@ -370,8 +395,8 @@ teardown and is never changed by it.
 | `0` | Clean — cap reached | The optional iteration cap `N` is reached. |
 | `1` | Aborted — stuck | `GIT_LOOPY_MAX_NMT_STRIKES` consecutive no-progress Iterations. |
 | `1` | Aborted — all skipped | A **Pickup** walked a non-empty Pool and could bind none of it for a reason an operator can repair. Deliberately not the exit-`0` empty Pool: "there is nothing to do" and "I could not take any of what there is" are different facts. |
-| `1` | Waiting — all blocked | Every Pickup refusal proved an open native `blocked_by` dependency. The distinct `all_blocked` reason lets an operator wait for dependency closure rather than repair the Pool. |
-| `1` | Aborted — preflight | A precondition failed before the first Iteration (unauthenticated `gh`, `gh` older than 2.94.0 and so unable to read `blockedBy`, missing `docs/agents/issue-tracker.md`, missing `jq`/`copilot`, …). |
+| `1` | Waiting — all blocked | Every Pickup refusal proved an open native `blocked_by` dependency or an open closing pull request. The distinct `all_blocked` reason lets an operator wait for dependency closure, or for a pull request to merge, rather than repair the Pool. |
+| `1` | Aborted — preflight | A precondition failed before the first Iteration (unauthenticated `gh`, `gh` older than 2.94.0 and so unable to read `blockedBy` or `closedByPullRequestsReferences`, missing `docs/agents/issue-tracker.md`, missing `jq`/`copilot`, …). |
 | `2` | Usage error | Malformed invocation (e.g. a non-numeric iteration cap). |
 
 The full table is Wrapper contract

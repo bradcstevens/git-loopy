@@ -5380,7 +5380,7 @@ def test_readiness_fixture_drives_the_python_readiness_seam(
 # The tests above this production adapter pin the fixture against itself.
 # The adapter below is Python's claim (#695): it drives the production
 # Readiness decision, the unbound-Pool rule, and the read's pure halves.
-# shell (#697) still owes the fixture. PowerShell claims it (#698).
+# The shell (#697) and PowerShell (#698) claim it.
 # ---------------------------------------------------------------------------
 
 _AWAITING_MERGE = _load_fixture("awaiting-merge.json")

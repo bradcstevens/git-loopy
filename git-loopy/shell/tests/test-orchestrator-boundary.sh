@@ -85,14 +85,30 @@ case "${1-} ${2-}" in
     fi
     count=$((count + 1))
     printf '%s\n' "$count" >"$FAKE_GH_LIST_COUNT"
-    jq -c 'map(if has("blockedBy") then . else . + {
-      blockedBy: {totalCount: 0, nodes: []}
-    } end)' "$FAKE_GH_LIST_JSON"
+    omit=false
+    [[ "${FAKE_GH_OMIT_CLOSING:-}" == "1" ]] && omit=true
+    jq -c --argjson omit "$omit" 'map(
+      (if has("blockedBy") then . else . + {
+        blockedBy: {totalCount: 0, nodes: []}
+      } end)
+      | if has("closedByPullRequestsReferences") then .
+        elif $omit then .
+        else . + {closedByPullRequestsReferences: []}
+        end
+    )' "$FAKE_GH_LIST_JSON"
     ;;
   "issue view")
-    jq -c 'if has("blockedBy") then . else . + {
-      blockedBy: {totalCount: 0, nodes: []}
-    } end' "$FAKE_GH_VIEW_DIR/${3}.json"
+    omit=false
+    [[ "${FAKE_GH_OMIT_CLOSING:-}" == "1" ]] && omit=true
+    jq -c --argjson omit "$omit" '
+      (if has("blockedBy") then . else . + {
+        blockedBy: {totalCount: 0, nodes: []}
+      } end)
+      | if has("closedByPullRequestsReferences") then .
+        elif $omit then .
+        else . + {closedByPullRequestsReferences: []}
+        end
+    ' "$FAKE_GH_VIEW_DIR/${3}.json"
     ;;
   *)
     printf 'unexpected gh invocation: %s\n' "$*" >&2
@@ -251,9 +267,17 @@ case "${1-} ${2-}" in
     if [[ -n "${FAKE_GH_EMPTY_AFTER:-}" ]] && ((count > FAKE_GH_EMPTY_AFTER)); then
       printf '[]\n'
     else
-      jq -c 'map(if has("blockedBy") then . else . + {
-        blockedBy: {totalCount: 0, nodes: []}
-      } end)' "$FAKE_GH_LIST_JSON"
+      omit=false
+      [[ "${FAKE_GH_OMIT_CLOSING:-}" == "1" ]] && omit=true
+      jq -c --argjson omit "$omit" 'map(
+        (if has("blockedBy") then . else . + {
+          blockedBy: {totalCount: 0, nodes: []}
+        } end)
+        | if has("closedByPullRequestsReferences") then .
+          elif $omit then .
+          else . + {closedByPullRequestsReferences: []}
+          end
+      )' "$FAKE_GH_LIST_JSON"
     fi
     ;;
   "issue view")
@@ -267,9 +291,59 @@ case "${1-} ${2-}" in
         view_file="$FAKE_GH_VIEW_DIR/${3}.$list_count.json"
       fi
     fi
-    jq -c 'if has("blockedBy") then . else . + {
-      blockedBy: {totalCount: 0, nodes: []}
-    } end' "$view_file"
+    omit=false
+    [[ "${FAKE_GH_OMIT_CLOSING:-}" == "1" ]] && omit=true
+    jq -c --argjson omit "$omit" '
+      (if has("blockedBy") then . else . + {
+        blockedBy: {totalCount: 0, nodes: []}
+      } end)
+      | if has("closedByPullRequestsReferences") then .
+        elif $omit then .
+        else . + {closedByPullRequestsReferences: []}
+        end
+    ' "$view_file"
+    ;;
+  "api graphql")
+    # One state read per collection. A scenario that carries no reference never
+    # reaches here. `FAKE_GH_PR_STATES` is a JSON object of id to OPEN/MERGED/
+    # CLOSED; an id absent from it is a null node. A non-zero
+    # `FAKE_GH_GRAPHQL_STATUS` with no states is a failed request and writes no
+    # stdout. The same status with states still returns `data.nodes`, then
+    # exits non-zero: a null sibling does not discard the rest of the page.
+    count=0
+    if [[ -f "${FAKE_GH_GRAPHQL_COUNT:-}" ]]; then
+      count="$(<"$FAKE_GH_GRAPHQL_COUNT")"
+    fi
+    if [[ -n "${FAKE_GH_GRAPHQL_COUNT:-}" ]]; then
+      printf '%s\n' "$((count + 1))" >"$FAKE_GH_GRAPHQL_COUNT"
+    fi
+    body="$(cat)"
+    if [[ -n "${FAKE_GH_GRAPHQL_BODIES:-}" ]]; then
+      printf '%s\n' "$body" >>"$FAKE_GH_GRAPHQL_BODIES"
+    fi
+    if [[ "${FAKE_GH_GRAPHQL_STATUS:-0}" != "0" && -z "${FAKE_GH_PR_STATES:-}" ]]; then
+      printf 'graphql state read failed\n' >&2
+      exit "$FAKE_GH_GRAPHQL_STATUS"
+    fi
+    states='{}'
+    if [[ -n "${FAKE_GH_PR_STATES:-}" ]]; then
+      states="$FAKE_GH_PR_STATES"
+    fi
+    jq -c --argjson states "$states" '
+      .variables.ids as $ids
+      | {
+          data: {
+            nodes: [
+              $ids[]
+              | . as $id
+              | if $states[$id] then {id: $id, state: $states[$id]} else null end
+            ]
+          }
+        }
+    ' <<<"$body"
+    if [[ "${FAKE_GH_GRAPHQL_STATUS:-0}" != "0" ]]; then
+      exit "$FAKE_GH_GRAPHQL_STATUS"
+    fi
     ;;
   "issue close")
     if [[ "${FAKE_GH_CLOSE_STATUS:-0}" != "0" ]]; then
@@ -597,6 +671,9 @@ unset FAKE_GH_VERSION
 assert_contains "$(<"$temp_dir/readiness-preflight.stderr")" \
   "cannot read issue dependencies (blockedBy)" \
   "old gh readiness preflight explains the missing capability"
+assert_contains "$(<"$temp_dir/readiness-preflight.stderr")" \
+  "closedByPullRequestsReferences" \
+  "old gh readiness preflight names the closing-reference field"
 if grep -q '^issue list ' "$FAKE_GH_LOG"; then
   fail "old gh reached Pool collection"
 fi
@@ -927,10 +1004,10 @@ assert_contains "$(<"$temp_dir/readiness-pickup.stderr")" \
   "serial Pickup skipped #51 — blocked by open dependency: example/repo#50" \
   "Pickup names the blocker it passed over"
 assert_contains "$(<"$FAKE_GH_LOG")" \
-  "issue list --state open --label ready-for-agent --limit 100 --json number,title,body,labels,state,url,createdAt,blockedBy" \
-  "Pool collection carries blockedBy"
+  "issue list --state open --label ready-for-agent --limit 100 --json number,title,body,labels,state,url,createdAt,blockedBy,closedByPullRequestsReferences" \
+  "Pool collection carries blockedBy and closing references"
 if grep -q '^api graphql' "$FAKE_GH_LOG"; then
-  fail "Readiness paid a dedicated GraphQL dependency round-trip"
+  fail "a Pool with no closing reference paid a pull-request state read"
 fi
 assert_equal "1" "$(<"$FAKE_COPILOT_CALLS")" \
   "blocked candidate never started a session"
@@ -976,8 +1053,8 @@ jq -se '
 ' "$temp_dir/readiness-all-blocked.stdout" >/dev/null ||
   fail "all-Blocked Pool did not end the Run waiting on blockers without a Strike"
 assert_contains "$(<"$temp_dir/readiness-all-blocked.stderr")" \
-  "waiting on blockers" \
-  "the all-blocked ending tells the operator why work did not start"
+  "open blockers or on pull requests to merge" \
+  "the all-blocked ending names both waits"
 
 # A Pool that mixes a proven blocker with a read the Runner could not prove ends
 # under `preflight_failed` (#542): "waiting" must not hide work an operator can
@@ -1076,6 +1153,372 @@ jq -se '
 ' "$temp_dir/readiness-all-unprovable.stdout" >/dev/null ||
   fail "an all-unreadable Pool ended the Run as one it could take no work from"
 
+# ADR-0069: an open closing pull request is passed over at Pickup. The
+# references rode the list and the view; one GraphQL request resolves every
+# distinct id on that read, and a merged reference stays admissible.
+reset_closing_stub() {
+  unset FAKE_GH_PR_STATES FAKE_GH_GRAPHQL_STATUS FAKE_GH_GRAPHQL_COUNT \
+    FAKE_GH_GRAPHQL_BODIES FAKE_GH_OMIT_CLOSING
+}
+awaiting_body=$'## What to build\nShip it.\n\n## Acceptance criteria\n- Done.'
+awaiting_empty_blocked='{"totalCount":0,"nodes":[]}'
+awaiting_open_blocker='{"totalCount":1,"nodes":[{"id":"blocker-50","number":50,"state":"OPEN","title":"Dependency","url":"https://github.com/example/repo/issues/50"}]}'
+
+awaiting_closing_ref() {
+  jq -cn --arg id "$1" --argjson number "$2" \
+    '{id: $id, number: $number, repository: {name: "repo", owner: {login: "example"}}}'
+}
+
+awaiting_issue() {
+  local number="$1" created="$2" title="$3" blocked="$4" refs="$5"
+  local include_closing="${6:-yes}"
+  if [[ "$include_closing" == "yes" ]]; then
+    jq -cn \
+      --argjson number "$number" \
+      --arg created "$created" \
+      --arg title "$title" \
+      --arg body "$awaiting_body" \
+      --argjson blocked "$blocked" \
+      --argjson refs "$refs" \
+      '{
+        number: $number,
+        title: $title,
+        body: $body,
+        labels: [{name: "ready-for-agent"}],
+        state: "OPEN",
+        url: ("https://example.invalid/issues/" + ($number | tostring)),
+        createdAt: $created,
+        blockedBy: $blocked,
+        closedByPullRequestsReferences: $refs
+      }'
+  else
+    jq -cn \
+      --argjson number "$number" \
+      --arg created "$created" \
+      --arg title "$title" \
+      --arg body "$awaiting_body" \
+      --argjson blocked "$blocked" \
+      '{
+        number: $number,
+        title: $title,
+        body: $body,
+        labels: [{name: "ready-for-agent"}],
+        state: "OPEN",
+        url: ("https://example.invalid/issues/" + ($number | tostring)),
+        createdAt: $created,
+        blockedBy: $blocked
+      }'
+  fi
+}
+
+stage_awaiting_pool() {
+  local label="$1"
+  local list_json="$2"
+  repo="$temp_dir/awaiting-$label"
+  fake_bin="$temp_dir/awaiting-$label-bin"
+  make_real_repo "$repo"
+  write_turn_tools "$fake_bin"
+  printf '%s\n' "$list_json" >"$temp_dir/awaiting-$label-list.json"
+  mkdir -p "$temp_dir/awaiting-$label-views"
+  local issue
+  while IFS= read -r issue; do
+    jq --argjson issue "$issue" \
+      '.[] | select(.number == $issue) | . + {comments: []}' \
+      "$temp_dir/awaiting-$label-list.json" \
+      >"$temp_dir/awaiting-$label-views/$issue.json"
+  done < <(jq -r '.[].number' "$temp_dir/awaiting-$label-list.json")
+  export FAKE_GH_LOG="$temp_dir/awaiting-$label-gh.log"
+  export FAKE_GH_LIST_COUNT="$temp_dir/awaiting-$label-list.count"
+  export FAKE_GH_LIST_JSON="$temp_dir/awaiting-$label-list.json"
+  export FAKE_GH_VIEW_DIR="$temp_dir/awaiting-$label-views"
+  rm -f "$FAKE_GH_LIST_COUNT"
+  setup_copilot_env "awaiting-$label"
+}
+
+awaiting_open_refs="$(
+  jq -cn --argjson first "$(awaiting_closing_ref PR_kwDO_688 688)" \
+    --argjson second "$(awaiting_closing_ref PR_kwDO_689 689)" \
+    '[$first, $second]'
+)"
+awaiting_merged_refs="$(
+  jq -cn --argjson merged "$(awaiting_closing_ref PR_kwDO_302 302)" '[$merged]'
+)"
+awaiting_pair="$(
+  jq -cn \
+    --argjson head "$(
+      awaiting_issue 61 "2026-03-01T00:00:00Z" "Awaiting merge" \
+        "$awaiting_empty_blocked" "$awaiting_open_refs"
+    )" \
+    --argjson follower "$(
+      awaiting_issue 62 "2026-03-02T00:00:00Z" "Merged reference stays ready" \
+        "$awaiting_empty_blocked" "$awaiting_merged_refs"
+    )" \
+    '[$head, $follower]'
+)"
+
+reset_closing_stub
+export FAKE_GH_PR_STATES='{"PR_kwDO_688":"OPEN","PR_kwDO_689":"OPEN","PR_kwDO_302":"MERGED"}'
+export FAKE_GH_GRAPHQL_COUNT="$temp_dir/awaiting-pass-graphql.count"
+export FAKE_GH_GRAPHQL_BODIES="$temp_dir/awaiting-pass-graphql.bodies"
+: >"$FAKE_GH_GRAPHQL_BODIES"
+stage_awaiting_pool pass "$awaiting_pair"
+export FAKE_COPILOT_COMMITS=1
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/awaiting-pass.stdout" \
+  "$temp_dir/awaiting-pass.stderr" 1; then
+  fail "Awaiting-merge Pickup Run did not exit 0: $(<"$temp_dir/awaiting-pass.stderr")"
+fi
+unset FAKE_COPILOT_COMMITS
+jq -se '
+  ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues] == [[61, 62]])
+  and ([.[] | select(.type == "wrapper.pool.excluded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.pickup.skipped")
+       | {issue, reason, position, considered}] == [{
+    issue: 61,
+    reason: "awaiting_pull_request_merge: example/repo#688, example/repo#689",
+    position: 1,
+    considered: 2
+  }])
+  and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 1)
+  and ([.[] | select(.type == "wrapper.pickup.bound")]
+    | all(.issue == 62 and .position == 2 and .considered == 2))
+  and ([.[] | select(.type == "wrapper.strike")] | length == 0)
+' "$temp_dir/awaiting-pass.stdout" >/dev/null ||
+  fail "an Awaiting-merge head was not passed over without a Strike"
+assert_contains "$(<"$temp_dir/awaiting-pass.stderr")" \
+  "serial Pickup skipped #61 — awaiting pull request merge: example/repo#688, example/repo#689" \
+  "Pickup names every open closing pull request it passed over"
+assert_contains "$(<"$FAKE_GH_LOG")" \
+  "issue list --state open --label ready-for-agent --limit 100 --json number,title,body,labels,state,url,createdAt,blockedBy,closedByPullRequestsReferences" \
+  "closing references ride the collection read"
+assert_contains "$(<"$FAKE_GH_LOG")" \
+  "issue view 61 --json number,title,body,labels,state,url,createdAt,blockedBy,closedByPullRequestsReferences,comments" \
+  "closing references ride the authoritative view"
+graphql_lines="$(grep -c '^api graphql --input -$' "$FAKE_GH_LOG" || true)"
+assert_equal "1" "$graphql_lines" \
+  "one read with several references pays one state request"
+assert_equal "1" "$(<"$FAKE_GH_GRAPHQL_COUNT")" \
+  "the state read is counted once"
+jq -se '
+  length == 1
+  and (.[0].variables.ids == ["PR_kwDO_688", "PR_kwDO_689", "PR_kwDO_302"])
+  and (.[0].query | contains("nodes(ids:"))
+' "$FAKE_GH_GRAPHQL_BODIES" >/dev/null ||
+  fail "the state read did not carry every distinct id in one request"
+assert_equal "1" "$(<"$FAKE_COPILOT_CALLS")" \
+  "the passed-over candidate never started a session"
+
+# A Pool whose every refusal is a wait — here, only an open closing pull
+# request — ends all_blocked. The diagnostic names both waits, not blockers
+# alone.
+reset_closing_stub
+export FAKE_GH_PR_STATES='{"PR_kwDO_688":"OPEN","PR_kwDO_689":"OPEN"}'
+export FAKE_GH_GRAPHQL_COUNT="$temp_dir/awaiting-blocked-graphql.count"
+stage_awaiting_pool blocked "$(jq -c '[.[0]]' <<<"$awaiting_pair")"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/awaiting-blocked.stdout" \
+  "$temp_dir/awaiting-blocked.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" \
+  "an all-waiting Pool aborts the Run instead of reporting a finished queue"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "an all-waiting Pool started a session"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["awaiting_pull_request_merge: example/repo#688, example/repo#689"])
+  and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
+  and ([.[] | select(.type == "wrapper.strike")] | length == 0)
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome]
+    == ["all_blocked"])
+  and (.[-1].type == "wrapper.run.end")
+  and (.[-1].outcome == "all_blocked")
+' "$temp_dir/awaiting-blocked.stdout" >/dev/null ||
+  fail "an Awaiting-merge Pool did not end waiting, without a Strike"
+assert_contains "$(<"$temp_dir/awaiting-blocked.stderr")" \
+  "wait on open blockers or on pull requests to merge; this Run is waiting on them." \
+  "the all-blocked diagnostic names pull requests to merge, not blockers alone"
+
+# An open blocker still outranks an open pull request. The state read still
+# happens; it does not change the reason a Blocked candidate reports today.
+reset_closing_stub
+export FAKE_GH_PR_STATES='{"PR_kwDO_688":"OPEN"}'
+export FAKE_GH_GRAPHQL_COUNT="$temp_dir/awaiting-outrank-graphql.count"
+outrank_refs="$(jq -cn --argjson one "$(awaiting_closing_ref PR_kwDO_688 688)" '[$one]')"
+stage_awaiting_pool outrank "$(
+  jq -cn --argjson issue "$(
+    awaiting_issue 61 "2026-03-01T00:00:00Z" "Blocked and awaiting" \
+      "$awaiting_open_blocker" "$outrank_refs"
+  )" '[$issue]'
+)"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/awaiting-outrank.stdout" \
+  "$temp_dir/awaiting-outrank.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" "a Blocked head still ends the Run waiting"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["blocked_by_open_dependency: example/repo#50"])
+  and (.[-1].outcome == "all_blocked")
+' "$temp_dir/awaiting-outrank.stdout" >/dev/null ||
+  fail "an open blocker did not outrank the open closing pull request"
+assert_equal "1" "$(<"$FAKE_GH_GRAPHQL_COUNT")" \
+  "outranking a pull request still resolved its state once"
+
+# A failed state read decides nothing: it is not a wait and not an admission.
+reset_closing_stub
+export FAKE_GH_GRAPHQL_STATUS=1
+export FAKE_GH_GRAPHQL_COUNT="$temp_dir/awaiting-failed-graphql.count"
+failed_refs="$(jq -cn --argjson one "$(awaiting_closing_ref PR_kwDO_305 305)" '[$one]')"
+stage_awaiting_pool failed "$(
+  jq -cn --argjson issue "$(
+    awaiting_issue 61 "2026-03-01T00:00:00Z" "State read failed" \
+      "$awaiting_empty_blocked" "$failed_refs"
+  )" '[$issue]'
+)"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/awaiting-failed.stdout" \
+  "$temp_dir/awaiting-failed.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" "a failed state read exits nonzero"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "a failed state read started a session"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["readiness_unprovable"])
+  and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
+  and ([.[] | select(.type == "wrapper.strike")] | length == 0)
+  and (.[-1].outcome == "preflight_failed")
+  and (.[-1].outcome != "all_blocked")
+' "$temp_dir/awaiting-failed.stdout" >/dev/null ||
+  fail "a failed state read was treated as a wait or an admission"
+assert_equal "1" "$(<"$FAKE_GH_GRAPHQL_COUNT")" \
+  "a failed state read was still the one request that read owed"
+
+# A null node — the token cannot see it — is the same unread verdict, even
+# when an open sibling in the same response would have been a wait. Exit 1
+# with `data.nodes` still present must not discard that sibling.
+reset_closing_stub
+export FAKE_GH_PR_STATES='{"PR_kwDO_688":"OPEN"}'
+export FAKE_GH_GRAPHQL_STATUS=1
+export FAKE_GH_GRAPHQL_COUNT="$temp_dir/awaiting-sibling-graphql.count"
+sibling_refs="$(
+  jq -cn \
+    --argjson open "$(awaiting_closing_ref PR_kwDO_688 688)" \
+    --argjson hidden "$(awaiting_closing_ref PR_kwDO_309 309)" \
+    '[$open, $hidden]'
+)"
+stage_awaiting_pool sibling "$(
+  jq -cn --argjson issue "$(
+    awaiting_issue 61 "2026-03-01T00:00:00Z" "Open beside a null node" \
+      "$awaiting_empty_blocked" "$sibling_refs"
+  )" '[$issue]'
+)"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/awaiting-sibling.stdout" \
+  "$temp_dir/awaiting-sibling.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" "an open pull request beside a null node still waits"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["awaiting_pull_request_merge: example/repo#688"])
+  and (.[-1].outcome == "all_blocked")
+' "$temp_dir/awaiting-sibling.stdout" >/dev/null ||
+  fail "a null sibling hid the open closing pull request or was read as a failure of the whole page"
+
+reset_closing_stub
+export FAKE_GH_PR_STATES='{}'
+export FAKE_GH_GRAPHQL_COUNT="$temp_dir/awaiting-null-graphql.count"
+null_refs="$(jq -cn --argjson one "$(awaiting_closing_ref PR_kwDO_309 309)" '[$one]')"
+stage_awaiting_pool null "$(
+  jq -cn --argjson issue "$(
+    awaiting_issue 61 "2026-03-01T00:00:00Z" "Null state node" \
+      "$awaiting_empty_blocked" "$null_refs"
+  )" '[$issue]'
+)"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/awaiting-null.stdout" \
+  "$temp_dir/awaiting-null.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" "a null state node exits nonzero"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["readiness_unprovable"])
+  and (.[-1].outcome == "preflight_failed")
+' "$temp_dir/awaiting-null.stdout" >/dev/null ||
+  fail "a node the token cannot see was admitted or treated as a wait"
+
+# A zero-value reference is unreadable. It costs no state request, and it is
+# not "no pull requests".
+reset_closing_stub
+export FAKE_GH_GRAPHQL_COUNT="$temp_dir/awaiting-unreadable-graphql.count"
+printf '0\n' >"$FAKE_GH_GRAPHQL_COUNT"
+unreadable_refs='[{"id":"","number":0}]'
+stage_awaiting_pool unreadable "$(
+  jq -cn --argjson issue "$(
+    awaiting_issue 61 "2026-03-01T00:00:00Z" "Unreadable reference" \
+      "$awaiting_empty_blocked" "$unreadable_refs"
+  )" '[$issue]'
+)"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/awaiting-unreadable.stdout" \
+  "$temp_dir/awaiting-unreadable.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" "an unreadable reference exits nonzero"
+if grep -q '^api graphql' "$FAKE_GH_LOG"; then
+  fail "an unreadable reference paid a state read"
+fi
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["readiness_unprovable"])
+  and (.[-1].outcome == "preflight_failed")
+' "$temp_dir/awaiting-unreadable.stdout" >/dev/null ||
+  fail "an unreadable reference was admitted or treated as a wait"
+
+# A missing field is the unread connection, never an empty one. The stub must
+# not invent `[]` for this scenario.
+reset_closing_stub
+export FAKE_GH_OMIT_CLOSING=1
+export FAKE_GH_GRAPHQL_COUNT="$temp_dir/awaiting-missing-graphql.count"
+printf '0\n' >"$FAKE_GH_GRAPHQL_COUNT"
+stage_awaiting_pool missing "$(
+  jq -cn --argjson issue "$(
+    awaiting_issue 61 "2026-03-01T00:00:00Z" "Field absent" \
+      "$awaiting_empty_blocked" "[]" no
+  )" '[$issue]'
+)"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/awaiting-missing.stdout" \
+  "$temp_dir/awaiting-missing.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" "a missing closing-reference field exits nonzero"
+if grep -q '^api graphql' "$FAKE_GH_LOG"; then
+  fail "a missing closing-reference field paid a state read"
+fi
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["readiness_unprovable"])
+  and (.[-1].outcome == "preflight_failed")
+  and (.[-1].outcome != "all_blocked")
+' "$temp_dir/awaiting-missing.stdout" >/dev/null ||
+  fail "a missing closing-reference field was read as no pull requests"
+reset_closing_stub
+
+repo="$temp_dir/readiness-all-unprovable"
+fake_bin="$temp_dir/readiness-all-unprovable-bin"
 export FAKE_GH_LOG="$temp_dir/github-cap-gh.log"
 export FAKE_GH_LIST_COUNT="$temp_dir/github-cap-list.count"
 export FAKE_GH_LIST_JSON="$temp_dir/github-list.json"
@@ -2555,7 +2998,7 @@ jq -se '
     "id": "n", "number": 50, "state": "OPEN", "title": "t",
     "url": "https://github.com/example/repo/issues/50"}]}}'
   assert_equal \
-    '{"admissible":false,"blockers":["example/repo#50"],"skip_reason":"blocked_by_open_dependency","verdict":"blocked"}' \
+    '{"admissible":false,"blockers":["example/repo#50"],"names":["example/repo#50"],"reason":"blocked_by_open_dependency: example/repo#50","skip_reason":"blocked_by_open_dependency","unbound_pool_class":"waiting","verdict":"blocked"}' \
     "$(jq -cS . <<<"$(git_loopy_candidate_readiness "$blocked")")" \
     "a GitHub candidate is judged on the connection its collection carried"
 
@@ -2567,7 +3010,7 @@ jq -se '
   GIT_LOOPY_ISSUE_SOURCE="prds"
   markdown='{"ref": "prds/feature/001-thing.md", "title": "t", "body": "b"}'
   assert_equal \
-    '{"admissible":true,"blockers":[],"skip_reason":null,"verdict":"ready"}' \
+    '{"admissible":true,"blockers":[],"names":[],"reason":null,"skip_reason":null,"unbound_pool_class":"admitted","verdict":"ready"}' \
     "$(jq -cS . <<<"$(git_loopy_candidate_readiness "$markdown")")" \
     "a local-markdown candidate has no dependency graph and is ready"
 ) || fail "the shell Readiness seam does not answer per candidate source"
@@ -2612,6 +3055,8 @@ jq -se '
     fail "gh 2.93.9 was accepted for a Readiness collection"
   assert_contains "$message" "gh 2.93.9 cannot read issue dependencies (blockedBy)" \
     "the refusal names the gh that cannot answer"
+  assert_contains "$message" "closedByPullRequestsReferences" \
+    "the refusal names the closing-reference field an old gh cannot serve"
   assert_contains "$message" "requires gh >= 2.94.0" \
     "the refusal names the floor the operator must reach"
 
@@ -3540,6 +3985,35 @@ jq -se '
     == [[72, 70, 71], [72, 70, 71]])
 ' "$temp_dir/pin-unread.stdout" >/dev/null ||
   fail "a Pin the Pickup could not read was spent"
+clear_pin_pickup_views
+
+# An Awaiting-merge Pin was read — the open pull request is an answer about
+# it — so it is spent. The next Pickup orders it like any other issue.
+jq --argjson refs "$(awaiting_closing_ref PR_kwDO_pin 688)" \
+  '. + {
+    blockedBy: {totalCount: 0, nodes: []},
+    closedByPullRequestsReferences: [$refs]
+  }' "$temp_dir/pin-turn-views/72.json" \
+  >"$temp_dir/pin-turn-views/72.1.json"
+export FAKE_GH_PR_STATES='{"PR_kwDO_pin":"OPEN"}'
+export FAKE_GH_GRAPHQL_COUNT="$temp_dir/pin-awaiting-graphql.count"
+printf '0\n' >"$FAKE_GH_GRAPHQL_COUNT"
+run_pin_lifetime awaiting 2
+unset FAKE_GH_PR_STATES FAKE_GH_GRAPHQL_COUNT
+[[ "$(<"$FAKE_COPILOT_CALLS")" == "2" ]] ||
+  fail "the Awaiting-merge Pin Run did not work two Iterations: \
+$(<"$temp_dir/pin-awaiting.stderr")"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | [.issue, .reason]]
+    == [[72, "awaiting_pull_request_merge: example/repo#688"]])
+  and ([.[] | select(.type == "wrapper.pickup.bound") | [.issue, .reason]]
+    == [[70, "order"], [70, "order"]])
+  and ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues]
+    == [[72, 70, 71], [70, 71, 72]])
+' "$temp_dir/pin-awaiting.stdout" >/dev/null ||
+  fail "an Awaiting-merge Pin was promoted again after it was passed over"
+assert_equal "1" "$(<"$temp_dir/pin-awaiting-graphql.count")" \
+  "the Pin's state read happened once, on the read that carried the reference"
 clear_pin_pickup_views
 
 printf 'shell Orchestrator boundary: ok\n'
