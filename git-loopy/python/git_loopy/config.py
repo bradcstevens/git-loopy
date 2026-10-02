@@ -46,6 +46,7 @@ __all__ = [
     "MODEL_REASONING_EFFORTS",
     "MODEL_ROSTER_CLI_VERSION",
     "SUPPORTED_MODELS",
+    "DEFAULT_MAX_NMT_STRIKES",
     "DEFAULT_SEND_TIMEOUT_SECONDS",
     "TASK_TYPE_LABEL_PREFIX",
     "TASK_TYPE_KEYS",
@@ -344,6 +345,11 @@ def task_type_refusal(exc: TaskTypeError) -> str:
 #: :class:`RunConfig` knob (issue #51): the loop reads
 #: :attr:`RunConfig.send_timeout_seconds` rather than the env directly.
 DEFAULT_SEND_TIMEOUT_SECONDS: float = 7200.0
+
+#: How many **Strikes** an issue may be charged in one Run before it is skipped
+#: (ADR-0070). The one default the CLI resolver, :class:`RunConfig` and the
+#: attempt ledger share.
+DEFAULT_MAX_NMT_STRIKES = 3
 
 
 @dataclass(frozen=True)
@@ -834,7 +840,7 @@ class RunConfig:
     issue_source: Literal["github", "prds"] = "github"
     include_prs: bool | None = None
     max_iterations: int = 0
-    max_nmt_strikes: int = 3
+    max_nmt_strikes: int = DEFAULT_MAX_NMT_STRIKES
     demotion_threshold: int = 3
     deny_tools: frozenset[str] = field(default_factory=frozenset)
     deny_skills: frozenset[str] = field(default_factory=frozenset)

@@ -1255,13 +1255,13 @@ def test_run_end_table_final_strikes_uses_last_iteration_value() -> None:
     )
 
 
-def test_run_end_final_strikes_sums_each_issues_latest_count() -> None:
-    """Per-issue Strikes total each issue's latest count, once (ADR-0070).
+def test_run_end_final_strikes_is_the_issue_at_stakes_count() -> None:
+    """Per-issue Strikes show the issue at stake's count, never a sum (ADR-0070).
 
-    Strikes charged to an issue are cumulative and never refunded, so the
-    Run's total is every issue's last reported count — not the last
-    Iteration's, which would forget the other issues, and not the sum of the
-    Iterations, which would count #42's first Strike twice.
+    Wrapper contract §12: a consumer "shows the count of the issue at stake and
+    never sums across issues". The issue at stake is the one last bound, or
+    failing that the one last charged — the same issue the Header follows. A
+    later advance on that issue refunds nothing, so its count stands.
     """
     renderer, summary, _buf = _make_renderer()
     renderer.render({"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000A4"})
@@ -1278,12 +1278,24 @@ def test_run_end_final_strikes_sums_each_issues_latest_count() -> None:
             }
         )
         renderer.render({"type": WRAPPER_ITERATION_END, "iter": iter_num})
-    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 4, "issue": 44})
+
+    assert summary.totals().final_strikes == 1, "#43 is at stake; 3 is a sum"
+
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 4, "issue": 42})
     renderer.render({"type": WRAPPER_COMMIT_RECORDED, "sha": "deadbeef", "subject": "x"})
     renderer.render({"type": WRAPPER_ITERATION_END, "iter": 4})
     renderer.render({"type": WRAPPER_RUN_END, "outcome": "empty_pool"})
 
-    assert summary.totals().final_strikes == 3
+    assert summary.totals().final_strikes == 2, "#42's Strikes are never refunded"
+
+
+def test_run_end_final_strikes_follows_the_last_charged_issue_when_none_is_bound() -> None:
+    """With no bound Iteration, the issue at stake is the one last charged."""
+    summary = RunSummary()
+    summary.record_strike(strikes=2, issue=42)
+    summary.record_strike(strikes=1, issue=43)
+
+    assert summary.totals().final_strikes == 1
 
 
 def test_a_strike_naming_its_issue_prints_that_issues_count_and_ending() -> None:

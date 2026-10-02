@@ -2437,10 +2437,11 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.11 adds the spent refill turn, including a zero reservation. 1.10
+    # 1.12 charges Strikes per issue, so an advance resets none (ADR-0070).
+    # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.11"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.12"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]

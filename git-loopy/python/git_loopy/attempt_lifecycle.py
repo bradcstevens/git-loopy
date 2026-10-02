@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from git_loopy.config import RoutingLifecyclePosition
+from git_loopy.config import DEFAULT_MAX_NMT_STRIKES, RoutingLifecyclePosition
 from git_loopy.session_outcome import SessionOutcome
 
 __all__ = ["AttemptState", "AttemptLedger", "DEFAULT_MAX_STRIKES"]
@@ -41,9 +41,9 @@ class AttemptState(Enum):
     SKIPPED = "skipped"
 
 
-#: The default Strike limit, matching ``max_nmt_strikes``'s own default so a
-#: ledger built without a Config disposes of an issue as a default Run would.
-DEFAULT_MAX_STRIKES = 3
+#: The default Strike limit: ``max_nmt_strikes``'s own default, so a ledger
+#: built without a Config disposes of an issue as a default Run would.
+DEFAULT_MAX_STRIKES = DEFAULT_MAX_NMT_STRIKES
 
 
 @dataclass

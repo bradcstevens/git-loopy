@@ -99,6 +99,7 @@ from typing import TYPE_CHECKING, Any, Callable, Collection, Literal, Mapping
 
 from git_loopy import settings
 from git_loopy.config import (
+    DEFAULT_MAX_NMT_STRIKES,
     DEFAULT_SEND_TIMEOUT_SECONDS,
     CONTEXT_TIERS,
     DEFAULT_CONTEXT_TIER,
@@ -143,7 +144,6 @@ __all__ = [
     "ResolvedConfig",
 ]
 
-_DEFAULT_MAX_NMT_STRIKES = 3
 #: How many no-progress **Lane contributions** one **Routed pair** may
 #: accumulate in a Run before **Demotion** steps its **Measured routing** entry
 #: up the price staircase (#366, ADR-0030). Shares a value with the Strike budget
@@ -2055,7 +2055,7 @@ def _resolve_max_nmt_strikes(
     gv = settings.table_int(global_, "max_nmt_strikes", scope="global")
     if gv is not None:
         return _validate_max_nmt_strikes(gv, source="global config max_nmt_strikes")
-    return _DEFAULT_MAX_NMT_STRIKES
+    return DEFAULT_MAX_NMT_STRIKES
 
 
 def _validate_max_nmt_strikes(value: int, *, source: str) -> int:

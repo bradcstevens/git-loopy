@@ -36,7 +36,7 @@ Design notes:
   authoritative count after the iteration). Absent that key, each
   STRIKE event increments the counter — a marker form for diagnostic
   use. A Strike that names its ``issue`` is that issue's own count
-  (ADR-0070), and the Run total sums each issue's latest one.
+  (ADR-0070), and the Run total shows the issue at stake's, never a sum.
 * **context_used = tokens_in + tokens_out.** Read straight off the tally
   (:attr:`~git_loopy.usage.UsageTally.total_tokens`); matches the schema
   example in :mod:`git_loopy.persist`. Labelled as "observed tokens" in the
@@ -368,6 +368,10 @@ class RunSummary:
     #: (ADR-0070). ``None`` until then, so a producer whose Strikes are one
     #: Run-wide count keeps the last-Iteration reading in :meth:`totals`.
     issue_strikes: Optional[dict[int | str, int]] = None
+    #: The issue at stake, whose count :meth:`totals` reports: the one last
+    #: bound, or failing that the one last charged — the issue the Header
+    #: follows too.
+    strike_focus: int | str | None = None
 
     # -- iteration lifecycle ------------------------------------------------
 
@@ -394,6 +398,8 @@ class RunSummary:
             started_at=datetime.now(timezone.utc),
         )
         self.open_contributions[contribution_id] = snap
+        if snap.issue_num is not None:
+            self.strike_focus = snap.issue_num
         return snap
 
     def on_contribution_end(
@@ -505,6 +511,8 @@ class RunSummary:
             started_at=datetime.now(timezone.utc),
         )
         self.current = snap
+        if issue_num is not None:
+            self.strike_focus = issue_num
         return snap
 
     def on_iteration_end(
@@ -645,6 +653,7 @@ class RunSummary:
             if self.issue_strikes is None:
                 self.issue_strikes = {}
             self.issue_strikes[issue] = int(strikes)
+            self.strike_focus = issue
         snap = self.current
         if snap is None:
             return
@@ -677,10 +686,10 @@ class RunSummary:
         An unreported Run-only bill makes the combined bill unknown; its
         separately named subtotal remains available wherever it was measured.
 
-        ``final_strikes`` is every issue's latest Strike count summed, when
-        the producer charges Strikes per issue (ADR-0070): each count is
-        cumulative, so summing the Iterations would count one Strike again
-        for every later Iteration on its issue. A producer whose Strikes are
+        ``final_strikes`` is the issue at stake's Strike count when the
+        producer charges Strikes per issue (ADR-0070) — see
+        :attr:`strike_focus` — and never a sum across issues (Wrapper contract
+        §12); an issue never charged reads ``0``. A producer whose Strikes are
         one Run-wide count that resets on progress reports the last completed
         Iteration's value instead, since summing would mislead there too.
         """
@@ -717,7 +726,7 @@ class RunSummary:
             if self.run_usage.premium_requests is None:
                 premium_requests = None
         if self.issue_strikes is not None:
-            final_strikes = sum(self.issue_strikes.values())
+            final_strikes = self.issue_strikes.get(self.strike_focus, 0)
         else:
             final_strikes = self.completed[-1].strikes if self.completed else 0
         iterations_with_skill = sum(
