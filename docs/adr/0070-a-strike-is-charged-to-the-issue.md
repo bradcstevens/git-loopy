@@ -2,7 +2,13 @@
 
 **Status:** accepted — supersedes [ADR-0041](0041-the-strike-counts-issues-given-up-on.md)'s
 Run-wide ceiling and amends [ADR-0040](0040-a-bounded-number-of-attempts-per-issue-per-run.md)'s
-disposition table. The `all_skipped` termination ADR-0041 introduced is kept unchanged.
+disposition table. The `all_skipped` termination ADR-0041 introduced is kept unchanged. For the
+Python Runner it also amends the Run-wide Strike abort, reset and drain that
+[ADR-0004](0004-runner-checkpoint-and-push-durability.md),
+[ADR-0009](0009-runner-driven-integration-and-auto-resolution.md),
+[ADR-0020](0020-rolling-dispatch-with-bounded-green-integration.md),
+[ADR-0030](0030-demotion-is-measured-per-pair.md) and
+[ADR-0043](0043-a-stop-drains-before-it-cancels.md) relied on.
 
 A **Run** picked up #680 and ended 38 seconds later having done nothing. Its work was already
 sitting in an open pull request; the **Session** said so with *no more tasks*, which defeated

@@ -369,8 +369,10 @@ class RunSummary:
     #: Run-wide count keeps the last-Iteration reading in :meth:`totals`.
     issue_strikes: Optional[dict[int | str, int]] = None
     #: The issue at stake, whose count :meth:`totals` reports: the one last
-    #: bound, or failing that the one last charged — the issue the Header
-    #: follows too.
+    #: bound by a serial **Pickup** (:meth:`bind_issue`), or failing that the
+    #: one last charged. A Lane's binding does not move it — the Header's rule
+    #: too, which ``test_run_summary_and_header_agree_on_the_issue_at_stake``
+    #: holds the two readers to.
     strike_focus: int | str | None = None
 
     # -- iteration lifecycle ------------------------------------------------
@@ -398,8 +400,6 @@ class RunSummary:
             started_at=datetime.now(timezone.utc),
         )
         self.open_contributions[contribution_id] = snap
-        if snap.issue_num is not None:
-            self.strike_focus = snap.issue_num
         return snap
 
     def on_contribution_end(
@@ -511,9 +511,11 @@ class RunSummary:
             started_at=datetime.now(timezone.utc),
         )
         self.current = snap
-        if issue_num is not None:
-            self.strike_focus = issue_num
         return snap
+
+    def bind_issue(self, issue: int | str) -> None:
+        """A serial **Pickup** bound ``issue``: it is now the issue at stake."""
+        self.strike_focus = issue
 
     def on_iteration_end(
         self, rollup: Optional[Mapping[str, Any]] = None

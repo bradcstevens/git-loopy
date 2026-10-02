@@ -47,6 +47,7 @@ from git_loopy.events import (
     WRAPPER_CONCURRENCY_CHANGED,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
+    WRAPPER_ISSUE_ACTIVATED,
     WRAPPER_PARALLEL_DEGRADED,
     WRAPPER_PUSH_RECORDED,
     WRAPPER_RUN_END,
@@ -1255,38 +1256,60 @@ def test_run_end_table_final_strikes_uses_last_iteration_value() -> None:
     )
 
 
+def _bind(issue: int, *, iter_num: int) -> dict[str, Any]:
+    """The serial Pickup's binding, as the Python Runner emits it."""
+    return {
+        "type": WRAPPER_ISSUE_ACTIVATED,
+        "iter": iter_num,
+        "issue": issue,
+        "binding_source": "serial_pickup",
+    }
+
+
+def _charge(issue: int, strikes: int) -> dict[str, Any]:
+    return {
+        "type": WRAPPER_STRIKE,
+        "issue": issue,
+        "ending": "no_progress",
+        "strikes": strikes,
+        "max_strikes": 3,
+        "outcome": "warn",
+    }
+
+
 def test_run_end_final_strikes_is_the_issue_at_stakes_count() -> None:
     """Per-issue Strikes show the issue at stake's count, never a sum (ADR-0070).
 
     Wrapper contract §12: a consumer "shows the count of the issue at stake and
     never sums across issues". The issue at stake is the one last bound, or
-    failing that the one last charged — the same issue the Header follows. A
-    later advance on that issue refunds nothing, so its count stands.
+    failing that the one last charged — the same issue the Header follows. The
+    serial binding arrives as ``wrapper.issue.activated``: the Python Runner's
+    ``wrapper.iteration.start`` names no issue.
     """
     renderer, summary, _buf = _make_renderer()
     renderer.render({"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000A4"})
     for iter_num, issue, strikes in ((1, 42, 1), (2, 42, 2), (3, 43, 1)):
-        renderer.render({"type": WRAPPER_ITERATION_START, "iter": iter_num, "issue": issue})
-        renderer.render(
-            {
-                "type": WRAPPER_STRIKE,
-                "issue": issue,
-                "ending": "no_progress",
-                "strikes": strikes,
-                "max_strikes": 3,
-                "outcome": "warn",
-            }
-        )
+        renderer.render({"type": WRAPPER_ITERATION_START, "iter": iter_num})
+        renderer.render(_bind(issue, iter_num=iter_num))
+        renderer.render(_charge(issue, strikes))
         renderer.render({"type": WRAPPER_ITERATION_END, "iter": iter_num})
 
     assert summary.totals().final_strikes == 1, "#43 is at stake; 3 is a sum"
 
-    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 4, "issue": 42})
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 4})
+    renderer.render(_bind(42, iter_num=4))
     renderer.render({"type": WRAPPER_COMMIT_RECORDED, "sha": "deadbeef", "subject": "x"})
     renderer.render({"type": WRAPPER_ITERATION_END, "iter": 4})
-    renderer.render({"type": WRAPPER_RUN_END, "outcome": "empty_pool"})
 
     assert summary.totals().final_strikes == 2, "#42's Strikes are never refunded"
+
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 5})
+    renderer.render(_bind(44, iter_num=5))
+    renderer.render({"type": WRAPPER_COMMIT_RECORDED, "sha": "cafef00d", "subject": "y"})
+    renderer.render({"type": WRAPPER_ITERATION_END, "iter": 5})
+    renderer.render({"type": WRAPPER_RUN_END, "outcome": "empty_pool"})
+
+    assert summary.totals().final_strikes == 0, "#44 is at stake and was never charged"
 
 
 def test_run_end_final_strikes_follows_the_last_charged_issue_when_none_is_bound() -> None:
@@ -1296,6 +1319,63 @@ def test_run_end_final_strikes_follows_the_last_charged_issue_when_none_is_bound
     summary.record_strike(strikes=1, issue=43)
 
     assert summary.totals().final_strikes == 1
+
+
+def test_a_lane_binding_does_not_move_the_issue_at_stake() -> None:
+    """Only a serial binding is "the one last bound"; a Lane's charge still counts.
+
+    Both Headers keep the serial binding in focus while Lanes start and bind
+    their own issues, so the run summary does too.
+    """
+    renderer, summary, _buf = _make_renderer()
+    renderer.render({"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000A5"})
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1})
+    renderer.render(_bind(42, iter_num=1))
+    renderer.render(_charge(42, 1))
+    renderer.render(
+        {"type": events_module.WRAPPER_CONTRIBUTION_START, "contribution_id": "c-43", "issue": 43}
+    )
+    renderer.render({**_bind(43, iter_num=1), "iter": None, "lane_issue": 43})
+
+    assert summary.totals().final_strikes == 1, "#42 is still the one last bound"
+
+    renderer.render(_charge(43, 2))
+
+    assert summary.totals().final_strikes == 2, "#43 is now the one last charged"
+
+
+def test_run_summary_and_header_agree_on_the_issue_at_stake() -> None:
+    """The run-end figure is the Header's, Event for Event (ADR-0070)."""
+    from git_loopy.interactive.state import LiveRunState
+
+    renderer, summary, _buf = _make_renderer()
+    header = LiveRunState()
+    stream: list[dict[str, Any]] = [
+        {"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000A6", "max_strikes": 3},
+        {"type": WRAPPER_ITERATION_START, "iter": 1},
+        _bind(10, iter_num=1),
+        _charge(10, 1),
+        {"type": WRAPPER_ITERATION_END, "iter": 1},
+        {"type": WRAPPER_ITERATION_START, "iter": 2},
+        _bind(11, iter_num=2),
+        {"type": WRAPPER_COMMIT_RECORDED, "sha": "deadbeef", "subject": "x"},
+        {"type": events_module.WRAPPER_CONTRIBUTION_START, "contribution_id": "c-12", "issue": 12},
+        {**_bind(12, iter_num=2), "iter": None, "lane_issue": 12},
+        {"type": WRAPPER_ITERATION_END, "iter": 2},
+        _charge(12, 1),
+        {"type": WRAPPER_ITERATION_START, "iter": 3},
+        _bind(10, iter_num=3),
+        _charge(10, 2),
+        {"type": WRAPPER_ITERATION_END, "iter": 3},
+    ]
+    seen = []
+    for event in stream:
+        renderer.render(event)
+        header.render(event)
+        assert summary.totals().final_strikes == header.strikes, event
+        seen.append(header.strikes)
+
+    assert seen[-1] == 2 and 0 in seen and 1 in seen
 
 
 def test_a_strike_naming_its_issue_prints_that_issues_count_and_ending() -> None:

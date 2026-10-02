@@ -8,7 +8,9 @@ It loads [`git-loopy/PROMPT.md`](../PROMPT.md) (or the packaged default; see
 **Wrapper contract**: `ready-for-agent` collection, the `## What to build` plus
 `## Acceptance criteria` discriminator, a `Closes/Fixes/Resolves #N`
 auto-close backstop, the `GIT_LOOPY_*` configuration surface, and the
-clean-on-empty / abort-on-stuck termination model.
+clean-on-empty termination model, with each **Strike** charged to its issue
+rather than ending the Run stuck
+([ADR-0070](../../docs/adr/0070-a-strike-is-charged-to-the-issue.md)).
 
 The runner gives you a rich terminal UX — frozen iteration `Panel`s,
 per-iteration token + billed-Credits signal, a JSONL replay log under

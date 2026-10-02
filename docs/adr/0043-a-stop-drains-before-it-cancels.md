@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
+the Python Runner opens no `strike_limit` **Wind-down**, so the revocable Strike drain described
+here has no trigger there; only an operator Stop drains. The shell and PowerShell Orchestrators
+keep the Run-wide Strike abort.
+
 **Amended by [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md):**
 the Strike abort and operator Stop share a Wind-down latch, not a revocable
 exit. A green publication can clear the Strike condition and lift that drain;

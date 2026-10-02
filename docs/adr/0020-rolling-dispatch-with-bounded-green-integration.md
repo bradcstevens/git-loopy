@@ -2,6 +2,12 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
+for the Python Runner, a terminal unpublished contribution charges its issue one **Strike**
+against that issue's own `max_nmt_strikes`, and publication resets nothing. There is no
+Run-wide Strike limit, so reaching one no longer stops refill or latches a drain-confirmed
+abort, and no publication lifts one.
+
 **Amended by [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md):**
 "published" also requires base to be as durable as the tracker closure
 attesting to it wherever an upstream exists. Green gating and verified

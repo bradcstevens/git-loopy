@@ -67,6 +67,7 @@ from git_loopy.events import (
     WRAPPER_CONTRIBUTION_START,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
+    WRAPPER_ISSUE_ACTIVATED,
     WRAPPER_PARALLEL_DEGRADED,
     WRAPPER_PARALLEL_SERIAL_FALLBACK,
     WRAPPER_PICKUP_BOUND,
@@ -488,6 +489,14 @@ class Renderer:
         if snap is None:
             return
         self.console.print(self.summary.build_iteration_panel(snap))
+
+    def _on_issue_activated(self, event: dict[str, Any]) -> None:
+        # Prints nothing: the Pickup line already named the issue. A serial
+        # binding is the issue at stake for the Run's Strike figure (ADR-0070);
+        # a Lane's, stamped ``lane_issue``, is not.
+        issue = event.get("issue")
+        if issue is not None and event.get("lane_issue") is None:
+            self.summary.bind_issue(issue)
 
     def _on_contribution_start(self, event: dict[str, Any]) -> None:
         """Announce one **Lane contribution** opening (#310).
@@ -1405,6 +1414,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_RUN_END: Renderer._on_run_end,
     WRAPPER_ITERATION_START: Renderer._on_iteration_start,
     WRAPPER_ITERATION_END: Renderer._on_iteration_end,
+    WRAPPER_ISSUE_ACTIVATED: Renderer._on_issue_activated,
     WRAPPER_CONTRIBUTION_START: Renderer._on_contribution_start,
     WRAPPER_CONTRIBUTION_END: Renderer._on_contribution_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
