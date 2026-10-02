@@ -46,6 +46,7 @@ __all__ = [
     "MODEL_REASONING_EFFORTS",
     "MODEL_ROSTER_CLI_VERSION",
     "SUPPORTED_MODELS",
+    "DEFAULT_MAX_NMT_STRIKES",
     "DEFAULT_SEND_TIMEOUT_SECONDS",
     "TASK_TYPE_LABEL_PREFIX",
     "TASK_TYPE_KEYS",
@@ -344,6 +345,11 @@ def task_type_refusal(exc: TaskTypeError) -> str:
 #: :class:`RunConfig` knob (issue #51): the loop reads
 #: :attr:`RunConfig.send_timeout_seconds` rather than the env directly.
 DEFAULT_SEND_TIMEOUT_SECONDS: float = 7200.0
+
+#: How many **Strikes** an issue may be charged in one Run before it is skipped
+#: (ADR-0070). The one default the CLI resolver, :class:`RunConfig` and the
+#: attempt ledger share.
+DEFAULT_MAX_NMT_STRIKES = 3
 
 
 @dataclass(frozen=True)
@@ -673,14 +679,15 @@ class RunConfig:
             meaningful for ``issue_source == "github"``.
         max_iterations: Cap on iterations. ``0`` (the default) means
             unlimited.
-        max_nmt_strikes: Consecutive no-progress iterations tolerated
-            before the loop aborts non-zero. Must be ≥ 1.
+        max_nmt_strikes: How many **Strikes** each issue gets in a Run before
+            it is skipped (ADR-0070). Every Session outcome charges its issue
+            one; the Run never stops on Strikes. Must be ≥ 1.
         demotion_threshold: How many no-progress **Lane contributions** one
             **Routed pair** may accumulate in a Run before **Demotion** replaces
             its **Measured routing** entry with the next pair up the price
             staircase (#366, ADR-0030). Counted per pair, so it is unrelated to
-            ``max_nmt_strikes`` — that one is a single Run-scoped counter every
-            Lane shares, and ends the Run. Must be ≥ 1.
+            ``max_nmt_strikes`` — that one is charged per issue, and skips
+            the issue. Must be ≥ 1.
         deny_tools: Tool names to reject at the SDK permission gate.
         deny_skills: Skill names (the ``arguments.skill`` value passed
             to the ``skill`` meta-tool) to reject.
@@ -833,7 +840,7 @@ class RunConfig:
     issue_source: Literal["github", "prds"] = "github"
     include_prs: bool | None = None
     max_iterations: int = 0
-    max_nmt_strikes: int = 3
+    max_nmt_strikes: int = DEFAULT_MAX_NMT_STRIKES
     demotion_threshold: int = 3
     deny_tools: frozenset[str] = field(default_factory=frozenset)
     deny_skills: frozenset[str] = field(default_factory=frozenset)

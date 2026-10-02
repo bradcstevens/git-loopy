@@ -8,7 +8,9 @@ It loads [`git-loopy/PROMPT.md`](../PROMPT.md) (or the packaged default; see
 **Wrapper contract**: `ready-for-agent` collection, the `## What to build` plus
 `## Acceptance criteria` discriminator, a `Closes/Fixes/Resolves #N`
 auto-close backstop, the `GIT_LOOPY_*` configuration surface, and the
-clean-on-empty / abort-on-stuck termination model.
+clean-on-empty termination model, with each **Strike** charged to its issue
+rather than ending the Run stuck
+([ADR-0070](../../docs/adr/0070-a-strike-is-charged-to-the-issue.md)).
 
 The runner gives you a rich terminal UX — frozen iteration `Panel`s,
 per-iteration token + billed-Credits signal, a JSONL replay log under
@@ -1097,7 +1099,7 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 | --------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Clean — Pool empty    | `0`  | Start of an Iteration finds the ready-for-agent Pool empty.                                                                                                                                                                                        |
 | Clean — iteration cap | `0`  | Positional `<max-iterations>` reached without natural termination.                                                                                                                                                                                |
-| Aborted — stuck       | `1`  | `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                                                                                                                                                                             |
+| Aborted — all skipped | `1`  | The Pool is non-empty but no issue can be bound: each was refused at Pickup or has been charged `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) Strikes this Run.                                                                                                    |
 | Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, `CopilotClient` construction failed, writers bundle failed, or unknown `GIT_LOOPY_ISSUE_SOURCE`. Surfaces cleanly via stderr. |
 
 ---
@@ -1113,7 +1115,7 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 | `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or a `vX.Y.Z` Release-target label back at **Pickup** (ADR-0029, ADR-0066). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
-| `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
+| `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Strikes each issue gets before the Run skips it (ADR-0070). Integer ≥ 1.                                                                                                                                         |
 | `GIT_LOOPY_WORKTREE_SETUP`         | unset (auto-detect)            | A shell command run in each freshly created **Lane** worktree, before that Lane's agent session starts, to prepare its environment (install deps, create a venv, ...) so the feedback loops can run there. Runs once per Lane creation with `cwd` set to the worktree. When unset/blank, a best-effort auto-detect picks a common install command for the project type (`uv.lock`→`uv sync`, `package-lock.json`→`npm ci`, `package.json`→`npm install`, `requirements.txt`→`pip install -r requirements.txt`, `go.mod`→`go mod download`, ...). A non-zero setup exit is surfaced in the diagnostics log but does not abort the Lane. |
 | `GIT_LOOPY_GATE_TIMEOUT_SECONDS`   | `3600` (one hour)              | The wall-clock bound each **feedback loop** the **Integration** gate runs must finish within. Integration re-runs the merged worktree's own `AGENTS.md` loops unattended after every Lane merge, so a loop waiting on a socket, a prompt or a lock would otherwise block the gate forever. On expiry the loop's whole process group is killed and the gate goes **red naming that loop, as a timeout** — kept distinct from a non-zero exit, because a timeout is not a test failure. |
 | `GIT_LOOPY_CREDIT_BUDGET_USD_PER_HOUR` | unset (contraction unavailable) | The authoritative AI-credit ceiling adaptation judges this Run's burn against. Without it, credit pressure is unknown rather than estimated. Credit never gates capacity or expansion; it only contracts the effective Lane limit under sustained burn. A malformed or non-positive value reads as unset rather than aborting the Run. |
@@ -2088,10 +2090,10 @@ evidence, and `config get routing` attributes it to its own
 
 It is deliberately narrow:
 
-- **It is not the Strike counter.** Strikes are one Run-scoped counter every Lane
-  shares, and any Lane's progress resets it, so a good pair's commit erases the
-  strikes a bad one was accumulating. Demotion counts per pair; the Strike limit
-  keeps its own unchanged job of ending a Run that is going nowhere.
+- **It is not the Strike count.** Strikes are charged to issues, not pairs, so
+  they cannot say which pair is failing. Demotion counts per pair; the Strike
+  budget keeps its own job of skipping an issue that keeps ending badly
+  (ADR-0070).
 - **It never demotes a hand-written entry.** A `[routing]` entry you typed is your
   decision, however badly its pair performs, and this system does not overrule
   those — the artifact is only consulted where the entry actually in force is the

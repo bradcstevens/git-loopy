@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.21 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.22 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -690,14 +690,18 @@ wrapper closure. (PR mode: a PR head-SHA advance also counts as progress.)
 What a **Strike** counts depends on whether the Runner has a **Pickup** (§14.3), because only a
 Runner that binds one issue per Iteration can have an **Attempt lifecycle** to charge from:
 
-- **A Runner with a Pickup** (contract 1.27) MUST charge exactly **one Strike per issue this Run
-  has given up on** — the issue's transition into the lifecycle's terminal `skipped` position
-  (§14.3), charged once, at the ending that defeats it. An Iteration that made no progress MUST
-  NOT record a Strike of its own, and progress MUST NOT reset the counter: the lifecycle is
-  monotonic, so an issue an advance rescued was never given up on and an issue that was is not
-  un-given-up-on by another issue's advance. `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) is
-  therefore *how many issues this Run may abandon before it stops*, and reaching it ends the Run
-  with exit `1` (§10, `stuck`).
+- **A Runner with a Pickup** (contract 2.22, ADR-0070) MUST charge **one Strike to the issue a
+  session worked for every Session outcome** that session reaches (§14.3) — silent no-progress,
+  timeout, crash, no more tasks, or content-filtered. A session that advanced its issue MUST charge
+  nothing unless it timed out or crashed: progress refutes silent no-progress, no more tasks and
+  content-filtered, but a timeout or crash is an ending whether or not the session advanced.
+  Strikes are counted **per issue, per Run**: one issue's Strikes MUST NOT count against any other
+  issue, progress MUST NOT refund any, and a `skipped` issue MUST
+  NOT be charged further. `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) is therefore N, *how many
+  Strikes each issue gets*: an issue holding fewer than N stays eligible for a retry, and the N-th
+  skips it (§14.3). The Run MUST NOT stop on Strikes — it never ends `stuck` and never latches a
+  `strike_limit` Wind-down (§10.1); a Run that can bind none of what remains ends `all_skipped`
+  (§10).
 - **A Runner without a Pickup** MUST keep the original accounting: an Iteration that made no
   progress records a Strike, `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) **consecutive**
   no-progress Iterations end the Run with exit `1` (§10, `stuck`), and progress resets the
@@ -706,7 +710,10 @@ Runner that binds one issue per Iteration can have an **Attempt lifecycle** to c
 `conformance/progress-strikes.json` forks along exactly that line: from fixture schema `2` a case
 MAY carry a `distributions` selector naming the members whose accounting it describes, and a case
 carrying none is family-wide. An adapter MUST run the cases naming its own distribution and MUST
-NOT run the others.
+NOT run the others. From fixture schema `3` a step's `strikes` and `outcome` belong to the
+Iteration-counting accounting alone: an adapter for a Runner with a Pickup MUST assert each step's
+`progress` and MUST NOT read either, because progress is one input to the Session outcome that
+charges its Strike, which `conformance/attempt-lifecycle.json` pins.
 
 ## 7. Checkpoint (phase 1, MUST)
 
@@ -739,7 +746,7 @@ error (exit `2`).
 | ---- | -------------------- | -------------------------------------------------------------------- |
 | `0`  | Clean — queue empty  | An Iteration's collection (§2) finds the Pool empty.                 |
 | `0`  | Clean — cap reached  | The optional iteration cap `N` (§9) is reached.                      |
-| `1`  | Aborted — stuck      | The `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling is spent (§6).        |
+| `1`  | Aborted — stuck      | A Runner without a Pickup spent its `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling (§6). |
 | `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
 | `1`  | Waiting — all blocked | Every Pickup refusal proved a wait: an open native blocker, or an open closing pull request (§3.3.1, contract 2.17). |
 | `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), or an unread refusal left it unresolved (§3.3.1). |
@@ -750,13 +757,15 @@ Exit code `3` is retired. It used to mean a Run that continued past a Dashboard
 fault. The Run now outlives its client, so a client fault is not a Run outcome
 and the code must not be reused (`exit-codes.json` `retired`, #459).
 
-A Runner with a **Pickup** (§14.3) MUST distinguish the two exit-`1` aborts by reason, and MUST
-NOT report either as the exit-`0` empty queue: "there is nothing to do" and "I could not take any
-of what there is" are different facts about the repository, and only the first is a finished Run.
-The `all_skipped` reason is required from contract 1.27 because a Runner whose Strike counts
-skipped issues no longer charges anything for an Iteration that binds nothing — so without a
-terminal reason of its own, a Run every one of whose candidates is defeated would re-walk the
-same Pool for as long as its Iteration cap allowed. A Runner without a Pickup never reaches this
+A Runner with a **Pickup** (§14.3) never ends `stuck` (§6, contract 2.22). It MUST report a Run
+that could bind none of the Pool as `all_skipped`, and MUST NOT report that as the exit-`0` empty
+queue: "there is nothing to do" and "I could not take any of what there is" are different facts
+about the repository, and only the first is a finished Run. The `all_skipped` reason is required
+from contract 1.27 because an Iteration that binds nothing reaches no Session outcome and charges
+no Strike — so without a terminal reason of its own, a Run every one of whose candidates is
+defeated would re-walk the same Pool for as long as its Iteration cap allowed. From contract 2.22
+it is also the only way a Run that has skipped everything ends, because the Run never stops on
+Strikes. A Runner without a Pickup never reaches this
 reason and is not required to name it beyond mapping it (§10 is the family-wide termination
 matrix that `conformance/exit-codes.json` pins for every member).
 
@@ -788,7 +797,8 @@ The Stop itself takes **two stages** (ADR-0043), driven by the same gesture repe
 1. The first latches a wind-down. Refill, new **Lane** reservations and new **Iterations** stop at
    once; every started contribution and **Integration** operation runs to completion and
    integrates. The latch is durable — a later publication MUST NOT resume refill, which is what
-   distinguishes it from the drain a spent **Strike** ceiling latches.
+   distinguished it from the revocable drain a spent **Strike** ceiling latched before a Runner
+   with a Pickup stopped draining on Strikes (§6, contract 2.22).
 2. The second cancels the agent sessions still running, **salvaging** each one's workspace as a
    **Checkpoint** first. Cancellation is *requested*, never awaited.
 
@@ -812,7 +822,7 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_MODEL`              | 1     | `claude-opus-5`  | Model id (bare base id).                                       |
 | `GIT_LOOPY_REASONING_EFFORT`   | 1     | `max` for the built-in model | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; omitted and explicit `none` are distinct. A recognized model-id suffix is peeled into this field, and selecting another model without an effort leaves it omitted so the backend chooses. |
 | `GIT_LOOPY_ISSUE_SOURCE`       | 1     | `github`         | `github` or `prds` (legacy local-markdown mode).              |
-| `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | Consecutive no-progress Iterations before abort.              |
+| `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | A Runner with a Pickup: Strikes each issue gets before it is skipped. Without one: consecutive no-progress Iterations before abort (§6). |
 | `GIT_LOOPY_INCLUDE_PRS`        | 3     | off              | `1`/`true`/`yes` to also advance `ready-for-agent` PRs.       |
 | `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | MUST be honoured only by a member whose declared parallel capability manifest exposes this operator choice. Python refuses it: the Dashboard is available whenever stdout is a terminal, and the line printer runs when it is not. |
 | `GIT_LOOPY_MODEL_SELECT`       | 3     | off              | `1` enters the startup model picker (**ModelSelectionMode**). |
@@ -865,15 +875,30 @@ failures only: they emit no special Event and do not change the worker's own Run
 
 Contract-2.4 puts **Wind-down** on the wire. A Run emits
 `wrapper.stop.requested` when it latches a drain or escalates it to cancellation:
-`cause` is one of `operator_stop`, `strike_limit`, or `iteration_cap`; `stage` is
+`cause` is one of `operator_stop`, `strike_limit`, or `iteration_cap` (a Runner with a
+Pickup produces no `strike_limit` from contract 2.22, §6); `stage` is
 the ordered ladder `drain`, then `cancel`; and `draining` is the observed number
 of contributions still in flight (`0` for a serial Run). Only `operator_stop` may
 emit `cancel`. The Event records the true latch, not an input gesture, so each
 transition emits once and a third Stop gesture emits nothing. A green publication
 may clear only a Strike drain; that transition emits `wrapper.stop.lifted` with
-`cause: "strike_limit"` and its observed `draining` count. Dashboard consumers
+`cause: "strike_limit"` and its observed `draining` count. No Runner produces it
+from contract 2.22, since none drains on Strikes and lifts; it stays declared so
+a replayed log still reads. Dashboard consumers
 derive their stopped state from these Events: a trace that predates them is
 unknown, and `wrapper.run.end` with `outcome: "interrupted"` is not a Stop.
+
+Contract 2.22 (ADR-0070) names whose **Strike** a `wrapper.strike` is. It
+carries `strikes`, `max_strikes` and `outcome` (`warn`, `skip` or `abort`). A
+Runner with a Pickup (§6) MUST add the `issue` it charged and the `ending`, the
+**Session outcome** that charged it; `strikes` is then that issue's count and
+`max_strikes` is N, and `outcome` is `skip` on the N-th Strike and `warn`
+before it, never `abort`. A Runner without a Pickup omits both, and `strikes`
+is its Run-wide consecutive count. A consumer MUST NOT read an issue-naming
+Strike's count as the Run's: it shows the count of the issue at stake and
+never sums across issues. A finalized contribution's `strike_reaction` is
+`+1` when its session's ending charged its issue and `none` otherwise;
+`reset` is no longer produced, because nothing refunds a Strike.
 Note the shape: each is dotted `wrapper.<noun>.<verb>`, with underscores used only *within* a
 segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `work_finished`,
 `branch_observed`, `recovery_started`, `refill_turn`), and two that are
@@ -1353,8 +1378,8 @@ manifest advertises.
 A **Calibration** buys **Trials**, and a Trial contains an agent session that anywhere else in
 git-loopy would be an **Iteration**. It deliberately is not one
 ([ADR-0027](adr/0027-routing-is-calibrated-by-measurement.md)). Iterations are attributed to a
-**Run** and tick the **Strike** counter, and that counter is shared and consecutive — reaching
-the limit ends the Run. A Trial belongs to a Calibration; an Iteration belongs to a Run.
+**Run** and charge their issue's **Strikes**, and an issue that spends them is skipped for the rest
+of the Run (§6). A Trial belongs to a Calibration; an Iteration belongs to a Run.
 
 These additive type literals are reserved within compatibility schema 1: `calibration.trial.start`
 and `calibration.trial.end`. Like the **measured tier** they serve they are **Python-only**
@@ -1615,19 +1640,21 @@ run-wide default:
   rung, never a ladder — and **sticky** for the rest of the Run, so the issue never falls back to
   the pair that already stalled on it; it is a **no-op** where the routed pair already equals the
   rung, and MUST then keep the source it routed with rather than claim a change that did not
-  happen; and it MUST tick no **Strike**, because the mechanism that aborts a stuck Run must not
-  punish trying harder. It is a property of the *issue*, not of the mode that stalled it: an
+  happen; and it MUST charge no **Strike** of its own, because the stall that bought the rung
+  already charged its issue one and trying harder must not cost a second (§6). It is a property of the *issue*, not of the mode that stalled it: an
   Orchestrator with more than one pickup seam MUST feed and read one ledger from all of them.
   A mid-session switch is still forbidden — escalation is a **second pickup**, which is why it is
   stated here and not in the bullet above.
-- **Give an issue a bounded number of attempts (contract 1.26).** An Orchestrator MUST hold one
-  monotonic per-issue, per-**Run** **Attempt lifecycle** — `fresh` → `retrying` → `skipped`, the
-  states [`attempt-lifecycle.json`](../git-loopy/conformance/attempt-lifecycle.json) declares —
-  and MUST dispose of each of the five **Session outcomes** as that fixture's table states: a
-  silent no-progress and a crash move the issue one step, and a timeout, an explicit
-  no-more-tasks and a content-filtered turn move it straight to `skipped`. An Iteration that
-  advanced its issue reached no ending and MUST move it neither forward nor back. The lifecycle
-  MUST NOT regress — including on an advancing Iteration between two failures, because an issue
+- **Give an issue a bounded number of attempts (contract 1.26, 2.22).** An Orchestrator MUST hold
+  one monotonic per-issue, per-**Run** **Attempt lifecycle** — `fresh` → `retrying` → `skipped`,
+  the states [`attempt-lifecycle.json`](../git-loopy/conformance/attempt-lifecycle.json)
+  declares — as the projection of that issue's **Strikes** (§6): `fresh` at none, `retrying` at
+  fewer than N (`GIT_LOOPY_MAX_NMT_STRIKES`), and `skipped` at N. From contract 2.22 every one of
+  the five **Session outcomes** charges one Strike and so moves the issue one step, as that
+  fixture's table states (ADR-0070); before it, a timeout, an explicit no-more-tasks and a
+  content-filtered turn moved it straight to `skipped`. An Iteration that advanced its issue
+  without timing out or crashing reached no ending and MUST move it neither forward nor back.
+  The lifecycle MUST NOT regress — including on an advancing Iteration between two failures, because an issue
   that landed something once under a Run that cannot finish it is the ordinary shape of a Run
   grinding rather than evidence the Run recovered.
   It is **per Run and in memory**: an Orchestrator MUST NOT write it to the tracker, because a
@@ -1649,16 +1676,15 @@ run-wide default:
   afterwards. The lifecycle is what a resolution's **lifecycle position** reports (`fresh` is
   `fresh`; everything past it is `retrying`), which is how a same-pair crash retry reads as a
   retry at all.
-  **The lifecycle is what the Strike counts (contract 1.27).** An Orchestrator with a Pickup MUST
-  charge exactly one **Strike** per issue that reaches `skipped`, at the ending that puts it
-  there, and MUST charge nothing for an unproductive Iteration or an unpublished contribution
-  (§6) — an issue the Run is still willing to retry has not been given up on, and an Iteration is
-  not a thing the Run can give up on at all. Because the lifecycle is a property of the issue and
-  not of the seam that observed it, the Strike MUST be charged where the ending is observed, which
-  is the one seam every pickup mode already shares. And an Iteration whose Pickup finds the Pool
-  non-empty but can bind none of it MUST end the Run under the `all_skipped` reason (§10) rather
-  than record anything: with no-progress no longer charging the ceiling, that Iteration spends no
-  session and charges nothing, so it would otherwise re-walk the same Pool and skip the same
+  **The lifecycle is what the Strikes count (contract 2.22, ADR-0070).** An Orchestrator with a
+  Pickup MUST charge one **Strike** to an issue for each Session outcome a session on it reaches,
+  and the ending that charges the N-th is the one recorded as its defeat. It MUST charge nothing
+  for an Iteration that bound nothing, and nothing further once the issue is `skipped`. Because
+  the lifecycle is a property of the issue and not of the seam that observed it, the Strike MUST
+  be charged where the ending is observed, which is the one seam every pickup mode already
+  shares. And an Iteration whose Pickup finds the Pool non-empty but can bind none of it MUST end
+  the Run under the `all_skipped` reason (§10) rather than record anything: that Iteration spends
+  no session and charges nothing, so it would otherwise re-walk the same Pool and skip the same
   candidates until the Iteration cap.
 - **Publish what it resolved (contract 1.21).** An Orchestrator that resolves a Routing resolution
   MUST carry it on that Pickup's own `wrapper.pickup.bound` (§12) — the pair, the tier, the raw
@@ -2081,8 +2107,9 @@ retains the legacy path for one Run, and non-local absence and shell/PowerShell
 stay on the deferred legacy path. 2.10 also adds the optional
 `effort_configurable` Pickup fact, Static execution authorized by a remote
 host's own listing (§14.3), and exact-dimension Route publication with its
-migration and capacity refresh (§14.5). `routing-resolution.json` declares
-that provenance at 2.10; `event-schema.json` and `dashboard-insights.json`
+migration and capacity refresh (§14.5). `routing-resolution.json` declared
+that provenance at 2.10 and moved to 2.22 when its retry cases took per-issue
+Strikes (§6, ADR-0070); `event-schema.json` and `dashboard-insights.json`
 carried it at 2.10 and have since advanced to 2.11 with the Run-start issue
 source, 2.12 with Run-end refusals and 2.14 with the retirement of
 `wrapper.pipeline.quiescent` (§12). Contract 2.13 (ADR-0066) edited both
@@ -2095,10 +2122,12 @@ since advanced to 2.15 with the behavioural `contribution_events` obligation
 (§12, ADR-0065) and 2.16 with the Lane-work boundary (§12, #681). Neither
 carried 2.17 (Awaiting merge, §3.3.1), and both have since advanced to 2.18
 with parking and admission (§12, #682), 2.19 with Integration start and
-branch drift (§12, #684), and 2.20 with Recovery attempts (§12, #685), and 2.21 with the refill turn (§12, #686).
+branch drift (§12, #684), 2.20 with Recovery attempts (§12, #685), 2.21 with
+the refill turn (§12, #686) and 2.22 with the per-issue Strike record (§6,
+ADR-0070).
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
-(§3.1). Event wire compatibility is 1.3, advanced with the Lane-work boundary
-(§12), and historical streams' interpretation is unchanged.
+(§3.1). Event wire compatibility is 1.4, advanced with the per-issue Strike
+record (§6), and historical streams' interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
@@ -2218,7 +2247,8 @@ branch drift (§12, #684), and 2.20 with Recovery attempts (§12, #685), and 2.2
   configuration, and MUST report the attempt's **lifecycle position** beside it rather than in place
   of it. A reassessed retry that re-elects the same configuration is otherwise indistinguishable
   from a first election, and the position MUST NOT be derived from how many earlier attempts there
-  were: an **Iteration** that advanced its issue reaches no ending and spends no attempt, yet is a
+  were: an **Iteration** that advanced its issue without timing out or crashing reaches no ending
+  and spends no attempt, yet is a
   real earlier attempt the next election is told about.
   Bounded history MUST retain earlier capability failures before recent advances. Omitted
   advances still count toward the recorded session ordinal and the relevant input identity;

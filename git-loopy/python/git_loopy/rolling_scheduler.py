@@ -19,7 +19,7 @@ Design notes:
   scheduler turn reserve *every* currently refillable Lane, bounded by effective
   Lane concurrency, eligible validated candidates, available ``max_iterations``
   units, **Integration** backpressure, the serial-demand latch, and any
-  cap/abort drain. :meth:`RollingScheduler.reserve` is that whole decision, so
+  cap/Stop drain. :meth:`RollingScheduler.reserve` is that whole decision, so
   no caller reconstructs the bounds and none of them can be forgotten
   independently.
 * **A reservation is provisional until a session starts.** §3.2-3.4: worktree
@@ -40,11 +40,11 @@ Design notes:
   retained). :meth:`finish_work` returns which happened, and
   :meth:`finalize` returns whatever freeing an H slot admitted from the parked
   FIFO, so the ordering rules live in one place.
-* **Terminal is terminal exactly once.** §7.6: every terminal unpublished
-  contribution adds exactly one Strike and no intermediate phase adds any. The
-  scheduler records the reaction on the finalized row rather than ticking the
-  Strike machine itself, because that machine is shared with serial
-  **Iterations** and belongs to the composed :class:`~git_loopy.loop._Loop`.
+* **Terminal is terminal exactly once.** §7.6: a contribution is finalized
+  once and no intermediate phase finalizes it. The scheduler knows nothing of
+  **Strikes**: they are charged to the issue at its session's ending, in the
+  per-issue ledger the composed :class:`~git_loopy.loop._Loop` owns, because
+  serial **Iterations** charge the same ledger (ADR-0070).
 * **stdlib + the two Rolling seams only.** No SDK, no Rich, no peer-of-loop
   imports — the same constraint :mod:`git_loopy.rolling_pool` carries.
 """
@@ -67,7 +67,6 @@ __all__ = [
     "Contribution",
     "INTEGRATION_HIGH_WATER",
     "PARKED",
-    "PHASE_DRAINING_FOR_ABORT",
     "PHASE_DRAINING_FOR_STOP",
     "PHASE_DRAINING_FOR_SERIAL",
     "PHASE_ROLLING",
@@ -95,7 +94,8 @@ __all__ = [
 
 # Terminal dispositions of a **Lane contribution**, mirroring
 # :data:`git_loopy.events.CONTRIBUTION_TERMINAL_REASONS`. ``published`` is the
-# only Parallel progress; each of the others adds exactly one **Strike**.
+# only Parallel progress. None of them charges a **Strike**: the session's own
+# ending does (ADR-0070).
 REASON_PUBLISHED = "published"
 REASON_UNCHANGED_BRANCH = "unchanged_branch"
 REASON_CHECKPOINT_FAILED = "checkpoint_failed"
@@ -117,9 +117,11 @@ SERIAL_LATCH_REASONS: tuple[str, ...] = (
     REASON_SERIAL_FALLBACK,
 )
 
-# What a finalized contribution does to the shared Strike machine (#219 §7.4,
-# §7.6). The scheduler records the reaction; :class:`~git_loopy.loop._Loop`
-# still owns the machine, because serial **Iterations** tick the same one.
+# What a finalized contribution's row reports about **Strikes** (#219 §7.6,
+# ADR-0070). :class:`~git_loopy.loop._Loop` writes it from the per-issue ledger:
+# ``+1`` when the contribution's ending charged its issue one, ``none``
+# otherwise. ``reset`` survives only so a log written before ADR-0070 still
+# reads; nothing resets a Strike any more.
 STRIKE_RESET = "reset"
 STRIKE_ADD = "+1"
 STRIKE_NONE = "none"
@@ -142,7 +144,6 @@ PHASE_ROLLING = "rolling"
 PHASE_DRAINING_FOR_SERIAL = "draining_for_serial"
 PHASE_SERIAL_OWNERSHIP = "serial_ownership"
 PHASE_ROLLING_REFILL_TURN = "rolling_refill_turn"
-PHASE_DRAINING_FOR_ABORT = "draining_for_abort"
 PHASE_DRAINING_FOR_STOP = "draining_for_stop"
 
 # #304: why a **Parallel mode** Run is about to work a serial **Iteration**
@@ -261,9 +262,9 @@ class Contribution:
         published: ``True`` only after green publication *and* verified closure.
         reason: The terminal disposition, one of the ``REASON_*`` constants.
             ``None`` while the contribution is still open.
-        strike_reaction: :data:`STRIKE_RESET`, :data:`STRIKE_ADD`, or
-            :data:`STRIKE_NONE`, recorded once at finalization. ``None`` while
-            open.
+        strike_reaction: :data:`STRIKE_ADD` or :data:`STRIKE_NONE`, written
+            once by the loop when it closes the contribution's row. ``None``
+            while open.
     """
 
     contribution_id: str
@@ -310,7 +311,6 @@ class RollingScheduler:
     _serial_requests: list[tuple[int | str | None, str]] = field(
         default_factory=list, init=False
     )
-    _abort_latched: bool = field(default=False, init=False)
     _stop_latched: bool = field(default=False, init=False)
     _phase: str = field(default=PHASE_ROLLING, init=False)
     _worked: set[int | str] = field(default_factory=set, init=False)
@@ -449,8 +449,8 @@ class RollingScheduler:
             # refill turn §5.9 grants after a serial Iteration is the deliberate
             # exception — it runs before any remaining demand may relatch.
             return 0
-        if self._abort_latched or self._stop_latched:
-            # §7.7: drain-confirmed abort stops refill but cancels nothing.
+        if self._stop_latched:
+            # An operator Stop drain stops refill but cancels nothing.
             return 0
         if len(self._admitted) >= INTEGRATION_HIGH_WATER:
             # §1.3, §4.1: a full **Integration backlog** is backpressure, not
@@ -477,8 +477,6 @@ class RollingScheduler:
             return PHASE_DRAINING_FOR_SERIAL
         if self._stop_latched:
             return PHASE_DRAINING_FOR_STOP
-        if self._abort_latched:
-            return PHASE_DRAINING_FOR_ABORT
         return PHASE_ROLLING
 
     @property
@@ -765,9 +763,7 @@ class RollingScheduler:
         same scheduler turn tie-break by ascending issue number (§4.3-4.4).
 
         Args:
-            published: Whether this is Parallel progress. Resets the shared
-                consecutive-Strike count and cancels a pending abort drain
-                (§7.4, §7.7).
+            published: Whether this is Parallel progress.
             reason: The terminal disposition for an unpublished contribution.
                 Defaults to :data:`REASON_SERIAL_FALLBACK`, the disposition
                 §4.14 gives recovery exhaustion — the only way an *admitted*
@@ -780,10 +776,7 @@ class RollingScheduler:
             self._admitted.remove(contribution)
         terminal = REASON_PUBLISHED if published else (reason or REASON_SERIAL_FALLBACK)
         self._finalize(contribution, reason=terminal)
-        if published and not self._stop_latched:
-            # §7.7: a green publication during an abort drain cancels it.
-            self._abort_latched = False
-        elif terminal == REASON_SERIAL_FALLBACK:
+        if terminal == REASON_SERIAL_FALLBACK:
             # §5.2: a K<=3 Integration fallback requests serial service
             # immediately, from already-validated Run-ledger state.
             self.request_serial(ref=contribution.ref, reason=REASON_SERIAL_FALLBACK)
@@ -828,33 +821,15 @@ class RollingScheduler:
         """Whether a new unit of work may start: units remain and no drain is latched.
 
         A serial Iteration or a serial preparation pass is *new* work, and a
-        cap or an abort/stop drain finishes started work rather than starting
-        more (#219 §7.7).
+        cap or a Stop drain finishes started work rather than starting more
+        (#219 §7.7).
         """
-        return (
-            self.remaining_units != 0
-            and not self._abort_latched
-            and not self._stop_latched
-        )
+        return self.remaining_units != 0 and not self._stop_latched
 
     @property
     def serial_latched(self) -> bool:
         """Whether validated serial demand has stopped refill (#219 §5.3)."""
         return self._serial_latched
-
-    def strike_limit_reached(self) -> bool:
-        """Latch the drain-confirmed abort (#219 §7.7).
-
-        Stops new reservations and refill, but cancels nothing: every started
-        contribution and **Integration** operation finishes, and a later green
-        publication that resets **Strike** cancels the pending abort outright.
-        The Run exits stuck only at full quiescence with the limit still
-        reached, which is why this is a latch rather than an immediate exit.
-        """
-        if self._abort_latched:
-            return False
-        self._abort_latched = True
-        return True
 
     def request_stop_drain(self) -> None:
         """Latch the operator's deliberate drain without cancelling live work."""
@@ -864,11 +839,6 @@ class RollingScheduler:
     def stop_latched(self) -> bool:
         """Whether an operator Stop has stopped all future Lane reservations."""
         return self._stop_latched
-
-    @property
-    def abort_latched(self) -> bool:
-        """Whether a drain-confirmed abort is pending (#219 §7.7)."""
-        return self._abort_latched
 
     def confirm_empty(self) -> bool:
         """Ask, authoritatively, whether the **Pool** is exhausted (#219 §7.17).
@@ -891,15 +861,9 @@ class RollingScheduler:
         return self.pool.terminal_survivors
 
     def _finalize(self, contribution: Contribution, *, reason: str) -> None:
-        """Close a contribution exactly once and record its Strike reaction."""
+        """Close a contribution exactly once and record its disposition."""
         contribution.published = reason == REASON_PUBLISHED
         contribution.reason = reason
-        if reason == REASON_OPERATOR_STOP:
-            contribution.strike_reaction = STRIKE_NONE
-        else:
-            contribution.strike_reaction = (
-                STRIKE_RESET if contribution.published else STRIKE_ADD
-            )
         self._open.pop(contribution.contribution_id, None)
         self._release_lane(contribution)
         self._finalized.append(contribution)

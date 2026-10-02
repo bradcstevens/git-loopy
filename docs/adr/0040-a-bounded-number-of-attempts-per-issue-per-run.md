@@ -2,6 +2,12 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):** the budget is no longer two
+attempts with three endings defeating an issue on first sight. Every **Session outcome** charges
+its issue one **Strike**, and an issue is skipped at `max_nmt_strikes` (N). The lifecycle is the
+projection of that count — `fresh` at none, `retrying` below N, `skipped` at N — and stays per
+issue, per Run, monotonic, and a **Pickup** filter.
+
 Implemented by [#412](https://github.com/bradcstevens/git-loopy/issues/412), under the per-issue
 routing spec [#400](https://github.com/bradcstevens/git-loopy/issues/400). Completes the pair
 [ADR-0039](0039-a-pickup-publishes-the-pair-it-resolved.md) opened: a **Pickup** that publishes

@@ -443,6 +443,12 @@ CONTRIBUTION_TERMINAL_REASONS: tuple[str, ...] = (
 #
 # ``cause`` names why refill stopped. A **Pool** that simply ran out is not a
 # cause: the Run finished the work it had, which is not a Wind-down.
+#
+# The Python Runner no longer produces ``strike_limit`` (nor, below, a
+# :data:`WRAPPER_STOP_LIFTED`): a Strike is charged to its issue and skips that
+# issue, never the Run (ADR-0070). The cause stays declared because the shell
+# and PowerShell Orchestrators still drain on a Run-wide Strike count, and a
+# replayed Python trace from before ADR-0070 carries it.
 WIND_DOWN_CAUSES: tuple[str, ...] = (
     "operator_stop",
     "strike_limit",
@@ -467,6 +473,20 @@ WIND_DOWN_CANCEL_CAUSE = "operator_stop"
 # "cleared" was refused because a cleared operator Stop is representable
 # nonsense.
 WIND_DOWN_LIFTABLE_CAUSES: tuple[str, ...] = ("strike_limit",)
+
+# The ``outcome`` a :data:`WRAPPER_STRIKE` reports. ``warn`` is a Strike under
+# the ceiling. ``skip`` is the Strike that took its ``issue`` out of the Run, and
+# ``abort`` the one that ended a Run counting Strikes Run-wide. The Python Runner
+# charges every Strike to an issue, so it emits only ``warn`` and ``skip``
+# (ADR-0070); ``abort`` is the shell and PowerShell Orchestrators'.
+STRIKE_OUTCOME_WARN = "warn"
+STRIKE_OUTCOME_SKIP = "skip"
+STRIKE_OUTCOME_ABORT = "abort"
+STRIKE_OUTCOMES: tuple[str, ...] = (
+    STRIKE_OUTCOME_WARN,
+    STRIKE_OUTCOME_SKIP,
+    STRIKE_OUTCOME_ABORT,
+)
 
 # Calibration events (#371, ADR-0027). A **Calibration** is not a **Run** and a
 # **Trial** is not an **Iteration**, so its records get a type prefix of their own

@@ -11,8 +11,6 @@ of the AFK runner. Its load-bearing surface is intentionally small:
 * :func:`actionable_close_refs` — applies the typed, issues-only Pool policy.
 * :func:`did_iteration_make_progress` — the truth function for whether an
   iteration counts as work.
-* :class:`NMTStrikeStateMachine` — the no-more-tasks strike state machine
-  that decides when to abort a stuck run.
 * :func:`exit_code_for` — the Wrapper-contract termination matrix.
 
 Design notes:
@@ -34,7 +32,6 @@ Design notes:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 from typing import Iterable, Literal
 
 __all__ = [
@@ -43,7 +40,6 @@ __all__ = [
     "filter_to_pool",
     "actionable_close_refs",
     "did_iteration_make_progress",
-    "NMTStrikeStateMachine",
     "exit_code_for",
     "CHECKPOINT_TRAILER_KEY",
     "checkpoint_message",
@@ -146,8 +142,8 @@ def did_iteration_make_progress(
     reads it off the Agent's own message and it reaches
     :class:`~git_loopy.session_outcome.SessionOutcome` as an ending (#405) — and
     this predicate still ignores it, deliberately: an ending records what
-    happened, and progress is what the contract (§6) says the Strike counter is
-    made of.
+    happened, and progress is what the contract (§6) says an Iteration that
+    charges no Strike is made of.
 
     Args:
         commits_in_iter: Number of new agent commits the iteration produced.
@@ -259,117 +255,3 @@ def is_checkpoint_message(message: str) -> bool:
     return any(
         line.strip().lower().startswith(prefix) for line in message.split("\n")
     )
-
-
-# Outcome alphabet — kept narrow on purpose. The loop only needs to know
-# whether to keep iterating ("running") or abort ("aborted"). The
-# distinction between "saw NMT" and "silently no-progress" is renderer
-# concern, not state-machine concern.
-Outcome = Literal["running", "aborted"]
-
-
-@dataclass
-class NMTStrikeStateMachine:
-    """Counts the issues a Run has given up on, against a configurable cap.
-
-    Until #413 this counted *Iterations*: a no-progress Iteration recorded a
-    Strike, progress reset the count, and ``max_strikes`` consecutive
-    unproductive Iterations aborted the Run. That was the only unit available
-    — an Iteration was the only thing the Run could count — and it charged the
-    ceiling for **attempts** rather than for **defeats**. With the **Attempt
-    lifecycle** (ADR-0040) the Run knows which *issue* it has run out of
-    attempts for, and that is the thing worth ending a Run over:
-
-    * Start in ``running`` with zero strikes.
-    * Each call to :meth:`tick` represents one completed accounting scope — a
-      serial **Iteration** or a finalized **Lane contribution**.
-    * A scope charges one strike for each issue it moved to **skipped**. A
-      scope that skipped nothing charges nothing, however unproductive it was.
-    * Reaching ``max_strikes`` flips the outcome to ``aborted``, and it stays
-      there; further ticks are no-ops on the outcome.
-
-    Progress **refunds nothing**, which is the same monotonicity the lifecycle
-    itself has: an issue is only ever skipped once, and a Run that lands a
-    commit on some *other* issue has not undone that. A reset here would make
-    the ceiling defeasible by exactly the Runs it exists for.
-
-    The progress signals stay on :meth:`tick` because §6's progress predicate
-    (:func:`did_iteration_make_progress`) is the other half of the same
-    contract section and the same Conformance fixture drives both; the machine
-    itself no longer consults them.
-
-    Attributes:
-        max_strikes: How many issues this Run may give up on before aborting.
-            Must be ≥ 1. Mirrors ``MAX_NMT_STRIKES`` (default 3).
-        strikes: Current strike count — the number of issues skipped so far.
-        outcome: Either ``"running"`` or ``"aborted"``.
-    """
-
-    max_strikes: int = 3
-    strikes: int = 0
-    outcome: Outcome = field(default="running")
-
-    def __post_init__(self) -> None:
-        if self.max_strikes < 1:
-            raise ValueError(
-                f"max_strikes must be ≥ 1 (got {self.max_strikes!r}); "
-                "the loop would abort on the very first skipped issue "
-                "otherwise."
-            )
-
-    def tick(
-        self,
-        *,
-        commits_in_iter: int,
-        auto_closures_in_iter: int,
-        checkpoints_in_iter: int = 0,
-        pr_advances_in_iter: int = 0,
-        saw_nmt_sentinel: bool = False,
-        issues_skipped_in_iter: int = 0,
-    ) -> Outcome:
-        """Record one completed accounting scope and return the outcome.
-
-        Args:
-            commits_in_iter: Number of agent commits the scope produced.
-                Informational — §6 progress, not a Strike decision.
-            auto_closures_in_iter: Number of wrapper-issued auto-closes.
-                Informational, as above.
-            checkpoints_in_iter: Number of runner Checkpoints produced.
-                Informational only and never progress.
-            pr_advances_in_iter: Number of PR heads that advanced.
-                Informational, as above.
-            saw_nmt_sentinel: ``True`` if the agent emitted the
-                ``<promise>NO MORE TASKS</promise>`` sentinel this
-                scope. Informational only — the state machine never
-                consults it. The renderer uses it to pick which warning
-                line to print. The sentinel's own reader is
-                :class:`~git_loopy.session_outcome.SessionOutcomeWatch`,
-                which turns it into a **Session outcome** (#405) rather
-                than into a Strike decision.
-            issues_skipped_in_iter: How many issues this scope moved to
-                **skipped** in the **Attempt lifecycle**. The only input the
-                ceiling is spent against. More than one is reachable in
-                **Parallel mode**, where one accounting scope can defeat more
-                than one issue.
-
-        Returns:
-            The new outcome (``"running"`` or ``"aborted"``).
-        """
-        _ = (
-            commits_in_iter,
-            auto_closures_in_iter,
-            checkpoints_in_iter,
-            pr_advances_in_iter,
-            saw_nmt_sentinel,
-        )
-        # Terminal state. On abort the state machine freezes — further
-        # ticks neither charge strikes nor flip the outcome back.
-        if self.outcome == "aborted":
-            return self.outcome
-        if issues_skipped_in_iter <= 0:
-            return self.outcome
-
-        self.strikes += issues_skipped_in_iter
-        if self.strikes >= self.max_strikes:
-            self.outcome = "aborted"
-        return self.outcome

@@ -379,15 +379,15 @@ def test_the_classifier_core_cannot_reach_the_run_wide_default_or_spend() -> Non
     assert "RECOMMENDED_ROUTING" not in imported_names | referenced
 
 
-def test_the_classifier_never_reaches_the_strike_machine() -> None:
-    """A classification must never end an unattended Run (ADR-0029, #371).
+def test_the_classifier_never_reaches_the_strike_ledger() -> None:
+    """A classification must never cost an issue a Strike (ADR-0029, #371).
 
-    **Strikes** are shared and consecutive and reaching the limit ends the Run,
-    so a classifier that could strike out might terminate an overnight Run
-    without having done any work. The protection is structural — neither half of
-    the classifier can reach the counter — so a later refactor that routed a
-    classification through the orchestrator fails here rather than quietly
-    re-arming the hazard.
+    A **Strike** is charged to an issue and reaching the ceiling skips it for
+    the rest of the Run (ADR-0070), so a classifier that could strike out might
+    shelve an issue overnight without any session having worked it. The
+    protection is structural — neither half of the classifier can reach the
+    ledger — so a later refactor that routed a classification through the
+    orchestrator fails here rather than quietly re-arming the hazard.
     """
     for module in (task_type_classifier, task_type_session):
         source = Path(module.__file__).read_text(encoding="utf-8")
@@ -395,8 +395,8 @@ def test_the_classifier_never_reaches_the_strike_machine() -> None:
         referenced = {
             node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
         } | {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
-        assert "NMTStrikeStateMachine" not in referenced, module.__name__
-        assert "tick" not in referenced, module.__name__
+        assert "AttemptLedger" not in referenced, module.__name__
+        assert "observe" not in referenced, module.__name__
         assert "max_nmt_strikes" not in referenced, module.__name__
 
 

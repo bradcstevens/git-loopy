@@ -52,6 +52,7 @@ from git_loopy.events import (
     SESSION_CREATED,
     SESSION_DELETED,
     SESSION_IDLE,
+    STRIKE_OUTCOME_SKIP,
     TOOL_CALL,
     TOOL_PERMISSION_DENIED,
     TOOL_PERMISSION_REQUESTED,
@@ -67,6 +68,7 @@ from git_loopy.events import (
     WRAPPER_CONTRIBUTION_START,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
+    WRAPPER_ISSUE_ACTIVATED,
     WRAPPER_PARALLEL_DEGRADED,
     WRAPPER_PARALLEL_SERIAL_FALLBACK,
     WRAPPER_PICKUP_BOUND,
@@ -489,6 +491,15 @@ class Renderer:
             return
         self.console.print(self.summary.build_iteration_panel(snap))
 
+    def _on_issue_activated(self, event: dict[str, Any]) -> None:
+        # Prints nothing: the Pickup line already named the issue. A serial
+        # binding makes its issue the one at stake for the Run's Strike figure
+        # until a later Strike names another (ADR-0070); a Lane's, stamped
+        # ``lane_issue``, does not.
+        issue = event.get("issue")
+        if issue is not None and event.get("lane_issue") is None:
+            self.summary.bind_issue(issue)
+
     def _on_contribution_start(self, event: dict[str, Any]) -> None:
         """Announce one **Lane contribution** opening (#310).
 
@@ -832,16 +843,27 @@ class Renderer:
             )
         except (TypeError, ValueError):
             strikes_value = None
-        self.summary.record_strike(strikes=strikes_value)
+        issue = event.get("issue")
+        self.summary.record_strike(strikes=strikes_value, issue=issue)
         snap = self.summary.current
-        current_strikes = snap.strikes if snap is not None else (strikes_value or 0)
+        if issue is not None and strikes_value is not None:
+            current_strikes = strikes_value
+        else:
+            current_strikes = snap.strikes if snap is not None else (strikes_value or 0)
         text = Text()
         text.append("⚠ ", style=STYLES["warning"])
         text.append("strike ", style=STYLES["warning"])
+        if issue is not None:
+            text.append(f"#{issue} ", style=STYLES["warning"])
         if max_strikes is not None:
             text.append(f"{current_strikes}/{max_strikes}", style=STYLES["warning"])
         else:
             text.append(str(current_strikes), style=STYLES["warning"])
+        ending = event.get("ending")
+        if ending:
+            text.append(f"  ({ending})", style=STYLES["meta"])
+        if event.get("outcome") == STRIKE_OUTCOME_SKIP:
+            text.append("  → issue skipped", style=STYLES["warning"])
         self.console.print(text)
 
     def _on_ask_user_attempted(self, event: dict[str, Any]) -> None:
@@ -1394,6 +1416,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_RUN_END: Renderer._on_run_end,
     WRAPPER_ITERATION_START: Renderer._on_iteration_start,
     WRAPPER_ITERATION_END: Renderer._on_iteration_end,
+    WRAPPER_ISSUE_ACTIVATED: Renderer._on_issue_activated,
     WRAPPER_CONTRIBUTION_START: Renderer._on_contribution_start,
     WRAPPER_CONTRIBUTION_END: Renderer._on_contribution_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,

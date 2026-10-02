@@ -1,7 +1,7 @@
 {
-  "schema_version": 2,
-  "contract_version": "2.0",
-  "note": "Fixture schema 2 adds the per-case `distributions` selector and the step-level `issues_skipped` count. An adapter runs only the cases naming its distribution, and a case that names none is family-wide. The fork exists because #413 re-based the **Strike** on the **Attempt lifecycle**: a Runner with a **Pickup** charges one Strike per *skipped issue* and none for an unproductive Iteration, while the shell and PowerShell Orchestrators have no Pickup and therefore no lifecycle to charge from, so they keep counting consecutive no-progress Iterations. The now-false cases are retained rather than deleted precisely so those two members stay pinned to the accounting they actually implement. `issues_skipped` is deliberately a sibling of `signals` and not a member of it: `signals` are §6's progress inputs, which is the other half this same fixture drives through the progress predicate, and a lifecycle fact is not one of them.",
+  "schema_version": 3,
+  "contract_version": "2.22",
+  "note": "Fixture schema 3 retires the step-level `issues_skipped` count that schema 2 added, and makes a step's `strikes` and `outcome`, and a case's `max_strikes`, belong to the Iteration-counting accounting alone; the per-case `distributions` selector stays. An adapter runs only the cases naming its distribution, and a case that names none is family-wide. The fork exists because a Runner with a **Pickup** charges a **Strike** to the *issue* a Session worked, once per Session ending, and never to an Iteration (ADR-0070). The progress predicate is one input to that ending, not the Strike itself, so such a member asserts only each step's `progress`: it reads no `strikes` or `outcome`, even on a family-wide case, and the cases only it runs carry neither. Its per-issue Strike accounting is pinned by `attempt-lifecycle.json`. The shell and PowerShell Orchestrators have no Pickup and therefore no lifecycle to charge from, so they keep counting consecutive no-progress Iterations and abort at the limit. Their cases are retained rather than deleted precisely so those two members stay pinned to the accounting they actually implement.",
   "distributions": ["python", "shell", "powershell"],
   "cases": [
     {
@@ -268,9 +268,8 @@
       ]
     },
     {
-      "id": "no-progress-alone-charges-nothing",
+      "id": "nothing-durable-is-not-progress",
       "distributions": ["python"],
-      "max_strikes": 3,
       "steps": [
         {
           "signals": {
@@ -280,19 +279,15 @@
             "pr_advances_in_iter": 0,
             "saw_nmt_sentinel": false
           },
-          "issues_skipped": 0,
           "expected": {
-            "progress": false,
-            "strikes": 0,
-            "outcome": "running"
+            "progress": false
           }
         }
       ]
     },
     {
-      "id": "checkpoint-alone-is-not-progress-and-charges-nothing",
+      "id": "a-checkpoint-alone-is-not-progress",
       "distributions": ["python"],
-      "max_strikes": 3,
       "steps": [
         {
           "signals": {
@@ -302,197 +297,15 @@
             "pr_advances_in_iter": 0,
             "saw_nmt_sentinel": false
           },
-          "issues_skipped": 0,
           "expected": {
-            "progress": false,
-            "strikes": 0,
-            "outcome": "running"
+            "progress": false
           }
         }
       ]
     },
     {
-      "id": "a-skipped-issue-records-one-strike",
+      "id": "the-nmt-sentinel-is-not-progress",
       "distributions": ["python"],
-      "max_strikes": 3,
-      "steps": [
-        {
-          "signals": {
-            "commits_in_iter": 0,
-            "auto_closures_in_iter": 0,
-            "checkpoints_in_iter": 0,
-            "pr_advances_in_iter": 0,
-            "saw_nmt_sentinel": false
-          },
-          "issues_skipped": 1,
-          "expected": {
-            "progress": false,
-            "strikes": 1,
-            "outcome": "running"
-          }
-        }
-      ]
-    },
-    {
-      "id": "every-issue-skipped-in-one-scope-records-its-own-strike",
-      "distributions": ["python"],
-      "max_strikes": 3,
-      "steps": [
-        {
-          "signals": {
-            "commits_in_iter": 0,
-            "auto_closures_in_iter": 0,
-            "checkpoints_in_iter": 0,
-            "pr_advances_in_iter": 0,
-            "saw_nmt_sentinel": false
-          },
-          "issues_skipped": 2,
-          "expected": {
-            "progress": false,
-            "strikes": 2,
-            "outcome": "running"
-          }
-        }
-      ]
-    },
-    {
-      "id": "progress-refunds-no-skipped-issue",
-      "distributions": ["python"],
-      "max_strikes": 3,
-      "steps": [
-        {
-          "signals": {
-            "commits_in_iter": 0,
-            "auto_closures_in_iter": 0,
-            "checkpoints_in_iter": 0,
-            "pr_advances_in_iter": 0,
-            "saw_nmt_sentinel": false
-          },
-          "issues_skipped": 1,
-          "expected": {
-            "progress": false,
-            "strikes": 1,
-            "outcome": "running"
-          }
-        },
-        {
-          "signals": {
-            "commits_in_iter": 1,
-            "auto_closures_in_iter": 0,
-            "checkpoints_in_iter": 0,
-            "pr_advances_in_iter": 0,
-            "saw_nmt_sentinel": false
-          },
-          "issues_skipped": 0,
-          "expected": {
-            "progress": true,
-            "strikes": 1,
-            "outcome": "running"
-          }
-        },
-        {
-          "signals": {
-            "commits_in_iter": 0,
-            "auto_closures_in_iter": 0,
-            "checkpoints_in_iter": 0,
-            "pr_advances_in_iter": 0,
-            "saw_nmt_sentinel": false
-          },
-          "issues_skipped": 1,
-          "expected": {
-            "progress": false,
-            "strikes": 2,
-            "outcome": "running"
-          }
-        }
-      ]
-    },
-    {
-      "id": "abort-at-the-skip-ceiling-and-remain-terminal",
-      "distributions": ["python"],
-      "max_strikes": 3,
-      "steps": [
-        {
-          "signals": {
-            "commits_in_iter": 0,
-            "auto_closures_in_iter": 0,
-            "checkpoints_in_iter": 0,
-            "pr_advances_in_iter": 0,
-            "saw_nmt_sentinel": false
-          },
-          "issues_skipped": 1,
-          "expected": {
-            "progress": false,
-            "strikes": 1,
-            "outcome": "running"
-          }
-        },
-        {
-          "signals": {
-            "commits_in_iter": 0,
-            "auto_closures_in_iter": 0,
-            "checkpoints_in_iter": 0,
-            "pr_advances_in_iter": 0,
-            "saw_nmt_sentinel": false
-          },
-          "issues_skipped": 1,
-          "expected": {
-            "progress": false,
-            "strikes": 2,
-            "outcome": "running"
-          }
-        },
-        {
-          "signals": {
-            "commits_in_iter": 0,
-            "auto_closures_in_iter": 0,
-            "checkpoints_in_iter": 0,
-            "pr_advances_in_iter": 0,
-            "saw_nmt_sentinel": true
-          },
-          "issues_skipped": 1,
-          "expected": {
-            "progress": false,
-            "strikes": 3,
-            "outcome": "aborted"
-          }
-        },
-        {
-          "signals": {
-            "commits_in_iter": 1,
-            "auto_closures_in_iter": 0,
-            "checkpoints_in_iter": 0,
-            "pr_advances_in_iter": 0,
-            "saw_nmt_sentinel": false
-          },
-          "issues_skipped": 0,
-          "expected": {
-            "progress": true,
-            "strikes": 3,
-            "outcome": "aborted"
-          }
-        },
-        {
-          "signals": {
-            "commits_in_iter": 0,
-            "auto_closures_in_iter": 0,
-            "checkpoints_in_iter": 0,
-            "pr_advances_in_iter": 0,
-            "saw_nmt_sentinel": false
-          },
-          "issues_skipped": 1,
-          "expected": {
-            "progress": false,
-            "strikes": 3,
-            "outcome": "aborted"
-          }
-        }
-      ]
-    },
-    {
-      "id": "nmt-sentinel-is-informational-and-charges-nothing",
-      "distributions": ["python"],
-      "max_strikes": 3,
       "steps": [
         {
           "signals": {
@@ -502,11 +315,8 @@
             "pr_advances_in_iter": 0,
             "saw_nmt_sentinel": true
           },
-          "issues_skipped": 0,
           "expected": {
-            "progress": false,
-            "strikes": 0,
-            "outcome": "running"
+            "progress": false
           }
         },
         {
@@ -517,11 +327,8 @@
             "pr_advances_in_iter": 0,
             "saw_nmt_sentinel": true
           },
-          "issues_skipped": 0,
           "expected": {
-            "progress": true,
-            "strikes": 0,
-            "outcome": "running"
+            "progress": true
           }
         }
       ]

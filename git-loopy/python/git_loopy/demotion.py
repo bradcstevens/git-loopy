@@ -12,13 +12,12 @@ better, only that this one is failing.
 Design notes:
 
 * **The signal is per pair, and it is not the Strike counter.** ADR-0027
-  originally specified consecutive **Strikes**, which cannot be implemented:
-  :class:`~git_loopy.wrapper.NMTStrikeStateMachine` is one Run-scoped counter
-  every **Lane** shares and *any* Lane's progress resets, so a good pair's commit
-  erases what a bad pair accumulated. Worse, the limit that ends a Run is small,
-  so a threshold at or above it never fires and one below it fires on noise — the
-  usable range is empty. The Strike counter keeps its existing job (ending a Run
-  that is going nowhere) entirely unchanged.
+  originally specified consecutive **Strikes**, which could not be implemented:
+  the Strike counter was then one Run-scoped counter every **Lane** shared and
+  *any* Lane's progress reset, so a good pair's commit erased what a bad pair
+  accumulated, and a threshold at or above the small limit that ended a Run
+  never fired while one below it fired on noise. Since ADR-0070 a Strike is
+  charged to an *issue*, which is still not a pair, so the reasoning stands.
 
 * **The source is the finalized Contribution, not the Run summary.** ADR-0030
   says *"the record already knows which pair worked which issue and whether it

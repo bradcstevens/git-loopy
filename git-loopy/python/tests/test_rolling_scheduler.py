@@ -336,7 +336,7 @@ def test_a_terminal_finalization_withdraws_admitted_and_parked_contributions() -
 # --------------------------------------------------------------------------- #
 
 
-def test_unchanged_branch_finalizes_terminal_unpublished_with_one_strike() -> None:
+def test_unchanged_branch_finalizes_terminal_unpublished() -> None:
     scheduler, _source = _scheduler([11], lane_cap=1)
     scheduler.start()
     contribution = scheduler.start_session(scheduler.reserve()[0])
@@ -347,11 +347,13 @@ def test_unchanged_branch_finalizes_terminal_unpublished_with_one_strike() -> No
     assert scheduler.finalized == (contribution,)
     assert contribution.published is False
     assert contribution.reason == "unchanged_branch"
-    assert contribution.strike_reaction == "+1"
+    # ADR-0070: the session's ending charges the issue; the loop, not the
+    # scheduler, writes what that did to the row.
+    assert contribution.strike_reaction is None
     assert scheduler.admitted == ()
 
 
-def test_checkpoint_failure_never_admits_and_adds_one_strike() -> None:
+def test_checkpoint_failure_never_admits() -> None:
     """#219 §3.10: a failed Checkpoint may never admit incomplete state."""
     scheduler, _source = _scheduler([11], lane_cap=1)
     scheduler.start()
@@ -363,7 +365,6 @@ def test_checkpoint_failure_never_admits_and_adds_one_strike() -> None:
 
     assert disposition == "terminal"
     assert contribution.reason == "checkpoint_failed"
-    assert contribution.strike_reaction == "+1"
     assert scheduler.admitted == ()
 
 
@@ -470,7 +471,7 @@ def test_backpressure_lifts_the_moment_an_h_slot_frees() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_published_contribution_resets_strike_and_frees_the_h_slot() -> None:
+def test_published_contribution_frees_the_h_slot() -> None:
     scheduler, _source = _scheduler([11], lane_cap=1)
     scheduler.start()
     contribution = scheduler.start_session(scheduler.reserve()[0])
@@ -480,13 +481,12 @@ def test_published_contribution_resets_strike_and_frees_the_h_slot() -> None:
 
     assert admitted == ()
     assert contribution.reason == "published"
-    assert contribution.strike_reaction == "reset"
     assert scheduler.admitted == ()
     assert scheduler.open_count == 0
 
 
 def test_recovery_exhaustion_is_terminal_unpublished_and_requests_serial() -> None:
-    """#219 §4.14: one Strike, and validated serial demand latches at once."""
+    """#219 §4.14: validated serial demand latches at once."""
     scheduler, _source = _scheduler([11], lane_cap=1)
     scheduler.start()
     contribution = scheduler.start_session(scheduler.reserve()[0])
@@ -495,7 +495,6 @@ def test_recovery_exhaustion_is_terminal_unpublished_and_requests_serial() -> No
     scheduler.finalize(contribution, published=False, reason="serial_fallback")
 
     assert contribution.published is False
-    assert contribution.strike_reaction == "+1"
     assert scheduler.serial_latched is True
 
 
@@ -656,21 +655,8 @@ def test_serial_demand_relatches_only_after_one_full_refill_turn() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# §7.7, §7.10, §7.16-7.17 — cap, abort drain, and Run-boundary termination
+# §7.7, §7.10, §7.16-7.17 — cap, Stop drain, and Run-boundary termination
 # --------------------------------------------------------------------------- #
-
-
-def test_strike_limit_latches_a_drain_confirmed_abort() -> None:
-    scheduler, _source = _scheduler([11, 12], lane_cap=2)
-    scheduler.start()
-    scheduler.start_session(scheduler.reserve()[0])
-
-    scheduler.strike_limit_reached()
-
-    assert scheduler.phase == "draining_for_abort"
-    assert scheduler.refillable == 0
-    assert scheduler.reserve() == ()
-    assert scheduler.open_count == 1  # §7.7: started work still finishes
 
 
 def test_operator_stop_latches_a_drain_that_a_publication_cannot_resume() -> None:
@@ -685,23 +671,8 @@ def test_operator_stop_latches_a_drain_that_a_publication_cannot_resume() -> Non
 
     assert scheduler.phase == "draining_for_stop"
     assert scheduler.refillable == 0
-    assert contribution.strike_reaction == "reset"
     source.refs = [12]
     assert scheduler.reserve() == ()
-
-
-def test_a_later_publication_cancels_the_pending_abort() -> None:
-    scheduler, source = _scheduler([11], lane_cap=1)
-    scheduler.start()
-    contribution = scheduler.start_session(scheduler.reserve()[0])
-    scheduler.finish_work(contribution, changed=True)
-    scheduler.strike_limit_reached()
-
-    scheduler.finalize(contribution, published=True)
-
-    assert scheduler.phase == "rolling"
-    source.refs = [12]
-    assert [r.item.ref for r in scheduler.reserve()] == [12]
 
 
 def test_the_iteration_cap_stops_refill_and_drains() -> None:
@@ -804,10 +775,10 @@ def test_no_membership_read_while_serial_is_latched() -> None:
     assert source.membership_calls == reads
 
 
-def test_no_membership_read_while_draining_for_abort() -> None:
+def test_no_membership_read_while_draining_for_stop() -> None:
     scheduler, source = _scheduler([11, 12], lane_cap=3)
     scheduler.start()
-    scheduler.strike_limit_reached()
+    scheduler.request_stop_drain()
     reads = source.membership_calls
 
     scheduler.reserve()

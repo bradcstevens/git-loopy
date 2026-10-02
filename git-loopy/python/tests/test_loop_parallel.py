@@ -150,11 +150,10 @@ from git_loopy.session_outcome import (
     SessionTermination,
 )
 from git_loopy.skill_catalog import build_skill_catalog
-from git_loopy.rolling_pool import RollingPool
 from git_loopy import dynamic_route
 from git_loopy import static_route
 from git_loopy.static_route import RoutePolicy
-from git_loopy.sources import MembershipSnapshot, PoolCandidate
+from git_loopy.sources import PoolCandidate
 from git_loopy.staircase import Candidate, PriceStaircase
 from git_loopy.wrapper import (
     CHECKPOINT_TRAILER_KEY,
@@ -2212,74 +2211,6 @@ def test_second_stop_before_host_dispatch_starts_no_host_contribution(
     assert _work_finished(tmp_path) == []
 
 
-class _EmptyRollingSource:
-    """A membership seam that never offers a candidate.
-
-    The **Wind-down** ladder is a fact about latches, not about refill, so a
-    Pool the scheduler can never draw from keeps the test on the one axis it
-    is about.
-    """
-
-    def shallow_membership(self) -> MembershipSnapshot:
-        return MembershipSnapshot(candidates=(), complete=True)
-
-
-def test_a_stop_pressed_during_a_strike_drain_escalates_to_cancel(
-    monkeypatch,
-) -> None:
-    """One latch, two causes — so the operator's gesture climbs it (#457).
-
-    ADR-0043 makes the **Strike** abort and the operator **Stop** the *same*
-    primitive entered for different reasons, and #445 §J spells out what that
-    costs on the wire: a Stop pressed while a Strike drain is already in force
-    escalates rather than re-latching, and emits exactly one Event. Re-latching
-    would put a second ``drain`` on the trace that stopped nothing which was not
-    already stopped, and would leave the operator's *second* gesture as the
-    first thing that ever cancelled anything — one press behind the model
-    ``Ctrl+C`` established.
-
-    The scheduler here is the real one, because the whole decision is read off
-    its abort latch; a double would be asserting that the test knows what
-    ``abort_latched`` means.
-    """
-    diag = logging.getLogger("test.loop.parallel.escalation")
-    scheduler = loop_module.rolling_scheduler.RollingScheduler(
-        diag=diag,
-        pool=RollingPool(diag=diag, source=_EmptyRollingSource(), clock=lambda: 0.0),
-        lane_cap=2,
-        max_iterations=0,
-    )
-    parallel = object.__new__(loop_module._ParallelLoop)
-    parallel._scheduler = scheduler
-    parallel._stop_cancel_requested = False
-    parallel._active_agent_tasks = set()
-    parallel._serial = object.__new__(loop_module._Loop)
-    emitted: list[dict[str, Any]] = []
-    parallel._serial._emit = lambda event_type, **payload: emitted.append(
-        {"type": event_type, **payload}
-    )
-    parallel._serial._stop_drain_requested = False
-    parallel._serial._stop_cancel_requested = False
-    parallel._serial._wind_down_stage = None
-    parallel._serial._wind_down_cause = None
-    parallel._serial._active_agent_task = None
-
-    scheduler.start()
-    assert scheduler.strike_limit_reached()
-    parallel._serial._announce_wind_down(
-        cause="strike_limit", stage="drain", draining=scheduler.open_count
-    )
-    emitted.clear()
-
-    parallel.request_stop_drain()
-
-    assert [
-        (event["cause"], event["stage"], event["draining"]) for event in emitted
-    ] == [("operator_stop", "cancel", 0)]
-    assert parallel._serial._stop_drain_requested is True
-    assert parallel._stop_cancel_requested is True
-
-
 def test_parallel_the_first_stop_stops_refill_and_still_integrates_started_work(
     tmp_path, monkeypatch
 ) -> None:
@@ -2446,7 +2377,8 @@ def test_parallel_a_stop_never_interrupts_the_publish_transaction(
     events = _logged_events(tmp_path)
     (end,) = [e for e in events if e["type"] == "wrapper.contribution.end"]
     assert end["reason"] == "published"
-    assert end["summary"]["strike_reaction"] == "reset"
+    # A publication charges its issue nothing (ADR-0070); nothing is reset.
+    assert end["summary"]["strike_reaction"] == "none"
     (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
     assert run_end["outcome"] == "operator_stop"
 
@@ -4696,7 +4628,7 @@ def test_repeated_never_started_dispatches_narrow_the_existing_host_pressure(
 
     assert built[0]._scheduler is not None
     assert built[0]._scheduler.effective_limit < host.capacity
-    assert built[0]._serial._strike_machine.strikes == 0
+    assert [built[0]._serial._attempts.strikes(ref) for ref in (42, 43)] == [0, 0]
     assert any(
         event["pressure"] == "host"
         for event in _logged_events(tmp_path)
@@ -4725,7 +4657,7 @@ def test_sustained_dispatch_refusal_ends_the_run_as_an_environment_failure(
     assert asyncio.run(loop_module.run(cfg)) == loop_module.exit_code_for(
         "preflight_failed"
     )
-    assert built[0]._serial._strike_machine.strikes == 0
+    assert [built[0]._serial._attempts.strikes(ref) for ref in (42, 43)] == [0, 0]
 
 
 def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
@@ -4789,7 +4721,7 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     assert len(built) == 1
     assert built[0]._serial._attempts.state(42) is AttemptState.FRESH
     assert built[0]._serial._attempts.state(43) is AttemptState.FRESH
-    assert built[0]._serial._strike_machine.strikes == 0
+    assert [built[0]._serial._attempts.strikes(ref) for ref in (42, 43)] == [0, 0]
     # Both blameless failures finalize terminally and ahead of the re-offered
     # contributions, which the host then carried into Integration.
     reasons = [
@@ -4814,24 +4746,24 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
 
 
 @dataclass
-class _StrikeThenPublishExecutionHost:
-    """One issue defeated outright, and one held until the abort latches.
+class _DefeatThenPublishExecutionHost:
+    """One issue defeated outright, and one held until that defeat is charged.
 
     The **Execution host** seam is the deterministic way to stage the one
-    ordering this test is about: the drain-confirmed **Strike** abort has to be
-    latched *while another contribution is still in flight*, so the green
-    publication that follows has something to revoke. A timeout ending defeats
-    its issue in a single attempt (it is outside the two retryable endings), so
-    the ceiling is reached without waiting on a **Pool** re-offer.
+    ordering this test is about: the defeated issue's last **Strike** has to be
+    charged *while another contribution is still in flight*, so a Run that
+    still wound down on Strikes would have work to drain. With a ceiling of one
+    Strike, the timeout ending defeats its issue in a single attempt.
     """
 
     git: FakeGitClient
     loops: list[Any]
     held_ref: int
+    defeated_ref: int
     placement: Placement = "fake"
     isolation_grade: IsolationGrade = "workspace separation only"
     capacity: int = 4
-    #: Bound on the hold, so a Run that never latches the abort fails as a
+    #: Bound on the hold, so a Run that never charges the defeat fails as a
     #: readable assertion rather than as a test-suite timeout.
     hold_limit: int = 5000
 
@@ -4854,13 +4786,13 @@ class _StrikeThenPublishExecutionHost:
             )
         for _ in range(self.hold_limit):
             if any(
-                loop._scheduler is not None and loop._scheduler.abort_latched
+                loop._serial._attempts.skipped(self.defeated_ref)
                 for loop in self.loops
             ):
                 break
             await asyncio.sleep(0.001)
-        else:  # pragma: no cover - only on a regression that never latches
-            raise AssertionError("the Strike abort never latched while work was open")
+        else:  # pragma: no cover - only on a regression that never charges it
+            raise AssertionError("the defeat was never charged while work was open")
         source = self.git.add_worktree(
             self.git.root / f"host-source-{request.issue_ref}",
             branch=branch,
@@ -4885,19 +4817,16 @@ class _StrikeThenPublishExecutionHost:
         )
 
 
-def test_a_green_publication_lifts_the_strike_drain_on_the_wire(
+def test_a_defeated_issue_never_winds_the_parallel_run_down(
     tmp_path, monkeypatch
 ) -> None:
-    """The revocable half of the shared latch, end to end (#457, ADR-0043).
+    """A Strike skips its issue and nothing else (ADR-0070).
 
-    §7.7 has always let a green publication cancel a pending abort inside the
-    scheduler; what #457 adds is that the Run *says so*. A client that attached
-    while the drain was in force otherwise keeps rendering a draining Run
-    forever, because the fact that un-latched it never reached the trace.
-
-    One issue is defeated while another is still in flight, so the abort latches
-    with work outstanding; releasing that work publishes green and clears it.
-    Both Events are asserted in order, with their observed in-flight counts.
+    Before ADR-0070 a defeat in one Lane latched a Run-wide abort that drained
+    every sibling and had to be lifted again by a green publication (#457). A
+    Strike is now the issue's own: one issue is defeated while another is still
+    in flight, and the sibling publishes into a Run that never announced a
+    **Wind-down** at all.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -4920,7 +4849,9 @@ def test_a_green_publication_lifts_the_strike_drain_on_the_wire(
     monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
 
     built: list[loop_module._ParallelLoop] = []
-    host = _StrikeThenPublishExecutionHost(git=fake_git, loops=built, held_ref=42)
+    host = _DefeatThenPublishExecutionHost(
+        git=fake_git, loops=built, held_ref=42, defeated_ref=43
+    )
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
@@ -4948,21 +4879,16 @@ def test_a_green_publication_lifts_the_strike_drain_on_the_wire(
     asyncio.run(_bounded())
 
     events = _logged_events(tmp_path)
-    wind_down = [
-        (
-            event["type"],
-            event.get("cause"),
-            event.get("stage"),
-        )
+    assert [
+        (event["issue"], event["ending"], event["strikes"], event["outcome"])
         for event in events
-        if event["type"]
-        in {"wrapper.stop.requested", "wrapper.stop.lifted"}
-    ]
-    assert wind_down == [
-        ("wrapper.stop.requested", "strike_limit", "drain"),
-        ("wrapper.stop.lifted", "strike_limit", None),
-    ]
-    assert 42 in [ref for ref, _ in fake_gh.issue_close_calls]
+        if event["type"] == "wrapper.strike"
+    ] == [(43, "timeout", 1, "skip")]
+    assert not any(
+        event["type"] in {"wrapper.stop.requested", "wrapper.stop.lifted"}
+        for event in events
+    )
+    assert [ref for ref, _ in fake_gh.issue_close_calls] == [42]
 
 
 @dataclass
@@ -5261,7 +5187,8 @@ def test_parallel_loop_treats_a_proven_missing_remote_ref_as_a_breach(
     assert fake_git.fetch_calls == []
     assert fake_client.created == []
     assert len(built) == 1
-    assert built[0]._serial._strike_machine.strikes == 2
+    # Each breach charges its own issue one Strike (ADR-0070).
+    assert [built[0]._serial._attempts.strikes(ref) for ref in (42, 43)] == [1, 1]
 
 
 @dataclass
@@ -5334,7 +5261,7 @@ def test_parallel_loop_reoffers_an_unreachable_remote_without_a_strike(
     assert [request.issue_ref for request in host.calls].count(43) == 2
     assert fake_client.created == []
     assert len(built) == 1
-    assert built[0]._serial._strike_machine.strikes == 0
+    assert [built[0]._serial._attempts.strikes(ref) for ref in (42, 43)] == [0, 0]
 
 
 @dataclass
@@ -6128,8 +6055,10 @@ def test_a_pin_that_stays_open_rejoins_the_order_once_spent(
         client_cls=_NoProgressFakeClient,
     )
 
+    # Two Strikes apiece (ADR-0070): #41 is skipped after its retry, which is
+    # what lets #44's own retry reach the head of the serial order.
     asyncio.run(
-        loop_module.run(_pinned_config(44, max_iterations=6, max_nmt_strikes=10))
+        loop_module.run(_pinned_config(44, max_iterations=6, max_nmt_strikes=2))
     )
 
     bindings = _bindings(_logged_events(tmp_path))
@@ -7406,27 +7335,22 @@ def test_serial_all_blocked_end_records_its_skips_and_no_refusals(
     ]
 
 
-def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
+def test_parallel_serial_iteration_defeat_ends_the_run_all_skipped_never_stuck(
     tmp_path, monkeypatch
 ) -> None:
-    """A serial Iteration's **Strike** abort ends a Parallel Run stuck (#308).
+    """A serial Iteration's defeat skips its issue; it never stops the Run (ADR-0070).
 
-    #219 §7.4 shares ONE Strike machine between **Lane contributions** and
-    serial **Iterations**, and §7.7 makes reaching its limit latch a
-    drain-confirmed abort: refill stops, started work drains, and the Run exits
-    ``stuck``. A finalized Lane contribution already latches that abort
-    (``_apply_strike_reaction``) — but a serial Iteration ticks the very same
-    machine, and the rolling driver used to discard the outcome it returned. So
-    a Parallel-mode Run whose serial work made no progress accumulated Strikes,
-    emitted the abort **Event**, and then just kept granting itself serial
-    Iterations forever.
+    #308 once had a serial Iteration's **Strike** latch the same drain-confirmed
+    abort a Lane contribution did, ending a Parallel-mode Run ``stuck``. A
+    Strike is now charged to the issue that earned it and only skips that
+    issue, so the Run carries on until it runs out of eligible work — which,
+    with one serial-required issue and an agent that never commits or closes,
+    is the very next serial turn.
 
-    The Pool here is one serial-required issue and an agent that never commits
-    or closes, with ``max_nmt_strikes=1``. Since contract 1.27 the ceiling counts
-    the issues the Run has given up on, so the issue's first no-progress
-    **Iteration** spends its first attempt (**retrying**, no Strike) and its
-    second defeats it — one Strike, the ceiling, and the Wrapper contract's
-    ``stuck`` exit rather than the ``empty_pool`` exit or no exit at all.
+    With ``max_nmt_strikes=1`` the first no-progress **Iteration** charges the
+    issue's only Strike and skips it; the second walks a Pool with nothing left
+    to bind and ends the Run ``all_skipped`` — never ``stuck``, and never after
+    a **Wind-down** announcement.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -7449,7 +7373,7 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        max_iterations=0,  # unbounded: only the Strike limit can stop this Run
+        max_iterations=0,  # unbounded: only running out of work can stop this Run
         max_nmt_strikes=1,
         verbosity=0,
         render_reasoning=False,
@@ -7462,23 +7386,18 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
 
     events = _logged_events(tmp_path)
     strikes = [e for e in events if e["type"] == "wrapper.strike"]
-    assert [s["outcome"] for s in strikes] == ["abort"], (
-        f"expected the issue's defeat to be the abort, got {strikes}"
-    )
-    assert [
-        (event["cause"], event["stage"], event["draining"])
-        for event in events
-        if event["type"] == "wrapper.stop.requested"
-    ] == [("strike_limit", "drain", 0)]
+    assert [(s["issue"], s["strikes"], s["outcome"]) for s in strikes] == [
+        (44, 1, "skip")
+    ], f"expected the issue's defeat to skip it, got {strikes}"
+    assert not any(e["type"] == "wrapper.stop.requested" for e in events)
 
-    # --- The abort ends the Run, and no further serial Iteration is granted
-    #     after it: §7.7 drains started work, it does not start new work.
+    # One worked Iteration, then the serial turn that found nothing to bind.
     starts = [e for e in events if e["type"] == "wrapper.iteration.start"]
     assert len(starts) == 2, f"expected exactly two Iterations, got {len(starts)}"
 
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
-    assert run_end["outcome"] == "stuck"
-    assert exit_code == loop_module.exit_code_for("stuck")
+    assert run_end["outcome"] == "all_skipped"
+    assert exit_code == loop_module.exit_code_for("all_skipped")
 
 
 def test_parallel_serial_iteration_that_binds_nothing_ends_the_run_all_skipped(
@@ -7487,12 +7406,12 @@ def test_parallel_serial_iteration_that_binds_nothing_ends_the_run_all_skipped(
     """Rolling dispatch's own livelock, ended on the spot (#413, ADR-0041).
 
     The sibling of
-    :func:`test_parallel_serial_iteration_strike_abort_stops_the_run_stuck`:
-    there the ceiling stops the Run, here it never gets near one. A single
-    serial-required issue is defeated by two no-progress Iterations, and the
-    third serial turn walks a Pool that still holds it and binds nothing —
-    charging nothing, since #413, so it would be granted again and again for as
-    long as the Run had units.
+    :func:`test_parallel_serial_iteration_defeat_ends_the_run_all_skipped_never_stuck`,
+    with a retry in between. A single serial-required issue is defeated by two
+    no-progress Iterations — its two Strikes (ADR-0070) — and the third serial
+    turn walks a Pool that still holds it and binds nothing — charging nothing,
+    since #413, so it would be granted again and again for as long as the Run
+    had units.
 
     Terminal *here* rather than latched for the idle-check is safe for a reason
     the serial-only driver does not need: the scheduler grants a serial turn only
@@ -7522,7 +7441,7 @@ def test_parallel_serial_iteration_that_binds_nothing_ends_the_run_all_skipped(
         model="claude-opus-4.8-max",
         issue_source="github",
         max_iterations=0,  # unbounded: only the all-skipped outcome can stop this
-        max_nmt_strikes=9,  # deliberately out of reach
+        max_nmt_strikes=2,
         verbosity=0,
         render_reasoning=False,
     )
@@ -7542,7 +7461,7 @@ def test_parallel_serial_iteration_that_binds_nothing_ends_the_run_all_skipped(
         f"expected two worked Iterations then the one that took nothing, "
         f"got {len(starts)}"
     )
-    assert [s["strikes"] for s in events if s["type"] == "wrapper.strike"] == [1]
+    assert [s["strikes"] for s in events if s["type"] == "wrapper.strike"] == [1, 2]
 
 
 # ---------------------------------------------------------------------------
@@ -8168,9 +8087,9 @@ def test_a_lane_stall_and_a_serial_stall_defeat_one_issue_between_them(
 ) -> None:
     """The **Attempt lifecycle** is per issue, not per mode either (#412).
 
-    A **Lane** stall and the serial stall that follows it are two attempts on
+    A **Lane** stall and the serial stall that follows it are two Strikes on
     one issue, and the ledger that counts them is the one ledger both **Pickup**
-    seams feed. A per-mode count would give every issue two attempts *per mode*
+    seams feed. A per-mode count would give every issue its Strikes *per mode*
     and defeat nothing on the path that matters.
 
     The Parallel scheduler's own collision guard is untouched by this and must
@@ -8205,7 +8124,7 @@ def test_a_lane_stall_and_a_serial_stall_defeat_one_issue_between_them(
                 reasoning_effort="low",
                 issue_source="github",
                 max_iterations=3,
-                max_nmt_strikes=9,
+                max_nmt_strikes=2,
                 verbosity=0,
                 render_reasoning=False,
                 escalation_rung=("claude-opus-5", "max"),
@@ -8280,7 +8199,9 @@ def test_a_defeated_issue_stops_being_a_lane_candidate(tmp_path, monkeypatch) ->
     assert pool.eligible(_candidate(98)) is True
     assert pool.eligible(_candidate(99)) is True
 
-    built[0]._serial._attempts.observe(98, SessionOutcome.TIMEOUT)
+    ledger = built[0]._serial._attempts
+    for _ in range(ledger.max_strikes):
+        ledger.observe(98, SessionOutcome.TIMEOUT)
 
     assert pool.eligible(_candidate(98)) is False
     assert pool.eligible(_candidate(99)) is True
@@ -8372,7 +8293,9 @@ def test_a_blocked_issue_stops_being_a_lane_candidate_but_stays_cached(
         )
         is False
     )
-    built[0]._serial._attempts.observe(98, SessionOutcome.TIMEOUT)
+    ledger = built[0]._serial._attempts
+    for _ in range(ledger.max_strikes):
+        ledger.observe(98, SessionOutcome.TIMEOUT)
     assert pool.eligible(ready) is False
 
 
@@ -10181,22 +10104,32 @@ def test_dynamic_lane_retry_exhaustion_starts_no_third_attempt(
     tmp_path, monkeypatch, outcome, entrypoint
 ) -> None:
     fake_client, spied, exit_code = _dynamic_retry_lane_run(
-        tmp_path, monkeypatch, outcome=outcome, max_iterations=5, max_nmt_strikes=1,
+        tmp_path, monkeypatch, outcome=outcome, max_iterations=5, max_nmt_strikes=2,
         setup_entrypoint=entrypoint,
     )
 
     assert exit_code == 1
-    assert len(fake_client.create_calls) == 2
     assert len([
         request for _, request in spied["assessments"] if "Test issue 42" in request.issue
     ]) == 2
     events = _logged_events(tmp_path)
-    assert len([e for e in events if e["type"] == "wrapper.strike"]) == 1
-    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == ["stuck"]
+    # #42's defeat stops nothing but #42 (ADR-0070): #43 takes its own two
+    # Strikes, and the Run ends once neither has any left.
     assert [
+        e["issue"] for e in events if e["type"] == "wrapper.pickup.bound"
+    ].count(42) == 2
+    assert [
+        (e["strikes"], e["outcome"])
+        for e in events
+        if e["type"] == "wrapper.strike" and e["issue"] == 42
+    ] == [(1, "warn"), (2, "skip")]
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == [
+        "all_skipped"
+    ]
+    assert {
         (call["model"], call["reasoning_effort"], call["context_tier"])
         for call in fake_client.create_calls
-    ] == [("claude-opus-5", "high", "default")] * 2
+    } == {("claude-opus-5", "high", "default")}
     assert Path(fake_client.create_calls[0]["working_directory"]).name == "issue-42"
     first, retry = [
         request for _, request in spied["assessments"] if "Test issue 42" in request.issue
@@ -10280,7 +10213,11 @@ def test_unavailable_dynamic_retry_after_a_lane_spends_no_attempt(
     assert exit_code == (0 if refusal == "invalid_output" else 1)
     assert len(fake_client.create_calls) == expected_sessions
     events = _logged_events(tmp_path)
-    assert not [e for e in events if e["type"] == "wrapper.strike"]
+    # Only the sessions that ran charge a Strike (ADR-0070); the refused retry
+    # opened none, so #42 keeps the one its Lane stall cost it.
+    assert sorted(
+        (e["issue"], e["strikes"]) for e in events if e["type"] == "wrapper.strike"
+    ) == ([(42, 1), (43, 1)] if refusal == "invalid_output" else [(42, 1)])
     resolutions = [e for e in events if e["type"] == "wrapper.routing.resolved"]
     assert len(resolutions) == expected_sessions
     assert len([e for e in resolutions if e["issue"] == 42]) == 1
