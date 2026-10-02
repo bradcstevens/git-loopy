@@ -11,7 +11,7 @@
     },
     "awaiting-merge.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives decide_readiness, unbound_pool_outcome, closing-connection completeness, and the state-read request and failure scope with this fixture."},
-      "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator decides Readiness from blockers alone; #697 resolves closing pull requests, implements Awaiting merge and claims this fixture.", "issue": 697},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh drives git_loopy_decide_readiness, git_loopy_unbound_pool_outcome, closing-connection completeness, and the state-read request and failure scope with this fixture."},
       "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 drives Get-GitLoopyReadiness, Get-GitLoopyUnboundPoolOutcome, closing-connection completeness, and the state-read request and failure scope with this fixture."},
       "rust": {"kind": "waived_out_of_scope", "reason": "Awaiting merge is an Orchestrator admission decision; the Dashboard never reads an issue's tracker state."}
     },
