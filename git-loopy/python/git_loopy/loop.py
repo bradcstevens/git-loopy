@@ -2183,7 +2183,9 @@ class _Loop:
             except git_module.GitError as exc:
                 self._diag.error("git head_sha failed: %s; aborting iteration", exc)
                 await self._settle_preparation_pass()
-                self._finish_iteration(iter_num, outcome="no_progress")
+                self._finish_iteration(
+                    iter_num, outcome="no_progress", strike_ref=active.ref
+                )
                 return ("continue", 0, 0)
 
             # 5) Run the SDK session. How it ends is *data* (#403): the ending

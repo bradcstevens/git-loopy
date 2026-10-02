@@ -1281,8 +1281,8 @@ def test_run_end_final_strikes_is_the_issue_at_stakes_count() -> None:
     """Per-issue Strikes show the issue at stake's count, never a sum (ADR-0070).
 
     Wrapper contract §12: a consumer "shows the count of the issue at stake and
-    never sums across issues". The issue at stake is the one last bound, or
-    failing that the one last charged — the same issue the Header follows. The
+    never sums across issues". The issue at stake is the one named by whichever
+    came last, a serial binding or a Strike — the same issue the Header follows. The
     serial binding arrives as ``wrapper.issue.activated``: the Python Runner's
     ``wrapper.iteration.start`` names no issue.
     """
@@ -1322,7 +1322,7 @@ def test_run_end_final_strikes_follows_the_last_charged_issue_when_none_is_bound
 
 
 def test_a_lane_binding_does_not_move_the_issue_at_stake() -> None:
-    """Only a serial binding is "the one last bound"; a Lane's charge still counts.
+    """Only a serial binding moves the issue at stake; a Lane's Strike still does.
 
     Both Headers keep the serial binding in focus while Lanes start and bind
     their own issues, so the run summary does too.
@@ -1337,11 +1337,11 @@ def test_a_lane_binding_does_not_move_the_issue_at_stake() -> None:
     )
     renderer.render({**_bind(43, iter_num=1), "iter": None, "lane_issue": 43})
 
-    assert summary.totals().final_strikes == 1, "#42 is still the one last bound"
+    assert summary.totals().final_strikes == 1, "#42's serial binding is still the latest"
 
     renderer.render(_charge(43, 2))
 
-    assert summary.totals().final_strikes == 2, "#43 is now the one last charged"
+    assert summary.totals().final_strikes == 2, "#43's Strike came after #42's binding"
 
 
 def test_run_summary_and_header_agree_on_the_issue_at_stake() -> None:

@@ -710,7 +710,10 @@ Runner that binds one issue per Iteration can have an **Attempt lifecycle** to c
 `conformance/progress-strikes.json` forks along exactly that line: from fixture schema `2` a case
 MAY carry a `distributions` selector naming the members whose accounting it describes, and a case
 carrying none is family-wide. An adapter MUST run the cases naming its own distribution and MUST
-NOT run the others.
+NOT run the others. From fixture schema `3` a step's `strikes` and `outcome` belong to the
+Iteration-counting accounting alone: an adapter for a Runner with a Pickup MUST assert each step's
+`progress` and MUST NOT read either, because progress is one input to the Session outcome that
+charges its Strike, which `conformance/attempt-lifecycle.json` pins.
 
 ## 7. Checkpoint (phase 1, MUST)
 

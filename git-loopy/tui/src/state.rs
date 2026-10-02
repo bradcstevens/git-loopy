@@ -546,8 +546,9 @@ pub struct DashboardState {
     pub(crate) max_strikes: i64,
     /// Each issue's Strikes, once any Strike has named its issue (ADR-0070).
     pub(crate) issue_strikes: Option<BTreeMap<IssueRef, i64>>,
-    /// The issue the Header's Strike count follows: the one last bound, or
-    /// failing that the one last charged.
+    /// The issue the Header's Strike count follows: the one named by
+    /// whichever came last, a serial binding or a Strike. A Lane's binding
+    /// does not move it.
     pub(crate) strike_focus: Option<IssueRef>,
     pub(crate) started_at: Option<Timestamp>,
     pub(crate) ended_at: Option<Timestamp>,

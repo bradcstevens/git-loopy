@@ -493,8 +493,9 @@ class Renderer:
 
     def _on_issue_activated(self, event: dict[str, Any]) -> None:
         # Prints nothing: the Pickup line already named the issue. A serial
-        # binding is the issue at stake for the Run's Strike figure (ADR-0070);
-        # a Lane's, stamped ``lane_issue``, is not.
+        # binding makes its issue the one at stake for the Run's Strike figure
+        # until a later Strike names another (ADR-0070); a Lane's, stamped
+        # ``lane_issue``, does not.
         issue = event.get("issue")
         if issue is not None and event.get("lane_issue") is None:
             self.summary.bind_issue(issue)

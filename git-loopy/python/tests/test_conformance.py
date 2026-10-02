@@ -570,36 +570,36 @@ _PYTHON_PROGRESS_STRIKES = _cases_for(_PROGRESS_STRIKES, "python")
     _PYTHON_PROGRESS_STRIKES,
     ids=lambda case: case["id"],
 )
-def test_progress_and_strike_fixture(case: dict[str, Any]) -> None:
-    """The progress predicate, and that no Iteration signal is a Strike input.
+def test_progress_strikes_fixture_pins_the_progress_predicate(
+    case: dict[str, Any],
+) -> None:
+    """The progress predicate a Runner with a **Pickup** feeds its Session outcome.
 
     The Python Runner charges a **Strike** to an issue from a **Session
-    outcome** alone (ADR-0070, pinned by ``attempt-lifecycle.json``), so the
-    ledger is given the Iteration's work and nothing else: an ending is the
-    only thing it is ever asked to observe, and an Iteration's progress
-    signals, whatever they say, reach it as no ending at all.
+    outcome** (ADR-0070), and this predicate is one input to that ending, not
+    the Strike itself: :func:`~git_loopy.session_outcome.resolve_session_outcome`
+    also weighs how the session terminated and what the Agent declared, none of
+    which a step carries. So this adapter asserts ``progress`` alone and reads
+    no ``strikes`` or ``outcome`` — the Iteration-counting accounting only the
+    shell and PowerShell Orchestrators implement. The per-issue accounting is
+    pinned through its own seams by ``attempt-lifecycle.json``.
     """
-    ledger = AttemptLedger(max_strikes=case["max_strikes"])
-    issue = 412
-
     for step in case["steps"]:
-        signals = step["signals"]
-        expected = step["expected"]
-        assert did_iteration_make_progress(**signals) is expected["progress"]
-        ledger.observe(issue, None)
-        assert ledger.strikes(issue) == expected["strikes"]
-        assert ("aborted" if ledger.skipped(issue) else "running") == expected[
-            "outcome"
-        ]
+        assert (
+            did_iteration_make_progress(**step["signals"])
+            is step["expected"]["progress"]
+        )
 
 
 def test_the_progress_strike_fork_leaves_every_member_something_to_run() -> None:
     """A selector that narrowed a case to nobody would be a silently dead case.
 
     The fork is only honest if all three members still drive the fixture, and if
-    the two accountings it separates are both *actually* pinned: a Run with a
-    **Pickup** charges nothing for an unproductive Iteration and never stops on
-    Strikes, and a Run without one still charges the Iteration.
+    both halves it separates are *actually* pinned: the Python Runner's cases
+    pin its progress predicate both ways and claim nothing about its Strikes —
+    a case only it runs carries no ``strikes``, ``outcome`` or ``max_strikes``
+    for a reader to mistake for one — while a Run without a **Pickup** still
+    charges the unproductive Iteration and aborts at the limit.
     """
     for distribution in _PROGRESS_STRIKES["distributions"]:
         assert _cases_for(_PROGRESS_STRIKES, distribution), distribution
@@ -619,8 +619,21 @@ def test_the_progress_strike_fork_leaves_every_member_something_to_run() -> None
             for step in case["steps"]
         }
 
-    assert strike_totals("python") == {0}
-    assert outcomes("python") == {"running"}
+    python_only = [
+        case
+        for case in _PROGRESS_STRIKES["cases"]
+        if case.get("distributions") == ["python"]
+    ]
+    assert python_only
+    for case in python_only:
+        assert "max_strikes" not in case, case["id"]
+        for step in case["steps"]:
+            assert set(step["expected"]) == {"progress"}, case["id"]
+    assert {
+        step["expected"]["progress"]
+        for case in _PYTHON_PROGRESS_STRIKES
+        for step in case["steps"]
+    } == {True, False}
     assert "aborted" in outcomes("shell")
     assert "aborted" in outcomes("powershell")
     assert 0 not in strike_totals("shell")

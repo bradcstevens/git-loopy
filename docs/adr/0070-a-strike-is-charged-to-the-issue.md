@@ -71,8 +71,9 @@ and `skip` on the N-th. An Iteration's rollup `strikes` is the bound issue's cou
 contribution's `strike_reaction` is `+1` when its session's ending charged its issue and `none`
 otherwise; `reset` is no longer produced, because nothing refunds. The Event schema moves to `1.4`
 and the Wrapper contract to `2.22`. The Dashboard's Header shows the Strikes of the issue at stake
-— the one last bound, or failing that the one last charged — against N, never a sum across
-issues.
+against N, never a sum across issues. The issue at stake is the one named by whichever came last:
+a serial **Pickup**'s binding or a Strike. A **Lane**'s binding does not move it; a Lane's Strike
+does.
 
 ## What this does not do
 

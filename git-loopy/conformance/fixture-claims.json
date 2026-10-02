@@ -100,7 +100,7 @@
       "rust": {"kind": "waived_out_of_scope", "reason": "How long a Pin lasts is an Orchestrator Pickup decision; the Dashboard renders the Pickup records it emits."}
     },
     "progress-strikes.json": {
-      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives production progress and Strike accounting with fixture steps."},
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives the production progress predicate with fixture steps; its per-issue Strike accounting is attempt-lifecycle.json's (ADR-0070)."},
       "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh drives production progress and Strike accounting with fixture steps."},
       "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 drives production progress and Strike accounting with fixture steps."},
       "rust": {"kind": "waived_out_of_scope", "reason": "Strike accounting belongs to an Orchestrator; the Dashboard displays emitted progress without calculating it."}

@@ -4288,6 +4288,51 @@ def test_strikes_are_counted_per_issue(tmp_path, monkeypatch) -> None:
     ] == [(7, "fresh"), (7, "retrying"), (31, "fresh"), (31, "retrying")]
 
 
+def test_an_iteration_that_cannot_read_head_rolls_up_its_bound_issues_strikes(
+    tmp_path, monkeypatch
+) -> None:
+    """A bound Iteration's rollup is its issue's count, even with no session (ADR-0070).
+
+    Iteration 2 binds #7 again and then cannot read ``HEAD``, so it ends before
+    any session starts and charges nothing. It still bound #7, and "an
+    Iteration's rollup ``strikes`` is the bound issue's count": the Strike #7
+    took in Iteration 1, not the zero of an Iteration that bound no issue.
+    """
+
+    class _SecondPromptsHeadReadFails(FakeGitClient):
+        prompts_built = 0
+        head_read_failed = False
+
+        def recent_commits(self, n: int):
+            self.prompts_built += 1
+            return super().recent_commits(n)
+
+        def head_sha(self) -> str:
+            if self.prompts_built == 2 and not self.head_read_failed:
+                self.head_read_failed = True
+                raise git_module.GitError(["git", "rev-parse", "HEAD"], 128, "simulated")
+            return super().head_sha()
+
+    _wire_multi_issue_github(tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")])
+    monkeypatch.setattr(
+        loop_module, "_make_git_client", lambda: _SecondPromptsHeadReadFails(tmp_path)
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(issue_source="github", max_iterations=2, max_nmt_strikes=3)
+        )
+    )
+
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    assert [(s["issue"], s["strikes"]) for s in _strikes(tmp_path)] == [(7, 1)]
+    assert [
+        (e["iter"], e["outcome"], e["summary"]["strikes"])
+        for e in events
+        if e["type"] == "wrapper.iteration.end"
+    ] == [(1, "no_progress", 1), (2, "no_progress", 1)]
+
+
 def test_no_number_of_defeated_issues_stops_the_run(tmp_path, monkeypatch) -> None:
     """There is no Run-wide ceiling left to reach (ADR-0070).
 

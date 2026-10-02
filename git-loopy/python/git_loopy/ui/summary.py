@@ -368,11 +368,12 @@ class RunSummary:
     #: (ADR-0070). ``None`` until then, so a producer whose Strikes are one
     #: Run-wide count keeps the last-Iteration reading in :meth:`totals`.
     issue_strikes: Optional[dict[int | str, int]] = None
-    #: The issue at stake, whose count :meth:`totals` reports: the one last
-    #: bound by a serial **Pickup** (:meth:`bind_issue`), or failing that the
-    #: one last charged. A Lane's binding does not move it — the Header's rule
-    #: too, which ``test_run_summary_and_header_agree_on_the_issue_at_stake``
-    #: holds the two readers to.
+    #: The issue at stake, whose count :meth:`totals` reports: the one named
+    #: by whichever came last, a serial **Pickup**'s binding (:meth:`bind_issue`)
+    #: or a Strike (:meth:`record_strike`). A Lane's binding does not move it,
+    #: though a Lane's Strike does — the Header's rule too, which
+    #: ``test_run_summary_and_header_agree_on_the_issue_at_stake`` holds the
+    #: two readers to.
     strike_focus: int | str | None = None
 
     # -- iteration lifecycle ------------------------------------------------

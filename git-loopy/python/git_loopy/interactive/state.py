@@ -558,8 +558,9 @@ class LiveRunState:
         #: (ADR-0070). ``None`` until then, so a trace without per-issue
         #: Strikes keeps the Run-wide reading.
         self._issue_strikes: dict[int | str, int] | None = None
-        #: The issue the header's Strike count follows: the one last bound,
-        #: or failing that the one last charged.
+        #: The issue the header's Strike count follows: the one named by
+        #: whichever came last, a serial binding or a Strike. A Lane's binding
+        #: does not move it.
         self._strike_focus: int | str | None = None
         self.ended = False
         self.context_window_available: bool | None = None
