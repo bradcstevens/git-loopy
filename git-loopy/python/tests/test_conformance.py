@@ -39,6 +39,7 @@ from git_loopy.release_version import read_runtime_release_version
 from git_loopy.run_routing_preflight import routing_choice_refusal
 from git_loopy.config import (
     CONTEXT_TIERS,
+    DEFAULT_MAX_NMT_STRIKES,
     MODEL_CONTEXT_TIERS,
     MODEL_REASONING_EFFORTS,
     EffortGateWarning,
@@ -54,11 +55,7 @@ from git_loopy.config import (
     resolve_iteration_model,
 )
 from git_loopy.attempt_evidence import AttemptEvidenceLedger
-from git_loopy.attempt_lifecycle import (
-    DEFAULT_MAX_STRIKES,
-    AttemptLedger,
-    AttemptState,
-)
+from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
 from git_loopy.escalation import EscalationLedger
 from git_loopy.session_outcome import SessionOutcome
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
@@ -5126,9 +5123,10 @@ def test_the_fixture_strike_budget_default_is_the_runners() -> None:
     and a Run built from an unconfigured :class:`RunConfig` must both give an issue
     the fixture's default number of Strikes.
     """
-    assert _ATTEMPT_LIFECYCLE["max_strikes_default"] == DEFAULT_MAX_STRIKES
+    assert _ATTEMPT_LIFECYCLE["max_strikes_default"] == DEFAULT_MAX_NMT_STRIKES
+    assert AttemptLedger().max_strikes == DEFAULT_MAX_NMT_STRIKES
     assert RunConfig.__dataclass_fields__["max_nmt_strikes"].default == (
-        DEFAULT_MAX_STRIKES
+        DEFAULT_MAX_NMT_STRIKES
     )
 
 
@@ -5153,8 +5151,8 @@ def test_each_ending_disposes_as_the_fixture_states(row: dict[str, Any]) -> None
     )
     rung = ("claude-opus-5", "max")
 
-    for prior in range(DEFAULT_MAX_STRIKES):
-        attempts = AttemptLedger(max_strikes=DEFAULT_MAX_STRIKES)
+    for prior in range(DEFAULT_MAX_NMT_STRIKES):
+        attempts = AttemptLedger(max_strikes=DEFAULT_MAX_NMT_STRIKES)
         for _ in range(prior):
             attempts.observe(412, SessionOutcome.CRASH)
         attempts.observe(412, outcome)

@@ -692,9 +692,11 @@ Runner that binds one issue per Iteration can have an **Attempt lifecycle** to c
 
 - **A Runner with a Pickup** (contract 2.22, ADR-0070) MUST charge **one Strike to the issue a
   session worked for every Session outcome** that session reaches (§14.3) — silent no-progress,
-  timeout, crash, no more tasks, or content-filtered. A session that advanced its issue reached no
-  ending and MUST charge nothing. Strikes are counted **per issue, per Run**: one issue's Strikes
-  MUST NOT count against any other issue, progress MUST NOT refund any, and a `skipped` issue MUST
+  timeout, crash, no more tasks, or content-filtered. A session that advanced its issue MUST charge
+  nothing unless it timed out or crashed: progress refutes silent no-progress, no more tasks and
+  content-filtered, but a timeout or crash is an ending whether or not the session advanced.
+  Strikes are counted **per issue, per Run**: one issue's Strikes MUST NOT count against any other
+  issue, progress MUST NOT refund any, and a `skipped` issue MUST
   NOT be charged further. `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) is therefore N, *how many
   Strikes each issue gets*: an issue holding fewer than N stays eligible for a retry, and the N-th
   skips it (§14.3). The Run MUST NOT stop on Strikes — it never ends `stuck` and never latches a
@@ -1648,8 +1650,8 @@ run-wide default:
   the five **Session outcomes** charges one Strike and so moves the issue one step, as that
   fixture's table states (ADR-0070); before it, a timeout, an explicit no-more-tasks and a
   content-filtered turn moved it straight to `skipped`. An Iteration that advanced its issue
-  reached no ending and MUST move it neither forward nor back. The lifecycle
-  MUST NOT regress — including on an advancing Iteration between two failures, because an issue
+  without timing out or crashing reached no ending and MUST move it neither forward nor back.
+  The lifecycle MUST NOT regress — including on an advancing Iteration between two failures, because an issue
   that landed something once under a Run that cannot finish it is the ordinary shape of a Run
   grinding rather than evidence the Run recovered.
   It is **per Run and in memory**: an Orchestrator MUST NOT write it to the tracker, because a
@@ -2242,7 +2244,8 @@ record (§6), and historical streams' interpretation is unchanged.
   configuration, and MUST report the attempt's **lifecycle position** beside it rather than in place
   of it. A reassessed retry that re-elects the same configuration is otherwise indistinguishable
   from a first election, and the position MUST NOT be derived from how many earlier attempts there
-  were: an **Iteration** that advanced its issue reaches no ending and spends no attempt, yet is a
+  were: an **Iteration** that advanced its issue without timing out or crashing reaches no ending
+  and spends no attempt, yet is a
   real earlier attempt the next election is told about.
   Bounded history MUST retain earlier capability failures before recent advances. Omitted
   advances still count toward the recorded session ordinal and the relevant input identity;

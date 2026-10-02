@@ -11,12 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from git_loopy.attempt_lifecycle import (
-    DEFAULT_MAX_STRIKES,
-    AttemptLedger,
-    AttemptState,
-)
-from git_loopy.config import RoutingLifecyclePosition
+from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
+from git_loopy.config import DEFAULT_MAX_NMT_STRIKES, RoutingLifecyclePosition
 from git_loopy.session_outcome import SessionOutcome
 
 _EVERY_ENDING = tuple(SessionOutcome)
@@ -24,7 +20,7 @@ _EVERY_ENDING = tuple(SessionOutcome)
 
 def test_the_default_limit_is_the_default_max_nmt_strikes() -> None:
     """A ledger built without a Config disposes of an issue as a default Run does."""
-    assert DEFAULT_MAX_STRIKES == 3
+    assert DEFAULT_MAX_NMT_STRIKES == 3
     assert AttemptLedger().max_strikes == 3
 
 

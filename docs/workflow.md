@@ -158,8 +158,9 @@ One serial Iteration makes one bounded attempt at one Active issue:
    issue, and leaves the worktree clean. If anything remains, the Orchestrator
    records a close-keyword-free Checkpoint so work is not lost.
 7. **Push and account.** The Orchestrator pushes new commits, updates the
-   Dashboard and Summary, and charges the issue a Strike when its session
-   ended without meaningful progress.
+   Dashboard and Summary, and charges the issue a Strike whenever its session
+   reaches an ending: no progress, a timeout or crash, no more tasks, or a
+   content filter.
 
 ```mermaid
 flowchart TD
@@ -179,7 +180,7 @@ flowchart TD
 The next Iteration starts with a fresh context and re-collects the Pool. The Run
 continues until ready work is exhausted, an Iteration cap is reached, the loop
 engineer Stops it, or every remaining issue has been skipped. An issue is skipped
-once its sessions have ended without progress as many times as its Strike budget
+once its sessions have ended badly as many times as its Strike budget
 allows; other issues keep their own budgets.
 
 The loop engineer then reviews the pushed commits against the spec, issue

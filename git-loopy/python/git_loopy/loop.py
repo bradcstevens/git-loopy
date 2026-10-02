@@ -64,8 +64,9 @@ Per-iteration sequence:
     :meth:`_Loop._observe_session_ending` (the one seam a serial Iteration and
     a **Lane** share). An issue that has taken ``max_nmt_strikes`` of them is
     skipped for the rest of the Run; the Run itself never stops on Strikes.
-    An Iteration that advanced its issue reached no ending and charges
-    nothing, and nothing is ever refunded. Checkpoints and pushes are still
+    An Iteration that advanced its issue charges nothing unless its session
+    timed out or crashed, which progress never launders, and nothing is ever
+    refunded. Checkpoints and pushes are still
     *not* progress, which is what the §6 predicate reports on the Summary row.
 13. Emit ``wrapper.iteration.end`` (renderer closes snapshot panel) and
     persist :class:`~git_loopy.persist.IterationCounters` from the
@@ -4009,16 +4010,13 @@ class _Loop:
         strikes = self._attempts.strikes(ref)
         limit = self._attempts.max_strikes
         skipped = self._attempts.skipped(ref)
-        if skipped:
-            self._diag.warning(
-                "issue #%s: strike %d of %d (%s); skipped for the rest of this Run",
-                ref, strikes, limit, ending.value,
-            )
-        else:
-            self._diag.warning(
-                "issue #%s: strike %d of %d (%s); it stays eligible for a retry",
-                ref, strikes, limit, ending.value,
-            )
+        self._diag.warning(
+            "issue #%s: strike %d of %d (%s); %s",
+            ref, strikes, limit, ending.value,
+            "skipped for the rest of this Run"
+            if skipped
+            else "it stays eligible for a retry",
+        )
         self._emit(
             events_module.WRAPPER_STRIKE,
             iter_num=iter_num,

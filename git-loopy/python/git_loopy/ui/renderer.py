@@ -52,6 +52,7 @@ from git_loopy.events import (
     SESSION_CREATED,
     SESSION_DELETED,
     SESSION_IDLE,
+    STRIKE_OUTCOME_SKIP,
     TOOL_CALL,
     TOOL_PERMISSION_DENIED,
     TOOL_PERMISSION_REQUESTED,
@@ -860,7 +861,7 @@ class Renderer:
         ending = event.get("ending")
         if ending:
             text.append(f"  ({ending})", style=STYLES["meta"])
-        if event.get("outcome") == "skip":
+        if event.get("outcome") == STRIKE_OUTCOME_SKIP:
             text.append("  → issue skipped", style=STYLES["warning"])
         self.console.print(text)
 

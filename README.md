@@ -307,10 +307,10 @@ if a saved Skill policy still enables the retired name.
    vertical slices, and runs the repository's feedback loops. It commits with a
    close keyword and closes the issue. The Orchestrator captures leftover work in
    a Checkpoint when necessary, pushes new commits, updates the live interface
-   and Summary, and charges the issue a Strike when its session ended without
-   progress.
+   and Summary, and charges the issue a Strike whenever its session reaches an
+   ending: no progress, a timeout or crash, no more tasks, or a content filter.
 8. **Repeat, then judge.** The next Iteration receives a fresh Pool and context.
-   An issue whose sessions keep ending without progress is skipped once it holds
+   An issue whose sessions keep ending badly is skipped once it holds
    its configured Strikes; the Run stops when work is exhausted, the configured
    limit is reached, or every remaining issue has been skipped. The loop engineer reviews the pushed result against
    the spec and repository standards, accepts it, reopens it, or creates a new

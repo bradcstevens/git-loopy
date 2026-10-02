@@ -3,8 +3,10 @@
 **Status:** accepted
 
 **Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
-for the Python Runner, a terminal unpublished contribution charges its issue one **Strike**
-against that issue's own `max_nmt_strikes`, and publication resets nothing. There is no
+for the Python Runner, a Lane's **Strike** is charged by its session's ending, not by its
+contribution's disposition: a terminal unpublished contribution is no longer a Strike in itself,
+its `strike_reaction` is `+1` only when that ending charged its issue against the issue's own
+`max_nmt_strikes`, and publication resets nothing. There is no
 Run-wide Strike limit, so reaching one no longer stops refill or latches a drain-confirmed
 abort, and no publication lifts one.
 

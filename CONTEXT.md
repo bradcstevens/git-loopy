@@ -232,7 +232,8 @@ _Avoid_: poll, refresh, shallow pool, live pool.
 **Strike**:
 One **Session outcome** charged to the issue whose session it was. Every ending — silent
 no-progress, timeout, crash, no more tasks, content-filtered — charges exactly one, and a session
-that advanced its issue reached no ending and charges nothing. Strikes are counted per issue, per
+that advanced its issue charges nothing unless the Orchestrator lost it to a timeout or crash,
+which progress does not launder (**Session outcome**). Strikes are counted per issue, per
 **Run**: what one issue spends no other issue loses. `--max-nmt-strikes` is N, the number each
 issue gets, so it reads as *how many times this Run may try an issue that keeps ending badly*;
 the issue is retried until it holds N and is **Skip**ped then, and the **Attempt lifecycle** is
@@ -1164,7 +1165,7 @@ from its **Strikes**: **fresh** (none), **retrying** (fewer than N, the `--max-n
 budget) and **skipped** (N, out of contention for the rest of the Run). Every **Session outcome**
 charges the issue one Strike, so every ending is retried until N — an operator who wants an ending
 to defeat an issue on first sight sets N to `1` — and an **Iteration** that advanced its issue
-reached no ending, so it spends no attempt and refunds none (ADR-0070). It is the other dial the
+without losing its session reached no ending, so it spends no attempt and refunds none (ADR-0070). It is the other dial the
 **Escalation rung** shares an ending with: the rung decides whether the *pair* changes, this
 decides whether the issue is worked again, and only silent no-progress turns both. Per Run and in memory
 like the rung, and for the same reason with a sharper edge — it is **never written to the
@@ -1184,7 +1185,7 @@ endings: only silent no-progress — the session that ran to the end, claimed no
 nothing behind — is evidence about the configuration. A crash and a content-filtered turn are
 evidence about the harness, a timeout is its own verdict because neither neighbour would be honest,
 a no-more-tasks declaration is the **Agent** saying the work is absent, and an **Iteration** that
-advanced its issue reached no ending yet is still the most direct evidence there is that the
+advanced its issue without losing its session reached no ending yet is still the most direct evidence there is that the
 configuration is working. Capability evidence **never blacklists**: every eligible configuration
 stays a candidate at every attempt, and re-electing one an earlier attempt failed to solve the task
 on costs a stated justification rather than a veto — an issue may simply be hard. Per **Run** and in
@@ -1374,8 +1375,9 @@ The Run-end replacement of a **Measured routing** entry whose **Routed pair** st
 progress on real work. Its signal is counted per **Routed pair** from the Run's finalized
 **Lane contributions** — a contribution that reached a terminal disposition without publishing is
 a **no-progress** one — and deliberately *not* from the **Strike** count, which is charged to
-issues rather than pairs, so it can never carry a per-pair meaning; the Strike count's own job,
-skipping an issue that keeps ending badly, is unchanged (ADR-0030, ADR-0070). The threshold is **Config**, and it is an absolute bar rather than a comparison:
+issues rather than pairs, so it can never carry a per-pair meaning; the Strike count keeps its
+own job, skipping an issue that keeps ending badly (ADR-0070), and Demotion never borrows it
+(ADR-0030). The threshold is **Config**, and it is an absolute bar rather than a comparison:
 nothing is claimed about which pair would have done better, only that this one is failing. It is
 evaluated and applied after the **Run** ends and never mid-Run, at the one quiescent point where
 every Lane has finalized and nothing is in flight to race it over the single tracked file — which

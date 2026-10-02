@@ -28,7 +28,8 @@ ticket) rather than about the issue.
 `max_nmt_strikes` (default `3`, must be at least `1`) is now **N, the number of Strikes each issue
 gets in a Run**. Every **Session outcome** — silent no-progress, timeout, crash, *no more tasks*,
 content-filtered — charges exactly one Strike to the issue that session worked. An Iteration that
-advanced its issue reached no ending and charges nothing.
+advanced its issue charges nothing unless its session timed out or crashed: progress refutes the
+three endings that are claims about the work, never a session the Orchestrator lost.
 
 The **Attempt lifecycle** becomes a projection of that count: no Strikes is `fresh`, 1 to N−1 is
 `retrying`, and N is `skipped`. Everything ADR-0040 said about the lifecycle still holds, because
