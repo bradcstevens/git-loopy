@@ -687,10 +687,12 @@ wrapper closure. (PR mode: a PR head-SHA advance also counts as progress.)
 - The legacy `<promise>NO MORE TASKS</promise>` sentinel is **informational only** and MUST NOT
   be a Strike input in its own right.
 
-What a **Strike** counts depends on whether the Runner has a **Pickup** (§14.3), because only a
-Runner that binds one issue per Iteration can have an **Attempt lifecycle** to charge from:
+What a **Strike** counts depends on whether the Runner holds an **Attempt lifecycle** (§14):
+every Runner's **Pickup** binds one issue per Iteration (§3.3), but only a Runner that holds a
+lifecycle keeps a count of that issue's attempts to charge. §14 owes one to every Orchestrator; a
+Runner that does not yet hold it keeps the second accounting below:
 
-- **A Runner with a Pickup** (contract 2.22, ADR-0070) MUST charge **one Strike to the issue a
+- **A Runner with an Attempt lifecycle** (contract 2.22, ADR-0070) MUST charge **one Strike to the issue a
   session worked for every Session outcome** that session reaches (§14.3) — silent no-progress,
   timeout, crash, no more tasks, or content-filtered. A session that advanced its issue MUST charge
   nothing unless it timed out or crashed: progress refutes silent no-progress, no more tasks and
@@ -702,7 +704,7 @@ Runner that binds one issue per Iteration can have an **Attempt lifecycle** to c
   skips it (§14.3). The Run MUST NOT stop on Strikes — it never ends `stuck` and never latches a
   `strike_limit` Wind-down (§10.1); a Run that can bind none of what remains ends `all_skipped`
   (§10).
-- **A Runner without a Pickup** MUST keep the original accounting: an Iteration that made no
+- **A Runner without an Attempt lifecycle** MUST keep the original accounting: an Iteration that made no
   progress records a Strike, `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) **consecutive**
   no-progress Iterations end the Run with exit `1` (§10, `stuck`), and progress resets the
   consecutive-strike counter.
@@ -711,8 +713,8 @@ Runner that binds one issue per Iteration can have an **Attempt lifecycle** to c
 MAY carry a `distributions` selector naming the members whose accounting it describes, and a case
 carrying none is family-wide. An adapter MUST run the cases naming its own distribution and MUST
 NOT run the others. From fixture schema `3` a step's `strikes` and `outcome` belong to the
-Iteration-counting accounting alone, as does a case's `max_strikes`: an adapter for a Runner with a
-Pickup MUST assert each step's `progress` and MUST NOT read any of the three, because progress is
+Iteration-counting accounting alone, as does a case's `max_strikes`: an adapter for a Runner with an
+Attempt lifecycle MUST assert each step's `progress` and MUST NOT read any of the three, because progress is
 one input to the Session outcome that charges its Strike, which `conformance/attempt-lifecycle.json`
 pins.
 
@@ -747,7 +749,7 @@ error (exit `2`).
 | ---- | -------------------- | -------------------------------------------------------------------- |
 | `0`  | Clean — queue empty  | An Iteration's collection (§2) finds the Pool empty.                 |
 | `0`  | Clean — cap reached  | The optional iteration cap `N` (§9) is reached.                      |
-| `1`  | Aborted — stuck      | A Runner without a Pickup spent its `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling (§6). |
+| `1`  | Aborted — stuck      | A Runner without an Attempt lifecycle spent its `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling (§6). |
 | `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
 | `1`  | Waiting — all blocked | Every Pickup refusal proved a wait: an open native blocker, or an open closing pull request (§3.3.1, contract 2.17). |
 | `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), or an unread refusal left it unresolved (§3.3.1). |
@@ -758,7 +760,7 @@ Exit code `3` is retired. It used to mean a Run that continued past a Dashboard
 fault. The Run now outlives its client, so a client fault is not a Run outcome
 and the code must not be reused (`exit-codes.json` `retired`, #459).
 
-A Runner with a **Pickup** (§14.3) never ends `stuck` (§6, contract 2.22). It MUST report a Run
+A Runner with an **Attempt lifecycle** (§14) never ends `stuck` (§6, contract 2.22). It MUST report a Run
 that could bind none of the Pool as `all_skipped`, and MUST NOT report that as the exit-`0` empty
 queue: "there is nothing to do" and "I could not take any of what there is" are different facts
 about the repository, and only the first is a finished Run. The `all_skipped` reason is required
@@ -766,9 +768,9 @@ from contract 1.27 because an Iteration that binds nothing reaches no Session ou
 no Strike — so without a terminal reason of its own, a Run every one of whose candidates is
 defeated would re-walk the same Pool for as long as its Iteration cap allowed. From contract 2.22
 it is also the only way a Run that has skipped everything ends, because the Run never stops on
-Strikes. A Runner without a Pickup never reaches this
-reason and is not required to name it beyond mapping it (§10 is the family-wide termination
-matrix that `conformance/exit-codes.json` pins for every member).
+Strikes. A Runner without an Attempt lifecycle reaches this reason only when its Pickup refuses
+every candidate for another reason, such as **Readiness** (§3.3.1); §10 is the family-wide
+termination matrix that `conformance/exit-codes.json` pins for every member.
 
 `all_blocked` is terminal on the same evidence: a Run cannot close a blocker, or merge a pull
 request its own Pickup refused to redo, without first starting work, and no candidate can start.
@@ -799,7 +801,7 @@ The Stop itself takes **two stages** (ADR-0043), driven by the same gesture repe
    once; every started contribution and **Integration** operation runs to completion and
    integrates. The latch is durable — a later publication MUST NOT resume refill, which is what
    distinguished it from the revocable drain a spent **Strike** ceiling latched before a Runner
-   with a Pickup stopped draining on Strikes (§6, contract 2.22).
+   with an Attempt lifecycle stopped draining on Strikes (§6, contract 2.22).
 2. The second cancels the agent sessions still running, **salvaging** each one's workspace as a
    **Checkpoint** first. Cancellation is *requested*, never awaited.
 
@@ -823,7 +825,7 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_MODEL`              | 1     | `claude-opus-5`  | Model id (bare base id).                                       |
 | `GIT_LOOPY_REASONING_EFFORT`   | 1     | `max` for the built-in model | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; omitted and explicit `none` are distinct. A recognized model-id suffix is peeled into this field, and selecting another model without an effort leaves it omitted so the backend chooses. |
 | `GIT_LOOPY_ISSUE_SOURCE`       | 1     | `github`         | `github` or `prds` (legacy local-markdown mode).              |
-| `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | A Runner with a Pickup: Strikes each issue gets before it is skipped. Without one: consecutive no-progress Iterations before abort (§6). |
+| `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | A Runner with an Attempt lifecycle: Strikes each issue gets before it is skipped. Without one: consecutive no-progress Iterations before abort (§6). |
 | `GIT_LOOPY_INCLUDE_PRS`        | 3     | off              | `1`/`true`/`yes` to also advance `ready-for-agent` PRs.       |
 | `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | MUST be honoured only by a member whose declared parallel capability manifest exposes this operator choice. Python refuses it: the Dashboard is available whenever stdout is a terminal, and the line printer runs when it is not. |
 | `GIT_LOOPY_MODEL_SELECT`       | 3     | off              | `1` enters the startup model picker (**ModelSelectionMode**). |
@@ -876,8 +878,8 @@ failures only: they emit no special Event and do not change the worker's own Run
 
 Contract-2.4 puts **Wind-down** on the wire. A Run emits
 `wrapper.stop.requested` when it latches a drain or escalates it to cancellation:
-`cause` is one of `operator_stop`, `strike_limit`, or `iteration_cap` (a Runner with a
-Pickup produces no `strike_limit` from contract 2.22, §6); `stage` is
+`cause` is one of `operator_stop`, `strike_limit`, or `iteration_cap` (a Runner with an
+Attempt lifecycle produces no `strike_limit` from contract 2.22, §6); `stage` is
 the ordered ladder `drain`, then `cancel`; and `draining` is the observed number
 of contributions still in flight (`0` for a serial Run). Only `operator_stop` may
 emit `cancel`. The Event records the true latch, not an input gesture, so each
@@ -891,10 +893,10 @@ unknown, and `wrapper.run.end` with `outcome: "interrupted"` is not a Stop.
 
 Contract 2.22 (ADR-0070) names whose **Strike** a `wrapper.strike` is. It
 carries `strikes`, `max_strikes` and `outcome` (`warn`, `skip` or `abort`). A
-Runner with a Pickup (§6) MUST add the `issue` it charged and the `ending`, the
+Runner with an Attempt lifecycle (§6) MUST add the `issue` it charged and the `ending`, the
 **Session outcome** that charged it; `strikes` is then that issue's count and
 `max_strikes` is N, and `outcome` is `skip` on the N-th Strike and `warn`
-before it, never `abort`. A Runner without a Pickup omits both, and `strikes`
+before it, never `abort`. A Runner without one omits both, and `strikes`
 is its Run-wide consecutive count. A consumer MUST NOT read an issue-naming
 Strike's count as the Run's: it shows the count of the issue at stake and
 never sums across issues. A finalized contribution's `strike_reaction` is
@@ -1220,9 +1222,9 @@ Orchestrator rollout tickets own enabling those producers.
 The normalized `summary` requires `model`, `tokens_in`, `tokens_out`, `observed_tokens`,
 `tool_count`, `skill_call_count`, sorted-distinct `skills_consulted`, `commits`,
 `auto_closures`, `pr_advances`, `strikes`, and nullable `peak_context_window`. From contract 2.22
-(ADR-0070) a Runner with a Pickup (§6) reports as `strikes` the Strikes of the issue the Iteration
+(ADR-0070) a Runner with an Attempt lifecycle (§6) reports as `strikes` the Strikes of the issue the Iteration
 bound, which never reset, or `0` for an Iteration that bound none; a Runner without one reports its
-Run-wide consecutive count, which progress resets. A consumer MUST NOT sum a Pickup Runner's
+Run-wide consecutive count, which progress resets. A consumer MUST NOT sum such a Runner's
 `strikes` across Iterations. Each issue contribution requires `issue`, `status`, UTC RFC3339
 `first_started_at`, closure-only `closed_at`,
 closure-only `issue_elapsed_seconds`, `active_seconds`, `cumulative_active_seconds`,
@@ -1681,8 +1683,8 @@ run-wide default:
   afterwards. The lifecycle is what a resolution's **lifecycle position** reports (`fresh` is
   `fresh`; everything past it is `retrying`), which is how a same-pair crash retry reads as a
   retry at all.
-  **The lifecycle is what the Strikes count (contract 2.22, ADR-0070).** An Orchestrator with a
-  Pickup MUST charge one **Strike** to an issue for each Session outcome a session on it reaches,
+  **The lifecycle is what the Strikes count (contract 2.22, ADR-0070).** An Orchestrator that
+  holds it MUST charge one **Strike** to an issue for each Session outcome a session on it reaches,
   and the ending that charges the N-th is the one recorded as its defeat. It MUST charge nothing
   for an Iteration that bound nothing, and nothing further once the issue is `skipped`. Because
   the lifecycle is a property of the issue and not of the seam that observed it, the Strike MUST

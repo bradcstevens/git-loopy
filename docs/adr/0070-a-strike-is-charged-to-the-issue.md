@@ -82,9 +82,9 @@ Lane per Run, so a Parallel-safe issue whose Lane ends charges one Strike and is
 serial round takes it — the gap ADR-0041 recorded, unchanged here and tracked as its own
 follow-up.
 
-It does not change the shell or PowerShell Orchestrators. They have no **Pickup**, so they have
-no issue to charge, and they keep counting consecutive no-progress Iterations for the whole Run
-and ending `stuck` at the limit. `conformance/progress-strikes.json` keeps pinning them to that,
+It does not change the shell or PowerShell Orchestrators. Their **Pickup** binds an issue, but
+they hold no **Attempt lifecycle** to charge it to, so they keep counting consecutive no-progress
+Iterations for the whole Run and ending `stuck` at the limit. `conformance/progress-strikes.json` keeps pinning them to that,
 and `conformance/attempt-lifecycle.json` pins the per-issue accounting this decision makes.
 
 It does not stop a Run re-picking an issue whose work sits in an open pull request; it only

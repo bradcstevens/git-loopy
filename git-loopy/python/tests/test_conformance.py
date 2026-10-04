@@ -550,8 +550,9 @@ def _cases_for(fixture: dict[str, Any], distribution: str) -> list[dict[str, Any
     A case naming no ``distributions`` is family-wide; one that names some runs
     only for the members it names. #413 forked ``progress-strikes.json`` this
     way because the **Strike** stopped counting unproductive **Iterations** —
-    true of a Runner with a **Pickup**, which since ADR-0070 charges it to the
-    issue a Session worked, and false of the two Orchestrators that have none,
+    true of a Runner with an **Attempt lifecycle**, which since ADR-0070 charges
+    it to the issue a Session worked, and false of the two Orchestrators that
+    hold none,
     so the retained cases keep pinning them to what they implement rather than
     being deleted.
     """
@@ -573,7 +574,7 @@ _PYTHON_PROGRESS_STRIKES = _cases_for(_PROGRESS_STRIKES, "python")
 def test_progress_strikes_fixture_pins_the_progress_predicate(
     case: dict[str, Any],
 ) -> None:
-    """The progress predicate a Runner with a **Pickup** feeds its Session outcome.
+    """The progress predicate a Runner with an **Attempt lifecycle** feeds its Session outcome.
 
     The Python Runner charges a **Strike** to an issue from a **Session
     outcome** (ADR-0070), and this predicate is one input to that ending, not
@@ -600,7 +601,7 @@ def test_the_progress_strike_fork_leaves_every_member_something_to_run() -> None
     pin its progress predicate both ways and claim nothing about its Strikes —
     every case it runs is family-wide, so each ``strikes`` and ``outcome`` it
     passes over is the shell and PowerShell Orchestrators' and none is its own
-    for a reader to mistake for one — while a Run without a **Pickup** still
+    for a reader to mistake for one — while a Run without an **Attempt lifecycle** still
     charges the unproductive Iteration and aborts at the limit.
     """
     for distribution in _PROGRESS_STRIKES["distributions"]:

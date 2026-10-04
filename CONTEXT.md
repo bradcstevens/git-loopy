@@ -51,7 +51,7 @@ _Avoid_: automation (too broad), tooling work, prompt engineering (a part, not t
 One invocation of the git-loopy loop, identified by a `run_id`, spanning serial
 **Iterations** and/or parallel **Lane contributions** until its authorized work is
 exhausted, it can take none of the work that remains, an **Automation stop** occurs, or, for a
-**Runner** with no **Pickup**, the strike limit is reached.
+**Runner** with no **Attempt lifecycle**, the strike limit is reached.
 
 **Execution host**:
 Where one **Lane contribution** executes. A Run selects one host; each contribution
@@ -241,8 +241,9 @@ the issue is retried until it holds N and is **Skip**ped then, and the **Attempt
 that count's projection. Strikes are monotonic: progress refunds none, on that issue or another,
 and a skipped issue is charged nothing further. The Run never stops on Strikes — a Run that has
 skipped everything it could take ends as an **All-skipped Run** (ADR-0070). A **Runner** with no
-**Pickup** has no issue to charge and keeps the original accounting — a Strike per no-progress
-Iteration, consecutive, reset by progress, ending the Run `stuck` at the limit — which is the line
+**Attempt lifecycle** — today the shell and PowerShell Orchestrators, whose **Pickup** binds an
+issue but keeps no count of its attempts — keeps the original accounting: a Strike per no-progress
+Iteration, consecutive, reset by progress, ending the Run `stuck` at the limit. That is the line
 `conformance/progress-strikes.json` forks along.
 _Avoid_: failure, miss, no-progress count.
 
