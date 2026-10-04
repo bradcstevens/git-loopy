@@ -50,7 +50,8 @@ _Avoid_: automation (too broad), tooling work, prompt engineering (a part, not t
 **Run**:
 One invocation of the git-loopy loop, identified by a `run_id`, spanning serial
 **Iterations** and/or parallel **Lane contributions** until its authorized work is
-exhausted, it can take none of the work that remains, or an **Automation stop** occurs.
+exhausted, it can take none of the work that remains, an **Automation stop** occurs, or, for a
+**Runner** with no **Pickup**, the strike limit is reached.
 
 **Execution host**:
 Where one **Lane contribution** executes. A Run selects one host; each contribution

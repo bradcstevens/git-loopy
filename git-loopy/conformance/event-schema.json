@@ -214,6 +214,7 @@
         "strikes",
         "peak_context_window"
       ],
+      "strikes_note": "From contract 2.22 a producer with a Pickup reports the Strikes of the issue the Iteration bound, which never reset (ADR-0070), or 0 for an Iteration that bound none; a producer without one reports its Run-wide consecutive count, which resets on progress. A consumer never sums a Pickup producer's strikes across Iterations.",
       "issue_required": [
         "issue",
         "status",

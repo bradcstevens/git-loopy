@@ -711,9 +711,10 @@ Runner that binds one issue per Iteration can have an **Attempt lifecycle** to c
 MAY carry a `distributions` selector naming the members whose accounting it describes, and a case
 carrying none is family-wide. An adapter MUST run the cases naming its own distribution and MUST
 NOT run the others. From fixture schema `3` a step's `strikes` and `outcome` belong to the
-Iteration-counting accounting alone: an adapter for a Runner with a Pickup MUST assert each step's
-`progress` and MUST NOT read either, because progress is one input to the Session outcome that
-charges its Strike, which `conformance/attempt-lifecycle.json` pins.
+Iteration-counting accounting alone, as does a case's `max_strikes`: an adapter for a Runner with a
+Pickup MUST assert each step's `progress` and MUST NOT read any of the three, because progress is
+one input to the Session outcome that charges its Strike, which `conformance/attempt-lifecycle.json`
+pins.
 
 ## 7. Checkpoint (phase 1, MUST)
 
@@ -1218,8 +1219,12 @@ Orchestrator rollout tickets own enabling those producers.
 
 The normalized `summary` requires `model`, `tokens_in`, `tokens_out`, `observed_tokens`,
 `tool_count`, `skill_call_count`, sorted-distinct `skills_consulted`, `commits`,
-`auto_closures`, `pr_advances`, `strikes`, and nullable `peak_context_window`. Each issue
-contribution requires `issue`, `status`, UTC RFC3339 `first_started_at`, closure-only `closed_at`,
+`auto_closures`, `pr_advances`, `strikes`, and nullable `peak_context_window`. From contract 2.22
+(ADR-0070) a Runner with a Pickup (§6) reports as `strikes` the Strikes of the issue the Iteration
+bound, which never reset, or `0` for an Iteration that bound none; a Runner without one reports its
+Run-wide consecutive count, which progress resets. A consumer MUST NOT sum a Pickup Runner's
+`strikes` across Iterations. Each issue contribution requires `issue`, `status`, UTC RFC3339
+`first_started_at`, closure-only `closed_at`,
 closure-only `issue_elapsed_seconds`, `active_seconds`, `cumulative_active_seconds`,
 `consumption` (`model`, `tokens_in`, `tokens_out`), and nullable `peak_context_window`. Only
 authoritative source closure populates closure-only fields.

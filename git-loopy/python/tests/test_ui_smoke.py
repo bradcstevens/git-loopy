@@ -1322,7 +1322,7 @@ def test_run_end_final_strikes_follows_the_last_charged_issue_when_none_is_bound
 
 
 def test_a_lane_binding_does_not_move_the_issue_at_stake() -> None:
-    """Only a serial binding moves the issue at stake; a Lane's Strike still does.
+    """Of the two bindings, only a serial one moves the issue at stake; a Lane's Strike does too.
 
     Both Headers keep the serial binding in focus while Lanes start and bind
     their own issues, so the run summary does too.

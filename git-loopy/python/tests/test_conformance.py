@@ -580,9 +580,10 @@ def test_progress_strikes_fixture_pins_the_progress_predicate(
     the Strike itself: :func:`~git_loopy.session_outcome.resolve_session_outcome`
     also weighs how the session terminated and what the Agent declared, none of
     which a step carries. So this adapter asserts ``progress`` alone and reads
-    no ``strikes`` or ``outcome`` — the Iteration-counting accounting only the
-    shell and PowerShell Orchestrators implement. The per-issue accounting is
-    pinned through its own seams by ``attempt-lifecycle.json``.
+    no ``max_strikes``, ``strikes`` or ``outcome`` — the Iteration-counting
+    accounting only the shell and PowerShell Orchestrators implement, which a
+    family-wide case carries for them. The per-issue accounting is pinned
+    through its own seams by ``attempt-lifecycle.json``.
     """
     for step in case["steps"]:
         assert (
@@ -597,7 +598,8 @@ def test_the_progress_strike_fork_leaves_every_member_something_to_run() -> None
     The fork is only honest if all three members still drive the fixture, and if
     both halves it separates are *actually* pinned: the Python Runner's cases
     pin its progress predicate both ways and claim nothing about its Strikes —
-    a case only it runs carries no ``strikes``, ``outcome`` or ``max_strikes``
+    every case it runs is family-wide, so each ``strikes`` and ``outcome`` it
+    passes over is the shell and PowerShell Orchestrators' and none is its own
     for a reader to mistake for one — while a Run without a **Pickup** still
     charges the unproductive Iteration and aborts at the limit.
     """
@@ -619,16 +621,8 @@ def test_the_progress_strike_fork_leaves_every_member_something_to_run() -> None
             for step in case["steps"]
         }
 
-    python_only = [
-        case
-        for case in _PROGRESS_STRIKES["cases"]
-        if case.get("distributions") == ["python"]
-    ]
-    assert python_only
-    for case in python_only:
-        assert "max_strikes" not in case, case["id"]
-        for step in case["steps"]:
-            assert set(step["expected"]) == {"progress"}, case["id"]
+    for case in _PYTHON_PROGRESS_STRIKES:
+        assert "distributions" not in case, case["id"]
     assert {
         step["expected"]["progress"]
         for case in _PYTHON_PROGRESS_STRIKES
@@ -1559,6 +1553,9 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "pr_advances",
                 "strikes",
                 "peak_context_window",
+            ],
+            "strikes_note": _EVENT_SCHEMA["payload_contracts"]["wrapper.iteration.end"][
+                "strikes_note"
             ],
             "issue_required": [
                 "issue",
