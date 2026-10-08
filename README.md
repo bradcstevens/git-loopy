@@ -307,10 +307,12 @@ if a saved Skill policy still enables the retired name.
    vertical slices, and runs the repository's feedback loops. It commits with a
    close keyword and closes the issue. The Orchestrator captures leftover work in
    a Checkpoint when necessary, pushes new commits, updates the live interface
-   and Summary, and records a Strike when no meaningful progress occurred.
+   and Summary, and charges the issue a Strike whenever its session reaches an
+   ending: no progress, a timeout or crash, no more tasks, or a content filter.
 8. **Repeat, then judge.** The next Iteration receives a fresh Pool and context.
-   The Run stops when work is exhausted, the configured limit is reached, or
-   strikes trip the guardrail. The loop engineer reviews the pushed result against
+   An issue whose sessions keep ending badly is skipped once it holds
+   its configured Strikes; the Run stops when work is exhausted, the configured
+   limit is reached, or every remaining issue has been skipped. The loop engineer reviews the pushed result against
    the spec and repository standards, accepts it, reopens it, or creates a new
    sliced issue. Closed issues and commits preserve the state between Iterations.
 9. **Improve the workflow, not just the code.** Every red gate, wasted Iteration,
@@ -341,7 +343,7 @@ flowchart TD
     end
 
     Pool --> Collect
-    Account --> Continue{"More ready work<br/>and strikes remain?"}
+    Account --> Continue{"More ready work<br/>not yet skipped?"}
     Continue -- "Yes" --> Collect
     Continue -- "No" --> Review["Loop engineer review<br/>spec and standards"]
     Review --> Value["Accepted value<br/>or a new sliced issue"]

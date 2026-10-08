@@ -1,10 +1,10 @@
-"""The per-issue **Attempt lifecycle** — fresh, retrying, skipped (#412).
+"""The per-issue **Attempt lifecycle** — Strikes charged to one issue (#412, ADR-0070).
 
 A Run that could not make progress on an issue re-picked the same issue on the
-same pair until its **Strike** ceiling aborted it. These are the tests for the
-ledger that ends that: which **Session outcome** moves an issue one step, which
-defeats it outright, and — just as load-bearing — that nothing ever moves it
-back.
+same pair until something stopped it. These are the tests for the ledger that
+stops it: every **Session outcome** charges the issue it belongs to one
+**Strike**, an issue out of Strikes is skipped for the rest of the Run, and —
+just as load-bearing — nothing ever moves it back.
 """
 
 from __future__ import annotations
@@ -12,104 +12,116 @@ from __future__ import annotations
 import pytest
 
 from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
-from git_loopy.config import RoutingLifecyclePosition
+from git_loopy.config import DEFAULT_MAX_NMT_STRIKES, RoutingLifecyclePosition
 from git_loopy.session_outcome import SessionOutcome
 
-
-def test_a_silent_no_progress_ending_retries_the_issue_before_skipping_it() -> None:
-    """The ending that buys a second attempt, because the pair may be the fault.
-
-    Silent no-progress is the one ending the **Escalation rung** answers with a
-    harder pair, so the issue is owed the attempt that pair is for. It is owed
-    exactly one: a second stall at the rung has nowhere further to go.
-    """
-    ledger = AttemptLedger()
-
-    assert ledger.state(412) is AttemptState.FRESH
-
-    assert ledger.observe(412, SessionOutcome.NO_PROGRESS) is AttemptState.RETRYING
-    assert ledger.observe(412, SessionOutcome.NO_PROGRESS) is AttemptState.SKIPPED
+_EVERY_ENDING = tuple(SessionOutcome)
 
 
-@pytest.mark.parametrize(
-    "outcome",
-    [
-        SessionOutcome.TIMEOUT,
-        SessionOutcome.NO_MORE_TASKS,
-        SessionOutcome.CONTENT_FILTERED,
-    ],
-)
-def test_three_endings_defeat_a_fresh_issue_outright(
+def test_the_default_limit_is_the_default_max_nmt_strikes() -> None:
+    """A ledger built without a Config disposes of an issue as a default Run does."""
+    assert DEFAULT_MAX_NMT_STRIKES == 3
+    assert AttemptLedger().max_strikes == 3
+
+
+@pytest.mark.parametrize("outcome", _EVERY_ENDING, ids=lambda o: o.value)
+def test_every_ending_charges_one_strike_and_retries_until_the_limit(
     outcome: SessionOutcome,
 ) -> None:
-    """No second attempt, because nothing about the second one would differ.
+    """No ending is special: each one costs the issue exactly one Strike.
 
-    A timeout would be re-run at the same pair with the same clock; no-more-tasks
-    and a filtered turn are the session stating the work is not there to be done.
-    Each of them is a *retry* the runner already knows the answer to, so the
-    issue skips the retrying rung entirely.
+    ADR-0070 retired the per-ending table that sent a timeout, a no-more-tasks
+    or a filtered turn straight to ``skipped``. Every ending now buys a retry
+    until the issue's own count reaches the limit.
     """
-    ledger = AttemptLedger()
+    ledger = AttemptLedger(max_strikes=3)
 
+    assert ledger.state(412) is AttemptState.FRESH
+    assert ledger.observe(412, outcome) is AttemptState.RETRYING
+    assert ledger.strikes(412) == 1
+    assert ledger.observe(412, outcome) is AttemptState.RETRYING
+    assert ledger.strikes(412) == 2
     assert ledger.observe(412, outcome) is AttemptState.SKIPPED
+    assert ledger.strikes(412) == 3
 
 
-def test_a_crash_retries_once_on_the_same_pair() -> None:
-    """The harness failed, not the work — so the same pair is worth one more go.
+def test_a_limit_of_one_skips_on_the_first_ending() -> None:
+    """``max_nmt_strikes = 1`` is the strictest Run: one ending and the issue is out."""
+    ledger = AttemptLedger(max_strikes=1)
 
-    A crash is the one ending that says nothing about the issue at all, which is
-    why it moves the lifecycle (something was spent) but never the pair (nothing
-    suggested the pair was wrong). One retry, then defeat: a second crash on one
-    issue this Run is a pattern rather than an accident.
-    """
-    ledger = AttemptLedger()
-
-    assert ledger.observe(412, SessionOutcome.CRASH) is AttemptState.RETRYING
     assert ledger.observe(412, SessionOutcome.CRASH) is AttemptState.SKIPPED
+    assert ledger.strikes(412) == 1
 
 
-def test_a_session_that_advanced_its_issue_moves_nothing() -> None:
+@pytest.mark.parametrize("bad", [0, -1])
+def test_a_limit_below_one_is_refused(bad: int) -> None:
+    """A limit of zero would skip every issue before its first session."""
+    with pytest.raises(ValueError, match="max_strikes"):
+        AttemptLedger(max_strikes=bad)
+
+
+def test_a_session_that_advanced_its_issue_charges_nothing() -> None:
     """No ending is not a sixth ending.
 
     An **Iteration** that committed reached no ending at all, and the ledger
-    exists to count *failures to advance*. Spending a lifecycle step on work that
-    landed would defeat any issue that simply takes three Iterations to finish.
+    exists to count *failures to advance*. Charging a Strike to work that
+    landed would skip any issue that simply takes several Iterations to finish.
     """
     ledger = AttemptLedger()
 
     assert ledger.observe(412, None) is AttemptState.FRESH
-    assert ledger.observe(412, None) is AttemptState.FRESH
-    assert ledger.state(412) is AttemptState.FRESH
+    ledger.observe(412, SessionOutcome.NO_PROGRESS)
+    assert ledger.observe(412, None) is AttemptState.RETRYING
+    assert ledger.strikes(412) == 1
 
 
-def test_a_skipped_issue_never_comes_back() -> None:
-    """Monotonic, including against the ending that means *it worked*.
+def test_strikes_are_never_refunded() -> None:
+    """Monotonic: an advancing Iteration between two endings refunds nothing.
 
-    A defeated issue that advanced once would be re-picked, and the Iteration
-    that advanced it is not evidence the Run can finish it — it is the ordinary
-    shape of a Run grinding at work it cannot land. The lifecycle is a claim
-    about the *Run*, and only a new Run withdraws it.
+    The count is the Run's claim about the issue. A Run that advanced it once
+    and then stalled again is still spending budget on it, and only a fresh
+    Run withdraws the claim.
     """
-    ledger = AttemptLedger()
+    ledger = AttemptLedger(max_strikes=3)
+
+    ledger.observe(412, SessionOutcome.NO_PROGRESS)
+    ledger.observe(412, None)
+    ledger.observe(412, SessionOutcome.CRASH)
+    ledger.observe(412, None)
+    assert ledger.observe(412, SessionOutcome.TIMEOUT) is AttemptState.SKIPPED
+
+
+def test_a_skipped_issue_never_comes_back_and_takes_no_further_strikes() -> None:
+    """Monotonic, including against the ending that means *it worked*."""
+    ledger = AttemptLedger(max_strikes=1)
     ledger.observe(412, SessionOutcome.TIMEOUT)
 
     for outcome in (None, SessionOutcome.NO_PROGRESS, SessionOutcome.CRASH):
         assert ledger.observe(412, outcome) is AttemptState.SKIPPED
+    assert ledger.strikes(412) == 1
 
 
-def test_each_issue_carries_its_own_lifecycle() -> None:
-    """Per issue, so one defeated issue never spends another's attempts."""
-    ledger = AttemptLedger()
+def test_each_issue_carries_its_own_strikes() -> None:
+    """Per issue, so one stubborn issue never spends another's Strikes.
 
-    ledger.observe(412, SessionOutcome.TIMEOUT)
+    The bug ADR-0070 fixes: a Run-wide counter let two issues that each ended
+    once with no more tasks bring the Run to the edge of its ceiling.
+    """
+    ledger = AttemptLedger(max_strikes=3)
 
-    assert ledger.state(412) is AttemptState.SKIPPED
-    assert ledger.state(413) is AttemptState.FRESH
+    ledger.observe(680, SessionOutcome.NO_MORE_TASKS)
+    ledger.observe(692, SessionOutcome.NO_MORE_TASKS)
+
+    assert ledger.strikes(680) == 1
+    assert ledger.strikes(692) == 1
+    assert ledger.strikes(701) == 0
+    assert ledger.state(680) is AttemptState.RETRYING
+    assert ledger.state(701) is AttemptState.FRESH
 
 
 def test_a_skipped_issue_is_the_one_a_pickup_refuses() -> None:
     """The predicate a **Pickup** filters on, so no call site re-derives it."""
-    ledger = AttemptLedger()
+    ledger = AttemptLedger(max_strikes=2)
 
     assert ledger.skipped(412) is False
     ledger.observe(412, SessionOutcome.CRASH)
@@ -122,10 +134,9 @@ def test_the_lifecycle_projects_onto_the_routing_record_it_is_reported_on() -> N
     """One projection, because a **Routing resolution** states the position too.
 
     A same-pair crash retry has to read ``retrying`` (contract §14) exactly as an
-    escalated stall does, and a Pickup that derived the position from the
-    **Escalation rung**'s ledger could only ever report the escalated half. The
-    routing vocabulary has no ``skipped`` member and needs none — a skipped issue
-    is never picked up, so it never resolves a pair to report a position on.
+    escalated stall does. The routing vocabulary has no ``skipped`` member and
+    needs none — a skipped issue is never picked up, so it never resolves a pair
+    to report a position on.
     """
     ledger = AttemptLedger()
 
@@ -134,14 +145,14 @@ def test_the_lifecycle_projects_onto_the_routing_record_it_is_reported_on() -> N
     assert ledger.lifecycle_position(412) is RoutingLifecyclePosition.RETRYING
 
 
-def test_the_ledger_remembers_which_ending_was_the_one_too_many() -> None:
+def test_the_ledger_remembers_which_ending_charged_the_last_strike() -> None:
     """The **Pickup skip** reports it, so an operator reads *why* not just *that*.
 
-    The defeating ending is the first one that reached ``skipped`` and stays
+    The defeating ending is the one that charged the limit-th Strike and stays
     that one: a later ending on an issue already out of contention did not take
     it out, and re-stamping it would rewrite the diagnosis every Iteration.
     """
-    ledger = AttemptLedger()
+    ledger = AttemptLedger(max_strikes=2)
 
     assert ledger.defeated_by(412) is None
     ledger.observe(412, SessionOutcome.CRASH)

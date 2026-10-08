@@ -2,6 +2,12 @@
 
 **Status:** accepted
 
+**Superseded in part by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):** a **Strike** is
+now charged to the issue whose **Session** ended, against that issue's own budget of
+`max_nmt_strikes`, and the Python Runner never stops on Strikes: there is no Run-wide ceiling, no
+`stuck`, and no revocable `strike_limit` drain. The `all_skipped` termination this decision
+introduced stands.
+
 Implemented by [#413](https://github.com/bradcstevens/git-loopy/issues/413), under the per-issue
 routing spec [#400](https://github.com/bradcstevens/git-loopy/issues/400). Completes
 [ADR-0040](0040-a-bounded-number-of-attempts-per-issue-per-run.md), which shipped the **Attempt

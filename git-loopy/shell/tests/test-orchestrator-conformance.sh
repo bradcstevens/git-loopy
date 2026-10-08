@@ -540,8 +540,8 @@ done < <(jq -c '.cases[]' "$conformance_dir/close-references.json")
 
 # Fixture schema 2 (#413) forks `progress-strikes.json` by distribution: a case
 # names the members whose accounting it describes, and a case naming none is
-# family-wide. The shell Orchestrator has no **Pickup**, so it has no **Attempt
-# lifecycle** to charge a **Strike** from and keeps counting consecutive
+# family-wide. The shell Orchestrator's **Pickup** binds an issue, but it holds
+# no **Attempt lifecycle** to charge a **Strike** to and keeps counting consecutive
 # no-progress **Iterations** — which is exactly the half of the fork it selects.
 # The count is asserted first so a selector typo (or a fixture that quietly
 # stopped describing this member) fails loudly rather than running nothing.

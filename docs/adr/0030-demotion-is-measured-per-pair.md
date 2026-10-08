@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
+for the Python Runner, the **Strike** counter no longer ends a Run that is going nowhere. It
+charges each issue and skips that issue at `max_nmt_strikes`; it is still not a per-pair
+quality measure, and **Demotion** below is unchanged.
+
 [ADR-0027](0027-routing-is-calibrated-by-measurement.md) rests its whole tolerance for
 five-sample evidence on **Demotion** — *"Search does not have to be right. It has to be cheap
 and reversible."* Its rule was *"a **Measured routing** entry whose pair accumulates consecutive

@@ -2,6 +2,12 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
+for the Python Runner, a **Strike** is charged to the issue whose **Session** ended, and the Run
+never aborts on Strikes. Checkpoints stay excluded from progress, so a Session that left only
+uncommitted edits still charges its issue — which is skipped at `max_nmt_strikes` — rather than
+feeding a Run-wide stuck-agent abort. The shell and PowerShell Orchestrators keep that abort.
+
 **Amended by [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md):**
 the non-fatal auto-push below remains a durability net for Iteration
 Checkpoints, but cannot by itself certify a Lane publication whose tracker

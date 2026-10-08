@@ -2,6 +2,14 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
+for the Python Runner, a Lane's **Strike** is charged by its session's ending, not by its
+contribution's disposition: a terminal unpublished contribution is no longer a Strike in itself,
+its `strike_reaction` is `+1` only when that ending charged its issue against the issue's own
+`max_nmt_strikes`, and publication resets nothing. There is no
+Run-wide Strike limit, so reaching one no longer stops refill or latches a drain-confirmed
+abort, and no publication lifts one.
+
 **Amended by [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md):**
 "published" also requires base to be as durable as the tracker closure
 attesting to it wherever an upstream exists. Green gating and verified

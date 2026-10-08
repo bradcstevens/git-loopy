@@ -34,6 +34,7 @@ from git_loopy import (
     trial,
     trial_concurrency,
 )
+from git_loopy.attempt_lifecycle import AttemptLedger
 from git_loopy.calibration_search import (
     PROMOTION_TRIALS,
     SearchBudget,
@@ -42,7 +43,6 @@ from git_loopy.calibration_search import (
 from git_loopy.measured_routing import ProvingTask
 from git_loopy.staircase import Candidate
 from git_loopy.trial_concurrency import InlineTrialDispatcher, TrialRequest, TrialResult
-from git_loopy.wrapper import NMTStrikeStateMachine
 
 
 # --------------------------------------------------------------------------- #
@@ -265,23 +265,25 @@ class _AlwaysFailsRunner:
 def test_a_calibration_whose_every_trial_fails_ticks_no_strike() -> None:
     """The property the whole design rests on, asserted end to end.
 
-    **Strikes** are shared and consecutive and reaching the limit **aborts the
-    Run**, so the limit here is set to one: if anything in a search's path could
-    reach the counter, a staircase of red rungs would trip it several times over.
-    The machine is left untouched, so a Calibration has nothing to end.
+    A **Strike** is charged to the issue a session worked, and an issue out of
+    them is skipped for the rest of the Run (ADR-0070), so the limit here is set
+    to one: if anything in a search's path could reach the ledger, a staircase
+    of red rungs would skip every Proving task's issue several times over. The
+    ledger is left untouched, so a Calibration has nothing to charge.
     """
-    machine = NMTStrikeStateMachine(max_strikes=1)
+    ledger = AttemptLedger(max_strikes=1)
     runner = _AlwaysFailsRunner()
+    proving_set = tuple(
+        ProvingTask(issue=100 + i, base_commit=f"b{i}", oracle_commit=f"f{i}")
+        for i in range(PROMOTION_TRIALS)
+    )
 
     result = search_price_staircase(
         candidates=(
             Candidate(model="cheap", effort=None, multiplier=0.25),
             Candidate(model="dear", effort="high", multiplier=10.0),
         ),
-        proving_set=tuple(
-            ProvingTask(issue=100 + i, base_commit=f"b{i}", oracle_commit=f"f{i}")
-            for i in range(PROMOTION_TRIALS)
-        ),
+        proving_set=proving_set,
         budget=SearchBudget(
             credit_ceiling=Decimal("10000"), wall_clock_ceiling_seconds=10_000.0
         ),
@@ -291,8 +293,8 @@ def test_a_calibration_whose_every_trial_fails_ticks_no_strike() -> None:
 
     assert result.winner is None
     assert runner.calls >= 2
-    assert machine.strikes == 0
-    assert machine.outcome == "running"
+    assert all(ledger.strikes(task.issue) == 0 for task in proving_set)
+    assert not any(ledger.skipped(task.issue) for task in proving_set)
 
 
 def test_no_calibration_module_can_reach_the_orchestrator() -> None:

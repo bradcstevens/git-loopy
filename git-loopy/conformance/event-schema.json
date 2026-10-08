@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "contract_version": "2.21",
-  "event_schema_version": "1.3",
+  "contract_version": "2.22",
+  "event_schema_version": "1.4",
   "insight_capabilities": {
     "names": [
       "agent_output",
@@ -178,6 +178,14 @@
       "cause_values": ["strike_limit"],
       "draining": "The observed count of contributions still in flight when a green publication clears the Strike drain."
     },
+    "wrapper.strike": {
+      "required_when_present": ["strikes", "max_strikes", "outcome"],
+      "optional": ["issue", "ending"],
+      "outcome_values": ["warn", "skip", "abort"],
+      "ending_values": ["no_progress", "timeout", "crash", "no_more_tasks", "content_filtered"],
+      "strikes": "Cumulative. With an issue, that issue's Strikes in this Run, which never reset (ADR-0070); without one, the Run-wide count, which resets on progress.",
+      "emitted": "Once per Strike recorded. A producer that charges Strikes per issue names the issue and the Session outcome that charged it, and reports warn, or skip on the Strike that takes the issue out of the Run; it never reports abort, because its Run never stops on Strikes. A producer that counts Strikes Run-wide omits both and reports warn or abort."
+    },
     "agent.output": {
       "required_when_present": ["text", "kind"],
       "kind_values": ["unclassified"]
@@ -206,6 +214,7 @@
         "strikes",
         "peak_context_window"
       ],
+      "strikes_note": "From contract 2.22 a producer with an Attempt lifecycle reports the Strikes of the issue the Iteration bound, which never reset (ADR-0070), or 0 for an Iteration that bound none; a producer without one reports its Run-wide consecutive count, which resets on progress. A consumer never sums such a producer's strikes across Iterations.",
       "issue_required": [
         "issue",
         "status",
@@ -425,6 +434,7 @@
         "strike_reaction"
       ],
       "strike_reaction_values": ["reset", "+1", "none"],
+      "strike_reaction_note": "+1 when the contribution's ending charged its issue a Strike, none otherwise. A publication charges nothing and refunds nothing: a Strike is never reset (ADR-0070), so reset is only what a log written before contract 2.22 carries.",
       "emitted": "The authoritative finalized Parallel row and Strike transition. A publication that has not yet verified its closure is not a contribution end.",
       "counted_once": "Lane-work and recovery Consumption and commits appear exactly once, in the originating contribution. Runner Checkpoint commits are excluded from the commit total.",
       "retired": ["cost_usd"],
@@ -1718,7 +1728,7 @@
             "agent_seconds": 61.5,
             "lifecycle_seconds": 94.25,
             "peak_context_window": 41000,
-            "strike_reaction": "reset"
+            "strike_reaction": "none"
           }
         },
         {
@@ -1804,7 +1814,7 @@
             "agent_seconds": 61.5,
             "lifecycle_seconds": 94.25,
             "peak_context_window": 41000,
-            "strike_reaction": "reset"
+            "strike_reaction": "none"
           }
         },
         {
@@ -1880,7 +1890,7 @@
             "agent_seconds": 61.5,
             "lifecycle_seconds": 94.25,
             "peak_context_window": 41000,
-            "strike_reaction": "reset"
+            "strike_reaction": "none"
           }
         },
         {
@@ -1927,20 +1937,20 @@
         "{\"ts\": \"2026-05-16T00:00:16.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:17.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.auto_close\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"issue_ref\": 42, \"lane_id\": \"lane-1\", \"outcome\": \"closed\"}\n",
         "{\"ts\": \"2026-05-16T00:00:17.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-alpha.1\"}\n",
-        "{\"ts\": \"2026-05-16T00:00:18.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
+        "{\"ts\": \"2026-05-16T00:00:18.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"none\"}}\n",
         "{\"ts\": \"2026-05-16T00:00:19.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.admitted\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:20.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
         "{\"ts\": \"2026-05-16T00:00:21.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.branch_observed\", \"base_publications_since_cut\": 1, \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
         "{\"ts\": \"2026-05-16T00:00:22.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.recovery_started\", \"attempt\": 1, \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\", \"max_attempts\": 3}\n",
         "{\"ts\": \"2026-05-16T00:00:23.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
         "{\"ts\": \"2026-05-16T00:00:23.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.auto_close\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"issue_ref\": 43, \"lane_id\": \"lane-2\", \"outcome\": \"closed\"}\n",
-        "{\"ts\": \"2026-05-16T00:00:24.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 2, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 1, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
+        "{\"ts\": \"2026-05-16T00:00:24.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 2, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 1, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"none\"}}\n",
         "{\"ts\": \"2026-05-16T00:00:25.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.serial.requested\", \"issue\": 45, \"reason\": \"not_parallel_safe\", \"refill_stopped\": true, \"serial_required\": 2}\n",
         "{\"ts\": \"2026-05-16T00:00:27.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:28.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.branch_observed\", \"base_publications_since_cut\": 2, \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:29.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:29.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.auto_close\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"issue_ref\": 44, \"lane_id\": \"lane-1\", \"outcome\": \"closed\"}\n",
-        "{\"ts\": \"2026-05-16T00:00:30.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
+        "{\"ts\": \"2026-05-16T00:00:30.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"none\"}}\n",
         "{\"ts\": \"2026-05-16T00:00:31.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.skipped\", \"considered\": 1, \"issue\": 46, \"position\": 1, \"reason\": \"routing refused: unknown task-type label 'task-type:chore '\"}\n",
         "{\"ts\": \"2026-05-16T00:00:32.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.rolling.refill_turn\", \"effective_lane_limit\": 2, \"reservations\": 0}\n"
       ]
@@ -2346,10 +2356,10 @@
           "agent_seconds": 41.5,
           "lifecycle_seconds": 96.25,
           "peak_context_window": null,
-          "strike_reaction": "reset"
+          "strike_reaction": "none"
         }
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-3\", \"issue\": 42, \"lane_id\": \"L1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": null, \"effort\": null, \"tokens_in\": null, \"tokens_out\": null, \"observed_tokens\": null, \"cost_usd\": null, \"commits\": 2, \"closures\": 1, \"closure_outcome\": \"verified\", \"recovery_attempts\": 0, \"agent_seconds\": 41.5, \"lifecycle_seconds\": 96.25, \"peak_context_window\": null, \"strike_reaction\": \"reset\"}}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-3\", \"issue\": 42, \"lane_id\": \"L1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": null, \"effort\": null, \"tokens_in\": null, \"tokens_out\": null, \"observed_tokens\": null, \"cost_usd\": null, \"commits\": 2, \"closures\": 1, \"closure_outcome\": \"verified\", \"recovery_attempts\": 0, \"agent_seconds\": 41.5, \"lifecycle_seconds\": 96.25, \"peak_context_window\": null, \"strike_reaction\": \"none\"}}\n"
     },
     {
       "id": "contribution-stamped-lane-commit",

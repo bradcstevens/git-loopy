@@ -2,6 +2,12 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
+for the Python Runner, the **Strike** machine no longer aborts the Run, and nothing resets a
+Strike. An issue that cannot land is charged a Strike per ending and skipped at
+`max_nmt_strikes`; a Run whose remaining candidates are all defeated ends `all_skipped`, which
+is the "get a human" valve below. The shell and PowerShell Orchestrators keep the Run-wide abort.
+
 ## Context
 
 Parallel **Lanes** (ADR-0008) each finish on their own branch, and those branches must

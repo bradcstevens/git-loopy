@@ -551,7 +551,17 @@ class LiveRunState:
         self._ended_monotonic: float | None = None
         self.iteration = 0
         self.status = _STATUS_STARTING
-        self.strikes = 0
+        #: The Run-wide count a producer that names no issue on its Strikes
+        #: reports (the shell and PowerShell Orchestrators, and older traces).
+        self._run_strikes = 0
+        #: Each issue's Strikes, once any Strike has named its issue
+        #: (ADR-0070). ``None`` until then, so a trace without per-issue
+        #: Strikes keeps the Run-wide reading.
+        self._issue_strikes: dict[int | str, int] | None = None
+        #: The issue the header's Strike count follows: the one named by
+        #: whichever came last, a serial binding or a Strike. A Lane's binding
+        #: does not move it.
+        self._strike_focus: int | str | None = None
         self.ended = False
         self.context_window_available: bool | None = None
         self.subagents_available: bool | None = None
@@ -860,7 +870,15 @@ class LiveRunState:
             self._record_closure(event.get("pr"), now, status=STATUS_ADVANCED)
             self._record_event_line(_log_pr_advanced_text(event))
         elif etype == _STRIKE:
-            self.strikes = _coerce_int(event.get("strikes"), self.strikes)
+            issue = event.get("issue")
+            if issue is not None and isinstance(event.get("strikes"), int):
+                issue = self._normalize_ref(issue)
+                if self._issue_strikes is None:
+                    self._issue_strikes = {}
+                self._issue_strikes[issue] = event["strikes"]
+                self._strike_focus = issue
+            else:
+                self._run_strikes = _coerce_int(event.get("strikes"), self._run_strikes)
             self.max_strikes = _coerce_int(event.get("max_strikes"), self.max_strikes)
             self._iter_strike = True
         elif etype == _ITERATION_END:
@@ -997,6 +1015,20 @@ class LiveRunState:
         """
         self.status = _STATUS_STOPPED
         self._mark_ended()
+
+    @property
+    def strikes(self) -> int:
+        """The Strike count the header shows.
+
+        The focused issue's own Strikes once a Strike has named its issue
+        (ADR-0070) — an issue never charged reads ``0`` — else the Run-wide
+        count a producer that names none reports.
+        """
+        if self._issue_strikes is None:
+            return self._run_strikes
+        if self._strike_focus is None:
+            return 0
+        return self._issue_strikes.get(self._strike_focus, 0)
 
     # -- live timers --------------------------------------------------------
 
@@ -1961,6 +1993,7 @@ class LiveRunState:
             entry.active_since = since
         entry.status = STATUS_ACTIVE
         self.active_ref = ref
+        self._strike_focus = ref
         # Attribute this iteration's pre-activation output (issue #34): flush the
         # pending buffer into the now-active issue's own accumulating Log, then
         # clear it so subsequent output lands directly in the issue's buffer.
