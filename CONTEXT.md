@@ -9,12 +9,12 @@ the planning skills, issue tracker, Runner family, and live interface.
 
 ## Two-phase model
 
-1. **Planning phase (human-led)**: The loop engineer starts with
-   `/grill-with-docs` for repo and domain work or `/grill-me` for general planning,
-   optionally uses `/prototype` when a decision needs runnable evidence and
-   `/research` when it needs primary-source evidence, then runs `/to-spec`,
-   `/to-tickets`, and `/triage`. The result is a set of small, explicit issues
-   labeled `ready-for-agent`.
+1. **Planning phase (human-led)**: One named **Planner** works with the loop
+   engineer, using `/grill-with-docs` for repo and domain work or `/grill-me` for
+   general planning, optionally `/prototype` or `/research` for evidence, then
+   `/to-spec` and `/to-tickets` to draft one complete issue graph. The loop
+   engineer approves a recorded graph revision before `/triage` mechanically
+   applies its approved execution labels.
 2. **Execution phase (autonomous)**: The git-loopy loop collects those triaged
    issues and, by default, works exactly one Active issue per Iteration. The loop
    engineer supervises the Run through its guardrails and Dashboard, then judges
@@ -36,6 +36,13 @@ times, not a single conversation that ends with its session.
 The human who designs, triages, and supervises the loop. The loop engineer owns
 intent, domain language, issue slicing, acceptance criteria, guardrails, and final
 judgment; git-loopy owns repeatable execution.
+
+**Planner**:
+The single named, human-driven **Agent profile** that drafts a complete graph of
+executable issues and native dependencies before a **Run**. Its graph is a
+proposal until the **Loop engineer** approves its recorded revision; it never
+turns planning documents into autonomous work.
+_Avoid_: Orchestrator (deterministic runner code), decomposer, auto-decomposer.
 
 **Meta-engineering**:
 Working on the system that builds and operates the software rather than on the
