@@ -2309,9 +2309,10 @@ cover changed and repeated elections, required repeat justification, infrastruct
 failure, advancing work, attempt/allowance exhaustion and explicit Static
 escalation. A refused retry spends no task attempt or Strike, while later
 eligible Static work still runs. Saved Config remains unchanged. The existing
-one-Lane-per-issue rule is preserved; this matrix does not grant a second Lane, is not
-itself the Dynamic-default activation, and does not extend routing to another Runner
-member or placement.
+one-Lane-at-a-time ownership rule is preserved. ADR-0070 permits another Lane after
+a charged contribution finalizes while its issue is still `retrying`; this matrix
+does not itself grant retries, activate Dynamic-default routing, or extend routing
+to another Runner member or placement.
 
 The `in_flight_consumption` matrix carries recorded init/update authorization
 through the real unattended CLI in serial and local Lane modes. Its eight cases,

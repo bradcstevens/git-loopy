@@ -491,8 +491,9 @@ history, CLI/Dashboard readback and idempotent tracker effects agree. The cases
 cover reselection, explicit Static escalation, advancing work, infrastructure
 failure, justified repetition through attempt exhaustion, unjustified repetition
 and exhausted allowance. Refused retries spend no task attempt or Strike and
-leave eligible Static work usable. Saved Config and the existing one-Lane-per-issue
-rule remain unchanged. This is shared executable coverage of the accepted retry
+leave eligible Static work usable. Saved Config and the one-Lane-at-a-time ownership
+rule remain unchanged; ADR-0070 governs admission of a new Lane after a charged
+attempt finalizes. This is shared executable coverage of the accepted retry
 policy, not new routing behavior or final activation.
 Review tightened the observation seam: each CLI Pickup line is compared
 independently of startup and earlier output; selector bills now cross the actual

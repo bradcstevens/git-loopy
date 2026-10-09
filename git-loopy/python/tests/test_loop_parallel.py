@@ -98,6 +98,7 @@ import itertools
 import json
 import logging
 import re
+import subprocess
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -353,15 +354,7 @@ _AFK_BODY = (
 
 
 def _no_more_tasks_event() -> SessionEvent:
-    """An Agent turn carrying the **NMT sentinel**.
-
-    The one **Session outcome** that defeats an issue on its *first* attempt
-    (ADR-0040: an explicit "there is nothing to do here" is taken at its word
-    and never retried), which is how a Parallel Run reaches the **Strike**
-    ceiling at all now that the ceiling counts skipped issues — a Lane-held
-    ``parallel-safe`` issue gets one Lane per Run, so a retryable ending would
-    leave it stalled rather than defeated.
-    """
+    """An Agent turn carrying the **NMT sentinel**, charged like every ending."""
     return SessionEvent(
         data=AssistantMessageData(
             content=(
@@ -4547,6 +4540,7 @@ def _wire_two_lane_rolling(
 class _TerminalFailureExecutionHost:
     """A complete host double that never starts an Agent session."""
 
+    git: FakeGitClient
     placement: Placement = "fake"
     isolation_grade: IsolationGrade = "workspace separation only"
     capacity: int = 4
@@ -4560,8 +4554,12 @@ class _TerminalFailureExecutionHost:
             call.issue_ref == request.issue_ref for call in self.calls
         )
         if calls_for_issue > 1:
+            path = self.git.root / "host" / f"issue-{request.issue_ref}"
+            branch = f"host/contribution/issue-{request.issue_ref}"
+            self.git.add_worktree(path, branch=branch, base=request.base_revision)
+            self.git.remove_worktree(path)
             return ContributionSuccess(
-                branch=git_module.lane_branch_name(request.run_id, request.issue_ref),
+                branch=branch,
                 sha="0000000000000000000000000000000000000001",
                 events=(),
                 placement=self.placement,
@@ -4612,7 +4610,7 @@ def test_repeated_never_started_dispatches_narrow_the_existing_host_pressure(
     _fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
         tmp_path, monkeypatch
     )
-    host = _RepeatedDispatchFailureHost()
+    host = _RepeatedDispatchFailureHost(git=_fake_git)
     built: list[loop_module._ParallelLoop] = []
     real_parallel_loop = loop_module._ParallelLoop
 
@@ -4643,7 +4641,7 @@ def test_sustained_dispatch_refusal_ends_the_run_as_an_environment_failure(
     _fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
         tmp_path, monkeypatch
     )
-    host = _RepeatedDispatchFailureHost(failures_remaining=15)
+    host = _RepeatedDispatchFailureHost(git=_fake_git, failures_remaining=15)
     built: list[loop_module._ParallelLoop] = []
     real_parallel_loop = loop_module._ParallelLoop
 
@@ -4675,7 +4673,7 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
         tmp_path, monkeypatch
     )
-    host = _TerminalFailureExecutionHost()
+    host = _TerminalFailureExecutionHost(git=fake_git)
     built: list[loop_module._ParallelLoop] = []
     real_parallel_loop = loop_module._ParallelLoop
 
@@ -4712,11 +4710,11 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     ]
     assert starts
     assert {event["host"] for event in starts} == {"fake"}
-    # The placeholder each blameless failure left behind is reclaimed, which is
-    # what lets the re-offer cut the same deterministic Lane branch again.
+    # Both setups use distinct placeholders; the host owns its returned branch.
     run_id = _run_id(tmp_path)
     assert sorted(_lane_branch_deletes(fake_git)) == sorted(
-        git_module.lane_branch_name(run_id, ref) for ref in (42, 43)
+        git_module.lane_branch_name(namespace, ref)
+        for namespace in (run_id, f"{run_id}/attempt-2") for ref in (42, 43)
     )
     assert len(built) == 1
     assert built[0]._serial._attempts.state(42) is AttemptState.FRESH
@@ -5195,6 +5193,7 @@ def test_parallel_loop_treats_a_proven_missing_remote_ref_as_a_breach(
 class _RemoteStallThenLocalExecutionHost:
     """A remote host whose unresponsive first attempt is retried by the Run."""
 
+    git: FakeGitClient
     placement: Placement = "github-actions"
     isolation_grade: IsolationGrade = "machine boundary"
     capacity: int = 4
@@ -5220,8 +5219,12 @@ class _RemoteStallThenLocalExecutionHost:
                 isolation_grade=self.isolation_grade,
                 ending=ending,
             )
+        path = self.git.root / "host" / f"issue-{request.issue_ref}"
+        branch = f"host/contribution/issue-{request.issue_ref}"
+        self.git.add_worktree(path, branch=branch, base=request.base_revision)
+        self.git.remove_worktree(path)
         return ContributionSuccess(
-            branch=git_module.lane_branch_name(request.run_id, request.issue_ref),
+            branch=branch,
             sha=request.base_revision,
             events=(),
             placement="local",
@@ -5243,7 +5246,7 @@ def test_parallel_loop_reoffers_an_unreachable_remote_without_a_strike(
         )
 
     monkeypatch.setattr(fake_git, "probe_remote_ref", _unreachable)
-    host = _RemoteStallThenLocalExecutionHost()
+    host = _RemoteStallThenLocalExecutionHost(git=fake_git)
     built: list[loop_module._ParallelLoop] = []
     real_parallel_loop = loop_module._ParallelLoop
 
@@ -6574,7 +6577,7 @@ def _run_parallel_safe_pin(
     first_43: gh_module.Issue,
     hidden: int | None = None,
 ) -> list[tuple[int, str]]:
-    """``--issue 43`` over parallel-safe #41-#43; #43 reads normally once #41 is viewed."""
+    """``--issue 43`` over #41-#43; N=1 isolates Pin spending from Lane retries."""
     monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
     _wire_rolling_run(
         tmp_path,
@@ -6593,7 +6596,7 @@ def _run_parallel_safe_pin(
     asyncio.run(
         asyncio.wait_for(
             loop_module.run(
-                _pinned_config(43, max_iterations=6, max_nmt_strikes=10)
+                _pinned_config(43, max_iterations=4, max_nmt_strikes=1)
             ),
             timeout=30,
         )
@@ -7403,8 +7406,13 @@ def test_parallel_serial_iteration_defeat_ends_the_run_all_skipped_never_stuck(
     assert exit_code == loop_module.exit_code_for("all_skipped")
 
 
+@pytest.mark.parametrize(
+    ("max_iterations", "ending"),
+    [(n, "no_progress") for n in (0, 1, 2, 3, 4)]
+    + [(0, ending) for ending in ("timeout", "crash", "no_more_tasks", "content_filtered")],
+)
 def test_a_parallel_safe_issue_is_retried_in_lanes_until_n_strikes_then_skipped(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, max_iterations, ending
 ) -> None:
     """Rolling dispatch honours the per-issue Strike budget (#703, ADR-0070).
 
@@ -7413,36 +7421,186 @@ def test_a_parallel_safe_issue_is_retried_in_lanes_until_n_strikes_then_skipped(
     Run — never two at once. At N Strikes it is skipped and the Run ends
     ``all_skipped`` because nothing else is bindable.
     """
-    fake_gh = _wire_rolling_run(
+    class EndingSession(_NoProgressFakeSession):
+        async def send_and_wait(self, prompt, *, timeout=60.0, **extra):
+            if ending == "timeout":
+                raise TimeoutError("fixture: lost session")
+            if ending == "crash":
+                raise ConnectionError("fixture: lost transport")
+            if ending == "no_more_tasks":
+                self._scripted_events = [_no_more_tasks_event()]
+            elif ending == "content_filtered":
+                self._scripted_events = [
+                    SessionEvent(
+                        data=AssistantUsageData(
+                            content_filter_triggered=True,
+                            finish_reason="content_filter",
+                            model="claude-opus-4.8-max",
+                        ),
+                        id=uuid4(),
+                        timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+                        type=SessionEventType.ASSISTANT_USAGE,
+                    )
+                ]
+            return await super().send_and_wait(prompt, timeout=timeout, **extra)
+
+    class EndingClient(_NoProgressFakeClient):
+        _session_cls = EndingSession
+
+    _wire_rolling_run(
         tmp_path,
         monkeypatch,
         [_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
-        client_cls=_NoProgressFakeClient,
+        client_cls=EndingClient,
     )
-    del fake_gh
-    cfg = RunConfig(
-        model="claude-opus-4.8-max",
-        issue_source="github",
-        max_iterations=0,
-        max_nmt_strikes=3,
-        verbosity=0,
-        render_reasoning=False,
-    )
+    cfg = replace(_pinned_config(42, max_iterations=max_iterations), issue_pin=None)
 
     exit_code = asyncio.run(asyncio.wait_for(loop_module.run(cfg), timeout=60))
 
     events = _logged_events(tmp_path)
     strikes = [e for e in events if e["type"] == "wrapper.strike"]
+    attempts = min(max_iterations, 3) if max_iterations else 3
     assert [(s["issue"], s["strikes"], s["outcome"]) for s in strikes] == [
         (42, 1, "warn"),
         (42, 2, "warn"),
         (42, 3, "skip"),
-    ]
+    ][:attempts]
+    assert [s["ending"] for s in strikes] == [ending] * attempts
+    starts = [e for e in events if e["type"] == "wrapper.contribution.start"]
+    assert len(starts) == attempts
+    assert not [e for e in events if e["type"] == "wrapper.iteration.start"]
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    expected = "iteration_cap" if 0 < max_iterations <= 3 else "all_skipped"
+    assert run_end["outcome"] == expected
+    assert run_end["iterations_run"] == attempts
+    assert exit_code == loop_module.exit_code_for(expected)
+
+
+@pytest.mark.parametrize("residue", ["clean", "dirty", "committed_timeout", "committed_crash"])
+def test_lane_retries_use_distinct_branches_with_real_git(
+    tmp_path, monkeypatch, residue
+) -> None:
+    preserve_dirty_workspace = residue != "clean"
+
+    class DirtySession(_NoProgressFakeSession):
+        async def send_and_wait(self, prompt, *, timeout=60.0, **extra):
+            assert self._working_directory is not None
+            path = Path(self._working_directory)
+            if residue.startswith("committed"):
+                (path / "durable.txt").write_text("unlanded commit\n", encoding="utf-8")
+                agent_git = git_module.SubprocessGitClient(path)
+                agent_git.add_all()
+                agent_git.commit("unlanded durable work")
+            (path / "unlanded.txt").write_text(
+                "work that salvage could not commit\n", encoding="utf-8"
+            )
+            if residue == "committed_timeout":
+                raise TimeoutError("fixture: lost advancing session")
+            if residue == "committed_crash":
+                raise ConnectionError("fixture: lost advancing transport")
+            return await super().send_and_wait(prompt, timeout=timeout, **extra)
+
+    class DirtyClient(_NoProgressFakeClient):
+        _session_cls = DirtySession
+
+    class CheckpointRefusedGit(git_module.SubprocessGitClient):
+        def commit(self, message: str) -> str:
+            raise git_module.GitError(("git", "commit"), 1, "fixture checkpoint failure")
+
+    class RealGit(git_module.SubprocessGitClient):
+        def add_worktree(self, path, *, branch, base):
+            child = super().add_worktree(path, branch=branch, base=base)
+            return CheckpointRefusedGit(child.root) if preserve_dirty_workspace else child
+
+    _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [_make_issue(42, labels=_PARALLEL_SAFE)],
+        client_cls=DirtyClient if preserve_dirty_workspace else _NoProgressFakeClient,
+    )
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", str(tmp_path)], check=True
+    )
+    git = RealGit(tmp_path)
+    for key, value in (
+        ("user.name", "Tester"),
+        ("user.email", "tester@example.com"),
+        ("commit.gpgsign", "false"),
+    ):
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", key, value], check=True
+        )
+    (tmp_path / ".gitignore").write_text(".git-loopy/\n", encoding="utf-8")
+    git.add_all()
+    git.commit("initial")
+    base = git.head_sha()
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: git)
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+
+    exit_code = asyncio.run(
+        asyncio.wait_for(
+            loop_module.run(_pinned_config(42, max_iterations=0)), timeout=10
+        )
+    )
+
+    events = _logged_events(tmp_path)
     starts = [e for e in events if e["type"] == "wrapper.contribution.start"]
     assert len(starts) == 3
+    active = set()
+    for event in events:
+        if event["type"] == "wrapper.contribution.start":
+            assert event["issue"] not in active
+            active.add(event["issue"])
+        elif event["type"] == "wrapper.contribution.end":
+            active.remove(event["issue"])
+    assert not active
+    assert [e["strikes"] for e in events if e["type"] == "wrapper.strike"] == [1, 2, 3]
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "all_skipped"
     assert exit_code == loop_module.exit_code_for("all_skipped")
+    branches = [b for b in git.list_branches() if b.startswith("git-loopy/")]
+    assert len(branches) == 3
+    if residue.startswith("committed"):
+        for branch in branches:
+            commits = git.commits_between(base, branch)
+            assert [commit.subject for commit in commits] == ["unlanded durable work"]
+    assert len(git.list_worktrees()) == (4 if preserve_dirty_workspace else 1)
+    for wt in git.list_worktrees():
+        if wt.branch in branches and preserve_dirty_workspace:
+            assert (wt.path / "unlanded.txt").read_text() == (
+                "work that salvage could not commit\n"
+            )
+
+
+def test_a_historical_lane_skip_does_not_turn_an_empty_pool_into_all_skipped(
+    tmp_path, monkeypatch
+) -> None:
+    tracker = _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [_make_issue(42, labels=_PARALLEL_SAFE)],
+        client_cls=_NoProgressFakeClient,
+    )
+    original_send = _NoProgressFakeSession.send_and_wait
+    calls = 0
+
+    async def send_then_close(self, prompt, *, timeout=60.0, **extra):
+        nonlocal calls
+        calls += 1
+        result = await original_send(self, prompt, timeout=timeout, **extra)
+        if calls == 3:
+            tracker.seed_issue(replace(tracker.issue_view(42), state="CLOSED"))
+        return result
+
+    monkeypatch.setattr(_NoProgressFakeSession, "send_and_wait", send_then_close)
+    exit_code = asyncio.run(loop_module.run(_pinned_config(42, max_iterations=4)))
+
+    events = _logged_events(tmp_path)
+    assert not [e for e in events if e["type"] == "wrapper.iteration.start"]
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "empty_pool"
+    assert run_end["iterations_run"] == 3
+    assert exit_code == 0
 
 
 def test_parallel_serial_iteration_that_binds_nothing_ends_the_run_all_skipped(
@@ -8250,9 +8408,9 @@ def test_a_defeated_issue_stops_being_a_lane_candidate(tmp_path, monkeypatch) ->
 
     assert pool.eligible(_candidate(98)) is False
     assert pool.eligible(_candidate(99)) is True
-    # A defeated issue leaves the cache too: nothing inside this Run can make it
-    # eligible again, so retaining it would only withhold a terminal Pool claim.
-    assert pool.cacheable(_candidate(98)) is False
+    # Refused Pickup, not removed membership: a terminal read must be able to
+    # distinguish an all-skipped Pool from an empty one.
+    assert pool.cacheable(_candidate(98)) is True
 
 
 def test_a_blocked_issue_stops_being_a_lane_candidate_but_stays_cached(

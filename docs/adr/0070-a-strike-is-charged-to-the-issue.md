@@ -9,6 +9,8 @@ Python Runner it also amends the Run-wide Strike abort, reset and drain that
 [ADR-0020](0020-rolling-dispatch-with-bounded-green-integration.md),
 [ADR-0030](0030-demotion-is-measured-per-pair.md) and
 [ADR-0043](0043-a-stop-drains-before-it-cancels.md) relied on.
+For the Python Runner, #703 additionally supersedes ADR-0020's one-Lane-per-issue-per-Run
+rule with one Lane contribution at a time and lifecycle-driven retries below.
 
 A **Run** picked up #680 and ended 38 seconds later having done nothing. Its work was already
 sitting in an open pull request; the **Session** said so with *no more tasks*, which defeated
@@ -75,7 +77,7 @@ against N, never a sum across issues. The issue at stake is the one named by whi
 a serial **Pickup**'s binding or a Strike. A **Lane**'s binding does not move it; a Lane's Strike
 does.
 
-## What this does not do
+## Rolling dispatch retries within the same budget
 
 Rolling dispatch retries a **Lane**-ended issue (#703). The Run-scoped worked guard still keeps an
 issue to one Lane at a time, held through parking, Integration and recovery. When a contribution
@@ -83,6 +85,17 @@ finalizes having charged its issue a Strike and the issue is still `retrying`, t
 the issue is eligible for a new Lane in the same Run, so a Parallel-safe issue gets the same N-Strike
 budget a Sequential Run gives it. A `skipped` issue never takes another Lane. The Strike count stays
 the only retry counter.
+
+Each new Lane setup uses a distinct branch and workspace namespace within the Run.
+An earlier unlanded branch, or a workspace whose salvage failed, remains recoverable;
+retry never resets or deletes it. Setup ordinals distinguish ownership, not attempts
+charged to the issue: failed setup still spends neither a Strike nor an iteration-cap unit.
+Skipped candidates remain Pool membership but are refused at Pickup. An authoritative
+terminal read therefore reports `all_skipped` for surviving skipped candidates,
+`empty_pool` if none remain, and never spends an extra Iteration just to classify them.
+The shared `max_iterations` budget still bounds Lane starts and serial Iterations together.
+
+## What this does not do
 
 It does not change the shell or PowerShell Orchestrators. Their **Pickup** binds an issue, but
 they hold no **Attempt lifecycle** to charge it to, so they keep counting consecutive no-progress

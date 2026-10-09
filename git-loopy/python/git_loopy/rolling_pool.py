@@ -223,6 +223,10 @@ class RollingPool:
     #: ``unresolved`` count so the two dispatch modes cannot drift apart on
     #: what a Pool nobody could bind work out of is entitled to report.
     read_refused: Callable[[PoolCandidate], bool] = _never_read_refused
+    #: An established Pickup refusal that precedes Readiness (the Attempt
+    #: lifecycle). Keep it in membership but do not reinterpret it as a
+    #: blocked or unread candidate during terminal classification.
+    terminal_refused: Callable[[PoolCandidate], bool] = field(default=lambda c: False)
     #: The candidate the next Lane must go to, or ``None`` (#430): an unspent
     #: ``parallel-safe`` **Pin**, which takes the first Lane. When its
     #: validation read fails, the walk stops there rather than give that Lane to
@@ -553,7 +557,7 @@ class RollingPool:
         unreadable = tuple(
             candidate.ref
             for candidate in survivors
-            if has_unresolved_readiness(candidate)
+            if not self.terminal_refused(candidate) and has_unresolved_readiness(candidate)
         )
         if unreadable:
             self.diag.error(
@@ -570,7 +574,9 @@ class RollingPool:
         unread_lease = tuple(
             candidate.ref
             for candidate in survivors
-            if candidate.ref not in unreadable and self.read_refused(candidate)
+            if candidate.ref not in unreadable
+            and not self.terminal_refused(candidate)
+            and self.read_refused(candidate)
         )
         if unread_lease:
             # Named separately from the readiness case because the operator's
@@ -590,7 +596,9 @@ class RollingPool:
         outcome = unbound_pool_outcome(
             candidates=len(survivors),
             waiting=sum(
-                1 for candidate in survivors if has_proven_open_blocker(candidate)
+                1 for candidate in survivors
+                if not self.terminal_refused(candidate)
+                and has_proven_open_blocker(candidate)
             ),
             unresolved=len(unreadable) + len(unread_lease),
         )

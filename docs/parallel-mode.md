@@ -108,11 +108,16 @@ not only in the Event stream — because you are the only one who can fix it. Th
 other two reasons it can give are that every `parallel-safe` issue it found was
 already worked this Run, and that a candidate could not be read.
 
-An issue holds at most one Lane at a time. When its Lane ends without advancing,
-the issue is charged one Strike; while it has fewer than `max_nmt_strikes`
-Strikes it is offered another Lane in the same Run, exactly as a sequential Run
-would retry it. At `max_nmt_strikes` it is skipped for the rest of the Run, and
-the Run ends `all_skipped` when nothing else can be bound.
+An issue holds at most one Lane contribution at a time, including through parking,
+Integration and recovery. Every Session outcome charges it one Strike; advancing
+work charges none unless its session timed out or crashed. After that contribution
+finalizes, a charged issue with fewer than `max_nmt_strikes` Strikes is eligible
+for another Lane in the same Run. Each setup uses a new branch and workspace,
+preserving earlier unlanded work. At `max_nmt_strikes` the issue is skipped for
+the rest of the Run. An authoritative Pool read ends the Run `all_skipped` when
+remaining candidates are refused and nothing else can be bound, or `empty_pool`
+if no candidates remain. Classification itself consumes no extra Iteration;
+Lane starts and serial Iterations share the unchanged `max_iterations` cap.
 
 ## The host capacity is a ceiling, not a target
 

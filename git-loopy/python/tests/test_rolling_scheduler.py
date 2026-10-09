@@ -379,6 +379,43 @@ def test_a_terminal_contribution_releases_its_lane_for_refill() -> None:
     assert [(r.lane_id, r.item.ref) for r in refill] == [("L1", 12)]
 
 
+@pytest.mark.parametrize("state", ["setup", "open", "admitted", "parked"])
+def test_attempt_ownership_cannot_release_before_finalization(state) -> None:
+    scheduler, _source = _scheduler([11, 12, 13], lane_cap=3)
+    scheduler.start()
+    reservations = scheduler.reserve()
+    ref = 11
+    if state != "setup":
+        contributions = [scheduler.start_session(r) for r in reservations]
+        if state == "admitted":
+            scheduler.finish_work(contributions[0], changed=True)
+        elif state == "parked":
+            for contribution in contributions:
+                scheduler.finish_work(contribution, changed=True)
+            ref = 13
+
+    with pytest.raises(RuntimeError, match="cannot release active Lane ownership"):
+        scheduler.release_attempt(ref)
+    assert scheduler.reserve() == ()
+
+
+def test_a_finalized_attempt_can_retry_but_never_spend_past_the_cap() -> None:
+    scheduler, source, clock = _scheduler_with_clock([11], max_iterations=2)
+    scheduler.start()
+    first = scheduler.start_session(scheduler.reserve()[0])
+    scheduler.finish_work(first, changed=False)
+    scheduler.release_attempt(11)
+    clock.advance(60)
+    second = scheduler.start_session(scheduler.reserve()[0])
+    assert second.ref == first.ref
+    assert second.contribution_id != first.contribution_id
+    scheduler.finish_work(second, changed=False)
+    scheduler.release_attempt(11)
+    assert scheduler.remaining_units == 0
+    assert scheduler.reserve() == ()
+    assert source.pickup_calls == [11, 11]
+
+
 # --------------------------------------------------------------------------- #
 # §3.9, §4.1-4.3 — a changed branch is offered; H = 2 decides admitted vs parked
 # --------------------------------------------------------------------------- #

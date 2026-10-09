@@ -775,9 +775,10 @@ def _lane_worktree_path(
     """Compute a Lane's **workspace** path under the clone's git directory.
 
     Lanes live in ``<common-git-dir>/git-loopy/<run_id>/issue-<N>``, grouped by
-    run so a run's workspaces are easy to find and reap, and one directory per
-    issue so concurrent Lanes never share a tree. The common git directory is
-    not content in any working tree, so a live Lane is invisible to ``git
+    run so a run's workspaces are easy to find and reap. Later setups qualify
+    ``run_id`` with ``attempt-<N>/`` to preserve previous branches and trees.
+    The issue leaf stays stable so concurrent Lanes never share a tree.
+    The common git directory is not content in any working tree, so a live Lane is invisible to ``git
     status``, unreachable by ``git add -A``, and survives ``git clean -ffxd``
     — all without an ignore entry — while still being per-clone and dying with
     the clone.
@@ -4488,6 +4489,7 @@ class _ParallelLoop:
         # exception. Keep the candidate cached but ineligible for this Run so
         # the terminal classifier can honestly report all_skipped.
         self._rolling_refused: dict[int | str, str] = {}
+        self._lane_setup_attempts: dict[int | str, int] = {}
         # The subset of :attr:`_rolling_refused` a **Lease** *read* refused
         # rather than a rival's answer. Kept apart because the two are not the
         # same fact: a rival holding the issue is the mechanism working, while
@@ -4527,6 +4529,7 @@ class _ParallelLoop:
                 cacheable=self._lane_candidate_cacheable,
                 on_membership_read=self._emit_membership_read,
                 read_refused=self._lane_lease_unreadable,
+                terminal_refused=lambda c: self._serial._attempts.skipped(c.ref),
                 lane_first=self._lane_first_pin,
                 lane_first_read=self._lane_first_read,
             )
@@ -4692,15 +4695,11 @@ class _ParallelLoop:
     def _lane_candidate_cacheable(self, candidate: PoolCandidate) -> bool:
         """Whether this candidate belongs in the Rolling dispatch cache.
 
-        A **Blocked** candidate is not Lane-candidate eligible, but it remains
-        cacheable until a later **Membership read** proves it Ready. The
-        **Attempt lifecycle** differs: a defeated candidate cannot become
-        eligible during this Run, so retaining it would block a terminal Pool
-        claim without a future refresh being able to change that fact.
+        Blocked and lifecycle-skipped candidates remain membership, never
+        eligible work: a terminal read must distinguish their refusals from
+        a genuinely empty Pool (ADR-0070).
         """
-        return is_parallel_safe(candidate) and not self._serial._attempts.skipped(
-            candidate.ref
-        )
+        return is_parallel_safe(candidate)
 
     def _lane_candidate_eligible(self, candidate: PoolCandidate) -> bool:
         """Is this candidate **Lane** work, Ready, and still owed an attempt?
@@ -4715,16 +4714,16 @@ class _ParallelLoop:
         record.
 
         Composed here rather than written into the scheduler's own collision
-        guard (:attr:`~git_loopy.rolling_scheduler.RollingScheduler._worked`),
-        which ADR-0040 keeps untouched: that guard answers "is one issue about
-        to take two Lanes at once", a worktree question with its own lifetime,
+        guard (:attr:`~git_loopy.rolling_scheduler.RollingScheduler._worked`):
+        that guard answers "is one issue about to take two Lanes at once",
+        a worktree question with its own lifetime,
         and a lifecycle answer smuggled into it would be indistinguishable from
         a collision afterwards. The scheduler composes its guard onto whatever
         predicate it is handed, so both hold.
 
-        The guard alone would look sufficient — it latches at session start, so
-        every Lane-defeated issue is already behind it. The order it does not
-        cover is the other one: a **Parallel-safe** issue defeated by a *serial*
+        The guard alone is insufficient: a finalized charged attempt releases
+        it even when the issue is skipped. Nor does it cover a **Parallel-safe**
+        issue defeated by a *serial*
         Iteration of a Parallel Run (a serial fallback taken while Lane
         concurrency is throttled to nothing works whatever sits at the Pool's
         head) was never in the guard, and nothing else would stop a Lane
@@ -4732,6 +4731,7 @@ class _ParallelLoop:
         """
         return (
             candidate.ref not in self._rolling_refused
+            and not self._serial._attempts.skipped(candidate.ref)
             and self._lane_candidate_cacheable(candidate)
             and is_lane_candidate(candidate)
         )
@@ -5243,13 +5243,7 @@ class _ParallelLoop:
                     # Pool can prove there is no Lane work before that driver
                     # has run at all, so give it the first turn rather than
                     # ending with a scheduler-only outcome.
-                    # A Lane-skipped issue leaves the cache, so a Pool emptied
-                    # by skips reads as empty too; the serial walk is what
-                    # reports it ``all_skipped`` (#703).
-                    if terminal_outcome == "empty_pool" and (
-                        scheduler._units_spent == 0
-                        or self._serial._attempts.any_skipped()
-                    ):
+                    if terminal_outcome == "empty_pool" and scheduler._units_spent == 0:
                         self._report_serial_fallback(scheduler)
                         outcome, _commits, _closures = (
                             await self._serial._run_one_iteration(
@@ -5292,12 +5286,15 @@ class _ParallelLoop:
                     if terminal_outcome in ("all_blocked", "all_skipped"):
                         self._terminal_refusals = []
                         for candidate in scheduler.terminal_survivors:
+                            defeated = self._serial._attempts.defeated_by(candidate.ref)
                             readiness = decide_readiness(candidate.blocked_by)
-                            reason = (
-                                readiness.refusal_reason
-                                if readiness.pool_class == POOL_CLASS_WAITING
-                                else self._rolling_refused[candidate.ref]
-                            )
+                            if defeated is not None:
+                                reason = f"already attempted this Run ({defeated.value})"
+                            elif readiness.pool_class == POOL_CLASS_WAITING:
+                                assert readiness.refusal_reason is not None
+                                reason = readiness.refusal_reason
+                            else:
+                                reason = self._rolling_refused[candidate.ref]
                             self._terminal_refusals.append(
                                 run_end_refusal(candidate.ref, reason)
                             )
@@ -6032,8 +6029,12 @@ class _ParallelLoop:
             passed_over(f"base revision failed: {exc}")
             scheduler.release(reservation)
             return
-        branch = git_module.lane_branch_name(self._run_id, ref)
-        path = _lane_worktree_path(self._workspace_root, self._run_id, ref)
+        # Even a failed setup can leave a branch or workspace behind. Never
+        # reuse either: unlanded work belongs to that earlier attempt.
+        self._lane_setup_attempts[ref] = self._lane_setup_attempts.get(ref, 0) + 1
+        workspace_run_id = self._lane_workspace_run_id(ref)
+        branch = git_module.lane_branch_name(workspace_run_id, ref)
+        path = _lane_worktree_path(self._workspace_root, workspace_run_id, ref)
         try:
             wt_git = self._git.add_worktree(path, branch=branch, base=base)
         except git_module.GitError as exc:
@@ -6159,7 +6160,7 @@ class _ParallelLoop:
                 ref=outcome.ref,
                 completion_sha=outcome.sha,
                 destination_branch=(
-                    f"git-loopy/{self._run_id}/materialized/issue-{ref}"
+                    f"git-loopy/{workspace_run_id}/materialized/issue-{ref}"
                 ),
             )
             if not isinstance(materialized, materialization_module.Materialized):
@@ -7091,10 +7092,9 @@ class _ParallelLoop:
         contribution.strike_reaction = strike_reaction
         if (
             strike_reaction == rolling_scheduler.STRIKE_ADD
-            and not self._serial._attempts.skipped(contribution.ref)
             and self._scheduler is not None
         ):
-            self._scheduler.release_for_retry(contribution.ref)
+            self._scheduler.release_attempt(contribution.ref)
         try:
             rollup = self._serial._rollup.finish(
                 iter_num=scope.iter_num,
@@ -7189,6 +7189,14 @@ class _ParallelLoop:
         finally:
             self._reap_integration_stage(stage, ref)
 
+    def _lane_workspace_run_id(self, ref: int | str) -> str:
+        attempt = self._lane_setup_attempts.get(ref, 1)
+        return (
+            self._run_id
+            if attempt == 1
+            else f"{self._run_id}/attempt-{attempt}"
+        )
+
     def _open_integration_stage(self, ref: int | str) -> _IntegrationStage | None:
         """Cut a private Integration worktree from the published green base.
 
@@ -7201,8 +7209,9 @@ class _ParallelLoop:
             # The stage's worktree and branch names derive from the issue
             # number; a non-int ref cannot be staged (or recovered).
             return None
-        branch = git_module.integration_branch_name(self._run_id, ref)
-        path = _integration_worktree_path(self._workspace_root, self._run_id, ref)
+        workspace_run_id = self._lane_workspace_run_id(ref)
+        branch = git_module.integration_branch_name(workspace_run_id, ref)
+        path = _integration_worktree_path(self._workspace_root, workspace_run_id, ref)
         try:
             git = self._git.add_worktree(
                 path, branch=branch, base=self._resolve_base_ref()
@@ -7745,9 +7754,10 @@ class _ParallelLoop:
         """Terminal auto-resolution failure -> fall back to a serial Iteration (#63).
 
         Posts exactly one automated breadcrumb comment on the issue and
-        leaves it **OPEN** — and latched into the scheduler's own
-        Run-scoped ``_worked`` guard (set at :meth:`~git_loopy.rolling_scheduler.RollingScheduler.start_session`),
-        so it is never re-Laned — so a later serial Iteration (granted via
+        leaves it **OPEN**. The scheduler retains ownership through this
+        contribution's finalization; a charged ending then releases ownership,
+        with the independent lifecycle predicate deciding retry eligibility.
+        A later serial Iteration (granted via
         :meth:`~git_loopy.rolling_scheduler.RollingScheduler.request_serial`,
         automatically requested by :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finalize`
         on this exact fallback) re-collects the issue and works it. The

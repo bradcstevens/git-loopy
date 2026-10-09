@@ -6,7 +6,9 @@
 now charged to the issue whose **Session** ended, against that issue's own budget of
 `max_nmt_strikes`, and the Python Runner never stops on Strikes: there is no Run-wide ceiling, no
 `stuck`, and no revocable `strike_limit` drain. The `all_skipped` termination this decision
-introduced stands.
+introduced stands. ADR-0070's #703 amendment also supersedes the one-Lane-per-Run
+limitation recorded under "What this does not do": finalized charged attempts
+below the issue's budget may now receive another Lane in that Run.
 
 Implemented by [#413](https://github.com/bradcstevens/git-loopy/issues/413), under the per-issue
 routing spec [#400](https://github.com/bradcstevens/git-loopy/issues/400). Completes

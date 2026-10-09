@@ -42,7 +42,8 @@ from git_loopy.wrapper import checkpoint_message, is_checkpoint_message
 __all__ = ["SweepReport", "resolve_base_ref", "sweep"]
 
 _BRANCH_RE = re.compile(
-    r"^git-loopy/(?P<run_id>[^/]+)(?:/(?P<stage>integrate|materialized))?"
+    r"^git-loopy/(?P<run_id>[^/]+)(?:/attempt-[1-9]\d*)?"
+    r"(?:/(?P<stage>integrate|materialized))?"
     r"/issue-(?P<issue>\d+)$"
 )
 

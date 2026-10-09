@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 
+import pytest
+
 from git_loopy.sources import (
     AfkReadyItem,
     MembershipSnapshot,
@@ -416,6 +418,43 @@ class TestTake:
 
 
 class TestTerminalOutcome:
+    @pytest.mark.parametrize(
+        ("other", "expected"),
+        [
+            ("absent", "all_skipped"),
+            ("ready", None),
+            ("blocked", "all_skipped"),
+            ("unread", "preflight_failed"),
+        ],
+    )
+    def test_a_lifecycle_refusal_does_not_hide_other_survivors(self, other, expected):
+        from git_loopy.sources import is_lane_candidate
+
+        candidates = [_candidate(31, blocked_by=BlockedByRead.unprovable())]
+        if other != "absent":
+            readiness = (
+                BlockedByRead.unprovable()
+                if other == "unread"
+                else BlockedByRead(
+                    total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+                )
+                if other == "blocked"
+                else BlockedByRead(total_count=0)
+            )
+            candidates.append(_candidate(7, blocked_by=readiness))
+        source = ScriptedSource([
+            MembershipSnapshot(candidates=tuple(candidates), complete=True)
+        ])
+        pool = _pool(
+            source,
+            eligible=lambda c: c.ref != 31 and is_lane_candidate(c),
+            terminal_refused=lambda c: c.ref == 31,
+        )
+        pool.start()
+
+        assert pool.confirm_terminal_outcome() == expected
+        assert pool.candidate_refs == tuple(c.ref for c in candidates)
+
     def test_a_complete_pool_of_open_blockers_ends_waiting_on_blockers(self) -> None:
         """A waiting cache is neither empty nor a reason to poll indefinitely."""
         from git_loopy.rolling_pool import is_parallel_safe
