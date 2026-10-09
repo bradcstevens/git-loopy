@@ -8,14 +8,15 @@ durability, then close**, in that order. Integration pushes current base, includ
 post-merge Release-line commit, to its explicitly configured upstream under a fresh,
 individual Lease fence before emitting `wrapper.integration.published` or attempting
 closure. Acknowledgement is required only where an upstream exists; without one, local
-remains the whole publication. Failure preserves landed local commits and the Lane branch,
-leaves the issue open, warns with the issue and reason, emits
-`wrapper.integration.push_failed`, and finalizes unpublished through the existing serial
-handoff. This is terminal even when Recovery produced the green stage: once base
+remains the whole publication. Failure preserves the verified commits on local base and
+the Lane branch, leaves the issue open, warns with the issue and reason, emits
+`wrapper.integration.push_failed`, and finalizes unpublished through the existing
+**Recovery handoff**. This is terminal even when Recovery produced the green stage: once base
 advances, a durability failure starts no further Recovery Agent, repeats no Release-line
 advance, and posts no recovery-exhaustion breadcrumb. No push retry loop is introduced;
-a later publish or serial push may carry the work. Recovery of a lost acknowledgement or
-torn worktree by SHA remains #419.
+a prepared Release-line commit stays local without announcing `wrapper.release.advanced`
+on publication failure. A later publish or serial push may carry the work. Recovery of a
+lost acknowledgement or torn worktree by SHA remains #419.
 
 **Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
 for the Python Runner, a Lane's **Strike** is charged by its session's ending, not by its

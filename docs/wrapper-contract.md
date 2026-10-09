@@ -1089,7 +1089,7 @@ contribution.start
       ( end[unchanged_branch]
       | [parked] admitted started branch_observed recovery_started{0..3}
           ( published auto_close [release.advanced] end[published]
-          | end[serial_fallback] ) )
+          | [push_failed] end[serial_fallback] ) )
   | end[checkpoint_failed | unchanged_branch | operator_stop] )
 ```
 
@@ -1287,11 +1287,14 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   means local is the whole publication and requires no push or warning. An acknowledged
   push emits the existing `wrapper.push.recorded` with contribution identity. A failed
   or rejected push, unreadable upstream configuration, or denied push Lease fence
-  preserves the landed commits on local base and the Lane branch, leaves the issue
+  preserves the verified commits on local base and the Lane branch, leaves the issue
   open, warns with the issue and reason, and emits `wrapper.integration.push_failed`
   with the identity triple and `message`. That contribution finalizes unpublished;
   neither publication nor closure is attested. The push MUST have its own immediate
-  Lease fence. No retry loop or rollback is required; later publication or serial
+  Lease fence. This failure is terminal even when Recovery produced the green stage:
+  once base advances, the Orchestrator MUST NOT start another Recovery Agent for that
+  stage, repeat its Release-line advance, or post a recovery-exhaustion breadcrumb.
+  No retry loop or rollback is required; later publication or serial
   auto-push may carry the work. Serial Checkpoint pushes remain best-effort and
   non-fatal (ADR-0004). Python produces the failure event; shell and PowerShell
   declare and serialize it but waive native Lane publication as out of scope under
@@ -2652,10 +2655,17 @@ restarts the stage at `alpha` when the line starts or its target rises
 it MUST NOT be performed in a Lane contribution. The resulting Release-line commit is therefore a
 post-Integration fact, not work a Lane proposes.
 
+Parallel Integration prepares this commit after the verified stage advances local base,
+before pushing current base to its upstream and closing the issue (§12). This places the
+issue's work and its Release-line commit in the same acknowledged push. If upstream
+durability fails, the commit remains on local base, but the issue remains open and the
+Orchestrator MUST NOT repeat the advance for that stage or emit `wrapper.release.advanced`.
+
 After a successful Release-line commit, the Orchestrator MUST emit
 `wrapper.release.advanced` with the closed `issue`, its `bump_class`, the
 ratcheted `release_target`, and the committed `release_version`. An issue with
-no Release-target label and a failed advance emit no such Event. A closed
+no Release-target label, a failed advance, and a Parallel publication whose upstream
+durability failed emit no such Event. A closed
 `vX.Y.Z` milestone may **Promote** the current prerelease line to stable from
 any stage, but does not select the target, and it is the only Promotion
 trigger: no Bump class Promotes unattended. Moving a line to `beta` or `rc` is
