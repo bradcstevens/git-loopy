@@ -1,5 +1,11 @@
 # Use one Release version for the complete distribution
 
+> **Note (superseded by [ADR-0073](0073-language-paths-release-and-gate-independently.md)):**
+> One family-wide Release version is replaced by one independent Release line per
+> Language path. Python inherits the existing history and unqualified `vX.Y.Z`
+> namespace; the separate Wrapper-contract and Event-schema compatibility identities
+> remain authoritative.
+>
 > **Note (superseded in part by [ADR-0046](0046-continuation-is-decommissioned.md)):**
 > This decision references Workflow Continuation, which has since been decommissioned.
 > The reasoning below is preserved as the record of what was decided at the time.

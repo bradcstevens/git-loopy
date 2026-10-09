@@ -335,6 +335,14 @@ runner from the pool at **Pickup** and bound for the length of that work. In
 issue it is working; it does not choose.
 _Avoid_: current task, current ticket.
 
+**Path-owned issue**:
+An executable issue assigned to exactly one **Language path**, whose closure may
+advance only that path's **Release target**. Shared-authority gate fan-out changes
+no ownership; work that intentionally changes several paths is split into linked
+issues. Ownership is recorded by one `path:<key>` tracker label and is never
+inferred from the files changed.
+_Avoid_: multi-path issue, repository issue, inferred path.
+
 **Working marker**:
 The agent's explicit, up-front restatement of its active issue, used to attribute the
 iteration's timing and streamed output to that issue in real time. Because the runner
@@ -758,20 +766,21 @@ _Avoid_: picker mode, interactive model prompt.
 
 **git-loopy**:
 The GitHub Copilot SDK loop-engineering framework and brand for encoding specialized
-engineering knowledge into repeatable, autonomous workflows. It ships a **Runner
-family**: the Python reference runner (the globally-installed `git-loopy` console
-command; `git loopy` also works as a git subcommand) plus the planned **shell**,
-**PowerShell**, and **Rust** ports, all implementing one **Wrapper contract**.
-Written `git-loopy` as the distribution, console command, and on-disk/brand
+engineering knowledge into repeatable, autonomous workflows. It hosts a **Runner
+family** of independently released **Language paths** that share versioned
+compatibility authorities; the Python path owns the globally-installed
+`git-loopy` console command (`git loopy` also works as a git subcommand).
+Written `git-loopy` as the framework, Python distribution, console command, and on-disk/brand
 spelling; `git_loopy` as the importable Python package. Supersedes the retired
 **copiloop** and **ralph-afk** brands.
 _Avoid_: copiloop, ralph-afk, "the runner" as a proper name.
 
 **Release version**:
-The Semantic Versioning identity assigned to one published git-loopy distribution.
-Every included **Orchestrator** and **TUI helper** shares it; the **installed catalog**
-does not, because a distribution carries no Skills — only the pin naming the revision
-to install. Contract and schema versions remain separate compatibility identities.
+The Semantic Versioning identity assigned to one published **Language path**.
+Each path advances its own Release line independently, so version equality across
+paths has no meaning. The Python path retains the unqualified `vX.Y.Z` release
+namespace; other paths qualify theirs. Contract and schema versions remain
+separate compatibility identities.
 _Avoid_: component version, protocol version, schema version.
 
 **Release target**:
@@ -1452,11 +1461,44 @@ _Avoid_: rollback, regression.
 
 ### The runner family
 
+**Language path**:
+One independently versioned and gated stream of git-loopy development for a
+host-language stack inside the shared repository. Paths share interoperability
+authorities but never wait on another path's implementation, Release line, or
+feedback loops.
+_Avoid_: separate repository, family member, port (one implementation within a path).
+
+**Path manifest**:
+The repository record that names one **Language path**'s Release authority,
+**Contract support**, Event-schema support, members, artifacts, and **Path gate**.
+It is the authority CI and publication read instead of inferring path ownership
+from directories. Its compatibility declarations only advance; removing support
+requires an explicit retirement decision.
+_Avoid_: package manifest, workflow matrix, path configuration.
+
+**Path baseline**:
+The last shared family Release and the exact contract and schema support a
+**Language path** proved when independent histories began. A path advances from
+that snapshot without rewriting or inheriting another path's later history.
+_Avoid_: fork point, initial version, copied version.
+
+**Dormant path**:
+A **Language path** held at its last declared **Release version** and declared
+**Contract support** while another path advances. Its own or still-supported
+shared surfaces remain gated, but newer contracts create no debt for it.
+_Avoid_: deprecated path, retired port, unsupported code.
+
+**Path artifact**:
+A published artifact owned and versioned by exactly one **Language path**.
+Another path may consume a compatible release through a contract or schema, but
+never shares its Release identity.
+_Avoid_: shared-version artifact, family artifact, duplicated artifact.
+
 **Runner family**:
-The set of interchangeable git-loopy runners that each implement the same **Wrapper contract**
-in a different host language — the Python reference runner plus the planned **shell**,
-**PowerShell**, and **Rust** ports. One family, one contract, many languages; an operator picks
-the runner that matches their OS and the language they are comfortable with.
+The compatibility family of git-loopy **Language paths** sharing the brand,
+**Wrapper contract** series, **Event schema**, and **Conformance suite** vocabulary.
+Paths may support different contract versions and Release independently;
+interchangeability is limited to their common declared compatibility surface.
 _Avoid_: variants, flavors, backends.
 
 **Orchestrator**:
@@ -1478,11 +1520,11 @@ _Avoid_: "the TUI" (ambiguous with the Python Textual app), frontend, renderer (
 Python `Renderer`).
 
 **Event schema**:
-The single JSONL event vocabulary every **Orchestrator** emits and the **TUI helper** and the
-replay log both consume — low-level live records plus authoritative lifecycle and accounting
-records, all sharing the envelope (`ts`, `run_id`, `iter`, `type`, payload) and fixed type
-string literals (`git_loopy.events`). The string *literals*, not the constant names, are the
-contract downstream tooling reads.
+The versioned JSONL event vocabulary **Orchestrators** emit and live-interface
+artifacts and replay logs consume — low-level live records plus authoritative
+lifecycle and accounting records sharing one envelope and fixed type literals.
+Each **Language path** declares the versions and capabilities it emits or consumes;
+cross-path compatibility is negotiated rather than inferred from Release equality.
 _Avoid_: log format, event stream (as the name), telemetry.
 
 **Insight capability**:
@@ -1495,18 +1537,33 @@ coming.
 _Avoid_: renderer feature, best-effort metric.
 
 **Wrapper contract**:
-The language-neutral behavioural specification every **Orchestrator** must satisfy —
+The versioned language-neutral behavioural specification **Language paths** may
+implement at different supported versions —
 `ready-for-agent` collection, the `## What to build` + `## Acceptance criteria` discriminator, the
 pool-whitelisted `Closes/Fixes/Resolves #N` backstop, progress/**Strike** accounting,
 **Checkpoint** + push, the exit-code table, and the `GIT_LOOPY_*` env surface. Versioned in
-`docs/wrapper-contract.md`; enforced across the family by the **Conformance suite**.
+`docs/wrapper-contract.md`; enforced within each path's declared **Contract support**
+by the **Conformance suite**.
 _Avoid_: runner contract, "the spec" (informal).
+
+**Contract support**:
+The newest **Wrapper contract** version a **Language path** declares and proves.
+Two paths are behaviourally interchangeable only within the contract surface both
+support; neither path's newer features create debt for the other.
+_Avoid_: contract pin, latest contract, family parity.
+
+**Path gate**:
+The blocking feedback-loop set owned by one **Language path**. A shared-authority
+change fans out to every path whose **Contract support** includes the affected
+surface; unrelated paths never block one another.
+_Avoid_: family gate, repository gate, advisory suite.
 
 **Conformance suite**:
 The language-neutral fixture set — golden cases for the discriminator, the close-keyword regex,
-progress/strike accounting, and the exit-code table — that every **Orchestrator** runs in CI and
-must pass, keeping the **Runner family** from drifting. The generalized successor to the deleted
-two-runner cross-parity test (ADR-0002).
+progress/strike accounting, and the exit-code table — that each **Language path**
+runs through its declared **Contract support**. Every member of that path must
+claim or role-waive every fixture in that surface; newer fixtures create no
+obligation until the path advances its support.
 _Avoid_: parity test (the retired two-runner name), integration tests.
 
 **Fixture claim**:
@@ -1516,8 +1573,8 @@ it against what the member's production seam returns. The test is falsifiable �
 field one of that member's asserted cases reads, and that member's suite goes red. A filename in a
 README, a doc comment or production code no test drives is a mention, and a mention claims nothing.
 One qualifying case is a claim; how much of the fixture a member covers is a separate question.
-Every fixture is claimed or waived by every member; the verdicts live in
-`conformance/fixture-claims.json` (ADR-0049).
+Every fixture inside a path's **Contract support** is claimed or waived by every
+member of that path; the verdicts live in `conformance/fixture-claims.json`.
 _Avoid_: mention, reference, coverage; claim unqualified (that word's other job here is the
 **Lease** a run takes); **Permanent waiver** and **Owed waiver** (the two ways a fixture is
 accounted for *without* being exercised).
