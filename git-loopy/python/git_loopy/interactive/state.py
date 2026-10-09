@@ -795,9 +795,8 @@ class LiveRunState:
         if lane_issue is not None and etype in _LANE_EVENTS:
             self._render_lane_event(str(etype), lane_issue, event, now)
             return
-        if (
-            has_contribution_identity(event)
-            and etype in _LANE_EVENTS
+        if has_contribution_identity(event) and (
+            etype in _LANE_EVENTS or etype == _USAGE_CONTEXT_WINDOW
         ):
             self._render_lane_event(str(etype), event["issue"], event, now)
             return

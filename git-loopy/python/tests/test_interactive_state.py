@@ -84,6 +84,30 @@ def test_iteration_start_updates_current_iteration() -> None:
     assert state.status == "running"
 
 
+def test_contribution_stamped_context_window_sample_leaves_the_header_alone() -> None:
+    state = _make_state()
+    state.render(
+        {
+            "type": events_module.WRAPPER_RUN_START,
+            "insight_capabilities": {"context_window": True},
+        }
+    )
+    state.render(
+        {
+            "type": events_module.USAGE_CONTEXT_WINDOW,
+            "iter": None,
+            "contribution_id": "c-1",
+            "issue": 7,
+            "lane_id": "lane-1",
+            "current_tokens": 50,
+            "token_limit": 32_000,
+        }
+    )
+
+    assert state.context_window is None
+    assert state.peak_context_window is None
+
+
 def test_context_window_samples_are_iteration_scoped_and_retain_peak() -> None:
     state = _make_state()
     state.render(
