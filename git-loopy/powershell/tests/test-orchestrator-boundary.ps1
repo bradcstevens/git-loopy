@@ -592,7 +592,12 @@ switch -CaseSensitive ($Command) {
         return
     }
     "api graphql" {
-        $Stdin = [Console]::In.ReadToEnd()
+        $Stdin = if ($MyInvocation.ExpectingInput) {
+            $input -join "`n"
+        }
+        else {
+            [Console]::In.ReadToEnd()
+        }
         [IO.File]::AppendAllText(
             $env:FAKE_GH_LOG,
             "graphql-stdin " + $Stdin + [Environment]::NewLine
@@ -890,6 +895,39 @@ $TempDir = Join-Path ([IO.Path]::GetTempPath()) (
 [IO.Directory]::CreateDirectory($TempDir) | Out-Null
 
 try {
+    # Exercise the Windows in-process fake on every host, not only the Unix
+    # executable launcher: a PowerShell pipeline is not Console.In.
+    $PipelineBin = Join-Path $TempDir "pipeline-bin"
+    Write-TurnTools -BinDir $PipelineBin
+    $PipelineGh = Join-Path $PipelineBin "gh.ps1"
+    if (-not $IsWindows) {
+        Copy-Item -LiteralPath (Join-Path $PipelineBin "gh") -Destination $PipelineGh
+    }
+    $env:FAKE_GH_LOG = Join-Path $TempDir "pipeline-gh.log"
+    $env:FAKE_GH_GRAPHQL_JSON = '{"data":{"nodes":[{"id":"PR_61","state":"OPEN"}]}}'
+    $env:FAKE_GH_GRAPHQL_STATUS = $null
+    $PipelineProbe = Join-Path $TempDir "pipeline-probe.ps1"
+    [IO.File]::WriteAllText($PipelineProbe, @'
+        param($ModulePath, $FakeGh)
+        $ErrorActionPreference = "Stop"
+        Import-Module $ModulePath
+        Set-Alias gh $FakeGh
+        & (Get-Module GitLoopy.Orchestrator) {
+            Invoke-GitLoopyPullRequestStateBatch -Ids @("PR_61")
+        }
+'@)
+    & $Pwsh -NoLogo -NoProfile -File $PipelineProbe `
+        $OrchestratorModule $PipelineGh | Out-Null
+    Assert-Equal 0 $LASTEXITCODE "in-process GraphQL fake exits successfully"
+    $PipelineLog = [IO.File]::ReadAllText($env:FAKE_GH_LOG)
+    Assert-Contains $PipelineLog "PR_61" (
+        "in-process fake receives the carried pull-request id"
+    )
+    Assert-Contains $PipelineLog 'nodes(ids:$ids)' (
+        "in-process fake receives the production GraphQL query"
+    )
+    $env:FAKE_GH_GRAPHQL_JSON = $null
+
     $VersionRuntime = Join-Path $TempDir "version-runtime"
     $VersionPort = Join-Path $VersionRuntime "git-loopy/powershell"
     $VersionOutside = Join-Path $TempDir "version-outside"
