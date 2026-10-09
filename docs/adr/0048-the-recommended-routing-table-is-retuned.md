@@ -20,6 +20,8 @@ ADR-0035 held for the run-wide default only now holds for the whole table.
 The maintainer selected **quality-first** models and **long context** from the
 authenticated 2026-10-08 catalog. A fresh listing through the Runner's own
 SDK-pinned CLI `1.0.85` confirmed the same available models, efforts and tiers.
+This was the initial capture; [ADR-0019](0019-roster-derived-from-the-pinned-harness.md#corporate-compatible-upgrade-record-sdk-1017rc3)
+records the later recapture through CLI `1.0.92-3`.
 This is a recommended starting preset, not a comparative benchmark result:
 the catalog establishes capabilities, not which model performs best on a task.
 

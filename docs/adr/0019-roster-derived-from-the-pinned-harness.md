@@ -184,7 +184,9 @@ The same listing captures context tiers for the 20 concrete models; `auto`
 remains model-dependent and is not recorded. The fixture's own revision moves
 to `2` for this roster refresh, and its tier rows are stamped to this CLI.
 `gemini-3.8-flash` remains off-roster on the warning-and-pass-through terms
-recorded above. Neither the kit's defaults nor the recommended routes change.
+recorded above. This SDK upgrade itself changes neither the kit's defaults nor
+the recommended routes; their independent quality-first retune is recorded in
+[ADR-0048](0048-the-recommended-routing-table-is-retuned.md#quality-first-retune-2026-10-09).
 The SDK 1.0.14 record above is now historical evidence, not the current pin.
 
 ## Amendment: the roster follows the harness you are running
