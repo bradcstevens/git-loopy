@@ -487,6 +487,60 @@ fn collapsed_parallel_activity_keeps_both_active_pairs_when_they_fit() {
 }
 
 #[test]
+fn collapsed_activity_preserves_the_run_subagent_total_when_pairs_are_long() {
+    let mut session = session();
+    ingest(
+        &mut session,
+        json!({
+            "type": "wrapper.run.start",
+            "insight_capabilities": {"subagents": true}
+        }),
+    );
+    lane(
+        &mut session,
+        "lane-1",
+        1_234_567_890,
+        "implementation",
+        "claude-opus-4.8-long-model-name",
+    );
+    lane(
+        &mut session,
+        "lane-2",
+        9_876_543_210,
+        "docs",
+        "claude-sonnet-4.6-long-model-name",
+    );
+    for (issue, tool_call_id) in [
+        (1_234_567_890, "call-lane-1"),
+        (9_876_543_210, "call-lane-2"),
+    ] as [(i64, &str); 2]
+    {
+        ingest(
+            &mut session,
+            json!({
+                "type": "subagent.started",
+                "lane_issue": issue,
+                "tool_call_id": tool_call_id
+            }),
+        );
+    }
+    let expanded_handle = render(&session)
+        .lines()
+        .find(|line| line.contains(" Activity "))
+        .unwrap()
+        .to_string();
+    assert!(expanded_handle.contains("2 subagents"), "{expanded_handle}");
+    session.handle_key(Key::ToggleActivity);
+    let handle = render(&session)
+        .lines()
+        .find(|line| line.contains(" Activity "))
+        .unwrap()
+        .to_string();
+    assert!(handle.contains("2 subagents"), "{handle}");
+    assert!(handle.contains("+2 more"), "{handle}");
+}
+
+#[test]
 fn short_bands_surrender_tails_before_agent_header_facts() {
     let mut session = session();
     for (id, issue) in [("lane-1", 605), ("lane-2", 606)] {

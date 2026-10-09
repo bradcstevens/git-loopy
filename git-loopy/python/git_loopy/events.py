@@ -1056,54 +1056,33 @@ def map_sdk_event(sdk_event: SessionEvent) -> dict[str, Any] | None:
             )
         )
         return usage_payload
-    if et is SessionEventType.SUBAGENT_STARTED:
-        return {
-            "type": SUBAGENT_STARTED,
-            "tool_call_id": data.tool_call_id,
-            "agent_name": data.agent_name,
-            "agent_display_name": data.agent_display_name,
-            "model": data.model,
-        }
-    if et is SessionEventType.SUBAGENT_COMPLETED:
+    subagent_type = {
+        SessionEventType.SUBAGENT_STARTED: SUBAGENT_STARTED,
+        SessionEventType.SUBAGENT_COMPLETED: SUBAGENT_COMPLETED,
+        SessionEventType.SUBAGENT_FAILED: SUBAGENT_FAILED,
+    }.get(et)
+    if subagent_type is not None:
         payload = {
-            "type": SUBAGENT_COMPLETED,
+            "type": subagent_type,
             "tool_call_id": data.tool_call_id,
             "agent_name": data.agent_name,
             "agent_display_name": data.agent_display_name,
             "model": data.model,
         }
-        payload.update(
-            _present(
-                duration_seconds=(
-                    data.duration.total_seconds()
-                    if data.duration is not None
-                    else None
-                ),
-                total_tokens=data.total_tokens,
-                total_tool_calls=data.total_tool_calls,
+        if et is not SessionEventType.SUBAGENT_STARTED:
+            payload.update(
+                _present(
+                    duration_seconds=(
+                        data.duration.total_seconds()
+                        if data.duration is not None
+                        else None
+                    ),
+                    total_tokens=data.total_tokens,
+                    total_tool_calls=data.total_tool_calls,
+                )
             )
-        )
-        return payload
-    if et is SessionEventType.SUBAGENT_FAILED:
-        payload = {
-            "type": SUBAGENT_FAILED,
-            "tool_call_id": data.tool_call_id,
-            "agent_name": data.agent_name,
-            "agent_display_name": data.agent_display_name,
-            "model": data.model,
-            "error": data.error,
-        }
-        payload.update(
-            _present(
-                duration_seconds=(
-                    data.duration.total_seconds()
-                    if data.duration is not None
-                    else None
-                ),
-                total_tokens=data.total_tokens,
-                total_tool_calls=data.total_tool_calls,
-            )
-        )
+        if et is SessionEventType.SUBAGENT_FAILED:
+            payload["error"] = data.error
         return payload
     if et is SessionEventType.SESSION_USAGE_INFO:
         raw_limit = data.token_limit
