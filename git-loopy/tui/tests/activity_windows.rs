@@ -524,6 +524,12 @@ fn collapsed_activity_preserves_the_run_subagent_total_when_pairs_are_long() {
             }),
         );
     }
+    let expanded_handle = render(&session)
+        .lines()
+        .find(|line| line.contains(" Activity "))
+        .unwrap()
+        .to_string();
+    assert!(expanded_handle.contains("2 subagents"), "{expanded_handle}");
     session.handle_key(Key::ToggleActivity);
     let handle = render(&session)
         .lines()

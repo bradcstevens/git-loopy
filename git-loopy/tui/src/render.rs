@@ -1142,8 +1142,30 @@ fn draw_activity(
             None => " Activity ".to_string(),
         },
     };
-    let mut collapsed_total_included = false;
-    if area.height == 1 {
+    if area.height > 1 {
+        if let Some(total) = activity.subagents {
+            let with_total = format!("{} {total} subagents ", title.trim_end());
+            title = if Line::raw(&with_total).width() <= usize::from(area.width.saturating_sub(2)) {
+                with_total
+            } else {
+                let identity = match agent {
+                    Some(agent) => format!(
+                        " {}{}",
+                        issue_label(&agent.issue),
+                        activity_pair(agent, glyphs)
+                    ),
+                    None => activity
+                        .issue
+                        .as_ref()
+                        .map_or_else(String::new, |issue| format!(" {}", issue_label(issue))),
+                };
+                format!(
+                    " Activity {} {total} subagents{identity} ",
+                    glyphs.attribution
+                )
+            };
+        }
+    } else {
         let pairs: Vec<_> = activity
             .windows
             .iter()
@@ -1156,58 +1178,13 @@ fn draw_activity(
                 )
             })
             .collect();
-        if let Some(total) = activity.subagents {
-            collapsed_total_included = true;
-            let mut kept = pairs.len();
-            loop {
-                let details = if kept == 0 {
-                    String::new()
-                } else {
-                    format!(" | {}", pairs[..kept].join(" | "))
-                };
-                let more = if kept < pairs.len() {
-                    format!(" | +{} more", pairs.len() - kept)
-                } else {
-                    String::new()
-                };
-                title = format!(
-                    " Activity {} {total} subagents{details}{more} ",
-                    glyphs.attribution,
-                );
-                if Line::raw(&title).width() <= usize::from(area.width.saturating_sub(2))
-                    || kept == 0
-                {
-                    break;
-                }
-                kept -= 1;
-            }
-        } else {
-            let mut kept = pairs.len();
-            while kept > 0 {
-                let more = if kept < pairs.len() {
-                    format!(" | +{} more", pairs.len() - kept)
-                } else {
-                    String::new()
-                };
-                title = format!(
-                    " Activity {}{}{} ",
-                    glyphs.attribution,
-                    pairs[..kept].join(" | "),
-                    more
-                );
-                if Line::raw(&title).width() <= usize::from(area.width.saturating_sub(2))
-                    || kept == 1
-                {
-                    break;
-                }
-                kept -= 1;
-            }
-        }
-    }
-    if !collapsed_total_included {
-        if let Some(total) = activity.subagents {
-            title = format!("{} {total} subagents ", title.trim_end());
-        }
+        title = collapsed_activity_title(
+            &pairs,
+            activity.subagents,
+            glyphs.attribution,
+            &title,
+            usize::from(area.width.saturating_sub(2)),
+        );
     }
     let block = glyphs.block(title);
     let inner = block.inner(area);
@@ -1251,6 +1228,42 @@ fn draw_activity(
             Paragraph::new(format!("+{remaining} more Lanes")),
             Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
         );
+    }
+}
+
+fn collapsed_activity_title(
+    pairs: &[String],
+    total: Option<usize>,
+    attribution: &str,
+    fallback: &str,
+    max_width: usize,
+) -> String {
+    if pairs.is_empty() && total.is_none() {
+        return fallback.to_string();
+    }
+    let minimum_kept = usize::from(total.is_none() && !pairs.is_empty());
+    let mut kept = pairs.len();
+    loop {
+        let details = if pairs.is_empty() {
+            String::new()
+        } else if total.is_some() {
+            format!(" | {}", pairs[..kept].join(" | "))
+        } else {
+            pairs[..kept].join(" | ")
+        };
+        let more = if kept < pairs.len() {
+            format!(" | +{} more", pairs.len() - kept)
+        } else {
+            String::new()
+        };
+        let title = match total {
+            Some(total) => format!(" Activity {attribution} {total} subagents{details}{more} "),
+            None => format!(" Activity {attribution}{details}{more} "),
+        };
+        if Line::raw(&title).width() <= max_width || kept <= minimum_kept {
+            return title;
+        }
+        kept -= 1;
     }
 }
 
