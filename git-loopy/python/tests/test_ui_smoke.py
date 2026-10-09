@@ -1759,6 +1759,7 @@ _ALLOWED_UI_IMPORTS: frozenset[str] = frozenset(
         # Deep and pure (stdlib only); summary.py folds its per-Iteration
         # Consumption onto it. Not a shell/CLI/persist coupling.
         "git_loopy.usage",
+        "git_loopy.contribution_identity",
         # git_loopy.viewer_zone — the one ambient-environment seam the UI is
         # allowed (#597, ADR-0058). Showing a person a wall clock requires
         # knowing whether this machine can state its own, which the UI cannot
@@ -2602,11 +2603,11 @@ def test_a_contribution_with_unavailable_billing_stays_unknown(issues) -> None:
     renderer, summary, _ = _make_renderer()
     renderer.render({
         "type": events_module.WRAPPER_CONTRIBUTION_START,
-        "contribution_id": "c-42", "issue": 42,
+        "iter": None, "contribution_id": "c-42", "issue": 42, "lane_id": "L1",
     })
     renderer.render({
         "type": events_module.WRAPPER_CONTRIBUTION_END,
-        "contribution_id": "c-42", "issue": 42,
+        "iter": None, "contribution_id": "c-42", "issue": 42, "lane_id": "L1",
         "summary": _contribution_summary(tokens_in=100, cost_usd=5, closure_outcome="closed"),
         "issues": issues,
     })

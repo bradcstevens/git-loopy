@@ -112,3 +112,27 @@ Queue band already carries. Deleting it is cheaper than inventing a projection t
   changes; this is a consumer and fixture decision throughout, as ADR-0044 was.
 - **ADR-0044's `1.28` is stale wherever it is quoted.** A reader reconciling it against
   `docs/wrapper-contract.md` should reach for ADR-0046, not restore the older literal.
+
+## Amendment (#687): the rolling stream is a shared replay obligation
+
+[#687](https://github.com/bradcstevens/git-loopy/issues/687) retires this decision's
+Rust-only rolling-case obligation and the Python constant-stub debt. Python's
+toolkit-neutral replay state now reduces the rolling Events, and its conformance
+test compares the complete projection of every snapshot under both `cases` and
+`rolling_dashboard_cases`. The rolling key stays separate to identify its stream
+family, not to exempt Python from replay. The field and the rolling stream are
+now shared oracle obligations; the earlier private-stream and stub claims above
+record the original implementation boundary, not the current one.
+
+The reducer follows
+[ADR-0063](0063-the-headers-parallel-posture-reports-the-run-not-the-orchestrator.md):
+Parallel is available only after a valid posture Event. Its Integration and
+refill-turn forms, contribution Status and phase age, Lane work-finished timing,
+and finalized contribution drift are reduced alongside that posture. This
+fulfills the replay-consumer obligation in
+[ADR-0065](0065-a-declared-rolling-event-is-seen-emitted-or-retired.md).
+
+Replay-oracle parity does not itself deliver #312's live Textual Dashboard. That
+surface must consume the reducer rather than restore the constant; its rendering
+and live wiring remain separate work. No Event payload, schema version, or Rust
+behavior changes as a consequence of this amendment.
