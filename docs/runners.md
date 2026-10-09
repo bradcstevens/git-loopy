@@ -127,7 +127,7 @@ runner-authored work as agent progress.
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Invocation                       | `uv run --project git-loopy/python git-loopy`                                                                                                      |
 | Positional arg (iteration cap)   | `uv run --project git-loopy/python git-loopy 50` (0 / omitted = unlimited)                                                                         |
-| `GIT_LOOPY_MODEL`                          | env var (default `claude-opus-5`; use a bare base id — see [`git-loopy/python/README.md`](../git-loopy/python/README.md))                            |
+| `GIT_LOOPY_MODEL`                          | env var (default `gpt-6.1-sol`; use a bare base id — see [`git-loopy/python/README.md`](../git-loopy/python/README.md))                            |
 | `GIT_LOOPY_ISSUE_SOURCE`                   | env var; `github` (default) or `prds`                                                                                                          |
 | `GIT_LOOPY_INCLUDE_PRS`                    | env var; `1`/`true`/`yes` to also collect `ready-for-agent` PRs (GitHub mode). Overrides `docs/agents/issue-tracker.md`; default auto-detects from that file, off unless opted in |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                | env var (default `3`): Strikes each issue gets before the Run skips it                                                                         |
@@ -145,7 +145,7 @@ The cost figure surfaced by the runner is an **estimate** based on provider list
 ## Invocation
 
 ```bash
-# Unlimited iterations, default model (claude-opus-5 at `max` reasoning effort).
+# Unlimited iterations, default model (gpt-6.1-sol at `max` reasoning effort).
 uv run --project git-loopy/python git-loopy
 
 # Cap at 50 iterations.
