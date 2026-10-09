@@ -93,6 +93,70 @@ def test_contribution_end_cannot_replace_lane_timing_with_iteration_row_timing()
 
 
 @pytest.mark.parametrize(
+    ("etype", "terminal"), [("wrapper.auto_close", "closed"), ("wrapper.pr.advanced", "advanced")],
+)
+@pytest.mark.parametrize("lane_stamp", [False, True])
+def test_rolling_closure_is_log_only_until_contribution_end(
+    etype: str, terminal: str, lane_stamp: bool,
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    now = 0.0
+    state = LiveRunState(monotonic=lambda: now)
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.contribution.start", **identity})
+    now = 3.0
+    state.render({"type": "wrapper.contribution.work_finished", **identity})
+    now = 4.0
+    state.render({"type": "wrapper.integration.started", **identity})
+    now = 10.0
+    stamp = {"lane_issue": 42} if lane_stamp else identity
+    state.render({"type": etype, **stamp, "issue": 42, "pr": 42})
+    projected = view_model.project_run_view(state, None, issue=42)
+    row = projected["dashboard"]["queue"]["rows"][0]
+    assert row["status"] == "integrating"
+    assert row["active_seconds"] == 3.0
+    assert row["phase_age_seconds"] == 6.0
+    assert projected["drill_in"]["log"]["lines"][-1]["kind"] == "event"
+    state.render({"type": "wrapper.contribution.end", **identity,
+                  "summary": {"closure_outcome": terminal}})
+    row = view_model.project_run_view(state, None, issue=42)["dashboard"]["queue"]["rows"][0]
+    assert row["status"] == terminal
+    assert "phase_age_seconds" not in row
+
+
+@pytest.mark.parametrize(
+    "override",
+    [{"iter": 2}, {"lane_id": ""}, {"issue": ""}, {"issue": True}, {"lane_id": None}],
+)
+def test_malformed_contribution_end_cannot_finalize_the_summary(override: dict) -> None:
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.ui.summary import RunSummary
+
+    state = LiveRunState()
+    summary = RunSummary()
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    start = {"type": "wrapper.contribution.start", **identity}
+    state.render(start)
+    summary.on_contribution_start(start)
+    end = {"type": "wrapper.contribution.end", **identity, "reason": "published",
+           "summary": {"closure_outcome": "closed"}}
+    malformed = {**end, **override}
+    state.render(malformed)
+    summary.on_contribution_end(malformed)
+    projected = view_model.project_run_view(state, summary, issue=42)
+    assert projected["dashboard"]["summary"]["rows"] == []
+    assert projected["drill_in"]["iteration_breakdown"]["rows"] == []
+    assert projected["dashboard"]["queue"]["rows"][0]["status"] == "active"
+    state.render(end)
+    summary.on_contribution_end(end)
+    projected = view_model.project_run_view(state, summary, issue=42)
+    assert len(projected["dashboard"]["summary"]["rows"]) == 1
+    assert len(projected["drill_in"]["iteration_breakdown"]["rows"]) == 1
+    assert projected["dashboard"]["queue"]["rows"][0]["status"] == "closed"
+
+
+@pytest.mark.parametrize(
     ("event", "expected"),
     [
         (
@@ -174,6 +238,7 @@ def test_invalid_refill_turn_is_not_an_observed_posture(
 
 def test_backlog_counts_contributions_once_until_they_end_not_until_publication() -> None:
     from git_loopy.interactive.state import LiveRunState
+    from git_loopy.rolling_scheduler import INTEGRATION_HIGH_WATER
 
     state = LiveRunState()
     first = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
@@ -189,6 +254,7 @@ def test_backlog_counts_contributions_once_until_they_end_not_until_publication(
     assert posture["availability"] == "not_declared"
     assert posture["integration_wip"] == 1
     assert posture["integration_high_water"] == 2
+    assert posture["integration_high_water"] == INTEGRATION_HIGH_WATER
     assert posture["parked_count"] == 1
     for identity in [first, second]:
         state.render({"type": "wrapper.contribution.end", **identity})

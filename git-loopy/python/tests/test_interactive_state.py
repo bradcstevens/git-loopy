@@ -532,11 +532,12 @@ def test_state_module_imports_are_constrained() -> None:
     The interactive sink must stay unit-testable without a TTY and must never
     import Textual or the SDK (issue #23 acceptance criterion; ADR-0001
     import-guard convention, mirroring ``git_loopy.sinks``). The **only**
-    first-party import allowed is :mod:`git_loopy.usage` (issue #41) — the shared
+    first-party value imports include :mod:`git_loopy.usage` (issue #41) — the shared
     ``UsageTally`` **Consumption** value object the per-Active-issue accrual folds
     onto. It is itself deep and pure (stdlib + :mod:`git_loopy.pricing`), so
     ``state.py`` imports ``usage``, **not** ``pricing`` / Textual / the SDK
-    directly. Any other first-party import (or Textual / the SDK) still fails.
+    directly — and the stdlib-only contribution identity decoder (#687),
+    shared with the Summary. Any other first-party import still fails.
     """
     source = Path(state_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -549,11 +550,12 @@ def test_state_module_imports_are_constrained() -> None:
         "dataclasses",
         "datetime",
         "typing",
-        # The one first-party allowance (issue #41): the shared UsageTally
+        # The shared UsageTally (issue #41):
         # Consumption value object. Deep and pure (stdlib + git_loopy.pricing);
         # state.py folds its per-Active-issue Consumption onto it. NOT a Textual /
         # SDK / pricing coupling — state.py imports usage, not pricing directly.
         "git_loopy.usage",
+        "git_loopy.contribution_identity",
     }
     seen: set[str] = set()
     for node in ast.walk(tree):
@@ -571,6 +573,18 @@ def test_state_module_imports_are_constrained() -> None:
     # is exactly one hop deep: state.py imports usage, not pricing directly.
     assert "git_loopy.usage" in seen, "state.py folds Consumption through UsageTally"
     assert "git_loopy.pricing" not in seen, "state.py imports usage, not pricing"
+
+
+def test_contribution_identity_decoder_has_only_stdlib_imports() -> None:
+    from git_loopy import contribution_identity
+
+    tree = ast.parse(Path(contribution_identity.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(alias.name in {"typing", "__future__"} for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level == 0
+            assert node.module in {"typing", "__future__"}
 
 
 # --------------------------------------------------------------------------- #

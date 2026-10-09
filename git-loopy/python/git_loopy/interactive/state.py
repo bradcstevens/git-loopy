@@ -6,7 +6,7 @@ reasoning/message delta — to it, and the Textual app *observes* it to paint th
 screen. The app reads; the loop writes; both run on the one asyncio event loop,
 so no locking is needed.
 
-This module is **deep and pure** — stdlib + ``typing`` only, **no Textual**, no
+This module is **deep and pure** — stdlib and pure value decoders, **no Textual**, no
 ``rich``, no SDK — so the run model stays unit-testable without a TTY and
 honours the repo's import-guard convention (ADR-0001; mirrors
 :mod:`git_loopy.sinks`). Enforced by
@@ -61,6 +61,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Mapping
 
+from git_loopy.contribution_identity import has_contribution_identity, identity_key
 from git_loopy.usage import BillingSample, UsageTally, is_run_scoped_usage
 
 __all__ = [
@@ -254,6 +255,8 @@ STATUS_RECOVERING = "recovering"
 _INTEGRATION_STATUSES = frozenset({
     STATUS_PARKED, STATUS_ADMITTED, STATUS_INTEGRATING, STATUS_RECOVERING,
 })
+_I64_MAX = 2**63 - 1
+_U32_MAX = 2**32 - 1
 
 # ---------------------------------------------------------------------------
 # Per-issue Log buffers (issue #34, ADR-0003)
@@ -793,7 +796,7 @@ class LiveRunState:
             self._render_lane_event(str(etype), lane_issue, event, now)
             return
         if (
-            _has_contribution_identity(event)
+            has_contribution_identity(event)
             and etype in _LANE_EVENTS
         ):
             self._render_lane_event(str(etype), event["issue"], event, now)
@@ -830,7 +833,7 @@ class LiveRunState:
                 return
             key = self._normalize_ref(issue)
             self._finish_activity_contribution(key, event)
-            whole_identity = _has_contribution_identity(event)
+            whole_identity = has_contribution_identity(event)
             if whole_identity:
                 self._finalize_contribution(key, event, now)
                 self._lane_work_finished.discard(key)
@@ -998,7 +1001,7 @@ class LiveRunState:
             issue = event.get("issue")
             if issue is not None:
                 key = self._normalize_ref(issue)
-                if _has_contribution_identity(event):
+                if has_contribution_identity(event):
                     self._lane_work_finished.add(key)
                     self._deactivate(key, at=now)
                 self._finish_activity_contribution(key, event)
@@ -1031,7 +1034,7 @@ class LiveRunState:
             limit = _observed_count(event.get("effective_lane_limit"))
             if (
                 reservations is None or limit is None
-                or reservations > 2**63 - 1 or limit > 2**63 - 1
+                or reservations > _I64_MAX or limit > _I64_MAX
             ):
                 return
             posture.observed = True
@@ -1075,7 +1078,7 @@ class LiveRunState:
         issue = event.get("issue")
         contribution_id = event.get("contribution_id")
         if (
-            not _has_contribution_identity(event)
+            not has_contribution_identity(event)
             or not isinstance(contribution_id, str)
         ):
             return
@@ -1644,6 +1647,7 @@ class LiveRunState:
         """
         key = self._normalize_ref(issue)
         self._lane_touch(key, now)
+        rolling = key in self._open_contributions or has_contribution_identity(event)
         st = self._lane_stream_state(key)
         provider = self._lane_provider(key)
         if etype == _TOOL_CALL:
@@ -1654,10 +1658,12 @@ class LiveRunState:
         elif etype == _CHECKPOINT_RECORDED:
             self._emit_event_line(st, provider, _log_checkpoint_text(event))
         elif etype == _AUTO_CLOSE:
-            self._lane_close(key, now, status=STATUS_CLOSED)
+            if not rolling:
+                self._lane_close(key, now, status=STATUS_CLOSED)
             self._emit_event_line(st, provider, _log_auto_close_text(event))
         elif etype == _PR_ADVANCED:
-            self._lane_close(key, now, status=STATUS_ADVANCED)
+            if not rolling:
+                self._lane_close(key, now, status=STATUS_ADVANCED)
             self._emit_event_line(st, provider, _log_pr_advanced_text(event))
         elif etype == _ASSISTANT_REASONING:
             self._finalize_reasoning_into(st, provider, event.get("content"))
@@ -1890,7 +1896,7 @@ class LiveRunState:
             window.subagent_ids.discard(identity)
 
     def _start_integration_window(self, event: Mapping[str, Any], now: float) -> None:
-        issue = _identity_key(event.get("issue"))
+        issue = identity_key(event.get("issue"))
         if issue is None:
             return
         contribution_id = event.get("contribution_id")
@@ -2484,26 +2490,6 @@ def _activity_lane(value: Any) -> int | str | None:
     return value if isinstance(value, (int, str)) else None
 
 
-def _has_contribution_identity(event: Mapping[str, Any]) -> bool:
-    """A whole non-empty triple and a present null Iteration (ADR-0044)."""
-    if "iter" not in event or event["iter"] is not None:
-        return False
-    contribution_id = event.get("contribution_id")
-    if not isinstance(contribution_id, str) or not contribution_id:
-        return False
-    return all(_identity_key(event.get(key)) is not None for key in ("issue", "lane_id"))
-
-
-def _identity_key(value: Any) -> int | str | None:
-    value = _activity_lane(value)
-    if (
-        value is None or value == ""
-        or (isinstance(value, int) and not -(2**63) <= value < 2**63)
-    ):
-        return None
-    return value
-
-
 def _activity_lane_sort_key(lane: int | str) -> tuple[int, int | str]:
     if isinstance(lane, int):
         return (0, lane)
@@ -2631,7 +2617,7 @@ def _recovery_pair(event: Mapping[str, Any]) -> tuple[int | None, int | None]:
         or not isinstance(max_attempts, int)
     ):
         return None, None
-    if attempt < 1 or max_attempts < 1 or attempt > max_attempts or max_attempts >= 2**32:
+    if attempt < 1 or max_attempts < 1 or attempt > max_attempts or max_attempts > _U32_MAX:
         return None, None
     return attempt, max_attempts
 

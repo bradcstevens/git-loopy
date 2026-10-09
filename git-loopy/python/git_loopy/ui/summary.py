@@ -57,6 +57,7 @@ from rich.table import Table
 from rich.text import Text
 
 from git_loopy.denomination import BilledCreditsDenomination, CostDenomination
+from git_loopy.contribution_identity import has_contribution_identity
 from git_loopy.usage import BillingSample, UsageTally
 
 from .console import STYLES
@@ -176,7 +177,8 @@ class IterationSnapshot:
     normalized_observed_tokens: Optional[int] = None
     has_normalized_rollup: bool = False
     #: Normalized-rollup measurement keys the producing Orchestrator declared
-    #: unavailable (sent as ``null``). Renderers project these as the unknown
+    #: unavailable (null, or omitted on contribution summaries). Renderers
+    #: project these as the unknown
     #: em dash; an observed none stays ``0`` / ``[]`` and never appears here.
     unavailable_measurements: frozenset[str] = frozenset()
     contribution_id: str | None = None
@@ -419,6 +421,8 @@ class RunSummary:
         therefore has no partial row. Returns ``None`` for an end whose start
         was never seen (a mid-Run attach), which must not crash the render.
         """
+        if not has_contribution_identity(event):
+            return None
         contribution_id = event.get("contribution_id")
         snap = (
             self.open_contributions.pop(contribution_id, None)
