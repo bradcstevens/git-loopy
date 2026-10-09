@@ -29,10 +29,11 @@ Design notes:
   minted at :meth:`start_session`, not at :meth:`reserve`. But a provisional
   reservation still holds its Lane and still reserves a cap unit *against
   further reservations*, so concurrent setup cannot oversubscribe either.
-* **The worked guard latches at session start and never releases.** §1.7: once
-  an issue's agent session has started it may never take a second Lane in this
-  Run, through parking, Integration, recovery, closure failure, and serial
-  fallback alike. Before session start there is no guard — only the reservation
+* **The worked guard latches at session start.** §1.7: once an issue's agent
+  session has started it may not take a second Lane while its contribution is
+  open, parked, admitted or recovering. It releases only through
+  :meth:`release_for_retry`, when the contribution has finalized having charged
+  a **Strike** and the issue is still under budget (ADR-0070). Before session start there is no guard — only the reservation
   itself, which is what makes §3.3's "leave the candidate eligible" true.
 * **Admission is a consequence of finishing, not a separate question.** §3.9 and
   §4.2-4.3: a changed durable branch is offered, and it either fits the H=2
@@ -867,6 +868,30 @@ class RollingScheduler:
         self._open.pop(contribution.contribution_id, None)
         self._release_lane(contribution)
         self._finalized.append(contribution)
+
+    def release_for_retry(self, ref: int | str) -> bool:
+        """Lift the worked guard so a finalized issue may take another Lane.
+
+        ADR-0070: an issue whose Lane ended charging a **Strike** and that is
+        still under its budget is retried in the same Run. The caller owns that
+        verdict; this only refuses while any contribution or reservation still
+        holds the issue, so one issue never holds two Lanes at once.
+        """
+        if ref in self._in_setup or any(
+            holder.ref == ref for holder in self._open.values()
+        ):
+            return False
+        if any(
+            getattr(holder, "item", None) is not None and holder.item.ref == ref
+            for holder in self._lanes_held.values()
+        ):
+            return False
+        if any(entry[1].ref == ref for entry in self._parked) or any(
+            c.ref == ref for c in self._admitted
+        ):
+            return False
+        self._worked.discard(ref)
+        return True
 
     def _release_lane(self, contribution: Contribution) -> None:
         for lane_id, holder in list(self._lanes_held.items()):

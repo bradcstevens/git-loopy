@@ -108,6 +108,12 @@ not only in the Event stream — because you are the only one who can fix it. Th
 other two reasons it can give are that every `parallel-safe` issue it found was
 already worked this Run, and that a candidate could not be read.
 
+An issue holds at most one Lane at a time. When its Lane ends without advancing,
+the issue is charged one Strike; while it has fewer than `max_nmt_strikes`
+Strikes it is offered another Lane in the same Run, exactly as a sequential Run
+would retry it. At `max_nmt_strikes` it is skipped for the rest of the Run, and
+the Run ends `all_skipped` when nothing else can be bound.
+
 ## The host capacity is a ceiling, not a target
 
 The bound **Execution host** is the safety and resource bound. **Rolling dispatch**
