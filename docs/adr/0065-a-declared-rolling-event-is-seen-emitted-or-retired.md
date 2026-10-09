@@ -118,6 +118,9 @@ is what let eight types ride on one producer. The shell and PowerShell Orchestra
 - **The Python replay oracle matches field inventory only.** Its rolling posture reducer,
   contribution-end fold and the new Statuses are a tracked gap filed from this decision, not work
   it absorbs.
+  **Amendment (#687):** the Python oracle now folds these Events and compares the complete
+  `rolling_dashboard_cases` projection alongside Rust. The tracked consumer gap is implemented;
+  the Python projection remains a replay oracle, not a second live Dashboard.
 - **The rolling stream case is corrected where it contradicts the contract.** Two of its published
   contributions carry no `wrapper.auto_close`, although *"a publication whose runner-driven closure
   has not yet verified is not a contribution end."*

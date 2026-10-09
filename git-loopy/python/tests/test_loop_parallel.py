@@ -7785,7 +7785,7 @@ def test_a_rolling_run_replays_from_its_own_record_to_the_same_dashboard(
     assert [
         (c[0], c[1], c[2], c[3], c[4])
         for c in live_view["contributions"][42]
-    ] == [("lane", 42, None, "closed", "closed")]
+    ] == [("contribution", "L1", None, "published", "closed")]
     assert _dashboard_projection(replayed) == live_view
 
 

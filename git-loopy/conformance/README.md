@@ -715,13 +715,14 @@ This is not a substitute for the composed actual-work-session routing matrix;
 shell/PowerShell routing activation remains deferred.
 
 One case sits outside `cases`, under `rolling_dashboard_cases`, and is replayed by
-the Rust Dashboard core alone. A rolling-dispatch stream is the one trace whose
-Header carries a declared **Parallel** posture, and replaying it through Python
-would demand a posture reducer the Textual Dashboard has no surface for (#687
-owns that reducer). Keeping it out of `cases` is therefore what lets every shared
-snapshot carry the one undeclared posture truthfully — but it is not exempt from the
-contract: the projection-field inventory sweep covers it alongside the shared cases,
-so a private case cannot be an unasserted one.
+both the Rust Dashboard core and the Python replay oracle (#687). A rolling-dispatch
+stream is the trace whose Header carries an observed **Parallel** posture. Keeping
+it out of `cases` lets every serial/Wave snapshot carry the undeclared posture
+truthfully; it is not an exemption from projection parity. Both members compare its
+complete snapshots, including Integration Statuses and phase age, Lane-work-only
+Active time, finalized contribution accounting and drift, backlog counts, Recovery
+attempts, and the refill-turn form. The projection-field inventory sweep covers it
+alongside the serial/Wave cases.
 
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
 (ADR-0038) — are deliberately **not** in this fixture set, now that both renderers

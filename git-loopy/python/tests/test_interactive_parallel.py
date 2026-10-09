@@ -643,14 +643,16 @@ def test_a_refilled_lane_slot_never_takes_a_running_contributions_work() -> None
         )
     )
     detail_42 = issue_detail(state, 42)
-    assert [c.kind for c in detail_42.contributions] == ["lane"]
-    assert [c.lane for c in detail_42.contributions] == [42]
+    assert [c.kind for c in detail_42.contributions] == ["contribution"]
+    assert [c.contribution_id for c in detail_42.contributions] == ["c-42"]
+    assert [c.lane for c in detail_42.contributions] == ["lane-0"]
     assert detail_42.status == STATUS_ADVANCED
     assert [
         (c.usage.tokens_in, c.usage.tokens_out) for c in detail_42.contributions
     ] == [(7, 1)]
     detail_43 = issue_detail(state, 43)
-    assert [c.kind for c in detail_43.contributions] == ["lane"]
+    assert [c.kind for c in detail_43.contributions] == ["contribution"]
+    assert [c.contribution_id for c in detail_43.contributions] == ["c-43"]
     assert detail_43.status == STATUS_CLOSED
     assert [
         (c.usage.tokens_in, c.usage.tokens_out) for c in detail_43.contributions

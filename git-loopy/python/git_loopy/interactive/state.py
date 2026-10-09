@@ -87,6 +87,10 @@ __all__ = [
     "STATUS_ADVANCED",
     "STATUS_NO_PROGRESS",
     "STATUS_GONE",
+    "STATUS_PARKED",
+    "STATUS_ADMITTED",
+    "STATUS_INTEGRATING",
+    "STATUS_RECOVERING",
     "LOG_REASONING",
     "LOG_MESSAGE",
     "LOG_EVENT",
@@ -139,8 +143,17 @@ _ITERATION_END = "wrapper.iteration.end"
 _CONTRIBUTION_START = "wrapper.contribution.start"
 _CONTRIBUTION_END = "wrapper.contribution.end"
 _CONTRIBUTION_WORK_FINISHED = "wrapper.contribution.work_finished"
+_INTEGRATION_PARKED = "wrapper.integration.parked"
+_INTEGRATION_ADMITTED = "wrapper.integration.admitted"
+_INTEGRATION_STARTED = "wrapper.integration.started"
+_INTEGRATION_BRANCH_OBSERVED = "wrapper.integration.branch_observed"
 _INTEGRATION_RECOVERY_STARTED = "wrapper.integration.recovery_started"
 _INTEGRATION_PUBLISHED = "wrapper.integration.published"
+_CONCURRENCY_CHANGED = "wrapper.concurrency.changed"
+_PARALLEL_DEGRADED = "wrapper.parallel.degraded"
+_PARALLEL_SERIAL_FALLBACK = "wrapper.parallel.serial_fallback"
+_SERIAL_REQUESTED = "wrapper.serial.requested"
+_ROLLING_REFILL_TURN = "wrapper.rolling.refill_turn"
 # The agent's final assistant message — a fallback marker source for when
 # streaming deltas are unavailable (the live path taps ``stream_message``).
 _ASSISTANT_MESSAGE = "assistant.message"
@@ -232,6 +245,14 @@ STATUS_CLOSED = "closed"
 STATUS_ADVANCED = "advanced"
 STATUS_NO_PROGRESS = "no-progress"
 STATUS_GONE = "gone"
+STATUS_PARKED = "parked"
+STATUS_ADMITTED = "admitted"
+STATUS_INTEGRATING = "integrating"
+STATUS_RECOVERING = "recovering"
+
+_INTEGRATION_STATUSES = frozenset({
+    STATUS_PARKED, STATUS_ADMITTED, STATUS_INTEGRATING, STATUS_RECOVERING,
+})
 
 # ---------------------------------------------------------------------------
 # Per-issue Log buffers (issue #34, ADR-0003)
@@ -296,6 +317,7 @@ class IssueLedgerEntry:
     usage: UsageTally = field(default_factory=UsageTally)
     ended_at: float | None = None
     active_since: float | None = None
+    phase_since: float | None = None
     usage_observed: bool = False
     closed_wall: datetime | None = None
     issue_elapsed_seconds: float | None = None
@@ -311,6 +333,11 @@ class IssueLedgerEntry:
         if self.active_since is not None:
             total += max(0.0, now - self.active_since)
         return total
+
+    def phase_age_seconds(self, now: float) -> float | None:
+        if self.status in _INTEGRATION_STATUSES and self.phase_since is not None:
+            return max(0.0, now - self.phase_since)
+        return None
 
 
 @dataclass(frozen=True)
@@ -366,6 +393,25 @@ class WindDownSnapshot:
     cause: str
     stage: str
     draining: int
+
+
+@dataclass
+class ParallelPosture:
+    """Run posture observed on the wire, never inferred from capabilities."""
+
+    observed: bool = False
+    configured_lane_limit: int | None = None
+    effective_lane_limit: int | None = None
+    pressure: str | None = None
+    degraded: bool = False
+    degraded_reason: str | None = None
+    serial_fallback_reason: str | None = None
+    serial_required: int | None = None
+    refill_stopped: bool = False
+    integration_observed: bool = False
+    admitted_open: set[str] = field(default_factory=set)
+    parked_open: set[str] = field(default_factory=set)
+    refill_turn: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -431,6 +477,7 @@ class IssueContribution:
     usage: UsageTally
     usage_observed: bool
     peak_context_window: ContextWindowSnapshot | None
+    drift: int | None = None
 
 
 def _default_wall_clock() -> datetime:
@@ -588,6 +635,9 @@ class LiveRunState:
         # neither that the Run was healthy nor that it was stopped.
         self.wind_down: WindDownSnapshot | None = None
         self.wind_down_observed = False
+        self.parallel = ParallelPosture()
+        self._lane_work_finished: set[int | str] = set()
+        self._branch_drift: dict[str, int | None] = {}
         self._contribution_hosts: dict[str, str] = {}
         self.context_window: ContextWindowSnapshot | None = None
         self.peak_context_window: ContextWindowSnapshot | None = None
@@ -741,6 +791,14 @@ class LiveRunState:
         if lane_issue is not None and etype in _LANE_EVENTS:
             self._render_lane_event(str(etype), lane_issue, event, now)
             return
+        if (
+            event.get("issue") is not None
+            and isinstance(event.get("contribution_id"), str)
+            and event.get("lane_id") is not None
+            and etype in _LANE_EVENTS
+        ):
+            self._render_lane_event(str(etype), event["issue"], event, now)
+            return
         # Contribution-scoped accounting boundaries (issue #310). Under
         # **Rolling dispatch** there is no round: each **Lane contribution**
         # opens and closes its own pair, so these must touch that
@@ -752,6 +810,7 @@ class LiveRunState:
             if issue is None:
                 return
             key = self._normalize_ref(issue)
+            self._lane_work_finished.discard(key)
             contribution_id = event.get("contribution_id")
             lane = _activity_lane(event.get("lane_id"))
             if isinstance(contribution_id, str):
@@ -775,9 +834,24 @@ class LiveRunState:
             self._finalize_contribution(key, event, now)
             contribution_id = event.get("contribution_id")
             if isinstance(contribution_id, str):
+                self.parallel.admitted_open.discard(contribution_id)
+                self.parallel.parked_open.discard(contribution_id)
                 self._activity_contribution_pickups.pop(contribution_id, None)
                 self._activity_starts.pop(contribution_id, None)
                 self._activity_contributions.pop(contribution_id, None)
+            self._lane_work_finished.discard(key)
+            return
+        if etype in {
+            _CONCURRENCY_CHANGED, _PARALLEL_DEGRADED, _PARALLEL_SERIAL_FALLBACK,
+            _SERIAL_REQUESTED, _ROLLING_REFILL_TURN,
+        }:
+            self._record_parallel_posture(str(etype), event)
+            return
+        if etype in {
+            _INTEGRATION_PARKED, _INTEGRATION_ADMITTED, _INTEGRATION_STARTED,
+            _INTEGRATION_BRANCH_OBSERVED,
+        }:
+            self._record_integration(str(etype), event, now)
             return
         if etype == _RUN_START:
             self._mark_started()
@@ -921,8 +995,12 @@ class LiveRunState:
         elif etype == _CONTRIBUTION_WORK_FINISHED:
             issue = event.get("issue")
             if issue is not None:
-                self._finish_activity_contribution(self._normalize_ref(issue), event)
+                key = self._normalize_ref(issue)
+                self._lane_work_finished.add(key)
+                self._deactivate(key, at=now)
+                self._finish_activity_contribution(key, event)
         elif etype == _INTEGRATION_RECOVERY_STARTED:
+            self._record_integration(str(etype), event, now)
             self._start_integration_window(event, now)
         elif etype == _INTEGRATION_PUBLISHED:
             window = self._activity_integration
@@ -940,6 +1018,84 @@ class LiveRunState:
             self._mark_ended()
             for window in self.activity_windows():
                 self._finish_activity_window(window)
+
+    def _record_parallel_posture(
+        self, etype: str, event: Mapping[str, Any]
+    ) -> None:
+        posture = self.parallel
+        posture.observed = True
+        posture.refill_turn = None
+        if etype == _CONCURRENCY_CHANGED:
+            configured = _observed_count(event.get("configured_lane_limit"))
+            effective = _observed_count(event.get("effective_lane_limit"))
+            if configured is not None:
+                posture.configured_lane_limit = configured
+            if effective is not None:
+                posture.effective_lane_limit = effective
+            if "pressure" in event:
+                pressure = event["pressure"]
+                if pressure is None or isinstance(pressure, str):
+                    posture.pressure = pressure
+        elif etype in {_PARALLEL_DEGRADED, _PARALLEL_SERIAL_FALLBACK}:
+            cap = _observed_count(event.get("lane_cap"))
+            if cap is not None:
+                posture.configured_lane_limit = cap
+            reason = event.get("reason")
+            reason = reason if isinstance(reason, str) else None
+            if etype == _PARALLEL_DEGRADED:
+                posture.degraded = True
+                posture.degraded_reason = reason
+            else:
+                posture.serial_fallback_reason = reason
+        elif etype == _SERIAL_REQUESTED:
+            if isinstance(event.get("refill_stopped"), bool):
+                posture.refill_stopped = event["refill_stopped"]
+            if "serial_required" in event:
+                posture.serial_required = _observed_count(event["serial_required"])
+        elif etype == _ROLLING_REFILL_TURN:
+            reservations = _observed_count(event.get("reservations"))
+            limit = _observed_count(event.get("effective_lane_limit"))
+            if reservations is not None and limit is not None:
+                posture.refill_turn = {
+                    "reservations": reservations, "effective_lane_limit": limit,
+                }
+
+    def _record_integration(
+        self, etype: str, event: Mapping[str, Any], now: float
+    ) -> None:
+        issue = event.get("issue")
+        contribution_id = event.get("contribution_id")
+        if (
+            issue is None or not isinstance(contribution_id, str)
+            or event.get("lane_id") is None
+        ):
+            return
+        if etype == _INTEGRATION_BRANCH_OBSERVED:
+            self._branch_drift[contribution_id] = _observed_count(
+                event.get("base_publications_since_cut")
+            )
+            return
+        posture = self.parallel
+        if etype == _INTEGRATION_PARKED:
+            posture.integration_observed = True
+            if contribution_id not in posture.admitted_open:
+                posture.parked_open.add(contribution_id)
+            status = STATUS_PARKED
+        elif etype == _INTEGRATION_ADMITTED:
+            posture.integration_observed = True
+            posture.parked_open.discard(contribution_id)
+            posture.admitted_open.add(contribution_id)
+            status = STATUS_ADMITTED
+        elif etype == _INTEGRATION_STARTED:
+            status = STATUS_INTEGRATING
+        else:
+            status = STATUS_RECOVERING
+        key = self._normalize_ref(issue)
+        entry = self.ledger.setdefault(
+            key, IssueLedgerEntry(key, now, self.iteration)
+        )
+        entry.status = status
+        entry.phase_since = now
 
     def stream_reasoning(self, delta: str, issue: int | str | None = None) -> None:
         """Fold a reasoning delta into the right issue's Log (issues #34/#66).
@@ -1408,6 +1564,8 @@ class LiveRunState:
         terminal status this run is left untouched (a late delta never
         resurrects a closed Lane).
         """
+        if key in self._lane_work_finished:
+            return
         self._iter_lane_refs.add(key)
         entry = self.ledger.get(key)
         if entry is None:
@@ -1429,6 +1587,7 @@ class LiveRunState:
         if entry.active_since is None:
             entry.active_since = now
         entry.status = STATUS_ACTIVE
+        entry.phase_since = None
 
     def _lane_stream_delta(self, ref: int | str, kind: str, delta: str) -> None:
         """Assemble a Lane's streamed reasoning/message delta into its own Log."""
@@ -1889,14 +2048,40 @@ class LiveRunState:
             entry.active_since = None
         summary = event.get("summary")
         summary = summary if isinstance(summary, Mapping) else {}
+        issues = event.get("issues")
+        payload = next(
+            (
+                row for row in issues
+                if isinstance(row, Mapping)
+                and self._normalize_ref(row.get("issue")) == key
+            ),
+            {},
+        ) if isinstance(issues, list) else {}
+        consumption = payload.get("consumption")
+        consumption = consumption if isinstance(consumption, Mapping) else {}
+        normalized = {
+            **payload,
+            "issue": key,
+            "status": payload.get("status") or summary.get("closure_outcome")
+            or STATUS_NO_PROGRESS,
+            "active_seconds": summary.get("agent_seconds"),
+            "consumption": {
+                **consumption,
+                "model": summary.get("model"),
+                "tokens_in": summary.get("tokens_in"),
+                "tokens_out": summary.get("tokens_out"),
+            },
+            "peak_context_window": summary.get("peak_context_window"),
+        }
         self._record_normalized_contributions(
             {
                 "iter": None,
-                "outcome": summary.get("closure_outcome"),
+                "outcome": event.get("reason"),
                 "duration_seconds": summary.get("lifecycle_seconds"),
-                "issues": event.get("issues"),
+                "issues": [normalized],
             },
             lane_keys={key},
+            rolling=event,
         )
 
     def _record_pool(self, issues: Any, now: float) -> None:
@@ -2116,6 +2301,7 @@ class LiveRunState:
         event: Mapping[str, Any],
         *,
         lane_keys: set[int | str] | None = None,
+        rolling: Mapping[str, Any] | None = None,
     ) -> None:
         """Project authoritative finalized issue rows from a scope's end.
 
@@ -2177,10 +2363,14 @@ class LiveRunState:
             )
             route = self._iter_routes.get(key)
             contribution = IssueContribution(
-                kind="lane" if is_lane else "iteration",
-                contribution_id="",
+                kind="contribution" if rolling is not None else (
+                    "lane" if is_lane else "iteration"
+                ),
+                contribution_id=str(rolling.get("contribution_id") or "") if rolling else "",
                 iteration=None if is_lane else iter_num,
-                lane=key if is_lane else None,
+                lane=_activity_lane(rolling.get("lane_id")) if rolling else (
+                    key if is_lane else None
+                ),
                 outcome=outcome,
                 duration_seconds=duration_seconds,
                 status=str(payload.get("status") or STATUS_NO_PROGRESS),
@@ -2193,12 +2383,15 @@ class LiveRunState:
                 peak_context_window=_context_window_snapshot(
                     payload.get("peak_context_window")
                 ),
+                drift=self._branch_drift.get(str(rolling.get("contribution_id")))
+                if rolling else None,
             )
             entry.contributions.append(contribution)
             entry.usage_observed = any(
                 item.usage_observed for item in entry.contributions
             )
             entry.status = contribution.status
+            entry.phase_since = None
             entry.active_duration = max(
                 0.0,
                 _coerce_float(
@@ -2209,7 +2402,11 @@ class LiveRunState:
             started = self._local_timestamp(payload.get("first_started_at"))
             if started is not None:
                 entry.started_wall = started
-            entry.closed_wall = self._local_timestamp(payload.get("closed_at"))
+            if rolling is not None:
+                if entry.status == STATUS_CLOSED:
+                    entry.closed_wall = self._wall_at(self._monotonic())
+            else:
+                entry.closed_wall = self._local_timestamp(payload.get("closed_at"))
             elapsed = payload.get("issue_elapsed_seconds")
             entry.issue_elapsed_seconds = (
                 max(0.0, float(elapsed)) if isinstance(elapsed, (int, float)) else None
@@ -2704,7 +2901,10 @@ def format_context_fill(snapshot: ContextWindowSnapshot | None) -> str:
 #: still-queued issues, then everything terminal (closed / advanced /
 #: no-progress / gone) as trailing history. Within a group the ledger's
 #: first-seen insertion order is preserved by the stable sort below.
-_QUEUE_GROUP_RANK: dict[str, int] = {STATUS_ACTIVE: 0, STATUS_QUEUED: 1}
+_QUEUE_GROUP_RANK: dict[str, int] = {
+    STATUS_ACTIVE: 0, STATUS_QUEUED: 1,
+    **{status: 0 for status in _INTEGRATION_STATUSES},
+}
 _QUEUE_GROUP_HISTORY = 2
 
 
@@ -2735,6 +2935,7 @@ class QueueRow:
     #: The pair the issue's most recent **Pickup** resolved, or ``None`` when
     #: nothing has resolved one for it.
     route: ResolvedRoute | None = None
+    phase_age_seconds: float | None = None
 
     @property
     def label(self) -> str:
@@ -2779,6 +2980,7 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
                 closed_wall=entry.closed_wall,
                 iteration_count=len(entry.contributions),
                 route=entry.route,
+                phase_age_seconds=entry.phase_age_seconds(base),
             )
         )
     rows.sort(key=lambda r: _QUEUE_GROUP_RANK.get(r.status, _QUEUE_GROUP_HISTORY))
