@@ -1142,6 +1142,7 @@ fn draw_activity(
             None => " Activity ".to_string(),
         },
     };
+    let mut collapsed_total_included = false;
     if area.height == 1 {
         let pairs: Vec<_> = activity
             .windows
@@ -1155,27 +1156,58 @@ fn draw_activity(
                 )
             })
             .collect();
-        let mut kept = pairs.len();
-        while kept > 0 {
-            let more = if kept < pairs.len() {
-                format!(" | +{} more", pairs.len() - kept)
-            } else {
-                String::new()
-            };
-            title = format!(
-                " Activity {}{}{} ",
-                glyphs.attribution,
-                pairs[..kept].join(" | "),
-                more
-            );
-            if Line::raw(&title).width() <= usize::from(area.width.saturating_sub(2)) || kept == 1 {
-                break;
+        if let Some(total) = activity.subagents {
+            collapsed_total_included = true;
+            let mut kept = pairs.len();
+            loop {
+                let details = if kept == 0 {
+                    String::new()
+                } else {
+                    format!(" | {}", pairs[..kept].join(" | "))
+                };
+                let more = if kept < pairs.len() {
+                    format!(" | +{} more", pairs.len() - kept)
+                } else {
+                    String::new()
+                };
+                title = format!(
+                    " Activity {} {total} subagents{details}{more} ",
+                    glyphs.attribution,
+                );
+                if Line::raw(&title).width() <= usize::from(area.width.saturating_sub(2))
+                    || kept == 0
+                {
+                    break;
+                }
+                kept -= 1;
             }
-            kept -= 1;
+        } else {
+            let mut kept = pairs.len();
+            while kept > 0 {
+                let more = if kept < pairs.len() {
+                    format!(" | +{} more", pairs.len() - kept)
+                } else {
+                    String::new()
+                };
+                title = format!(
+                    " Activity {}{}{} ",
+                    glyphs.attribution,
+                    pairs[..kept].join(" | "),
+                    more
+                );
+                if Line::raw(&title).width() <= usize::from(area.width.saturating_sub(2))
+                    || kept == 1
+                {
+                    break;
+                }
+                kept -= 1;
+            }
         }
     }
-    if let Some(total) = activity.subagents {
-        title = format!("{} {total} subagents ", title.trim_end());
+    if !collapsed_total_included {
+        if let Some(total) = activity.subagents {
+            title = format!("{} {total} subagents ", title.trim_end());
+        }
     }
     let block = glyphs.block(title);
     let inner = block.inner(area);

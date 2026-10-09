@@ -748,9 +748,20 @@ class LiveRunState:
         if (
             etype in {_SUBAGENT_STARTED, _SUBAGENT_COMPLETED, _SUBAGENT_FAILED}
             and isinstance(contribution_id, str)
-            and (window := self._activity_contributions.get(contribution_id)) is not None
         ):
-            self._render_lane_event(str(etype), window.issue, event, now)
+            window = self._activity_window_for_contribution(contribution_id)
+            if window is None:
+                return
+            if window.kind == "integration":
+                self._record_activity_subagent(str(etype), event)
+                key = self._normalize_ref(window.issue)
+                self._emit_event_line(
+                    self._lane_stream_state(key),
+                    self._lane_provider(key),
+                    _subagent_event_text(str(etype), event),
+                )
+            else:
+                self._render_lane_event(str(etype), window.issue, event, now)
             return
         # Contribution-scoped accounting boundaries (issue #310). Under
         # **Rolling dispatch** there is no round: each **Lane contribution**
@@ -1717,7 +1728,7 @@ class LiveRunState:
             return
         contribution_id = event.get("contribution_id")
         window = (
-            self._activity_contributions.get(contribution_id)
+            self._activity_window_for_contribution(contribution_id)
             if isinstance(contribution_id, str)
             else None
         )
@@ -1740,6 +1751,19 @@ class LiveRunState:
             window.subagent_ids.add(identity)
         elif identity in window.subagent_ids:
             window.subagent_ids.discard(identity)
+
+    def _activity_window_for_contribution(
+        self, contribution_id: str
+    ) -> ActivityWindow | None:
+        integration = self._activity_integration
+        if (
+            integration is not None
+            and integration.live
+            and integration.contribution_id == contribution_id
+        ):
+            return integration
+        window = self._activity_contributions.get(contribution_id)
+        return window if window is not None and window.live else None
 
     def _start_integration_window(self, event: Mapping[str, Any], now: float) -> None:
         issue = event.get("issue")
