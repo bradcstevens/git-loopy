@@ -139,10 +139,11 @@ dispatch owns that admission, not routing.
 The production-loop tests in `python/tests/test_loop_parallel.py` pin repeated
 Lane attempts through the per-issue Strike budget and terminal `all_skipped`,
 with distinct setup namespaces and preservation of earlier unlanded branches.
-They also pin the host-facing `<run_id>-attempt-<A>` identity and normalization
-of ingested Events to the owning Run's original `run_id`; A counts setups, not
-Strikes. These are Python scheduler/host proofs, not new family-wide fixture
-fields or a capability claim for the serial-only members.
+Focused host-identity and Event-ingest seam tests in the same module pin the
+host-facing `<run_id>-attempt-<A>` formatter and normalization of ingested
+Events to the owning Run's original `run_id`; A counts setups, not Strikes.
+These are Python-specific proofs, not new family-wide fixture fields or a
+capability claim for the serial-only members.
 Independent expected settings and outcome histories cover
 reselection, explicit Static escalation, advances, infrastructure failure,
 justified repeats through attempt exhaustion, unjustified-repeat refusal and

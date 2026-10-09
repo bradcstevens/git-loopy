@@ -776,7 +776,7 @@ def _lane_worktree_path(
 
     Lanes live in ``<common-git-dir>/git-loopy/<run_id>/issue-<N>``, grouped by
     run so a run's workspaces are easy to find and reap. Later setups qualify
-    ``run_id`` with ``attempt-<N>/`` to preserve previous branches and trees.
+    ``run_id`` with ``attempt-<A>/`` to preserve previous branches and trees.
     The issue leaf stays stable so concurrent Lanes never share a tree.
     The common git directory is not content in any working tree, so a live Lane is invisible to ``git
     status``, unreachable by ``git add -A``, and survives ``git clean -ffxd``
@@ -826,7 +826,7 @@ def _integration_worktree_path(
     extra workspace.
 
     ``run_id`` is the Lane's workspace namespace, so a retry Lane passes
-    ``<run_id>/attempt-<N>`` and its stage nests beneath that.
+    ``<run_id>/attempt-<A>`` and its stage nests beneath that.
     """
     return (
         common_git_dir / "git-loopy" / run_id / "integrate" / f"issue-{issue_number}"

@@ -192,7 +192,7 @@ class RollingPool:
             which de-synchronises concurrent Runs without ever waiting longer
             than the bound.
         eligible: Eligibility predicate. Defaults to :func:`is_parallel_safe`;
-            a scheduler composes its Run-scoped worked-issue guard into it.
+            a scheduler composes its retained Lane-ownership guard into it.
         cacheable: Membership predicate. Defaults to :func:`is_parallel_safe`;
             unlike ``eligible``, it retains candidates that are temporarily
             **Blocked** so the next refresh can promote them when their

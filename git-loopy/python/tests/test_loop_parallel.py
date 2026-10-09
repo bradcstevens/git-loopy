@@ -9,6 +9,9 @@ per-Lane commits landing on Lane branches, and a Lane's worktree torn down
 the moment ITS OWN contribution finishes (never waiting on any other Lane) —
 not internal call ordering.
 
+Focused seam tests complement those Runs where the claim is only a formatter,
+Event-ingest transformation or composed eligibility predicate.
+
 The fakes here (unlike the serial ``test_iteration_end_to_end`` client) record
 the per-session ``working_directory`` and route each Lane's simulated agent
 commit to the *right* worktree's child :class:`~tests.fakes.FakeGitClient`, so
@@ -8438,13 +8441,11 @@ def test_a_blocked_issue_stops_being_a_lane_candidate_but_stays_cached(
     *candidacy* instead — said once, rather than reserved, skipped and released
     once per scheduler turn for the rest of the Run.
 
-    **Blocked** is refused at the same seam but not by the same predicate.
-    Both remain cached: an issue at its Strike budget can
-    never become eligible again inside this Run; a blocked one clears itself the
-    moment its last blocker closes, with nobody touching the issue. So readiness
-    narrows ``eligible`` and leaves ``cacheable`` alone, and the next
-    **Membership read** — which already carries the blockers, on the one list
-    call it always made — is the whole of what promotes it.
+    Readiness and the Attempt lifecycle both narrow ``eligible`` without
+    removing Pool membership. An issue at its Strike budget stays refused for
+    the Run. A Blocked issue instead becomes eligible when the next Membership
+    read proves its last blocker closed. That read already carries blockers,
+    so readiness needs neither a separate tracker call nor a cache eviction.
 
     Asserted on the predicates the Run actually composed rather than through a
     dispatched Lane, because #438 already refuses a blocked candidate at the

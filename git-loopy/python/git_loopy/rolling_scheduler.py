@@ -158,9 +158,9 @@ PHASE_DRAINING_FOR_STOP = "draining_for_stop"
 #                                 human assertion the runner never infers, this
 #                                 is the overwhelmingly common cause and the
 #                                 fix is triage.
-# ``all_parallel_safe_worked``    eligible candidates existed, but this Run has
-#                                 already worked every one of them (#219 §1.7's
-#                                 retained ownership guard). Nothing is wrong.
+# ``all_parallel_safe_worked``    no eligible candidates remain, and this Run's
+#                                 ever-Laned history is non-empty. This history
+#                                 survives release of retained ownership.
 # ``parallel_safe_unavailable``   the Pool still holds ``parallel-safe``
 #                                 candidates, but every one is quarantined
 #                                 because its authoritative read failed (#219
