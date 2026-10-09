@@ -6483,7 +6483,10 @@ def test_a_parallel_safe_pin_that_stays_open_is_named_once(
     bindings = _bindings(_logged_events(tmp_path))
     assert bindings[0] == (43, "pin")
     assert set(bindings[:2]) == {(43, "pin"), (42, "order")}
-    assert bindings[2] == (41, "order")
+    # The Pin is spent by its first Lane; its retry is an ordinary election
+    # (ADR-0070), and the third unit goes to it before the serial issue.
+    assert bindings[2] == (43, "order")
+    assert (41, "order") not in bindings
 
 
 def test_a_parallel_safe_pin_with_a_cap_of_one_works_only_the_pin(
@@ -6590,7 +6593,7 @@ def _run_parallel_safe_pin(
     asyncio.run(
         asyncio.wait_for(
             loop_module.run(
-                _pinned_config(43, max_iterations=4, max_nmt_strikes=10)
+                _pinned_config(43, max_iterations=6, max_nmt_strikes=10)
             ),
             timeout=30,
         )
@@ -7395,6 +7398,48 @@ def test_parallel_serial_iteration_defeat_ends_the_run_all_skipped_never_stuck(
     starts = [e for e in events if e["type"] == "wrapper.iteration.start"]
     assert len(starts) == 2, f"expected exactly two Iterations, got {len(starts)}"
 
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "all_skipped"
+    assert exit_code == loop_module.exit_code_for("all_skipped")
+
+
+def test_a_parallel_safe_issue_is_retried_in_lanes_until_n_strikes_then_skipped(
+    tmp_path, monkeypatch
+) -> None:
+    """Rolling dispatch honours the per-issue Strike budget (#703, ADR-0070).
+
+    A ``parallel-safe`` issue whose Lane ends without advancing is charged one
+    Strike and, while under ``max_nmt_strikes``, takes another Lane in the same
+    Run — never two at once. At N Strikes it is skipped and the Run ends
+    ``all_skipped`` because nothing else is bindable.
+    """
+    fake_gh = _wire_rolling_run(
+        tmp_path,
+        monkeypatch,
+        [_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+        client_cls=_NoProgressFakeClient,
+    )
+    del fake_gh
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(asyncio.wait_for(loop_module.run(cfg), timeout=60))
+
+    events = _logged_events(tmp_path)
+    strikes = [e for e in events if e["type"] == "wrapper.strike"]
+    assert [(s["issue"], s["strikes"], s["outcome"]) for s in strikes] == [
+        (42, 1, "warn"),
+        (42, 2, "warn"),
+        (42, 3, "skip"),
+    ]
+    starts = [e for e in events if e["type"] == "wrapper.contribution.start"]
+    assert len(starts) == 3
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "all_skipped"
     assert exit_code == loop_module.exit_code_for("all_skipped")

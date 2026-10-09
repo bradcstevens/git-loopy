@@ -493,7 +493,11 @@ class GitClient(Protocol):
         """Reset exactly ``paths`` in the index back to ``HEAD``."""
         ...
 
-    def push(self) -> None:
+    def upstream(self) -> tuple[str, str] | None:
+        """Return the current branch's configured remote and upstream ref, if any."""
+        ...
+
+    def push(self, *, upstream: tuple[str, str] | None = None) -> None:
         """Push the current branch to its configured upstream."""
         ...
 
@@ -954,7 +958,29 @@ class SubprocessGitClient:
             cwd=self._root,
         )
 
-    def push(self) -> None:
+    def upstream(self) -> tuple[str, str] | None:
+        """Read the branch's upstream configuration without contacting the remote.
+
+        Missing tracking objects do not erase configured upstreams: an unreachable
+        or deleted remote must still require durability rather than become a local
+        publication. Git's upstream atoms read the configured remote and merge ref.
+        Read failures raise :exc:`GitError`, never masquerade as no upstream.
+        """
+        branch = self.current_branch()
+        if branch is None:
+            return None
+        value = _run(
+            [
+                "for-each-ref",
+                "--format=%(upstream:remotename)%00%(upstream:remoteref)",
+                f"refs/heads/{branch}",
+            ],
+            cwd=self._root,
+        ).strip()
+        remote, separator, ref = value.partition("\0")
+        return (remote, ref) if separator and remote and ref else None
+
+    def push(self, *, upstream: tuple[str, str] | None = None) -> None:
         """Push the current branch to its configured upstream via ``git push``.
 
         The remote half of ADR-0004's durability net. After an iteration produces
@@ -964,7 +990,12 @@ class SubprocessGitClient:
         config — ``push.default``, the branch's upstream tracking ref, credential
         helpers — the single source of truth.
 
-        :meth:`push_ref` is the one deliberate exception (ADR-0033). A **Lease**
+        Integration supplies ``upstream`` from :meth:`upstream` to target that
+        exact remote/ref, without force, rather than a configured push destination
+        that might differ. A successful bare push elsewhere cannot certify
+        tracker-attested publication (#418); serial checkpoints remain unchanged.
+
+        :meth:`push_ref` is the Lease exception (ADR-0033). A **Lease**
         names its refspec explicitly and swaps under ``--force-with-lease``
         precisely *because* it must not inherit any of that configuration: it
         addresses one ref per issue, and its whole guarantee is that exactly one
@@ -984,7 +1015,13 @@ class SubprocessGitClient:
                 the reasons above. The loop's ``_maybe_push`` catches this and
                 never lets it abort the run.
         """
-        _run(["push"], cwd=self._root)
+        # Tracker-attested publication must reach the configured upstream, even
+        # when push.default or a pushRemote would send a bare push elsewhere.
+        args = ["push"]
+        if upstream is not None:
+            remote, ref = upstream
+            args.extend(["--", remote, f"HEAD:{ref}"])
+        _run(args, cwd=self._root)
 
     def current_branch(self) -> str | None:
         """Return the name of the currently checked-out branch, or ``None``.

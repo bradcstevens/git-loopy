@@ -83,6 +83,7 @@ class FakeGitClient:
         branch: str | None = "main",
         commit_error: GitError | None = None,
         push_error: GitError | None = None,
+        upstream: tuple[str, str] | None = None,
         sha_prefix: str = "face",
         merge_conflicts: Sequence[int] | None = None,
         release_versions: Sequence[str] = (),
@@ -124,6 +125,7 @@ class FakeGitClient:
         # Injected failures (None = the happy path).
         self.commit_error = commit_error
         self.push_error = push_error
+        self.configured_upstream = upstream
         # Write spies.
         self.add_all_calls = 0
         self.commit_paths_calls: list[tuple[str, tuple[str, ...]]] = []
@@ -295,7 +297,10 @@ class FakeGitClient:
     def unstage_paths(self, paths: Sequence[Path | str]) -> None:
         self.unstage_paths_calls.append(tuple(str(p) for p in paths))
 
-    def push(self) -> None:
+    def upstream(self) -> tuple[str, str] | None:
+        return self.configured_upstream
+
+    def push(self, *, upstream: tuple[str, str] | None = None) -> None:
         self.push_calls += 1
         if self.push_error is not None:
             raise self.push_error

@@ -63,6 +63,7 @@ _STARTED = "wrapper.integration.started"
 _BRANCH_OBSERVED = "wrapper.integration.branch_observed"
 _RECOVERY_STARTED = "wrapper.integration.recovery_started"
 _PUBLISHED = "wrapper.integration.published"
+_PUSH_FAILED = "wrapper.integration.push_failed"
 _AUTO_CLOSE = "wrapper.auto_close"
 _RELEASE_ADVANCED = "wrapper.release.advanced"
 
@@ -72,6 +73,7 @@ _ORDERED_TYPES = frozenset({
     _START, _WORK_FINISHED, _END, _PARKED, _ADMITTED, _STARTED,
     _BRANCH_OBSERVED, _RECOVERY_STARTED, _PUBLISHED, _AUTO_CLOSE,
     _RELEASE_ADVANCED,
+    _PUSH_FAILED,
 })
 
 #: Run-exit reclamation may end any open contribution at any point with these.
@@ -94,7 +96,7 @@ def _lifecycle_sequences() -> list[tuple[Token, ...]]:
               ( end[unchanged_branch]
               | [parked] admitted started branch_observed recovery_started{0..3}
                   ( published auto_close [release.advanced] end[published]
-                  | end[serial_fallback] ) )
+                  | [push_failed] end[serial_fallback] ) )
           | end[checkpoint_failed | unchanged_branch | operator_stop] )
 
     The language is finite, so it is enumerated rather than parsed: that keeps
@@ -104,6 +106,7 @@ def _lifecycle_sequences() -> list[tuple[Token, ...]]:
         (_PUBLISHED, _AUTO_CLOSE, _end("published")),
         (_PUBLISHED, _AUTO_CLOSE, _RELEASE_ADVANCED, _end("published")),
         (_end("serial_fallback"),),
+        (_PUSH_FAILED, _end("serial_fallback")),
     ]
     after_work: list[tuple[Token, ...]] = [(_end("unchanged_branch"),)]
     for parked, recoveries, tail in itertools.product(
@@ -551,7 +554,20 @@ def _parallel_over_a_non_rolling_source(root: Path, mp: pytest.MonkeyPatch) -> N
     assert asyncio.run(loop_module.run(_config(1, issue_source="prds"))) == 0
 
 
+def _rejected_publication(root: Path, mp: pytest.MonkeyPatch) -> None:
+    git, gh = _wire(
+        root, mp, [lp._make_issue(42, labels=_PARALLEL_SAFE)], FakeGateRunner()
+    )
+    git.configured_upstream = ("origin", "refs/heads/main")
+    git.push_error = loop_module.git_module.GitError(
+        ["git", "push"], 1, "non-fast-forward rejected"
+    )
+    asyncio.run(loop_module.run(_config(1)))
+    assert not gh.issue_close_calls
+
+
 SCENARIOS: dict[str, Callable[[Path, pytest.MonkeyPatch], None]] = {
+    "rejected-publication": _rejected_publication,
     "two-lanes-park": _two_lanes_park_against_a_full_backlog,
     "red-then-green-recovery": _red_then_green_recovery,
     "k-exhausted-recovery-handoff": _k_exhausted_recovery_handoff,
