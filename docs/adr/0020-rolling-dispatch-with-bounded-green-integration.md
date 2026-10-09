@@ -2,6 +2,18 @@
 
 **Status:** accepted
 
+**Implemented amendment ([#418](https://github.com/bradcstevens/git-loopy/issues/418)):**
+the Python Runner's publication boundary is now **publish locally, acknowledge upstream
+durability, then close**, in that order. Integration pushes current base, including any
+post-merge Release-line commit, to its explicitly configured upstream under a fresh,
+individual Lease fence before emitting `wrapper.integration.published` or attempting
+closure. Acknowledgement is required only where an upstream exists; without one, local
+remains the whole publication. Failure preserves landed local commits and the Lane branch,
+leaves the issue open, warns with the issue and reason, emits
+`wrapper.integration.push_failed`, and finalizes unpublished through the existing serial
+handoff. No push retry loop is introduced; a later publish or serial push may carry the
+work. Recovery of a lost acknowledgement or torn worktree by SHA remains #419.
+
 **Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
 for the Python Runner, a Lane's **Strike** is charged by its session's ending, not by its
 contribution's disposition: a terminal unpublished contribution is no longer a Strike in itself,
