@@ -172,12 +172,15 @@ async def resolve_run_routing_preflight(
         and host_capabilities.placement == config.execution_host
         else None
     )
+
+    async def read_capabilities() -> HarnessCapabilities | None:
+        if capabilities_fetch is not None:
+            return await capabilities_fetch()
+        return await refresh_harness_capabilities(warn=warn)
+
     if config.route_policy is RoutePolicy.UNSELECTED:
         if refresh_roster:
-            if capabilities_fetch is None:
-                await refresh_harness_capabilities(warn=warn)
-            else:
-                await capabilities_fetch()
+            await read_capabilities()
         return RunRoutingPreflight()
 
     prerequisites = None
@@ -214,19 +217,28 @@ async def resolve_run_routing_preflight(
         return await refresh_harness_evidence(warn=warn)
 
     routes = _configured_static_routes(config)
-    static_listing: FreshHarnessCapabilities | None = None
+    preflight_listing: FreshHarnessCapabilities | None = None
     capabilities: HarnessCapabilities | None = None
     listing_refreshed = False
+
+    async def read_preflight_listing() -> FreshHarnessCapabilities | None:
+        nonlocal preflight_listing, capabilities, listing_refreshed
+        if not listing_refreshed:
+            preflight_listing = await live_capabilities()
+            capabilities = (
+                preflight_listing.capabilities
+                if preflight_listing is not None
+                else None
+            )
+            listing_refreshed = True
+        return preflight_listing
+
     if (
         refresh_roster
         and config.route_policy is RoutePolicy.DYNAMIC
         and not config.routing_suppressed
     ):
-        static_listing = await live_capabilities()
-        listing_refreshed = True
-        capabilities = (
-            static_listing.capabilities if static_listing is not None else None
-        )
+        await read_preflight_listing()
     recorded_host = (
         remote_capabilities
         if config.execution_host != LOCAL_EXECUTION_HOST_PLACEMENT
@@ -245,18 +257,9 @@ async def resolve_run_routing_preflight(
                 )
     if routes:
         if prerequisites is not None:
-            if not listing_refreshed:
-                static_listing = await live_capabilities()
-                listing_refreshed = True
-                capabilities = (
-                    static_listing.capabilities if static_listing is not None else None
-                )
+            await read_preflight_listing()
         elif not listing_refreshed:
-            capabilities = (
-                await refresh_harness_capabilities(warn=warn)
-                if capabilities_fetch is None
-                else await capabilities_fetch()
-            )
+            capabilities = await read_capabilities()
             listing_refreshed = True
         for name, route in routes:
             try:
@@ -274,10 +277,7 @@ async def resolve_run_routing_preflight(
                 )
     if prerequisites is None:
         if refresh_roster and not listing_refreshed:
-            if capabilities_fetch is None:
-                await refresh_harness_capabilities(warn=warn)
-            else:
-                await capabilities_fetch()
+            await read_capabilities()
         return RunRoutingPreflight(
             dynamic_refusal=dynamic_refusal,
             admission_ledger=ledger,
@@ -291,7 +291,7 @@ async def resolve_run_routing_preflight(
 
     async def readiness_capabilities() -> FreshHarnessCapabilities | None:
         # Reuse only within this preflight. Proposal and Pickup read afresh.
-        return static_listing if listing_refreshed else await live_capabilities()
+        return await read_preflight_listing()
 
     inputs = await RoutingLiveRead(
         evidence_fetch=source.fetch,

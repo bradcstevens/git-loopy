@@ -2550,10 +2550,10 @@ def _warn_off_roster_routing_models(
 ) -> None:
     """Typo-catch authored routing models against the harness-aware roster.
 
-    The supported set is the built-in roster plus whatever this operator's own
-    harness was last observed to offer (ADR-0019), so a model that only a newer
-    Copilot CLI serves is no longer reported as a probable typo. This warns and
-    never refuses: the Copilot CLI remains the final authority.
+    A successful observed roster replaces the built-in fallback for this
+    operator (ADR-0019), so newly offered models enter and removed models leave
+    the supported set on the next Run. This warns and never refuses: the Copilot
+    CLI remains the final authority.
     """
     known_models = supported_models()
     off_roster = sorted(

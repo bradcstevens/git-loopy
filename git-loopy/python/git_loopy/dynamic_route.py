@@ -24,12 +24,12 @@ from numbers import Integral
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from git_loopy.events import ROUTE_ELECTED, ROUTE_REVALIDATED, format_timestamp
+from git_loopy.roster_cache import record_observed_roster
 from git_loopy.static_route import (
     BASE_CONTEXT_TIER,
     LONG_CONTEXT_TIER,
     HarnessCapabilities,
     HarnessModel,
-    _record_observed_roster,
     default_capability_fetch,
 )
 
@@ -808,7 +808,7 @@ async def refresh_harness_evidence(
         if warn is not None:
             warn(f"{type(exc).__name__}: {exc}")
         return None
-    _record_observed_roster(evidence.capabilities)
+    record_observed_roster(evidence.capabilities)
     return evidence
 
 
