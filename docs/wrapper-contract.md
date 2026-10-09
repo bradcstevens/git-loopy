@@ -515,12 +515,11 @@ Refusal is **not eviction**. The candidate MUST stay in the scheduler's cache, b
 contract 2.17, a closing pull request that stops being open — makes it
 candidate-eligible on the following refresh, with no Run restarted and no human touching the issue.
 This is what separates readiness from an **Attempt-lifecycle** defeat, which nothing inside the Run
-can undo and which therefore keeps the issue out of candidacy for the rest of the Run.
+can undo and which therefore does evict.
 
 Readiness **composes** with the other candidacy predicates and MUST NOT replace any of them: a
 candidate must still carry `parallel-safe`, must still pass the Attempt-lifecycle skip, and the
-scheduler's own collision guard still applies while an attempt's contribution is open, though it is
-released once that contribution finalizes having charged a Strike (ADR-0070).
+scheduler's own collision guard is untouched.
 
 Because both seams read the same assertion, **both orders MUST agree**: a Lane MUST NOT reserve an
 issue a serial Iteration of the same Run already found Blocked or Awaiting merge, and a serial
@@ -1277,11 +1276,6 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   contribution is admitted to **Integration** — a record identifying only its Lane becomes
   unattributable as soon as the next contribution starts there. Consumers MUST NOT rely on a
   mutable Lane→issue lookup.
-  A retry setup uses a distinct workspace namespace `<run_id>/attempt-<A>` and
-  host-facing identity `<run_id>-attempt-<A>` (A counts setups of that issue,
-  starting at 2, not Strikes). Neither creates a new Run. Ingested remote Events
-  MUST be stamped with the owning Run's original envelope `run_id`, not the
-  host-facing attempt identity; the contribution triple distinguishes their work.
 - **Stamped existing records.** A Lane's ordinary records — `assistant.*`, `tool.*`,
   `usage.tokens`, `usage.context_window`, `agent.output`, `wrapper.commit.recorded`,
   `wrapper.checkpoint.recorded`, `wrapper.push.recorded`, `wrapper.auto_close` — carry the same triple when they belong to
@@ -2337,11 +2331,11 @@ from startup and earlier Pickups. Its cases
 cover changed and repeated elections, required repeat justification, infrastructure
 failure, advancing work, attempt/allowance exhaustion and explicit Static
 escalation. A refused retry spends no task attempt or Strike, while later
-eligible Static work still runs. Saved Config remains unchanged. The existing
-one-Lane-at-a-time ownership rule is preserved. ADR-0070 permits another Lane after
-a charged contribution finalizes while its issue is still `retrying`; this matrix
-does not itself grant retries, activate Dynamic-default routing, or extend routing
-to another Runner member or placement.
+eligible Static work still runs. Saved Config remains unchanged. This
+matrix does not grant a second Lane, is not itself the Dynamic-default activation,
+and does not extend routing to another Runner member or placement. How the Python
+Runner admits a Lane retry is its own implementation, documented in
+[`docs/parallel-mode.md`](parallel-mode.md), not a requirement this matrix pins.
 
 The `in_flight_consumption` matrix carries recorded init/update authorization
 through the real unattended CLI in serial and local Lane modes. Its eight cases,
