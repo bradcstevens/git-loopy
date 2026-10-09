@@ -225,6 +225,66 @@ def test_recovery_subagent_lifecycle_updates_the_live_integration_window() -> No
     )
 
 
+def test_late_subagent_completion_after_work_finished_stays_in_the_issue_log() -> None:
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+
+    state = LiveRunState()
+    for event in (
+        {
+            "type": "wrapper.run.start",
+            "insight_capabilities": {"subagents": True},
+        },
+        {
+            "type": "wrapper.contribution.start",
+            "issue": 605,
+            "lane_id": "lane-1",
+            "contribution_id": "c-605",
+        },
+        {"type": "wrapper.issue.activated", "issue": 605, "lane_issue": 605},
+        {
+            "type": "subagent.started",
+            "lane_issue": 605,
+            "contribution_id": "c-605",
+            "tool_call_id": "call-late",
+            "agent_name": "explorer",
+            "model": "gpt-5.6-terra",
+        },
+        {
+            "type": "wrapper.contribution.work_finished",
+            "issue": 605,
+            "lane_id": "lane-1",
+            "contribution_id": "c-605",
+        },
+        {
+            "type": "subagent.completed",
+            "issue": 605,
+            "lane_id": "lane-1",
+            "contribution_id": "c-605",
+            "tool_call_id": "call-late",
+            "agent_name": "explorer",
+            "model": "gpt-5.6-terra",
+            "duration_seconds": 4.0,
+            "total_tokens": 321,
+            "total_tool_calls": 2,
+        },
+    ):
+        state.render(event)
+
+    view = project_run_view(state, None, issue=605)
+    activity = view["dashboard"]["activity"]["windows"][0]
+    assert activity["live"] is False
+    assert activity["subagents"] == 0
+    assert any(
+        "Subagent completed: explorer @ gpt-5.6-terra" in line["text"]
+        for line in activity["lines"]
+    )
+    assert any(
+        "321 tokens" in line["text"]
+        for line in view["drill_in"]["log"]["lines"]
+    )
+
+
 def test_an_older_integration_publication_cannot_finish_a_newer_agent() -> None:
     from git_loopy.interactive.state import LiveRunState
     from git_loopy.interactive.view_model import project_run_view
