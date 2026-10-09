@@ -44,6 +44,47 @@ proposal until the **Loop engineer** approves its recorded revision; it never
 turns planning documents into autonomous work.
 _Avoid_: Orchestrator (deterministic runner code), decomposer, auto-decomposer.
 
+**Reviewer**:
+The independent **Agent profile** whose verdict gates closure after an Agent
+finishes any result the Orchestrator would publish and close. It uses the `review`
+**Task type** and its own **Routed pair**, judges the exact result on separate
+**Spec** and **Standards** axes through the required `/code-review` Skill, and
+returns findings to a fresh implementation Agent without charging a **Strike**
+or changing the **Attempt lifecycle**.
+_Avoid_: self-review, feedback-loop gate.
+
+**Review stage**:
+The pre-publication stage after serial feedback loops or Parallel Lane work and
+before closure or admission to **Integration**. Parallel contributions may be
+reviewed concurrently; a **Recovery** that changes code sends the changed result
+through a fresh Review stage before publication, and the **Orchestrator** alone
+publishes and closes an approved result. A Reviewer session that produces no
+verdict uses the existing **Session outcome**, **Strike**, and **Attempt
+lifecycle** accounting; a completed rejection does not. The stage is never
+bypassed for route availability, latency, or resource pressure.
+_Avoid_: QA, post-publication review, Integration gate.
+
+**Review verdict**:
+The head-bound judgment produced by one Review stage, recording separate Spec
+and Standards outcomes, findings or approval, its ordinal, and the Reviewer
+profile and route. Its closed vocabulary is **approved** or
+**changes_requested**; it is durable both as a structured Run Event and as an
+issue comment.
+_Avoid_: review summary, annotation, test result.
+
+**Review ref**:
+The Runner-owned remote ref that makes an exact pre-publication result durable
+for review. It advances only by fast-forward through remediation, is deleted
+after green publication makes its commits reachable from base, and is retained
+as the **Review handoff** breadcrumb otherwise.
+_Avoid_: pull request, Lane branch, local review branch.
+
+**Review handoff**:
+The per-Run disposition reached when an issue's third Reviewer verdict still
+requests changes. The exact rejected head and findings remain durable, the issue
+stays open and ineligible for more work in that Run, and unrelated work continues.
+_Avoid_: review failure, Strike, Run stop.
+
 **Meta-engineering**:
 Working on the system that builds and operates the software rather than on the
 software directly. The loop engineer's leverage: an improvement to a workflow,
@@ -431,20 +472,23 @@ _Avoid_: backlog, list.
 An issue's lifecycle within a run: **queued** (seen, not yet worked), **active**
 (being worked now — several at once in **Parallel mode**, one per **Lane**, and left the
 moment a **Lane contribution**'s Lane work finishes), **parked** (finished, still holding
-its Lane, waiting for the **Integration backlog** to admit it), **admitted** (in the
-Integration backlog, waiting its turn) — parked, admitted, and integrating each show their phase age,
-the time since the row entered that Status — **integrating** (being merged and gated in its
-**Integration stage**), **recovering** (in **Recovery** after that merge or gate failed),
-**closed**
-(finished and closed via a commit close-keyword), **advanced** (progressed but not
-closed), **no-progress** (worked without meaningful change), **gone** (left the Run's view
-without resolution — it was seen in a pool or a **Membership read**, and a later
+its Lane, waiting for review capacity or for the **Integration backlog** to admit it),
+**reviewing** (its exact result is in the **Review stage**), **admitted**
+(reviewed and in the Integration backlog, waiting its turn) — parked, admitted,
+and integrating each show their phase age, the time since the row entered that
+Status — **integrating** (being merged and gated in its **Integration stage**),
+**recovering** (in **Recovery** after that merge or gate failed), **closed**
+(finished and closed via a commit close-keyword), **advanced** (progressed but
+not closed), **review-handoff** (three review verdicts requested changes, so the
+issue remains open and ineligible for more work in this Run), **no-progress**
+(worked without meaningful change), **gone** (left the Run's view without
+resolution — it was seen in a pool or a **Membership read**, and a later
 authoritative pool no longer lists it).
 
 **Closed**:
 The successful terminal **Status** in which the source issue has actually been
 closed. It alone has a closure timestamp; **advanced**, **no-progress**, and
-**gone** are not completions.
+**review-handoff**, and **gone** are not completions.
 _Avoid_: completed, ended (when the source issue remains open).
 
 **Issue elapsed**:
@@ -1520,8 +1564,9 @@ _Avoid_: Wave, batch, cohort, sliding window.
 
 **Lane**:
 One reusable concurrent execution slot in **Parallel mode**. A Lane works one
-**Parallel-safe** issue at a time in its own **Lane workspace** and branch, then becomes
-available for refill once its finished branch is admitted to **Integration**. Shown as one
+**Parallel-safe** issue at a time in its own **Lane workspace** and branch, retains
+that issue through review and remediation, then becomes available for refill once
+the reviewed branch is admitted to **Integration** or reaches **Review handoff**. Shown as one
 active row in the **Dashboard**, with its own timer and **Log**.
 _Avoid_: worker, thread.
 
