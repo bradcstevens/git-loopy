@@ -166,7 +166,7 @@ def test_run_config_routing_copies_input_not_aliased() -> None:
 
 
 def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -> None:
-    """Pin CLI 1.0.85's observed capabilities without dropping compatibility IDs."""
+    """Pin CLI 1.0.92-3's observed capabilities without dropping compatibility IDs."""
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         REASONING_EFFORTS,
@@ -176,8 +176,14 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
     expected = {
         "auto": frozenset(),
         "claude-sonnet-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
+        "claude-sonnet-5.5": frozenset(
+            {"low", "medium", "high", "xhigh", "max"}
+        ),
         "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
         "claude-sonnet-4.5": frozenset(),
+        "claude-haiku-5.5": frozenset(
+            {"low", "medium", "high", "xhigh", "max"}
+        ),
         "claude-haiku-4.5": frozenset(),
         "claude-opus-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
@@ -185,6 +191,9 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
         "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
         "gpt-6-astra": frozenset({"low", "medium", "high", "xhigh", "max"}),
+        "gpt-6.1-sol": frozenset(
+            {"none", "low", "medium", "high", "xhigh", "max"}
+        ),
         "gpt-6-luna": frozenset(
             {"none", "low", "medium", "high", "xhigh", "max"}
         ),
@@ -213,7 +222,7 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
         ),
         "grok-4.5": frozenset({"low", "medium", "high"}),
         "grok-4.6": frozenset({"low", "medium", "high", "xhigh"}),
-        "grok-4.7": frozenset({"low", "medium", "high"}),
+        "grok-4.7": frozenset({"low", "medium", "high", "xhigh"}),
         "mai-code-1.1-flash": frozenset({"low", "medium", "high"}),
         "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
     }

@@ -93,8 +93,14 @@ TASK_TYPE_LABEL_PREFIX = "task-type:"
 MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "auto": frozenset(),
     "claude-sonnet-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
+    "claude-sonnet-5.5": frozenset(
+        {"low", "medium", "high", "xhigh", "max"}
+    ),
     "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
     "claude-sonnet-4.5": frozenset(),
+    "claude-haiku-5.5": frozenset(
+        {"low", "medium", "high", "xhigh", "max"}
+    ),
     "claude-haiku-4.5": frozenset(),
     "claude-opus-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
@@ -102,6 +108,9 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
     "gpt-6-astra": frozenset({"low", "medium", "high", "xhigh", "max"}),
+    "gpt-6.1-sol": frozenset(
+        {"none", "low", "medium", "high", "xhigh", "max"}
+    ),
     "gpt-6-luna": frozenset(
         {"none", "low", "medium", "high", "xhigh", "max"}
     ),
@@ -130,7 +139,7 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     ),
     "grok-4.5": frozenset({"low", "medium", "high"}),
     "grok-4.6": frozenset({"low", "medium", "high", "xhigh"}),
-    "grok-4.7": frozenset({"low", "medium", "high"}),
+    "grok-4.7": frozenset({"low", "medium", "high", "xhigh"}),
     "mai-code-1.1-flash": frozenset({"low", "medium", "high"}),
     "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
 }
@@ -148,7 +157,7 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
 #: differs from the CLI the SDK actually spawns, every gate verdict in the Run
 #: was reached against a description of some *other* binary, and the divergence
 #: is what the **Run readback** reports at Run start.
-MODEL_ROSTER_CLI_VERSION = "1.0.85"
+MODEL_ROSTER_CLI_VERSION = "1.0.92-3"
 
 #: The model ids the kit officially supports (the keys of
 #: :data:`MODEL_REASONING_EFFORTS`). :mod:`git_loopy.cli` uses this to
