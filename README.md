@@ -230,10 +230,9 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/loop-me`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/loop-me) | Grill an operator into workflow specs for the automation they want this workspace to run. |
 | [`/wait-what`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wait-what) | Ask for a re-pitch, in plain language and the project's own vocabulary, when an explanation did not land. |
 | [`/to-questionnaire`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-questionnaire) | Turn unresolved decisions into a questionnaire for the person who can answer them. |
-| [`/skill-router`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/skill-router) | Ask which skill or flow fits the situation in front of you. |
 | [`/mermaid-diagrams`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/mermaid-diagrams) | Draw software diagrams — flow, sequence, class, ERD, C4, state — in Mermaid syntax. |
 | [`/show-me`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/show-me) | Explain the current topic with concise diagrams, code-shape sketches, or focused HTML artifacts. |
-| [`/loose-ends`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/loose-ends) | On explicit invocation, audit unfinished issue-tracker workflows and open a read-only HTML report. |
+| [`/sync-model-roster`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/sync-model-roster) | Reconcile the pinned SDK model roster, then align one git-loopy configuration scope. |
 
 ### Turn intent into delivered work
 
@@ -263,7 +262,7 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/design-control-loop`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/design-control-loop) | Interview an operator, design a codebase control loop, and build its local commands and scheduled workflow. |
 | [`/model-fit`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/model-fit) | On explicit invocation, research available Copilot models and align model, effort, context, and enforcement settings with git-loopy routing. |
 | [`/wizard`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wizard) | Generate an interactive bash wizard for a manual procedure only a human can carry out. |
-| [`/next`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/next) | Route to the one action to take now, from the live state of the work. |
+| [`/next`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/next) | Choose the skill or flow that fits, or route to the one action to take now from live work state. |
 | [`/teach`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/teach) | Teach a concept over multiple sessions using the repository as a stateful workspace. |
 | [`/create-readme`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/create-readme) | Write a project README from what the repository actually contains. |
 | [`/writing-for-agents`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/writing-for-agents) | Write documents agents read — skills, `AGENTS.md`, and their siblings. |

@@ -388,6 +388,14 @@ the Python and shell ports never drift.
 
 ---
 
+## Contributor validation
+
+The validation commands live in [`AGENTS.md`](../../AGENTS.md). The boundary
+suite also checks in-process GraphQL pipeline input on every host, catching
+the Windows fake's input-transport regression outside Windows CI.
+
+---
+
 **Next:**
 - [`git-loopy/shell/README.md`](../shell/README.md) — the Bash port (Linux/macOS; needs `jq`).
 - [`docs/runners.md`](../../docs/runners.md) — the Runner family and roadmap.
