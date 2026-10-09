@@ -76,6 +76,10 @@ $script:EventTypes = [ordered]@{
     TOOL_PERMISSION_DENIED = "tool.permission_denied"
     USAGE_TOKENS = "usage.tokens"
     USAGE_CONTEXT_WINDOW = "usage.context_window"
+    # Vocabulary parity only: this port cannot observe SDK Subagent events.
+    SUBAGENT_STARTED = "subagent.started"
+    SUBAGENT_COMPLETED = "subagent.completed"
+    SUBAGENT_FAILED = "subagent.failed"
     # The two harness failure records (contract 1.19, #403): what ended a session
     # that ended badly, in the harness's own structured fields. Declared for
     # vocabulary parity and never emitted here -- this port shells out to the
@@ -98,9 +102,10 @@ $script:InsightCapabilities = [ordered]@{
     # Orchestrator never routes" from "no Pickup has resolved a pair yet" would
     # leave a Route column reading as pending forever.
     routing = $false
+    subagents = $false
 }
 # What *this Run* obtained, as opposed to what this distribution can observe.
-# The seven above are fixed per binary; a run-scoped capability can differ between
+# The eight above are fixed per binary; a run-scoped capability can differ between
 # two Runs of one binary, so it is composed onto the wire manifest rather than
 # frozen beside them (#334, ADR-0026, Wrapper contract 12).
 #
@@ -190,7 +195,7 @@ function Get-GitLoopyRunInsightCapabilities {
 
     # The Run-start Insight manifest as it goes on the wire: the frozen
     # per-distribution capabilities, then this Run's own run-scoped answers. The
-    # run-scoped keys come last so the seven a **Dashboard** must find keep the
+    # run-scoped keys come last so the eight a **Dashboard** must find keep the
     # order the family contract lists them in.
     $Manifest = Get-GitLoopyInsightCapabilities
     foreach ($Name in $script:RunScopedInsightCapabilities.Keys) {

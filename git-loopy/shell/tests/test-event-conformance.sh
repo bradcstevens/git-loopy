@@ -287,6 +287,7 @@ while IFS= read -r case_json; do
         {
           agent_output: [],
           routing: [],
+          subagents: [],
           structured_agent_events: [$rollup.summary.tool_count],
           token_usage: (
             [

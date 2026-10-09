@@ -870,11 +870,12 @@ tracker whose every candidate was rejected. `wrapper.pool.excluded` is Run-scope
 contribution-scoped: it names work that never became a **Lane contribution**, so it carries the
 collecting Iteration's `iter` and no contribution identity.
 Dashboard Insight additions within compatibility schema 1 are `wrapper.issue.activated`,
-`agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is the redacted
-Run-scoped record of the frozen **Effective Skill policy** (§17). Rolling-dispatch additions
-within compatibility schema 1 are listed under *Rolling-dispatch contribution lifecycle* below.
-Producing these additive events is capability-dependent. TTY attach-client failures are local UI
-failures only: they emit no special Event and do not change the worker's own Run record.
+`agent.output`, `usage.context_window`, and the `subagent.started` / `.completed` / `.failed`
+lifecycle; `wrapper.skill_policy.resolved` is the redacted Run-scoped record of the frozen
+**Effective Skill policy** (§17). Rolling-dispatch additions within compatibility schema 1 are
+listed under *Rolling-dispatch contribution lifecycle* below. Producing these additive events is
+capability-dependent. TTY attach-client failures are local UI failures only: they emit no special
+Event and do not change the worker's own Run record.
 
 Contract-2.4 puts **Wind-down** on the wire. A Run emits
 `wrapper.stop.requested` when it latches a drain or escalates it to cancellation:
@@ -974,15 +975,16 @@ Every `wrapper.run.start` MUST carry the exact distribution `release_version`, n
   "context_window": true,
   "skill_consultation": true,
   "cost": true,
-  "routing": true
+  "routing": true,
+  "subagents": true
 }
 ```
 
 The values above are the Python Orchestrator's current manifest. The shell and PowerShell
-Orchestrators declare only `agent_output` available. Later work may change a value to `true` only
-when that Orchestrator emits the signal truthfully. `false` means unavailable. `true` with no sample
-yet is still unknown. Unknown scalar values are JSON `null`; an observed count of none is `0`, and
-an observed collection with no members is `[]`.
+Orchestrators declare `agent_output` and no other capability available. Later work may change a
+value to `true` only when that Orchestrator emits the signal truthfully. `false` means unavailable.
+`true` with no sample yet is still unknown. Unknown scalar values are JSON `null`; an observed count
+of none is `0`, and an observed collection with no members is `[]`.
 
 `routing` is the contract-1.25 addition (#411) and declares whether this Orchestrator reports the
 **Routed pair** a unit of work runs on — the **Routing resolution** §14 obliges on a Pickup, and the
@@ -994,10 +996,22 @@ model listing declares `rate_card: false`: an omitted key leaves a **Dashboard**
 *this Orchestrator never routes* from *no Pickup has resolved a pair yet*, and a Route column that
 cannot tell them apart reads as pending forever.
 
+`subagents` declares whether an Orchestrator records the harness's Subagent lifecycle. Python
+declares it `true`; shell and PowerShell declare it `false`. A `true` capability makes a newly
+opened Agent window's live count `0`; the count rises on each distinct `subagent.started` tool-call
+id and falls on its `subagent.completed` or `subagent.failed` record. Run-wide totals count the live
+Subagents across Agent windows. Subagent lifecycle records carry `tool_call_id`, `agent_name`,
+`agent_display_name`, and `model`; completion may additionally carry `duration_seconds`,
+`total_tokens`, and `total_tool_calls`, while failure carries `error` and may carry those totals.
+Their self-reported totals are display detail only and MUST NOT be added to Consumption or Cost.
+The `initiator` and `parent_tool_call_id` on `usage.tokens` preserve the harness's attribution
+handles without changing its billing totals. `subagent.selected` and `subagent.deselected` are
+configuration events and MUST NOT be mapped.
+
 ### Run-scoped Insight capabilities
 
-The seven keys above are **per-distribution**: they answer "can this Orchestrator observe it at
-all?", so they are the same for every Run of one binary and every port MUST declare all seven. A
+The eight keys above are **per-distribution**: they answer "can this Orchestrator observe it at
+all?", so they are the same for every Run of one binary and every port MUST declare all eight. A
 **run-scoped** capability answers a different question — "did *this* Run obtain it?" — and two Runs
 of one binary can differ. Run-scoped keys are declared in the same object, are **accepted from any producer and
 required of none**, and are listed under `insight_capabilities.run_scoped` in
@@ -1216,6 +1230,13 @@ Orchestrator rollout tickets own enabling those producers.
   data.
 - `usage.context_window`: `current_tokens`, nullable `token_limit`, nullable
   `effective_target_tokens`, and nullable `effective_ceiling_tokens`.
+- `subagent.started`: `tool_call_id`, `agent_name`, `agent_display_name`, and `model`.
+- `subagent.completed`: the start fields and optional `duration_seconds`, `total_tokens`, and
+  `total_tool_calls`.
+- `subagent.failed`: the start fields and `error`, with optional duration and totals.
+- `usage.tokens` may carry `initiator` and `parent_tool_call_id`. They preserve attribution
+  provenance only; a consumer MUST NOT add lifecycle self-reported Subagent totals to billed
+  Consumption.
 - An enriched `wrapper.iteration.end`: `outcome`, monotonic `duration_seconds`, normalized
   `summary`, and an `issues` contribution list.
 
@@ -1276,9 +1297,10 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   unattributable as soon as the next contribution starts there. Consumers MUST NOT rely on a
   mutable Lane→issue lookup.
 - **Stamped existing records.** A Lane's ordinary records — `assistant.*`, `tool.*`,
-  `usage.tokens`, `usage.context_window`, `agent.output`, `wrapper.commit.recorded`,
-  `wrapper.checkpoint.recorded`, `wrapper.auto_close` — carry the same triple when they belong to
-  a contribution. The same literals remain valid, unstamped, for serial Iterations.
+  `usage.tokens`, `usage.context_window`, `subagent.started`, `subagent.completed`,
+  `subagent.failed`, `agent.output`, `wrapper.commit.recorded`, `wrapper.checkpoint.recorded`,
+  `wrapper.auto_close` — carry the same triple when they belong to a contribution. The same
+  literals remain valid, unstamped, for serial Iterations.
 - **Scope separation.** A Lane contribution MUST NOT emit `wrapper.iteration.start` or
   `wrapper.iteration.end`; a serial Iteration keeps both and its positive `iter`.
 - **`wrapper.contribution.end` is the finalized Parallel row and the Strike transition.** Its

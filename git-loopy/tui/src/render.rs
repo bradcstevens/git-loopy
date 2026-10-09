@@ -1174,6 +1174,9 @@ fn draw_activity(
             kept -= 1;
         }
     }
+    if let Some(total) = activity.subagents {
+        title = format!("{} {total} subagents ", title.trim_end());
+    }
     let block = glyphs.block(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);

@@ -26,6 +26,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -124,6 +125,7 @@ def test_dashboard_insight_vocabulary_is_additive_schema_version_one() -> None:
         "skill_consultation",
         "cost",
         "routing",
+        "subagents",
     )
     assert events_module.WRAPPER_ISSUE_ACTIVATED == "wrapper.issue.activated"
     assert events_module.AGENT_OUTPUT == "agent.output"
@@ -1032,6 +1034,106 @@ def test_map_sdk_event_assistant_usage_returns_usage_tokens() -> None:
     assert out["model"] == "claude-opus-4.7-xhigh"
     assert out["input"] == 1000
     assert out["output"] == 200
+
+
+def test_map_sdk_event_subagent_lifecycle_preserves_reported_facts() -> None:
+    started = map_sdk_event(
+        _wrap_sdk(
+            SessionEventType.SUBAGENT_STARTED,
+            SimpleNamespace(
+                tool_call_id="call-1",
+                agent_name="explorer",
+                agent_display_name="Code explorer",
+                model="gpt-5.6-terra",
+            ),
+        )
+    )
+    assert started == {
+        "type": "subagent.started",
+        "tool_call_id": "call-1",
+        "agent_name": "explorer",
+        "agent_display_name": "Code explorer",
+        "model": "gpt-5.6-terra",
+    }
+
+    completed = map_sdk_event(
+        _wrap_sdk(
+            SessionEventType.SUBAGENT_COMPLETED,
+            SimpleNamespace(
+                tool_call_id="call-1",
+                agent_name="explorer",
+                agent_display_name="Code explorer",
+                model="gpt-5.6-terra",
+                duration=timedelta(seconds=12.5),
+                total_tokens=2345,
+                total_tool_calls=6,
+            ),
+        )
+    )
+    assert completed == {
+        "type": "subagent.completed",
+        "tool_call_id": "call-1",
+        "agent_name": "explorer",
+        "agent_display_name": "Code explorer",
+        "model": "gpt-5.6-terra",
+        "duration_seconds": 12.5,
+        "total_tokens": 2345,
+        "total_tool_calls": 6,
+    }
+
+    failed = map_sdk_event(
+        _wrap_sdk(
+            SessionEventType.SUBAGENT_FAILED,
+            SimpleNamespace(
+                tool_call_id="call-2",
+                agent_name="reviewer",
+                agent_display_name="Code reviewer",
+                model="gpt-5.5",
+                error="agent crashed",
+                duration=None,
+                total_tokens=None,
+                total_tool_calls=None,
+            ),
+        )
+    )
+    assert failed == {
+        "type": "subagent.failed",
+        "tool_call_id": "call-2",
+        "agent_name": "reviewer",
+        "agent_display_name": "Code reviewer",
+        "model": "gpt-5.5",
+        "error": "agent crashed",
+    }
+
+
+def test_map_sdk_event_subagent_selection_events_remain_unmapped() -> None:
+    for event_type in (
+        SessionEventType.SUBAGENT_SELECTED,
+        SessionEventType.SUBAGENT_DESELECTED,
+    ):
+        assert map_sdk_event(_wrap_sdk(event_type, SimpleNamespace())) is None
+
+
+def test_map_sdk_event_usage_carries_subagent_attribution_handles() -> None:
+    data = SimpleNamespace(
+        model="gpt-5.6-terra",
+        input_tokens=11,
+        output_tokens=7,
+        initiator="subagent",
+        parent_tool_call_id="call-1",
+        copilot_usage=None,
+        cost=None,
+        cache_read_tokens=None,
+        cache_write_tokens=None,
+        content_filter_triggered=None,
+        finish_reason=None,
+    )
+    out = map_sdk_event(_wrap_sdk(SessionEventType.ASSISTANT_USAGE, data))
+    assert out is not None
+    assert out["initiator"] == "subagent"
+    assert out["parent_tool_call_id"] == "call-1"
+    assert out["input"] == 11
+    assert out["output"] == 7
 
 
 def test_map_sdk_event_assistant_usage_carries_the_harness_billing() -> None:

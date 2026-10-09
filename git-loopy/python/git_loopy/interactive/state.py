@@ -188,6 +188,9 @@ _LANE_EVENTS = frozenset(
         _ASSISTANT_MESSAGE,
         _AGENT_OUTPUT,
         _USAGE_TOKENS,
+        _SUBAGENT_STARTED,
+        _SUBAGENT_COMPLETED,
+        _SUBAGENT_FAILED,
     }
 )
 
@@ -741,6 +744,14 @@ class LiveRunState:
         if lane_issue is not None and etype in _LANE_EVENTS:
             self._render_lane_event(str(etype), lane_issue, event, now)
             return
+        contribution_id = event.get("contribution_id")
+        if (
+            etype in {_SUBAGENT_STARTED, _SUBAGENT_COMPLETED, _SUBAGENT_FAILED}
+            and isinstance(contribution_id, str)
+            and (window := self._activity_contributions.get(contribution_id)) is not None
+        ):
+            self._render_lane_event(str(etype), window.issue, event, now)
+            return
         # Contribution-scoped accounting boundaries (issue #310). Under
         # **Rolling dispatch** there is no round: each **Lane contribution**
         # opens and closes its own pair, so these must touch that
@@ -918,6 +929,7 @@ class LiveRunState:
                         self.peak_context_window = snapshot
         elif etype in {_SUBAGENT_STARTED, _SUBAGENT_COMPLETED, _SUBAGENT_FAILED}:
             self._record_activity_subagent(str(etype), event)
+            self._record_event_line(_subagent_event_text(str(etype), event))
         elif etype == _CONTRIBUTION_WORK_FINISHED:
             issue = event.get("issue")
             if issue is not None:
@@ -1512,6 +1524,9 @@ class LiveRunState:
                     BillingSample.from_event(event),
                 )
                 entry.usage_observed = True
+        elif etype in {_SUBAGENT_STARTED, _SUBAGENT_COMPLETED, _SUBAGENT_FAILED}:
+            self._record_activity_subagent(etype, event)
+            self._emit_event_line(st, provider, _subagent_event_text(etype, event))
 
     # -- internals ----------------------------------------------------------
 
@@ -1700,17 +1715,24 @@ class LiveRunState:
         identity = event.get("tool_call_id")
         if not isinstance(identity, str) or not identity:
             return
+        contribution_id = event.get("contribution_id")
+        window = (
+            self._activity_contributions.get(contribution_id)
+            if isinstance(contribution_id, str)
+            else None
+        )
         issue = event.get("lane_issue")
-        if issue is None:
-            window = self._activity_serial
-        else:
-            key = self._normalize_ref(issue)
-            matches = [
-                current
-                for current in self.activity_windows()
-                if current.live and current.issue == key
-            ]
-            window = matches[-1] if matches else None
+        if window is None:
+            if issue is None:
+                window = self._activity_serial
+            else:
+                key = self._normalize_ref(issue)
+                matches = [
+                    current
+                    for current in self.activity_windows()
+                    if current.live and current.issue == key
+                ]
+                window = matches[-1] if matches else None
         if window is None or not window.live:
             return
         window.subagents_observed = True
@@ -2371,6 +2393,30 @@ def _log_tool_text(event: Mapping[str, Any]) -> str:
         return f"◇ skill {skill or '(unknown)'}"
     args = _compact_args(arguments)
     return f"» {tool_name}  {args}" if args else f"» {tool_name}"
+
+
+def _subagent_event_text(etype: str, event: Mapping[str, Any]) -> str:
+    name = event.get("agent_display_name") or event.get("agent_name") or "(unknown)"
+    model = event.get("model")
+    identity = f"{name} @ {model}" if isinstance(model, str) and model else str(name)
+    if etype == _SUBAGENT_STARTED:
+        return f"Subagent started: {identity}"
+    if etype == _SUBAGENT_FAILED:
+        error = event.get("error")
+        detail = f": {error}" if isinstance(error, str) and error else ""
+        return f"Subagent failed: {identity}{detail}"
+    details: list[str] = []
+    duration = event.get("duration_seconds")
+    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+        details.append(f"{duration:.2f}s")
+    total_tokens = event.get("total_tokens")
+    if isinstance(total_tokens, int) and not isinstance(total_tokens, bool):
+        details.append(f"{total_tokens} tokens")
+    total_tool_calls = event.get("total_tool_calls")
+    if isinstance(total_tool_calls, int) and not isinstance(total_tool_calls, bool):
+        details.append(f"{total_tool_calls} tool calls")
+    detail = f" ({', '.join(details)})" if details else ""
+    return f"Subagent completed: {identity}{detail}"
 
 
 def _log_commit_text(event: Mapping[str, Any]) -> str:

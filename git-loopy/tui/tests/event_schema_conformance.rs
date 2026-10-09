@@ -8,7 +8,7 @@
 //! Event type reduces to `EventPayload::Other` rather than becoming an
 //! unreadable line -- and must still produce a projected view at the end.
 
-use git_loopy_tui::{DashboardSession, IssueRef, RunInputs, Zone};
+use git_loopy_tui::{DashboardSession, Event, EventPayload, IssueRef, RunInputs, Zone};
 use serde_json::Value;
 
 /// Compiled in, so the suite pins the fixture in this checkout and the test
@@ -73,4 +73,81 @@ fn the_rust_core_folds_every_rolling_stream_case_obliging_it() {
         let view = session.view();
         serde_json::to_value(&view).expect("{id}: the folded view serializes");
     }
+}
+
+#[test]
+fn the_rust_core_decodes_and_renders_pinned_subagent_lifecycle_records() {
+    let fixture = fixture();
+    let mut session = DashboardSession::new(
+        RunInputs {
+            model: None,
+            reasoning_effort: None,
+        },
+        Zone::utc(),
+        IssueRef::number(42),
+    );
+    for case in fixture["serialization_cases"]
+        .as_array()
+        .expect("serialization_cases is a list")
+        .iter()
+        .filter(|case| {
+            case["event"]["type"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("subagent."))
+                || case["id"] == "usage-tokens-subagent-attribution"
+        })
+    {
+        let event = case["event"]
+            .as_object()
+            .expect("fixture Event is an object");
+        let kind = event["type"].as_str().expect("fixture Event has a type");
+        let line = case["jsonl"]
+            .as_str()
+            .expect("fixture has serialized JSONL");
+        let decoded = Event::from_jsonl_line(line).expect("fixture decodes as an Event");
+        match kind {
+            "subagent.started" | "subagent.completed" | "subagent.failed" => {
+                let EventPayload::SubagentLifecycle(lifecycle) = decoded.payload else {
+                    panic!("{kind} did not decode to its lifecycle payload");
+                };
+                assert_eq!(
+                    lifecycle.agent_display_name.as_deref(),
+                    event["agent_display_name"].as_str()
+                );
+                assert_eq!(lifecycle.model.as_deref(), event["model"].as_str());
+            }
+            "usage.tokens" => {
+                let EventPayload::UsageTokens(usage) = decoded.payload else {
+                    panic!("usage.tokens did not decode to its typed payload");
+                };
+                assert_eq!(usage.initiator.as_deref(), Some("subagent"));
+                assert_eq!(
+                    usage.parent_tool_call_id.as_deref(),
+                    Some("call-subagent-1")
+                );
+            }
+            _ => unreachable!("filtered to lifecycle and attribution fixtures"),
+        }
+        session.ingest(line);
+    }
+
+    let view = session.view();
+    let lines: Vec<_> = view
+        .dashboard
+        .activity
+        .lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect();
+    assert!(lines.iter().any(|line| line.contains("Subagent started:")));
+    assert!(lines.iter().any(|line| {
+        line.contains("Subagent completed:")
+            && line.contains("12.50s")
+            && line.contains("2345 tokens")
+            && line.contains("6 tool calls")
+    }));
+    assert!(lines
+        .iter()
+        .any(|line| line.contains("Subagent failed:") && line.contains("agent crashed")));
+    assert_eq!(session.diagnostics().unreadable_lines, 0);
 }

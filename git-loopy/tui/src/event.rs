@@ -315,6 +315,20 @@ pub(crate) struct ContributionScope {
 pub struct SubagentLifecycle {
     #[serde(default)]
     pub tool_call_id: Option<String>,
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    #[serde(default)]
+    pub agent_display_name: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    #[serde(default)]
+    pub total_tokens: Option<i64>,
+    #[serde(default)]
+    pub total_tool_calls: Option<i64>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// The Run-start payload: Release identity and per-Orchestrator capabilities.
@@ -943,6 +957,12 @@ pub struct UsageTokens {
     /// Cache-write tokens billed. Absent decodes as `None` (unknown).
     #[serde(default, deserialize_with = "lenient_i64")]
     pub cache_write: Option<i64>,
+    /// Harness-reported usage initiator, retained for future attribution.
+    #[serde(default)]
+    pub initiator: Option<String>,
+    /// Parent tool call for usage initiated by a Subagent.
+    #[serde(default)]
+    pub parent_tool_call_id: Option<String>,
 }
 
 /// One recorded commit.

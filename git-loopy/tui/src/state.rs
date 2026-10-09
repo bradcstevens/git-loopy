@@ -13,9 +13,9 @@ use crate::event::{
     AutoClosed, CommitRecorded, ContextWindowSample, ContributionEnd, ContributionIdentity, Event,
     EventPayload, ExecutionHostDeclaration, InsightCapabilities, IssueRef, IterationEnd,
     IterationIssue, IterationSummary, LaneSlot, Pickup, ReleaseAdvanced, RoutingDelivery,
-    RoutingDeliveryStatus, RoutingPrepared, RoutingResolved, StopRequested, ROUTE_ELECTED,
-    ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE, ROUTE_PREPARATION_STATIC,
-    ROUTE_PREPARATION_UNAVAILABLE, ROUTE_REVALIDATED,
+    RoutingDeliveryStatus, RoutingPrepared, RoutingResolved, StopRequested, SubagentLifecycle,
+    ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE,
+    ROUTE_PREPARATION_STATIC, ROUTE_PREPARATION_UNAVAILABLE, ROUTE_REVALIDATED,
 };
 use crate::timestamp::Timestamp;
 
@@ -924,6 +924,11 @@ impl DashboardState {
                     self.record_usage(usage);
                 }
             }
+            EventPayload::SubagentLifecycle(lifecycle) => self.append_log_block(
+                LOG_EVENT,
+                &subagent_lifecycle_text(&event.kind, lifecycle),
+                now,
+            ),
             EventPayload::CommitRecorded(commit) => {
                 self.append_log_block(LOG_EVENT, &commit_log_text(commit), now)
             }
@@ -1029,9 +1034,7 @@ impl DashboardState {
                     effective_lane_limit: turn.effective_lane_limit,
                 });
             }
-            EventPayload::Other
-            | EventPayload::SubagentLifecycle(_)
-            | EventPayload::PoolExcluded(_) => {}
+            EventPayload::Other | EventPayload::PoolExcluded(_) => {}
         }
     }
 
@@ -1102,6 +1105,12 @@ impl DashboardState {
             EventPayload::AgentOutput(output) => {
                 self.append_lane_log(lane, &output.kind, &output.text, now)
             }
+            EventPayload::SubagentLifecycle(lifecycle) => self.append_lane_log(
+                lane,
+                LOG_EVENT,
+                &subagent_lifecycle_text(&event.kind, lifecycle),
+                now,
+            ),
             EventPayload::CommitRecorded(commit) => {
                 self.append_lane_log(lane, LOG_EVENT, &commit_log_text(commit), now)
             }
@@ -1645,6 +1654,9 @@ fn is_lane_event(kind: &str) -> bool {
             | "assistant.message"
             | "agent.output"
             | "usage.tokens"
+            | "subagent.started"
+            | "subagent.completed"
+            | "subagent.failed"
     )
 }
 
@@ -1662,6 +1674,9 @@ fn is_contribution_stamped_event(kind: &str) -> bool {
             | "tool.result"
             | "usage.context_window"
             | "usage.tokens"
+            | "subagent.started"
+            | "subagent.completed"
+            | "subagent.failed"
             | "wrapper.auto_close"
             | "wrapper.checkpoint.recorded"
             | "wrapper.commit.recorded"
@@ -1683,6 +1698,44 @@ fn commit_log_text(commit: &CommitRecorded) -> String {
         text.push_str(subject.split('\n').next().unwrap_or(subject));
     }
     text
+}
+
+fn subagent_lifecycle_text(kind: &str, lifecycle: &SubagentLifecycle) -> String {
+    let name = lifecycle
+        .agent_display_name
+        .as_deref()
+        .or(lifecycle.agent_name.as_deref())
+        .unwrap_or("(unknown)");
+    let identity = lifecycle
+        .model
+        .as_deref()
+        .filter(|model| !model.is_empty())
+        .map_or_else(|| name.to_string(), |model| format!("{name} @ {model}"));
+    match kind {
+        "subagent.started" => format!("Subagent started: {identity}"),
+        "subagent.failed" => lifecycle.error.as_deref().map_or_else(
+            || format!("Subagent failed: {identity}"),
+            |error| format!("Subagent failed: {identity}: {error}"),
+        ),
+        _ => {
+            let mut details = Vec::new();
+            if let Some(duration) = lifecycle.duration_seconds {
+                details.push(format!("{duration:.2}s"));
+            }
+            if let Some(tokens) = lifecycle.total_tokens {
+                details.push(format!("{tokens} tokens"));
+            }
+            if let Some(calls) = lifecycle.total_tool_calls {
+                details.push(format!("{calls} tool calls"));
+            }
+            let detail = if details.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", details.join(", "))
+            };
+            format!("Subagent completed: {identity}{detail}")
+        }
+    }
 }
 
 fn auto_close_log_text(closure: &AutoClosed) -> String {

@@ -1003,6 +1003,7 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         # `defaulted_explicit_override` rather than silencing it -- so unlike
         # the card, the answer cannot differ between two Runs of it.
         "routing": True,
+        "subagents": True,
     }
     # #311 AC3: what this Orchestrator can *schedule*, declared alongside what
     # it can observe. `contribution_events` is true now that a contribution

@@ -359,6 +359,14 @@ fn activity_effort_readback_preserves_dynamic_null_static_null_and_absence() {
 #[test]
 fn subagent_counts_follow_observed_lifecycles_not_agent_names_or_billing() {
     let mut session = session();
+    ingest(
+        &mut session,
+        json!({
+            "type": "wrapper.run.start",
+            "insight_capabilities": {"subagents": true}
+        }),
+    );
+    assert!(render(&session).contains("0 subagents"));
     lane(&mut session, "lane-1", 605, "implementation", "gpt-5.6-sol");
     lane(&mut session, "lane-2", 606, "docs", "gpt-5-mini");
     for id in ["call-1", "call-2", "call-2"] {
@@ -366,24 +374,34 @@ fn subagent_counts_follow_observed_lifecycles_not_agent_names_or_billing() {
             &mut session,
             json!({
                 "type": "subagent.started", "lane_issue": 605,
-                "tool_call_id": id, "agent_name": "research"
+                "tool_call_id": id, "agent_name": "research",
+                "agent_display_name": "Research agent", "model": "gpt-5.6-sol"
             }),
         );
     }
     assert!(render(&session).contains("sub 2"));
+    assert!(render(&session).contains("2 subagents"));
     ingest(
         &mut session,
         json!({
             "type": "subagent.completed", "lane_issue": 605,
-            "tool_call_id": "call-1", "total_tokens": 99999
+            "tool_call_id": "call-1",
+            "agent_name": "research",
+            "agent_display_name": "Research agent",
+            "model": "gpt-5.6-sol",
+            "duration_seconds": 12.5,
+            "total_tokens": 99999,
+            "total_tool_calls": 6
         }),
     );
     let view = serde_json::to_value(session.view()).unwrap();
     assert_eq!(view["dashboard"]["activity"]["windows"][0]["subagents"], 1);
-    assert_eq!(
-        view["dashboard"]["activity"]["windows"][1]["subagents"],
-        Value::Null
-    );
+    assert!(view["dashboard"]["activity"]["windows"][0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line["text"].as_str().unwrap().contains("99999 tokens")));
+    assert_eq!(view["dashboard"]["activity"]["windows"][1]["subagents"], 0);
     assert_eq!(
         view["dashboard"]["queue"]["rows"][0]["tokens_in"],
         Value::Null
@@ -391,10 +409,23 @@ fn subagent_counts_follow_observed_lifecycles_not_agent_names_or_billing() {
     ingest(
         &mut session,
         json!({
-            "type": "subagent.failed", "lane_issue": 605, "tool_call_id": "call-2"
+            "type": "subagent.failed",
+            "lane_issue": 605,
+            "tool_call_id": "call-2",
+            "agent_name": "research",
+            "agent_display_name": "Research agent",
+            "model": "gpt-5.6-sol",
+            "error": "timed out"
         }),
     );
     assert!(render(&session).contains("sub 0"));
+    assert!(render(&session).contains("0 subagents"));
+    let view = serde_json::to_value(session.view()).unwrap();
+    assert!(view["dashboard"]["activity"]["windows"][0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line["text"].as_str().unwrap().contains("timed out")));
 }
 
 #[test]
