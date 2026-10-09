@@ -1629,8 +1629,12 @@ _Avoid_: worker, thread.
 
 **Lane workspace**:
 The private worktree one **Lane** works its issue in. It lives inside the clone's own git
-directory, under the **Reserved branch namespace**'s subtree and keyed by run and issue, so
-it is never *content* in any working tree: no status, staging, or clean operation in the
+directory, under the **Reserved branch namespace**'s subtree and keyed by Run, setup attempt
+and issue: the first setup uses `<run_id>/issue-<N>`, and later setups use
+`<run_id>/attempt-<A>/issue-<N>` (A starts at 2). Setup attempts are not Strikes: a
+failed setup spends no Strike but still needs a fresh namespace. The nesting preserves an
+earlier attempt's **Breadcrumb**, rather than resuming or overwriting it. A workspace
+is never *content* in any working tree: no status, staging, or clean operation in the
 repository can see, capture, or destroy a live workspace, and no ignore entry is needed to
 keep it that way. It is per-clone, so two clones never share one, and it is removed with
 the clone. **Ephemeral by policy**: it exists only while its **Lane contribution** is in
@@ -1767,8 +1771,11 @@ _Avoid_: auto-resolution, resolution session, retry, rescue.
 How a **Lane contribution** ends when **Integration** cannot publish it — usually because its
 **Recovery** was exhausted, otherwise because no **Integration stage** could be cut for it or
 its publication could not be made: the contribution finishes unpublished, its Lane branch is
-kept as a **Breadcrumb**, and the Run latches serial demand for the issue, which may never take
-a second **Lane** in the same Run. It is not a **Serial fallback**, which is a serial
+kept as a **Breadcrumb**, and the Run latches serial demand for the issue. Lane ownership
+is retained until a charged attempt finalizes, or a later serial **Iteration** charges a
+**Strike**; only then may an issue below its per-Run Strike budget take another Lane
+(ADR-0070). An issue at its budget stays **skipped** for the Run. It is not a
+**Serial fallback**, which is a serial
 **Iteration** worked because no **Parallel-safe** candidate was eligible.
 The wire nevertheless carries it as the `serial_fallback` reason of
 `wrapper.contribution.end` and `wrapper.serial.requested`, a literal kept for

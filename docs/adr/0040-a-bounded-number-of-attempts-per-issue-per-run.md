@@ -110,7 +110,10 @@ defeated by a *serial* Iteration of a Parallel Run — a serial fallback taken w
 concurrency is throttled to nothing works whatever sits at the Pool's head — was never in the
 guard, and nothing else would stop a Lane reserving it the moment concurrency recovered. So the
 Lane candidate predicate is `is_parallel_safe AND not skipped`, and the scheduler composes its
-own guard onto that, unchanged.
+own ownership guard onto that. Under ADR-0070's #703 amendment, a finalized
+charged attempt releases that ownership; a later serial charge can release it
+too. Releasing a skipped issue does not make it eligible: the separate lifecycle
+predicate still refuses it.
 
 That half is a candidate filter rather than a **Pickup skip**, which is the one place the two
 seams are not symmetric, and the asymmetry is forced: the Lane path's only refusal shape releases

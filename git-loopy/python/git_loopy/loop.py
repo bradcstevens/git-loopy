@@ -1446,11 +1446,13 @@ class _Loop:
         #: The cause the announced rung was latched for.
         self._wind_down_cause: str | None = None
         self._active_agent_task: asyncio.Task[object] | None = None
+        # A serial Strike releases retained Lane ownership, not the issue's
+        # lifecycle verdict; Pickup still refuses an issue at its budget.
+        self._release_lane_ownership: Callable[[int | str], None] | None = None
         # The last Iteration's **Session outcome** (#403). Held as the record
         # rather than as the line it prints, because the per-issue attempt
         # lifecycle is keyed off the ending; recording it is all that happens
         # here, and no Run-level reaction reads it yet.
-        self._release_lane_ownership: Callable[[int | str], None] | None = None
         self._last_session_outcome: (
             session_outcome_module.SessionOutcomeRecord | None
         ) = None
@@ -4711,8 +4713,8 @@ class _ParallelLoop:
         reserved candidate over releases its reservation and leaves it eligible,
         so a defeated issue would be reserved, skipped and released once per
         turn for the rest of the Run. Refusing it *candidacy* says the same
-        thing once, and the serial Pickup that defeated it has already left the
-        record.
+        thing once; either a serial Pickup skip or the finalized Lane contribution
+        supplies the evidence for the issue's exhausted budget.
 
         Composed here rather than written into the scheduler's own collision
         guard (:attr:`~git_loopy.rolling_scheduler.RollingScheduler._worked`):
@@ -4723,12 +4725,11 @@ class _ParallelLoop:
         predicate it is handed, so both hold.
 
         The guard alone is insufficient: a finalized charged attempt releases
-        it even when the issue is skipped. Nor does it cover a **Parallel-safe**
-        issue defeated by a *serial*
-        Iteration of a Parallel Run (a serial fallback taken while Lane
-        concurrency is throttled to nothing works whatever sits at the Pool's
-        head) was never in the guard, and nothing else would stop a Lane
-        reserving it once concurrency recovered.
+        it even when the issue is skipped. A **Parallel-safe** issue skipped by a
+        serial Iteration may never have held Lane ownership at all: serial
+        fallback while Lane concurrency is throttled works whatever sits at the
+        Pool's head. Without the lifecycle predicate, nothing would stop a Lane
+        reserving that issue once concurrency recovered.
         """
         return (
             candidate.ref not in self._rolling_refused
@@ -5423,7 +5424,7 @@ class _ParallelLoop:
         answers ``None`` for it, so nothing is emitted.
 
         Costs no tracker read: the counts come off the **Pool** membership
-        cache and the Run-scoped worked guard the scheduler already holds, so
+        cache and the scheduler's history of issues ever Laned this Run, so
         this slice adds visibility and changes no dispatch decision.
         """
         fallback = scheduler.serial_fallback()

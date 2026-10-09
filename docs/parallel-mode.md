@@ -82,6 +82,12 @@ dispatch is also not a Strike: its issue stays eligible and repeated refusals
 raise the existing host/setup **Pressure signal**, which can contract the
 effective Lane limit.
 
+The first setup hands the host the Run's `<run_id>`; each later setup of that
+issue uses `<run_id>-attempt-<A>` (A starts at 2). This host-facing identity keeps
+dispatch tokens, artifacts and remote contribution branches distinct, and uses
+hyphens because Actions artifact names cannot contain `/`. It is not a new Run:
+ingested Events always carry the owning Run's original `run_id`.
+
 ## Eligibility is yours to assert: `parallel-safe`
 
 The runner **never infers** that two issues can be worked at the same time. An
@@ -183,8 +189,11 @@ git directory:
 ```
 
 A retry Lane of the same issue (ADR-0070) lives under
-`git-loopy/<run_id>/attempt-<N>/…` instead, so an earlier attempt's branch and
-workspace are preserved.
+`git-loopy/<run_id>/attempt-<A>/…` instead, with its stage beneath
+`attempt-<A>/integrate/`. A counts setups of that issue, starting at 2 for the
+second setup, not Strikes: a failed setup spends no Strike but still advances
+the namespace. Earlier unlanded branches are preserved; this is fresh work,
+not a resumption of the earlier workspace.
 
 That location is chosen so a live Lane cannot get in the way of the very
 commands the agents in it are running. The git directory is not *content* in any
@@ -202,7 +211,7 @@ down as soon as its contribution finishes.
 **`git-loopy/` is a reserved branch namespace.** Every branch the runner cuts
 for itself lives under it — `git-loopy/<run_id>/issue-<N>` for a Lane and
 `git-loopy/<run_id>/integrate/issue-<N>` for its stage, with a retry attempt's
-branches under `git-loopy/<run_id>/attempt-<N>/` — and it is the *only*
+branches under `git-loopy/<run_id>/attempt-<A>/` — and it is the *only*
 thing git-loopy will ever use to decide that a workspace is its own to reclaim.
 Don't put your own branches there.
 

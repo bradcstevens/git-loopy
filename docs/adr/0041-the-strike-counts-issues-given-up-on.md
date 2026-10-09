@@ -84,8 +84,10 @@ turn at which the answer could differ.
 ## What this does not do
 
 *Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md) (#703): rolling dispatch now
-gives a `retrying` issue a new Lane once its earlier contribution has charged a Strike, so the gap
-below is closed.*
+gives a `retrying` issue a new Lane once its earlier charged contribution has finalized,
+or a later serial Iteration charges a Strike and releases retained ownership. A contribution
+still parked, admitted or recovering holds the issue regardless of its Strike count.
+The gap below is closed.*
 
 When this ADR was written it did not narrow the gap between a Lane-stalled issue and a second
 attempt. Rolling dispatch gave an issue one Lane per Run, so a **Parallel-safe** issue whose Lane

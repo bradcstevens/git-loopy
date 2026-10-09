@@ -8263,17 +8263,15 @@ def test_a_lane_binding_publishes_the_same_routing_record_serial_does(
     assert bound["lifecycle_position"] == "fresh"
 
 
-def test_a_lane_that_stalled_escalates_at_its_next_pickup(
+def test_a_lane_that_stalled_escalates_at_its_next_serial_pickup(
     tmp_path, monkeypatch
 ) -> None:
     """The **Escalation rung** is per issue, not per mode (#408).
 
-    A silent no-progress **Lane** is never auto-resolved: its merge is
-    already-up-to-date, the issue is barred from being re-Laned, and only a
-    later serial round takes it again. So a ledger that only listened to serial
-    **Iterations** would put the evidence on the side of the mode boundary that
-    cannot act on it — the Lane learns the pair was too cheap and the Pickup
-    that could do something about it never hears.
+    A silent no-progress Lane charges a Strike. Once its contribution finalizes,
+    serial demand in this mixed Pool makes the next Pickup serial; it hears that
+    ending and elects the rung. A ledger that listened only to serial Iterations
+    would lose the evidence. This interleaving does not prohibit a retry Lane.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -8316,23 +8314,20 @@ def test_a_lane_that_stalled_escalates_at_its_next_pickup(
         (42, "claude-sonnet-5", "defaulted_no_task_type_label"),
         (42, "claude-opus-5", "escalated"),
     ]
+    assert sum(
+        e["type"] == "wrapper.contribution.start" for e in _logged_events(tmp_path)
+    ) == 1
 
 
-def test_a_lane_stall_and_a_serial_stall_defeat_one_issue_between_them(
+def test_a_lane_stall_and_a_serial_stall_skip_one_issue_at_its_strike_budget(
     tmp_path, monkeypatch
 ) -> None:
-    """The **Attempt lifecycle** is per issue, not per mode either (#412).
+    """Lane and serial stalls charge the same issue's Strike budget (#703).
 
-    A **Lane** stall and the serial stall that follows it are two Strikes on
-    one issue, and the ledger that counts them is the one ledger both **Pickup**
-    seams feed. A per-mode count would give every issue its Strikes *per mode*
-    and defeat nothing on the path that matters.
-
-    The Parallel scheduler's own collision guard is untouched by this and must
-    stay so: it latches at session start to stop one issue taking two **Lanes**
-    at once, which is a worktree-and-re-work question. The skip here is a
-    lifecycle question, and the serial Pickup — the one seam the guard does not
-    cover — is where it is asked.
+    Serial demand in this mixed Pool grants a serial turn after the Lane drains.
+    Both endings feed one ledger; ownership release does not refund either
+    Strike. The next serial Pickup refuses a third attempt before binding the
+    Serial-required issue.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -8379,32 +8374,18 @@ def test_a_lane_stall_and_a_serial_stall_defeat_one_issue_between_them(
         ("wrapper.pickup.skipped", 42),
         ("wrapper.pickup.bound", 43),
     ]
+    assert sum(
+        e["type"] == "wrapper.contribution.start" for e in _logged_events(tmp_path)
+    ) == 1
 
 
-def test_a_defeated_issue_is_not_a_lane_candidate(tmp_path, monkeypatch) -> None:
-    """A **Lane** Pickup is a Pickup, so the **Skip** has to reach it too (#412).
+def test_an_issue_at_its_strike_budget_is_not_a_lane_candidate(tmp_path, monkeypatch) -> None:
+    """The lifecycle refuses Lane candidacy independently of ownership (#703).
 
-    The Parallel scheduler's collision guard latches at session *start*, so
-    every issue a Lane defeated is already behind it and could not take a
-    second Lane anyway. The gap it does not cover is the other order: an issue
-    defeated by a *serial* Iteration of a Parallel Run — a serial fallback
-    while Lane concurrency is throttled to nothing works whatever sits at the
-    Pool's head, and a **Parallel-safe** issue defeated there was never in the
-    guard. Nothing would then stop a Lane reserving it the moment concurrency
-    recovered.
-
-    So the filter narrows the *Lane candidate list* as well, as a second and
-    separate predicate composed alongside the guard rather than as an entry
-    written into it: the guard answers "is one issue about to take two Lanes",
-    which is a worktree question with its own lifetime, and a lifecycle answer
-    smuggled into it would be indistinguishable from a collision afterwards.
-
-    It is a candidate filter and not a **Pickup skip** for the reason the Lane
-    path has no other refusal shape: passing a candidate over releases its
-    reservation, and a defeated issue released is re-reserved on the next turn
-    — a skip Event per turn, forever. Refusing it a reservation costs one
-    predicate and says the same thing once, where the serial Pickup that
-    defeated it already left the record.
+    A serial charge can skip an issue that has never held a Lane, and releasing
+    a finalized charged Lane must not admit an issue at its budget either.
+    This predicate refuses reservation while retaining membership, so terminal
+    classification distinguishes skipped work from an empty Pool.
     """
     fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
     built: list[loop_module._ParallelLoop] = []
@@ -8457,8 +8438,8 @@ def test_a_blocked_issue_stops_being_a_lane_candidate_but_stays_cached(
     *candidacy* instead — said once, rather than reserved, skipped and released
     once per scheduler turn for the rest of the Run.
 
-    **Blocked** is refused at the same seam but not by the same predicate, and
-    the difference is which of the two the cache keeps. A defeated issue can
+    **Blocked** is refused at the same seam but not by the same predicate.
+    Both remain cached: an issue at its Strike budget can
     never become eligible again inside this Run; a blocked one clears itself the
     moment its last blocker closes, with nobody touching the issue. So readiness
     narrows ``eligible`` and leaves ``cacheable`` alone, and the next

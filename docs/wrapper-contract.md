@@ -1277,6 +1277,11 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   contribution is admitted to **Integration** — a record identifying only its Lane becomes
   unattributable as soon as the next contribution starts there. Consumers MUST NOT rely on a
   mutable Lane→issue lookup.
+  A retry setup uses a distinct workspace namespace `<run_id>/attempt-<A>` and
+  host-facing identity `<run_id>-attempt-<A>` (A counts setups of that issue,
+  starting at 2, not Strikes). Neither creates a new Run. Ingested remote Events
+  MUST be stamped with the owning Run's original envelope `run_id`, not the
+  host-facing attempt identity; the contribution triple distinguishes their work.
 - **Stamped existing records.** A Lane's ordinary records — `assistant.*`, `tool.*`,
   `usage.tokens`, `usage.context_window`, `agent.output`, `wrapper.commit.recorded`,
   `wrapper.checkpoint.recorded`, `wrapper.push.recorded`, `wrapper.auto_close` — carry the same triple when they belong to

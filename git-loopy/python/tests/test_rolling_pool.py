@@ -1253,37 +1253,38 @@ class TestLanesWorkOldestFirst:
         assert pool.candidate_refs == (7, 31)
         assert pool.available_count == 2
 
-    def test_a_worked_issue_is_still_never_taken_twice(self) -> None:
-        """The Run-scoped worked guard composes into ``eligible`` and is order-blind.
+    def test_an_issue_with_retained_ownership_is_not_readmitted_on_refresh(self) -> None:
+        """An ownership guard composes into both predicates and is order-blind.
 
         The second half is what matters: issue 7 is still open, so the *next*
         membership refresh still lists it, and ``_reconcile`` must decline to
-        re-admit it. Asserting only that the emptied cache hands back ``None``
-        would pass without the guard existing at all.
+        re-admit it while ownership is retained. Releasing ownership and deciding
+        whether a retry is owed belong to the scheduler and lifecycle, not this
+        Pool-level ordering test.
         """
         from git_loopy.sources import GitHubIssueSource
         from tests.fakes import FakeGitHubClient
 
-        worked: set[int | str] = set()
+        owned: set[int | str] = set()
         gh = FakeGitHubClient(
             issues=[
                 _issue(7, "2026-01-01T00:00:00Z"),
                 _issue(19, "2026-03-01T00:00:00Z"),
             ]
         )
-        def unworked(candidate: PoolCandidate) -> bool:
-            return "parallel-safe" in candidate.labels and candidate.ref not in worked
+        def unclaimed(candidate: PoolCandidate) -> bool:
+            return "parallel-safe" in candidate.labels and candidate.ref not in owned
 
         pool = _pool(
             GitHubIssueSource(_silent_logger(), gh=gh),
-            eligible=unworked,
-            cacheable=unworked,
+            eligible=unclaimed,
+            cacheable=unclaimed,
         )
         pool.start()
 
         first = pool.take().item
         assert first is not None and first.ref == 7
-        worked.add(first.ref)
+        owned.add(first.ref)
 
         pool.confirm_empty()  # an authoritative refresh that still lists #7
 
