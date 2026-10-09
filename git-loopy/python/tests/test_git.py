@@ -859,6 +859,59 @@ def test_push_raises_without_upstream(tmp_path: Path) -> None:
         SubprocessGitClient(tmp_path).push()
 
 
+def test_upstream_is_absent_without_tracking_even_with_a_remote(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    _commit(tmp_path, "init")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "remote", "add", "origin", "unreachable"],
+        check=True, capture_output=True,
+    )
+    assert SubprocessGitClient(tmp_path).upstream() is None
+
+
+def test_configured_upstream_survives_a_missing_tracking_ref(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    _commit(tmp_path, "init")
+    for key, value in (
+        ("remote.origin.url", "unreachable"),
+        ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
+        ("branch.main.remote", "origin"),
+        ("branch.main.merge", "refs/heads/different"),
+    ):
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", key, value],
+            check=True, capture_output=True,
+        )
+    assert SubprocessGitClient(tmp_path).upstream() == ("origin", "refs/heads/different")
+
+
+def test_explicit_upstream_push_ignores_push_default_and_push_remote(tmp_path: Path) -> None:
+    remote, work = tmp_path / "origin.git", tmp_path / "work"
+    work.mkdir()
+    _init_bare(remote)
+    _init_repo(work)
+    _commit(work, "init")
+    _wire_upstream(work, remote)
+    for key, value in (
+        ("push.default", "nothing"),
+        ("branch.main.pushRemote", "unreachable"),
+        ("remote.origin.push", "HEAD:refs/heads/wrong"),
+    ):
+        subprocess.run(
+            ["git", "-C", str(work), "config", key, value],
+            check=True, capture_output=True,
+        )
+    local_head = _commit(work, "published")
+    client = SubprocessGitClient(work)
+    assert client.upstream() == ("origin", "refs/heads/main")
+    client.push(upstream=client.upstream())
+    refs = subprocess.run(
+        ["git", "-C", str(work), "ls-remote", "origin", "refs/heads/*"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert refs == f"{local_head}\trefs/heads/main"
+
+
 # --------------------------------------------------------------------------- #
 # GitClient conformance + Checkpoint-exclusion (the seam contract)             #
 # --------------------------------------------------------------------------- #
