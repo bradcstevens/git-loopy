@@ -8,6 +8,7 @@ fetch it again. Saved Config needs explicit migration authority.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Mapping
 
@@ -153,6 +154,7 @@ async def resolve_run_routing_preflight(
     ] | None = None,
     warn: Callable[[str], None] | None = None,
     host_capabilities: HostCapabilityReport | None = None,
+    refresh_roster: bool = False,
 ) -> RunRoutingPreflight:
     """Resolve authorization, Static settings and live Dynamic readiness.
 
@@ -171,7 +173,15 @@ async def resolve_run_routing_preflight(
         and host_capabilities.placement == config.execution_host
         else None
     )
+
+    async def read_capabilities() -> HarnessCapabilities | None:
+        if capabilities_fetch is not None:
+            return await capabilities_fetch()
+        return await refresh_harness_capabilities(warn=warn)
+
     if config.route_policy is RoutePolicy.UNSELECTED:
+        if refresh_roster:
+            await read_capabilities()
         return RunRoutingPreflight()
 
     prerequisites = None
@@ -203,13 +213,44 @@ async def resolve_run_routing_preflight(
             )
 
     async def live_capabilities() -> FreshHarnessCapabilities | None:
-        if harness_evidence_fetch is not None:
-            return await harness_evidence_fetch()
-        return await refresh_harness_evidence(warn=warn)
+        async def fetch() -> FreshHarnessCapabilities | None:
+            if harness_evidence_fetch is not None:
+                return await harness_evidence_fetch()
+            return await refresh_harness_evidence(warn=warn)
+
+        if ledger is None:
+            return await fetch()
+        remaining = ledger.remaining_seconds()
+        if remaining <= 0:
+            return None
+        try:
+            return await asyncio.wait_for(fetch(), timeout=remaining)
+        except TimeoutError:
+            return None
 
     routes = _configured_static_routes(config)
-    static_listing: FreshHarnessCapabilities | None = None
+    preflight_listing: FreshHarnessCapabilities | None = None
     capabilities: HarnessCapabilities | None = None
+    listing_refreshed = False
+
+    async def read_preflight_listing() -> FreshHarnessCapabilities | None:
+        nonlocal preflight_listing, capabilities, listing_refreshed
+        if not listing_refreshed:
+            preflight_listing = await live_capabilities()
+            capabilities = (
+                preflight_listing.capabilities
+                if preflight_listing is not None
+                else None
+            )
+            listing_refreshed = True
+        return preflight_listing
+
+    if (
+        refresh_roster
+        and config.route_policy is RoutePolicy.DYNAMIC
+        and not config.routing_suppressed
+    ):
+        await read_preflight_listing()
     recorded_host = (
         remote_capabilities
         if config.execution_host != LOCAL_EXECUTION_HOST_PLACEMENT
@@ -228,16 +269,10 @@ async def resolve_run_routing_preflight(
                 )
     if routes:
         if prerequisites is not None:
-            static_listing = await live_capabilities()
-            capabilities = (
-                static_listing.capabilities if static_listing is not None else None
-            )
-        else:
-            capabilities = (
-                await refresh_harness_capabilities(warn=warn)
-                if capabilities_fetch is None
-                else await capabilities_fetch()
-            )
+            await read_preflight_listing()
+        elif not listing_refreshed:
+            capabilities = await read_capabilities()
+            listing_refreshed = True
         for name, route in routes:
             try:
                 validate_static_route(route, capabilities)
@@ -253,10 +288,12 @@ async def resolve_run_routing_preflight(
                     )
                 )
     if prerequisites is None:
+        if refresh_roster and not listing_refreshed:
+            await read_capabilities()
         return RunRoutingPreflight(
             dynamic_refusal=dynamic_refusal,
             admission_ledger=ledger,
-            capabilities=capabilities,
+            capabilities=capabilities if routes else None,
             host_capabilities=recorded_host,
         )
     assert ledger is not None
@@ -266,7 +303,7 @@ async def resolve_run_routing_preflight(
 
     async def readiness_capabilities() -> FreshHarnessCapabilities | None:
         # Reuse only within this preflight. Proposal and Pickup read afresh.
-        return static_listing if routes else await live_capabilities()
+        return await read_preflight_listing()
 
     inputs = await RoutingLiveRead(
         evidence_fetch=source.fetch,
@@ -284,7 +321,7 @@ async def resolve_run_routing_preflight(
             if isinstance(inputs, RoutingUnavailable)
             else None
         ),
-        capabilities=capabilities,
+        capabilities=capabilities if routes else None,
         host_capabilities=recorded_host,
     )
 

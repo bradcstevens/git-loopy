@@ -19,6 +19,7 @@ import pytest
 
 from git_loopy import roster_cache
 from git_loopy.config import MODEL_REASONING_EFFORTS
+from git_loopy.dynamic_route import refresh_harness_evidence
 from git_loopy.static_route import (
     HarnessCapabilities,
     StaticRoute,
@@ -88,21 +89,17 @@ def test_an_observed_model_absent_from_the_fixture_becomes_supported(
     assert OFF_FIXTURE_MODEL in roster_cache.supported_models()
 
 
-def test_observation_adds_and_never_removes_compatibility_rows(
+def test_live_observation_is_the_supported_roster_when_present(
     config_home: Path,
 ) -> None:
-    """Union, not replacement.
-
-    ADR-0019 retains account-unlisted compatibility rows so that saved Config
-    keeps resolving. A one-model listing must not delete twenty-five of them.
-    """
+    """The current harness listing wins; the fixture is only a fallback."""
     roster_cache.record_observed_roster(
         HarnessCapabilities.from_listing([_Model(OFF_FIXTURE_MODEL)])
     )
 
     supported = roster_cache.supported_models()
-    assert frozenset(MODEL_REASONING_EFFORTS) <= supported
-    assert supported == frozenset(MODEL_REASONING_EFFORTS) | {OFF_FIXTURE_MODEL}
+    assert supported == {OFF_FIXTURE_MODEL}
+    assert not (frozenset(MODEL_REASONING_EFFORTS) <= supported)
 
 
 def test_the_refresh_that_verifies_a_route_is_what_records_the_roster(
@@ -139,17 +136,32 @@ def test_a_refresh_that_fails_records_nothing_and_keeps_the_last_answer(
     assert roster_cache.observed_models() == {OFF_FIXTURE_MODEL}
 
 
-def test_an_empty_listing_never_erases_the_remembered_roster(
+def test_an_empty_listing_replaces_the_remembered_roster(
     config_home: Path,
 ) -> None:
-    """An account that lists nothing is not evidence that nothing exists."""
+    """A successful empty answer is authoritative, not a failed read."""
     roster_cache.record_observed_roster(
         HarnessCapabilities.from_listing([_Model(OFF_FIXTURE_MODEL)])
     )
 
     roster_cache.record_observed_roster(HarnessCapabilities.from_listing([]))
 
-    assert roster_cache.observed_models() == {OFF_FIXTURE_MODEL}
+    assert roster_cache.observed_models() == frozenset()
+    assert roster_cache.supported_models() == frozenset()
+
+
+def test_the_dynamic_refresh_also_records_the_user_roster(
+    config_home: Path,
+) -> None:
+    """Dynamic routing's richer listing is still the Run's roster refresh."""
+
+    async def fetch() -> list[_Model]:
+        return [_Model(OFF_FIXTURE_MODEL)]
+
+    evidence = asyncio.run(refresh_harness_evidence(fetch=fetch))
+
+    assert evidence is not None
+    assert roster_cache.supported_models() == {OFF_FIXTURE_MODEL}
 
 
 @pytest.mark.parametrize(

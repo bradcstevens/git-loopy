@@ -1110,8 +1110,8 @@ async def _refresh_harness_capabilities(
     A function here rather than a call into
     :mod:`git_loopy.static_route` inline, on the discipline ``_make_client`` /
     ``_make_git_client`` already keep: the one place a Run reaches the network
-    for capabilities is named, so an offline suite replaces it and a reader can
-    see at a glance that an **unselected** policy never calls it at all.
+    for capabilities is named, so an offline suite replaces it and every Run
+    refreshes the operator's available-model roster through the same seam.
     """
     return await refresh_harness_capabilities(warn=warn)
 
@@ -7929,6 +7929,7 @@ async def run(
                 )
             ),
             host_capabilities=report,
+            refresh_roster=True,
         )
         if routing_preflight.refusal is not None:
             print(f"git-loopy: {routing_preflight.refusal}", file=sys.stderr)
@@ -8088,8 +8089,9 @@ async def run(
     # A selected route is verified against the authenticated harness *here*:
     # after the host is known to be usable and before a single session is
     # opened, so an unsupported or unverifiable selection costs no work at all
-    # (#560, #561, ADR-0057). A Run that selected no policy never reaches the
-    # network for it.
+    # (#560, #561, ADR-0057). An unselected Run still performs this read once:
+    # it refreshes the operator's available-model roster without making that
+    # advisory observation a route gate.
     if routing_preflight is None:
         routing_preflight = await resolve_run_routing_preflight(
             config,
@@ -8101,6 +8103,7 @@ async def run(
             ),
             harness_evidence_fetch=lambda: _fetch_harness_evidence(warn=diag.warning),
             host_capabilities=report,
+            refresh_roster=True,
         )
     if routing_preflight.refusal is not None:
         print(f"git-loopy: {routing_preflight.refusal}", file=sys.stderr)

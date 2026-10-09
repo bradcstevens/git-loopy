@@ -14,14 +14,11 @@ with no network, no credentials, and no spawned CLI. Making them live would put
 a round trip behind ``--help``. So the kit records what it observed the last time
 it legitimately talked to the harness, and the advisory surfaces read that.
 
-**Why the answer is a union, never a replacement.** ADR-0019's SDK 1.0.14 record
-deliberately retains seven account-unlisted compatibility rows so that existing
-saved Config keeps resolving. Replacing the built-in roster with one account's
-listing would delete exactly those rows and start warning about configurations
-that have always worked. Union only ever *adds* models the operator's harness
-actually offered, which is the whole of what "support the roster of the harness
-you are running" requires, and it introduces no capability gate for a model
-nobody observed.
+**Why the live listing wins.** A Run should reflect the actual models the current
+operator's harness exposes on this machine. If a fresh ``models.list`` succeeds,
+that answer becomes the supported set for the advisory surfaces; the built-in
+fixture remains only a safe fallback when the live listing is unavailable and no
+valid cached observation exists.
 
 The cache is advisory in the strict sense: it feeds typo-catching warnings, never
 a refusal. ``git_loopy.static_route`` continues to refuse an unlisted model from
@@ -75,7 +72,7 @@ def record_observed_roster(
     """
     try:
         models = getattr(capabilities, "models", None)
-        if not models:
+        if models is None:
             return
         document: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
@@ -106,9 +103,18 @@ def observed_models(env: Mapping[str, str] | None = None) -> frozenset[str]:
     """The models the last observed harness listing offered, or an empty set.
 
     Every failure — absent, unreadable, malformed, or written by a future schema
-    — answers "nothing was observed", which degrades to the built-in roster
-    rather than to a wrong answer.
+    — answers an empty set. :func:`supported_models` retains the internal
+    distinction between that failure and a successful empty listing so only the
+    former falls back to the built-in roster.
     """
+    observed = _read_observed_models(env)
+    return frozenset() if observed is None else observed
+
+
+def _read_observed_models(
+    env: Mapping[str, str] | None = None,
+) -> frozenset[str] | None:
+    """Read a valid observation, distinguishing an empty roster from no cache."""
     try:
         document = json.loads(roster_cache_path(env).read_text(encoding="utf-8"))
     except Exception:
@@ -116,24 +122,27 @@ def observed_models(env: Mapping[str, str] | None = None) -> frozenset[str]:
         # beyond OSError (RuntimeError from `Path.home()` with no HOME), and an
         # unreadable advisory cache must degrade to the built-in roster rather
         # than take down whatever asked whether a model was known.
-        return frozenset()
+        return None
     if not isinstance(document, dict):
-        return frozenset()
+        return None
     if document.get("schema_version") != SCHEMA_VERSION:
-        return frozenset()
+        return None
     models = document.get("models")
     if not isinstance(models, list):
-        return frozenset()
+        return None
     return frozenset(model for model in models if isinstance(model, str) and model)
 
 
 def supported_models(env: Mapping[str, str] | None = None) -> frozenset[str]:
     """The model ids this kit treats as known, on this operator's harness.
 
-    The built-in roster (:data:`~git_loopy.config.MODEL_REASONING_EFFORTS`) plus
-    whatever the operator's own harness was last seen to offer. A newer CLI than
-    the one the fixture was stamped against therefore stops producing "not in the
-    kit's supported set" warnings for models it genuinely serves, without any
-    fixture edit and without claiming effort capability nobody measured.
+    When a fresh live listing was observed, it is the authoritative roster for
+    this operator. The built-in fixture remains as the fallback only when no live
+    observation exists yet, so that offline and unauthenticated invocations still
+    behave predictably without claiming support for models the current harness is
+    not actually offering.
     """
-    return frozenset(MODEL_REASONING_EFFORTS) | observed_models(env)
+    observed = _read_observed_models(env)
+    if observed is not None:
+        return observed
+    return frozenset(MODEL_REASONING_EFFORTS)

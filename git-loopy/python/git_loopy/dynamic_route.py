@@ -24,6 +24,7 @@ from numbers import Integral
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from git_loopy.events import ROUTE_ELECTED, ROUTE_REVALIDATED, format_timestamp
+from git_loopy.roster_cache import record_observed_roster
 from git_loopy.static_route import (
     BASE_CONTEXT_TIER,
     LONG_CONTEXT_TIER,
@@ -798,7 +799,7 @@ async def refresh_harness_evidence(
         retrieved_at = now()
         if not isinstance(retrieved_at, datetime) or retrieved_at.tzinfo is None:
             raise ValueError("retrieval clock must return an aware datetime")
-        return FreshHarnessCapabilities(
+        evidence = FreshHarnessCapabilities(
             retrieved_at=retrieved_at,
             capabilities=HarnessCapabilities.from_listing(listing),
             tier_capacities=_tier_capacities(listing),
@@ -807,6 +808,8 @@ async def refresh_harness_evidence(
         if warn is not None:
             warn(f"{type(exc).__name__}: {exc}")
         return None
+    record_observed_roster(evidence.capabilities)
+    return evidence
 
 
 def _tier_capacities(listing: Sequence[Any]) -> dict[tuple[str, str], int]:

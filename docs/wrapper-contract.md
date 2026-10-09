@@ -1757,8 +1757,9 @@ NOT reintroduce it.
 This decision is pinned by three language-neutral fixtures in the
 [Conformance suite](../git-loopy/conformance/README.md):
 [`model-roster.json`](../git-loopy/conformance/model-roster.json) (the canonical
-`model → accepted efforts` sets — its keys are the supported-model set — beside `context_tiers`,
-the tier half of the same roster),
+offline fallback `model → accepted efforts` sets — its keys are the supported-model set only
+until a member successfully observes its operator's live roster — beside `context_tiers`, the
+tier half of the same fallback),
 [`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json) (labels + config →
 the **Routing resolution** record and whether it warns, and the closed `routing_sources`
 vocabulary every Runner reads instead of minting its own names), and

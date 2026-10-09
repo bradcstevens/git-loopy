@@ -5343,8 +5343,8 @@ def test_every_configured_static_route_is_checked_not_just_the_default(
     assert "ghost-model" in err and "docs" in err
 
 
-def test_an_unselected_policy_asks_the_harness_nothing(tmp_path, monkeypatch) -> None:
-    """The legacy Run pays for no capability round trip and refuses nothing."""
+def test_an_unselected_policy_refreshes_the_user_roster(tmp_path, monkeypatch) -> None:
+    """Every Run refreshes availability without turning it into a route gate."""
     _write_runnable_feedback_loop(tmp_path)
     fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
     asked: list[int] = []
@@ -5369,7 +5369,7 @@ def test_an_unselected_policy_asks_the_harness_nothing(tmp_path, monkeypatch) ->
     )
 
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
-    assert asked == [], "an unselected policy reached for harness capabilities"
+    assert asked == [1], "the Run did not refresh the user's model roster once"
     assert fake_client.create_calls, "no work session was opened"
 
 
@@ -5601,6 +5601,93 @@ def test_an_unselected_policy_resolves_no_dynamic_prerequisites(monkeypatch) -> 
     )
     assert verdict.passed
     assert verdict.prerequisites is None
+
+
+def test_a_dynamic_prerequisite_refusal_still_refreshes_the_user_roster(
+    monkeypatch,
+) -> None:
+    """A refused selector does not skip the Run-wide availability refresh."""
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    asked: list[int] = []
+
+    async def refresh(**_kwargs: Any) -> dynamic_route.FreshHarnessCapabilities:
+        asked.append(1)
+        return dynamic_route.FreshHarnessCapabilities(
+            retrieved_at=datetime(2026, 10, 8, tzinfo=timezone.utc),
+            capabilities=static_route.HarnessCapabilities.from_listing([]),
+            tier_capacities={},
+        )
+
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            _dynamic_config(),
+            os.environ,
+            harness_evidence_fetch=refresh,
+            refresh_roster=True,
+        )
+    )
+
+    assert verdict.dynamic_refusal is not None
+    assert asked == [1]
+
+
+def test_a_dynamic_evidence_failure_cannot_skip_the_user_roster_refresh(
+    monkeypatch,
+) -> None:
+    """Artificial Analysis can fail first without leaving availability stale."""
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    asked: list[int] = []
+
+    async def refresh(**_kwargs: Any) -> dynamic_route.FreshHarnessCapabilities:
+        asked.append(1)
+        return dynamic_route.FreshHarnessCapabilities(
+            retrieved_at=datetime(2026, 10, 8, tzinfo=timezone.utc),
+            capabilities=static_route.HarnessCapabilities.from_listing(
+                [_listed_model("gpt-5.6-terra", ["high"])]
+            ),
+            tier_capacities={
+                ("gpt-5.6-terra", "default"): 400_000,
+            },
+        )
+
+    async def fail_evidence(_self: Any) -> Any:
+        raise RuntimeError("evidence source unavailable")
+
+    monkeypatch.setattr(dynamic_route.ArtificialAnalysisSource, "fetch", fail_evidence)
+
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            _dynamic_config(),
+            os.environ,
+            harness_evidence_fetch=refresh,
+            refresh_roster=True,
+        )
+    )
+
+    assert verdict.dynamic_refusal is not None
+    assert verdict.capabilities is None
+    assert asked == [1]
+
+
+def test_the_run_roster_refresh_obeys_the_dynamic_deadline(monkeypatch) -> None:
+    """A hung harness cannot outlive the operator's routing wall-clock bound."""
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+
+    async def stalled_listing() -> dynamic_route.FreshHarnessCapabilities:
+        await asyncio.sleep(1)
+        raise AssertionError("the routing deadline did not cancel the listing")
+
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            _dynamic_config(routing_deadline_seconds=0.01),
+            os.environ,
+            harness_evidence_fetch=stalled_listing,
+            refresh_roster=True,
+        )
+    )
+
+    assert verdict.dynamic_refusal is not None
+    assert "deadline" in verdict.dynamic_refusal.lower()
 
 
 def test_a_dynamic_run_verifies_the_routing_entries_that_still_win(
