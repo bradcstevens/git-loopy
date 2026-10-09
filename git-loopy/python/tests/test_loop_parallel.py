@@ -2121,6 +2121,18 @@ def test_second_stop_before_lane_send_starts_no_agent_session(
     assert end["reason"] == "operator_stop"
 
 
+def test_each_lane_setup_hands_a_host_a_distinct_remote_run_identity() -> None:
+    loop = object.__new__(loop_module._ParallelLoop)
+    loop._run_id = "run-1"
+    loop._lane_setup_attempts = {}
+    ids = []
+    for attempt in (1, 2, 3):
+        loop._lane_setup_attempts[42] = attempt
+        ids.append(loop._lane_remote_run_id(42))
+    assert ids == ["run-1", "run-1-attempt-2", "run-1-attempt-3"]
+    assert not any("/" in i for i in ids)
+
+
 def test_second_stop_before_host_dispatch_starts_no_host_contribution(
     tmp_path, monkeypatch
 ) -> None:

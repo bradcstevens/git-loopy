@@ -33,7 +33,7 @@ Design notes:
   session has started it may not take a second Lane while its contribution is
   open, parked, admitted or recovering. It releases only through
   :meth:`release_attempt`, when the contribution has finalized having charged
-  a **Strike** (ADR-0070). Pickup's independent lifecycle predicate then
+  a **Strike**, or when a later serial Iteration charges one (ADR-0070). Pickup's independent lifecycle predicate then
   decides whether another attempt is owed. Before session start there is no
   guard — only the reservation
   itself, which is what makes §3.3's "leave the candidate eligible" true.
@@ -188,7 +188,7 @@ class SerialFallback:
             "it found zero" is the whole point of the report.
         unavailable: Quarantined ``parallel-safe`` candidates: labelled, but
             not currently readable.
-        worked: Issues this Run has already worked in a Lane.
+        worked: Issues this Run has ever worked in a Lane, even if released.
         reason: One of :data:`SERIAL_FALLBACK_REASONS`.
     """
 
@@ -317,6 +317,9 @@ class RollingScheduler:
     _stop_latched: bool = field(default=False, init=False)
     _phase: str = field(default=PHASE_ROLLING, init=False)
     _worked: set[int | str] = field(default_factory=set, init=False)
+    # Issues ever Laned this Run; unlike `_worked` it survives release, so the
+    # serial-fallback reason stays accurate once a skipped issue is released.
+    _laned: set[int | str] = field(default_factory=set, init=False)
     _in_setup: set[int | str] = field(default_factory=set, init=False)
     _next_contribution: int = field(default=0, init=False)
 
@@ -517,7 +520,7 @@ class RollingScheduler:
         if eligible > 0:
             return None
         unavailable = self.pool.unavailable_count
-        worked = len(self._worked)
+        worked = len(self._laned)
         if unavailable:
             reason = SERIAL_FALLBACK_UNAVAILABLE
         elif worked:
@@ -663,6 +666,7 @@ class RollingScheduler:
         self._units_spent += 1
         self._in_setup.discard(contribution.ref)
         self._worked.add(contribution.ref)
+        self._laned.add(contribution.ref)
         self._open[contribution.contribution_id] = contribution
         self._lanes_held[reservation.lane_id] = contribution
         return contribution
@@ -744,6 +748,7 @@ class RollingScheduler:
         if reoffer:
             self._units_spent -= 1
             self._worked.discard(contribution.ref)
+            self._laned.discard(contribution.ref)
         return TERMINAL
 
     def finalize(

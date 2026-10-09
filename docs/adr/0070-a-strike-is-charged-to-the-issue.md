@@ -81,12 +81,15 @@ does.
 
 Rolling dispatch retries a **Lane**-ended issue (#703). The Run-scoped worked guard still keeps an
 issue to one Lane at a time, held through parking, Integration and recovery. When a contribution
-finalizes having charged its issue a Strike and the issue is still `retrying`, the guard lifts and
-the issue is eligible for a new Lane in the same Run, so a Parallel-safe issue gets the same N-Strike
+finalizes having charged its issue a Strike the guard lifts, and Pickup's lifecycle predicate
+makes a `retrying` issue eligible for a new Lane in the same Run, so a Parallel-safe issue gets the same N-Strike
 budget a Sequential Run gives it. A `skipped` issue never takes another Lane. The Strike count stays
 the only retry counter.
 
-Each new Lane setup uses a distinct branch and workspace namespace within the Run.
+Each new Lane setup uses a distinct branch and workspace namespace within the Run, and a
+distinct run identity toward an Execution host (`<run_id>-attempt-N`), so a retry never
+adopts an earlier dispatch token, artifact or contribution branch. Ownership is also
+released when a later serial Iteration charges the issue a Strike.
 An earlier unlanded branch, or a workspace whose salvage failed, remains recoverable;
 retry never resets or deletes it. Setup ordinals distinguish ownership, not attempts
 charged to the issue: failed setup still spends neither a Strike nor an iteration-cap unit.

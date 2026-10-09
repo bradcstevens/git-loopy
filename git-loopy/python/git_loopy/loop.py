@@ -1447,6 +1447,7 @@ class _Loop:
         # rather than as the line it prints, because the per-issue attempt
         # lifecycle is keyed off the ending; recording it is all that happens
         # here, and no Run-level reaction reads it yet.
+        self._release_lane_ownership: Callable[[int | str], None] | None = None
         self._last_session_outcome: (
             session_outcome_module.SessionOutcomeRecord | None
         ) = None
@@ -3938,7 +3939,12 @@ class _Loop:
         it for real.
         """
         self._last_session_outcome = record
+        before = self._attempts.strikes(ref)
         self._observe_session_ending(ref, record, iter_num=iter_num)
+        # A serial Iteration holds exclusive base ownership, so no Lane can
+        # still own the issue; a Strike it charges makes the issue retryable.
+        if self._release_lane_ownership is not None and self._attempts.strikes(ref) > before:
+            self._release_lane_ownership(ref)
         _report_session_outcome(self._diag, ref=ref, record=record)
 
     def _observe_ingested_consumption(self, event: Mapping[str, Any]) -> None:
@@ -4526,7 +4532,6 @@ class _ParallelLoop:
                 source=source,
                 clock=time.monotonic,
                 eligible=self._lane_candidate_eligible,
-                cacheable=self._lane_candidate_cacheable,
                 on_membership_read=self._emit_membership_read,
                 read_refused=self._lane_lease_unreadable,
                 terminal_refused=lambda c: self._serial._attempts.skipped(c.ref),
@@ -4646,6 +4651,8 @@ class _ParallelLoop:
             host_capabilities=host_capabilities,
             release_line_reader=self._read_release_line,
         )
+        if self._scheduler is not None:
+            self._serial._release_lane_ownership = self._scheduler.release_attempt
 
     def request_stop_drain(self) -> None:
         """Stop refill and serial reservations while live work drains."""
@@ -4692,15 +4699,6 @@ class _ParallelLoop:
         finally:
             self._active_agent_tasks.discard(task)
 
-    def _lane_candidate_cacheable(self, candidate: PoolCandidate) -> bool:
-        """Whether this candidate belongs in the Rolling dispatch cache.
-
-        Blocked and lifecycle-skipped candidates remain membership, never
-        eligible work: a terminal read must distinguish their refusals from
-        a genuinely empty Pool (ADR-0070).
-        """
-        return is_parallel_safe(candidate)
-
     def _lane_candidate_eligible(self, candidate: PoolCandidate) -> bool:
         """Is this candidate **Lane** work, Ready, and still owed an attempt?
 
@@ -4732,7 +4730,7 @@ class _ParallelLoop:
         return (
             candidate.ref not in self._rolling_refused
             and not self._serial._attempts.skipped(candidate.ref)
-            and self._lane_candidate_cacheable(candidate)
+            and is_parallel_safe(candidate)
             and is_lane_candidate(candidate)
         )
 
@@ -6310,7 +6308,7 @@ class _ParallelLoop:
             reasoning_effort=contribution.reasoning_effort,
             context_tier=contribution.context_tier,
             skill_policy=self._skill_exposure,
-            run_id=self._run_id,
+            run_id=self._lane_remote_run_id(lane_work.item.ref),
         )
 
     def _host_for_contribution(
@@ -7197,6 +7195,13 @@ class _ParallelLoop:
             else f"{self._run_id}/attempt-{attempt}"
         )
 
+    def _lane_remote_run_id(self, ref: int | str) -> str:
+        """Run identity a host sees; unique per setup so a retry never adopts
+        the earlier Lane's dispatch token, artifact name or contribution branch.
+        Hyphenated, because Actions artifact names cannot contain ``/``."""
+        attempt = self._lane_setup_attempts.get(ref, 1)
+        return self._run_id if attempt == 1 else f"{self._run_id}-attempt-{attempt}"
+
     def _open_integration_stage(self, ref: int | str) -> _IntegrationStage | None:
         """Cut a private Integration worktree from the published green base.
 
@@ -7244,7 +7249,7 @@ class _ParallelLoop:
         lane_work: _LaneWork,
         stage: _IntegrationStage,
     ) -> bool:
-        """Publish a verified-green stage onto base, then close its issue.
+        """Publish a verified-green stage onto base and upstream, then close.
 
         The only place base advances under Parallel mode, and it advances by
         merging the Integration branch the gate just passed on — never the raw
@@ -7291,12 +7296,8 @@ class _ParallelLoop:
             return False
         if not self._base_advanced(pre_base, ref):
             return False
-        self._emit_contribution_event(
-            contribution, events_module.WRAPPER_INTEGRATION_PUBLISHED
-        )
         self._base_publications += 1
-        self._land_lane(contribution, lane_work, pre_base)
-        return True
+        return self._land_lane(contribution, lane_work, pre_base)
 
     def _base_advanced(self, pre_base: str, ref: int | str) -> bool:
         """Return whether Integration published a new base head."""
@@ -7369,9 +7370,14 @@ class _ParallelLoop:
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
         pre_base: str,
-    ) -> None:
-        """Finish a green landing: advance the line, close the issue, reap the branch."""
+    ) -> bool:
+        """Advance the line, ensure durability, then close and reap the branch."""
         advanced = self._advance_release_line(lane_work.item)
+        if not self._push_publication(contribution, lane_work.item):
+            return False
+        self._emit_contribution_event(
+            contribution, events_module.WRAPPER_INTEGRATION_PUBLISHED
+        )
         self._close_landed(contribution, lane_work.item, pre_base)
         if advanced is not None:
             next_line, bump_class = advanced
@@ -7384,6 +7390,45 @@ class _ParallelLoop:
                 release_version=next_line.version,
             )
         self._delete_branch_safely(contribution.ref, lane_work.branch)
+        return True
+
+    def _push_publication(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        item: AfkReadyItem,
+    ) -> bool:
+        """Require acknowledged upstream durability before tracker closure (#418).
+
+        No upstream means local is the whole publication. A configured upstream
+        that cannot be read or pushed is not absence: preserve the local landing
+        and Lane branch, leave the issue open, and record the failed publication.
+        No retry or rollback is attempted.
+        """
+        try:
+            upstream = self._git.upstream()
+            if upstream is None:
+                return True
+            if not self._leased(item, "publication push"):
+                message = "this Run no longer holds the Lease; not pushing"
+            else:
+                self._git.push(upstream=upstream)
+                self._emit_contribution_event(
+                    contribution, events_module.WRAPPER_PUSH_RECORDED
+                )
+                return True
+        except git_module.GitError as exc:
+            message = str(exc)
+        self._diag.warning(
+            "integration #%s: publication push failed: %s; "
+            "work stays on local base and the issue stays open",
+            item.ref, message,
+        )
+        self._emit_contribution_event(
+            contribution,
+            events_module.WRAPPER_INTEGRATION_PUSH_FAILED,
+            message=message,
+        )
+        return False
 
     def _advance_release_line(
         self, item: AfkReadyItem
@@ -7598,7 +7643,10 @@ class _ParallelLoop:
         (:meth:`_run_resolution_session`) and re-gates it. The first **green**
         attempt publishes that verified stage onto base
         (:meth:`_publish_stage`), closes the issue, deletes the (now-landed)
-        Lane branch, and returns ``True``. If all K attempts stay red the
+        Lane branch, and returns ``True``. If base advances but upstream
+        durability fails, return ``False`` immediately: the work is already
+        on base and must not buy another Recovery session or Release advance.
+        If all K attempts stay red the
         contribution falls back to a serial Iteration
         (:meth:`_fallback_lane_to_serial`) and returns ``False``, keeping its
         Lane branch as a breadcrumb.
@@ -7632,8 +7680,10 @@ class _ParallelLoop:
                 ref, f"auto-resolution attempt {attempt}", stage.path
             ):
                 continue
-            if self._publish_stage(contribution, lane_work, stage):
-                return True
+            pre_publications = self._base_publications
+            published = self._publish_stage(contribution, lane_work, stage)
+            if published or self._base_publications > pre_publications:
+                return published
         self._fallback_lane_to_serial(lane_work)
         return False
 

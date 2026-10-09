@@ -60,11 +60,11 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 - `/teach` — walks a human through an area of the code.
 - `/design-control-loop` — interviews an operator before designing and building a new control loop.
 
-**User-invoked operations beyond the bound issue** — catalog membership does not authorize a batch release, a tracker-wide survey, or changes to the operator's model configuration:
+**User-invoked operations beyond the bound issue** — catalog membership does not authorize a batch release or changes to the operator's model configuration:
 
 - `/release` — publishes a completed batch only when the user requests a release, never as a side effect of completing one issue.
-- `/loose-ends` — surveys the issue tracker for a human, rather than working the issue already selected.
 - `/model-fit` — recalibrates models and updates operator configuration only on explicit user invocation.
+- `/sync-model-roster` — repairs the pinned model roster and changes operator configuration only on explicit user invocation.
 
 **Session-management, setup & authoring** — irrelevant to a fresh one-shot `copilot -p` iteration:
 

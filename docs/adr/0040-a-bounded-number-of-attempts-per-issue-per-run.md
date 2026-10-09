@@ -90,16 +90,20 @@ candidate that silently vanished from consideration would be precisely the
 indefinitely-passed-over shape [ADR-0032](0032-the-runner-picks-the-oldest-eligible-issue.md)
 exists to make visible.
 
-**The Parallel scheduler's collision guard is left exactly as it is, and a second predicate is
-composed beside it.** The guard superficially resembles a skip set — a Run-scoped set of refs the
+**The Parallel scheduler's collision guard is not rewritten into a skip set, and a second predicate
+is composed beside it.** *Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md) (and its
+refinement of [ADR-0020](0020-rolling-dispatch-with-bounded-green-integration.md)): the guard is no
+longer "never released". Ownership is released once a contribution finalizes having charged a
+Strike, or when a later serial Iteration charges one; the lifecycle predicate below, not the guard,
+decides whether another Lane is owed, so a skipped issue is released yet still refused at Pickup.* The guard superficially resembles a skip set — a Run-scoped set of refs the
 Pool's eligibility predicate consults — and it is not one: it latches at agent-session start to
 stop one issue taking two **Lanes**, a worktree and re-work question with its own lifetime.
 Writing a lifecycle defeat into it would have merged two questions that happen to share a shape,
 and afterwards nothing could tell a defeat from a collision.
 
 But a **Lane** Pickup is a Pickup, so the skip has to reach it too. The guard alone looks
-sufficient, because it latches before any ending is observed and therefore already holds every
-issue a Lane defeated. The order it does not cover is the other one: a **Parallel-safe** issue
+sufficient, because it latches before any ending is observed and therefore held every
+issue a Lane defeated while the contribution was open. The order it does not cover is the other one: a **Parallel-safe** issue
 defeated by a *serial* Iteration of a Parallel Run — a serial fallback taken while Lane
 concurrency is throttled to nothing works whatever sits at the Pool's head — was never in the
 guard, and nothing else would stop a Lane reserving it the moment concurrency recovered. So the

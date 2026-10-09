@@ -862,8 +862,8 @@ def test_serial_fallback_distinguishes_already_worked_candidates() -> None:
     """Eligible candidates existed — this Run already worked all of them (#304).
 
     A different operator situation from "label some issues": the Run-scoped
-    worked guard (#219 §1.7) latches at agent-session start and never releases,
-    so the same issue can never take a second Lane in this Run.
+    worked guard (#219 §1.7) latches at agent-session start; with no charged Strike nothing releases it,
+    so the same issue cannot take a second Lane in this Run.
     """
     scheduler, _source = _scheduler([11], lane_cap=3)
     scheduler.start()
@@ -875,6 +875,24 @@ def test_serial_fallback_distinguishes_already_worked_candidates() -> None:
     assert fallback is not None
     assert fallback.reason == "all_parallel_safe_worked"
     assert (fallback.eligible, fallback.unavailable, fallback.worked) == (0, 0, 1)
+
+
+def test_serial_fallback_keeps_worked_reason_after_a_skipped_issue_is_released() -> None:
+    scheduler, _source = _scheduler([11], lane_cap=3)
+    skipped: set[int] = set()
+    inner = scheduler.pool.eligible
+    scheduler.pool.eligible = lambda c: inner(c) and c.ref not in skipped
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+    skipped.add(11)
+    scheduler.finish_work(contribution, changed=False)
+    scheduler.release_attempt(11)
+
+    fallback = scheduler.serial_fallback()
+
+    assert fallback is not None
+    assert fallback.reason == "all_parallel_safe_worked"
+    assert fallback.worked == 1
 
 
 def test_serial_fallback_reports_unreadable_candidates_as_unavailable() -> None:

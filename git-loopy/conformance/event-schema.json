@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "contract_version": "2.22",
-  "event_schema_version": "1.4",
+  "contract_version": "2.23",
+  "event_schema_version": "1.5",
   "insight_capabilities": {
     "names": [
       "agent_output",
@@ -390,7 +390,12 @@
       "emitted": "Once per Recovery attempt, before that attempt's Agent session (contract 2.20). attempt runs from 1 to the immutable max_attempts, K = 3. Never more than three. An exhausted contribution emits three, then wrapper.contribution.end with reason serial_fallback."
     },
     "wrapper.integration.published": {
-      "required_when_present": ["contribution_id", "issue", "lane_id"]
+      "required_when_present": ["contribution_id", "issue", "lane_id"],
+      "emitted": "After verified-green base advancement and, where an upstream is configured, an acknowledged push of current base to that upstream, before tracker closure (contract 2.23, #418). No upstream means local publication. A push failure emits wrapper.integration.push_failed instead and leaves the issue open."
+    },
+    "wrapper.integration.push_failed": {
+      "required_when_present": ["contribution_id", "issue", "lane_id", "message"],
+      "emitted": "Once when Integration cannot establish upstream durability, including an unreadable upstream configuration, a rejected or failed push, or a denied push Lease fence. Local base keeps the landed work, the issue remains open, and the contribution finishes unpublished. Python produces it; shell and PowerShell declare and serialize it but never publish Lane work; Rust accepts the additive record."
     },
     "wrapper.release.advanced": {
       "required_when_present": [
@@ -517,7 +522,8 @@
       "wrapper.integration.started",
       "wrapper.integration.branch_observed",
       "wrapper.integration.recovery_started",
-      "wrapper.integration.published"
+      "wrapper.integration.published",
+      "wrapper.integration.push_failed"
     ],
     "stamped_types": [
       "agent.output",
@@ -529,7 +535,8 @@
       "usage.tokens",
       "wrapper.auto_close",
       "wrapper.checkpoint.recorded",
-      "wrapper.commit.recorded"
+      "wrapper.commit.recorded",
+      "wrapper.push.recorded"
     ],
     "scheduler_scoped_types": [
       "wrapper.pool.refreshed",
@@ -632,6 +639,7 @@
     "WRAPPER_INTEGRATION_BRANCH_OBSERVED": "wrapper.integration.branch_observed",
     "WRAPPER_INTEGRATION_RECOVERY_STARTED": "wrapper.integration.recovery_started",
     "WRAPPER_INTEGRATION_PUBLISHED": "wrapper.integration.published",
+    "WRAPPER_INTEGRATION_PUSH_FAILED": "wrapper.integration.push_failed",
     "WRAPPER_RELEASE_ADVANCED": "wrapper.release.advanced",
     "WRAPPER_CONTRIBUTION_END": "wrapper.contribution.end",
     "WRAPPER_CONCURRENCY_CHANGED": "wrapper.concurrency.changed",
@@ -1409,6 +1417,31 @@
   ],
   "rolling_stream_cases": [
     {
+      "id": "upstream-push-rejected-after-green-local-landing",
+      "description": "An upstream rejection leaves the green work on local base, records the failure before the terminal unpublished contribution, and never attests to publication or closure. All members serialize or consume the additive record; only Python performs Lane publication.",
+      "distributions": ["python", "shell", "powershell", "rust"],
+      "events": [
+        {"ts": "2026-05-16T00:00:00.500Z", "run_id": "01HXR0000000000000000000DD", "iter": null, "type": "wrapper.pickup.bound", "issue": 42, "considered": 1, "position": 1, "reason": "order"},
+        {"ts": "2026-05-16T00:00:01.000Z", "run_id": "01HXR0000000000000000000DD", "iter": null, "type": "wrapper.contribution.start", "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1"},
+        {"ts": "2026-05-16T00:00:02.000Z", "run_id": "01HXR0000000000000000000DD", "iter": null, "type": "wrapper.contribution.work_finished", "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1"},
+        {"ts": "2026-05-16T00:00:03.000Z", "run_id": "01HXR0000000000000000000DD", "iter": null, "type": "wrapper.integration.admitted", "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1"},
+        {"ts": "2026-05-16T00:00:04.000Z", "run_id": "01HXR0000000000000000000DD", "iter": null, "type": "wrapper.integration.started", "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1"},
+        {"ts": "2026-05-16T00:00:05.000Z", "run_id": "01HXR0000000000000000000DD", "iter": null, "type": "wrapper.integration.branch_observed", "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1", "base_publications_since_cut": 0},
+        {"ts": "2026-05-16T00:00:06.000Z", "run_id": "01HXR0000000000000000000DD", "iter": null, "type": "wrapper.integration.push_failed", "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1", "message": "non-fast-forward rejected"},
+        {"ts": "2026-05-16T00:00:07.000Z", "run_id": "01HXR0000000000000000000DD", "iter": null, "type": "wrapper.contribution.end", "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1", "published": false, "reason": "serial_fallback", "summary": {"model": "claude-opus-4.8-max", "effort": "max", "tokens_in": null, "tokens_out": null, "observed_tokens": null, "commits": 1, "closures": 0, "closure_outcome": "advanced", "recovery_attempts": 0, "agent_seconds": 1.0, "lifecycle_seconds": 6.0, "peak_context_window": null, "strike_reaction": "none"}}
+      ],
+      "jsonl": [
+        "{\"ts\": \"2026-05-16T00:00:00.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 1, \"issue\": 42, \"position\": 1, \"reason\": \"order\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.work_finished\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.admitted\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:04.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.branch_observed\", \"base_publications_since_cut\": 0, \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:06.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.push_failed\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\", \"message\": \"non-fast-forward rejected\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:07.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\", \"published\": false, \"reason\": \"serial_fallback\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": null, \"tokens_out\": null, \"observed_tokens\": null, \"commits\": 1, \"closures\": 0, \"closure_outcome\": \"advanced\", \"recovery_attempts\": 0, \"agent_seconds\": 1.0, \"lifecycle_seconds\": 6.0, \"peak_context_window\": null, \"strike_reaction\": \"none\"}}\n"
+      ]
+    },
+    {
       "id": "two-lanes-refill-park-recover-and-latch-serial",
       "description": "One Run that fills two Lanes, refills Lane 1 the moment its first contribution is admitted, parks a third finisher against the full H=2 Integration backlog and narrows for it, advances a patch Release line after closing its first Integration publication, recovers one contribution inside its private stage, latches Serial-required work, and passes over its last candidate with a Pickup skip that binds nothing; every contribution, including c-0002 and c-0003, closes.",
       "distributions": [
@@ -2004,6 +2037,11 @@
     }
   ],
   "serialization_cases": [
+    {
+      "id": "contribution-stamped-upstream-push",
+      "event": {"ts": "2026-05-16T00:00:06.000Z", "run_id": "01HXR0000000000000000000DD", "iter": null, "type": "wrapper.push.recorded", "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1"},
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:06.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.push.recorded\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n"
+    },
     {
       "id": "release-line-advance",
       "event": {
