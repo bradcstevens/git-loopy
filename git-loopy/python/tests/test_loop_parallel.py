@@ -716,7 +716,7 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
     """Each Lane resolves its own (model, effort) at Active-issue pickup (#148).
 
     A two-Lane Run where issue 42 carries ``task-type:docs`` — routed to
-    ``gpt-5-mini @ medium`` by the run config's ``[routing]`` map — and issue 43
+    ``gpt-6-luna @ medium`` by the run config's ``[routing]`` map — and issue 43
     is unlabelled (so it keeps the global default ``claude-opus-4.8 @ max``).
     Asserts, at the session-creation seam, that each Lane opens its session on
     ITS OWN resolved pair: Lanes resolve independently and never contend over a
@@ -739,7 +739,7 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
 
     fake_client = _ParallelFakeClient(
         fake_git=fake_git,
-        scripted_events=[_usage_event("gpt-5-mini")],
+        scripted_events=[_usage_event("gpt-6-luna")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
 
@@ -749,7 +749,7 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
     cfg = RunConfig(
         model="claude-opus-4.8",
         reasoning_effort="max",
-        routing={"docs": ("gpt-5-mini", "medium")},
+        routing={"docs": ("gpt-6-luna", "medium")},
         context_tier="long_context",
         issue_source="github",
         max_iterations=2,
@@ -768,7 +768,7 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
         if c["working_directory"]
     }
     # The routed Lane (task-type:docs) opened on the routed (model, effort)...
-    assert by_dir["issue-42"]["model"] == "gpt-5-mini"
+    assert by_dir["issue-42"]["model"] == "gpt-6-luna"
     assert by_dir["issue-42"]["reasoning_effort"] == "medium"
     assert by_dir["issue-42"]["context_tier"] == "long_context"
     # ...while the unlabelled Lane opened on the global default.

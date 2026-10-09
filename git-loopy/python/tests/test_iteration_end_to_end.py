@@ -3324,7 +3324,7 @@ def test_a_serial_binding_publishes_the_pair_it_resolved_and_why(
             RunConfig(
                 issue_source="github",
                 max_iterations=1,
-                routing={"docs": ("gpt-5-mini", "medium")},
+                routing={"docs": ("gpt-6-luna", "medium")},
                 context_tier="long_context",
             )
         )
@@ -3332,14 +3332,14 @@ def test_a_serial_binding_publishes_the_pair_it_resolved_and_why(
 
     (bound,) = _pickup_events(tmp_path)
     assert bound["type"] == "wrapper.pickup.bound"
-    assert bound["model"] == "gpt-5-mini"
+    assert bound["model"] == "gpt-6-luna"
     assert bound["effort"] == "medium"
     assert bound["routing_source"] == "routed"
     assert bound["task_type_keys"] == ["docs"]
     assert bound["gate_warnings"] == []
     assert bound["context_tier"] == "long_context"
     assert bound["lifecycle_position"] == "fresh"
-    assert fake_client.create_calls[0]["model"] == "gpt-5-mini"
+    assert fake_client.create_calls[0]["model"] == "gpt-6-luna"
     assert fake_client.create_calls[0]["reasoning_effort"] == "medium"
     assert fake_client.create_calls[0]["context_tier"] == "long_context"
 

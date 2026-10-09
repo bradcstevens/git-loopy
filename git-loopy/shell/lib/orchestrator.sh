@@ -338,7 +338,7 @@ git_loopy_resolve_config() {
   local env_skills="${GIT_LOOPY_DENY_SKILLS:-}"
   local env_timeout="${GIT_LOOPY_SEND_TIMEOUT_SECONDS:-}"
 
-  local model="claude-opus-5"
+  local model="gpt-6.1-sol"
   local effort=""
   local model_explicit=0
   local effort_explicit=0

@@ -822,7 +822,7 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 
 | Variable                       | Phase | Default          | Meaning                                                        |
 | ------------------------------ | ----- | ---------------- | -------------------------------------------------------------- |
-| `GIT_LOOPY_MODEL`              | 1     | `claude-opus-5`  | Model id (bare base id).                                       |
+| `GIT_LOOPY_MODEL`              | 1     | `gpt-6.1-sol`    | Model id (bare base id).                                       |
 | `GIT_LOOPY_REASONING_EFFORT`   | 1     | `max` for the built-in model | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; omitted and explicit `none` are distinct. A recognized model-id suffix is peeled into this field, and selecting another model without an effort leaves it omitted so the backend chooses. |
 | `GIT_LOOPY_ISSUE_SOURCE`       | 1     | `github`         | `github` or `prds` (legacy local-markdown mode).              |
 | `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | A Runner with an Attempt lifecycle: Strikes each issue gets before it is skipped. Without one: consecutive no-progress Iterations before abort (§6). |
@@ -1796,6 +1796,12 @@ values. They are identified in the Runner README and are not claims of verificat
 the stamped CLI or of account availability. The exception does not admit new, unobserved
 effort sets: Gemini 3.8 stays on the unknown-model warning-and-pass-through path. The stamp
 therefore identifies the observed refresh, not the provenance of those retained rows.
+
+The 2026-10-09 backend-catalog refresh in ADR-0019 retains five more
+previously observed but now account-unlisted Opus/Astra rows rather than
+erasing saved Config compatibility. The fallback therefore carries 12
+account-unlisted entries beside its 21 currently observed entries. This
+does not extend the exception to a new unobserved effort set.
 
 The same stamp governs `context_tiers`, the **context tier** capability
 ([ADR-0017](adr/0017-context-tier-and-live-context-gauge.md)) that shares the roster rather than

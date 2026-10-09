@@ -127,7 +127,7 @@ Useful variations:
 
 ```bash
 git-loopy 50                      # cap the Run at 50 Iterations
-git-loopy --model claude-opus-5   # override the model for this Run
+git-loopy --model claude-sonnet-5.5   # override the model for this Run
 git-loopy config list             # the effective settings a Run would use
 ```
 

@@ -3436,12 +3436,9 @@ def test_the_roster_preserves_compatibility_efforts_alongside_pinned_models() ->
 def test_the_roster_fixture_pins_the_context_tier_half_of_the_roster() -> None:
     """Tier capability lives **on** the roster, not in a parallel table (ADR-0017).
 
-    One lockstep point with the live catalog, not two. The section ships empty
-    because ADR-0017 made verification against the pinned harness a precondition
-    of extending it and ADR-0019 requires a row and the ``cli_version`` stamp to
-    move as one regeneration — so an empty section is the honest statement that
-    no model's tiers have been captured for ``cli_version`` yet, and the gate
-    treats every model as unknown-and-untouched until one is.
+    One lockstep point with the live catalog, not two. ADR-0017 requires a
+    pinned-harness capture before a tier row is added; the 2026-10-09 refresh
+    records those tiers without guessing at compatibility-only models.
     """
     tiers = {
         model: frozenset(offered)

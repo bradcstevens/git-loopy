@@ -15,7 +15,59 @@ contract.
 is retuned. Three of its seven rows changed model, five changed effort, and one property that
 ADR-0035 held for the run-wide default only now holds for the whole table.
 
-## The table
+## Quality-first retune: 2026-10-09
+
+The maintainer selected **quality-first** models and **long context** from the
+authenticated 2026-10-08 catalog. A fresh listing through the Runner's own
+SDK-pinned CLI `1.0.85` confirmed the same available models, efforts and tiers.
+This is a recommended starting preset, not a comparative benchmark result:
+the catalog establishes capabilities, not which model performs best on a task.
+
+| `task-type` key | model | effort |
+| --- | --- | --- |
+| `planning` | `gpt-6.1-sol` | `xhigh` |
+| `review` | `claude-sonnet-5.5` | `xhigh` |
+| `implementation` | `gpt-6.1-sol` | `high` |
+| `test` | `claude-sonnet-5.5` | `high` |
+| `docs` | `gpt-6.1-sol` | `low` |
+| `chore` | `gpt-6-luna` | `medium` |
+| `bugfix` | `gpt-6.1-sol` | `xhigh` |
+
+Planning and diagnosis get the deeper first-pass effort; implementation and
+test construction use `high`; routine writing uses less reasoning, and chores
+use Luna. Review stays Anthropic while implementation and docs stay OpenAI.
+All seven pairs remain below `max`, and each is different from the retuned
+legacy escalation rung, `gpt-6.1-sol @ max`. The independent run-wide default
+uses that same pair, preserving ADR-0056's ceiling policy and its no-op retry
+for unclassified legacy work. Selected Static routing still changes a retry's
+pair only when the operator explicitly configures an escalation rung.
+
+The maintainer's project and global presets explicitly choose `long_context`;
+every recommended model offers it. The engine's built-in tier remains
+`default` where neither Config scope supplies a tier. A static
+route still inherits one run-level tier, not a new per-entry Config field.
+These are the catalog's reported limits:
+
+| Model | Maximum context window | Default-tier prompt cap | Long-tier prompt cap |
+| --- | --- | --- | --- |
+| `gpt-6.1-sol` | 1,050,000 | 272,000 | 922,000 |
+| `claude-sonnet-5.5` | 1,000,000 | 200,000 | 936,000 |
+| `gpt-6-luna` | 1,000,000 | 272,000 | 872,000 |
+
+The window and tier prompt caps are separate reported fields, not quantities
+to add or subtract to invent a budget. Context fill continues to read live
+session telemetry, and ADR-0017's bounded working-budget/compaction policy is
+unchanged. Long context can cost more; `context_tier = "default"` remains an
+explicit opt-out.
+
+Opus and Astra were absent from this account's listing, so neither is a
+default. Models with a pending-deprecation notice in the supplied catalog are
+also excluded from the preset. Existing saved Config elsewhere is not
+rewritten: `config routing use-recommended` adopts the new pairs, while the
+tracked project Config records this preset explicitly. The static recipe
+does not rank or constrain Dynamic routing's live elections.
+
+## Historical table: 2026-08-22
 
 | `task-type` key | model | effort |
 | --- | --- | --- |

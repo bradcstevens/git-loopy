@@ -636,7 +636,7 @@ done < <(jq -c '.detection_cases[]' "$conformance_dir/checkpoint-messages.json")
 
   git_loopy_resolve_config
   assert_equal "0" "$GIT_LOOPY_MAX_ITERATIONS" "default iteration cap"
-  assert_equal "claude-opus-5" "$GIT_LOOPY_MODEL" "default model"
+  assert_equal "gpt-6.1-sol" "$GIT_LOOPY_MODEL" "default model"
   assert_equal "max" "$GIT_LOOPY_REASONING_EFFORT" "default reasoning effort"
   assert_equal "github" "$GIT_LOOPY_ISSUE_SOURCE" "default issue source"
   assert_equal "3" "$GIT_LOOPY_MAX_NMT_STRIKES" "default Strike threshold"

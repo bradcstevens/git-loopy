@@ -118,7 +118,7 @@ function Resolve-GitLoopyConfig {
     $Model = Get-GitLoopyEnvironmentValue $Environment "GIT_LOOPY_MODEL"
     $ModelExplicit = -not [string]::IsNullOrWhiteSpace($Model)
     if (-not $ModelExplicit) {
-        $Model = "claude-opus-5"
+        $Model = "gpt-6.1-sol"
     }
     $ReasoningEffort = Get-GitLoopyEnvironmentValue `
         $Environment `

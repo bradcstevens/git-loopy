@@ -1163,7 +1163,7 @@ own ending, a **no-op** where the pair in force already
 equals the rung — which since ADR-0056 includes the **Default pair**, so unclassified work is
 retried at what it already ran on — and per issue rather than per mode — a **Lane** and a serial
 **Iteration** read and feed one ledger. It is configurable from the **Config** file only and on
-by default at `claude-opus-5 @ max`, and an explicit model pin suppresses it exactly as it
+by default at `gpt-6.1-sol @ max`, and an explicit model pin suppresses it exactly as it
 suppresses **Routing**. It is blind to work that ran expensively and produced nothing usable,
 because progress is commit-shaped and not quality-shaped.
 _Avoid_: retry model, fallback pair (that is the **Default pair**), escalation ladder.

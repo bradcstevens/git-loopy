@@ -23,6 +23,35 @@ supplies the per-model tier capability [ADR-0017](0017-context-tier-and-live-con
 requires, unblocks [#281](https://github.com/bradcstevens/git-loopy/issues/281), and
 corrects the diagnosis recorded in [#282](https://github.com/bradcstevens/git-loopy/issues/282).
 
+## Backend-catalog refresh: 2026-10-09
+
+The maintainer's authenticated 2026-10-08 catalog, exported through Copilot
+CLI `1.0.95-0`, is an input, not permission to restamp the Runner's roster
+against another binary. A fresh `models.list` through the unchanged
+SDK `1.0.14` pin and its CLI `1.0.85` returned the same **21** entries
+(20 concrete models plus `auto`) and confirmed the new default models'
+efforts and long-context support.
+
+Three newly observed effort rows are added: `claude-haiku-5.5`,
+`claude-sonnet-5.5` (both `low` through `max`), and `gpt-6.1-sol`
+(`none` through `max`). The roster fixture's own revision moves to `2`;
+its CLI stamp stays `1.0.85` because that is the binary used for this capture.
+No SDK upgrade is inferred from a backend catalog addition.
+
+The same capture fills `context_tiers` for the 20 concrete models, including
+the verified default-only models. `auto` is model-dependent and remains
+unpopulated, as do account-unlisted compatibility models. Maximum context
+windows do not substitute for a reported tier. The live session remains the
+authority on its actual token limit; no static capacity table is introduced.
+
+All preexisting effort rows survive for saved Config compatibility. There
+are now **12** account-unlisted rows: the seven earlier compatibility rows
+below, plus the five previously observed Opus/Astra rows that this account
+no longer lists. Their retained data is neither a current eligibility claim
+nor a reason to add them back to a successful observed roster. Defaults use
+only currently listed models
+([ADR-0048](0048-the-recommended-routing-table-is-retuned.md#quality-first-retune-2026-10-09)).
+
 ## Upgrade record: SDK 1.0.14
 
 **Historical:** superseded by the corporate-compatible records below. The

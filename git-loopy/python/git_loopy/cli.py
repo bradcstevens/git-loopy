@@ -153,7 +153,7 @@ _DEFAULT_DEMOTION_THRESHOLD = 3
 # Default model used when ``GIT_LOOPY_MODEL`` is unset. A bare base id (model id and
 # reasoning effort are separate axes on the live Copilot CLI — a suffixed
 # id like ``claude-opus-4.7-xhigh`` is rejected as "not available").
-_DEFAULT_MODEL = "claude-opus-5"
+_DEFAULT_MODEL = "gpt-6.1-sol"
 # Reasoning effort applied only on a *pure default invocation* (neither
 # ``GIT_LOOPY_MODEL`` nor ``GIT_LOOPY_REASONING_EFFORT`` set), preserving the kit's
 # "works out of the box at full reasoning" intent. Once the operator

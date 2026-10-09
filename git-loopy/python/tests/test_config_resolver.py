@@ -66,11 +66,15 @@ def _resolve(
 
 
 def test_resolve_all_empty_yields_builtin_defaults() -> None:
-    resolved = _resolve()
+    warnings: list[str] = []
+    resolved = _resolve(warn=warnings.append)
     run = resolved.run
     assert isinstance(run, RunConfig)
-    assert run.model == "claude-opus-5"
+    assert run.model == "gpt-6.1-sol"
     assert run.reasoning_effort == "max"
+    assert run.context_tier == "default"
+    assert run.escalation_rung == ("gpt-6.1-sol", "max")
+    assert warnings == []
     assert run.issue_source == "github"
     assert run.include_prs is None
     assert run.max_iterations == 0
@@ -549,7 +553,7 @@ def test_max_nmt_strikes_subone_config_aborts() -> None:
 
 def test_model_effort_pure_default() -> None:
     run = _resolve().run
-    assert (run.model, run.reasoning_effort) == ("claude-opus-5", "max")
+    assert (run.model, run.reasoning_effort) == ("gpt-6.1-sol", "max")
 
 
 def test_config_model_from_project() -> None:

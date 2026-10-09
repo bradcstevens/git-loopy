@@ -402,7 +402,7 @@ def test_escalation_and_lifecycle_position_are_independent_axes() -> None:
     assert (result.model, result.reasoning_effort) == ("claude-opus-5", "high")
 
 
-def test_a_model_with_no_tier_capability_row_keeps_the_run_level_tier() -> None:
+def test_a_model_with_no_tier_capability_row_keeps_the_run_level_tier(monkeypatch) -> None:
     """Absent capability data is not evidence of absent capability.
 
     The tier roster (ADR-0017) carries a row only for a model whose tiers were
@@ -410,6 +410,7 @@ def test_a_model_with_no_tier_capability_row_keeps_the_run_level_tier() -> None:
     unknown, and the resolver treats unknown exactly as the effort gate does: the
     live CLI stays the authority and the value passes through.
     """
+    monkeypatch.setattr(config_module, "MODEL_CONTEXT_TIERS", {})
     cfg = RunConfig(
         model="claude-opus-4.8",
         reasoning_effort="max",

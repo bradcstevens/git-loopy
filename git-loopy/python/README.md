@@ -94,8 +94,11 @@ Copilot CLI `1.0.85` by default. Updating the separate `copilot` command on `PAT
 does not update that harness. `python -m git_loopy.sdk_feed` reports when the
 corporate feed has ingested a newer release; it does not change the pin, and it
 is not an Integration feedback loop because an unreachable feed must not redden
-a Lane merge. The refreshed roster recognizes `claude-opus-5.5`, `gpt-6-sol`,
-`gpt-6-luna` and `gpt-6-astra` (each including `max` reasoning). The
+a Lane merge. The 2026-10-09 backend-catalog refresh recognizes
+`claude-sonnet-5.5`, `claude-haiku-5.5` and `gpt-6.1-sol` (each including
+`max` reasoning), and captures the concrete models' context tiers through
+that same pinned harness. Previously captured Opus/Astra rows remain
+compatibility data, not currently available defaults. The
 pinned-harness listing did not offer Gemini 3.8 on the account used for this
 upgrade, so no unverified effort set is added for it: configured
 `gemini-3.8-flash` selections and efforts stay unchanged, with the usual
@@ -894,7 +897,7 @@ erased by a screen restore.
 ## Invocation
 
 ```bash
-# Unlimited iterations, default model (claude-opus-5 at `max` reasoning effort).
+# Unlimited iterations, default model (gpt-6.1-sol at `max` reasoning effort).
 uv run --project git-loopy/python git-loopy
 
 # Cap at 50 iterations.
@@ -1108,9 +1111,9 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 
 | Env var                           | Default                        | Notes                                                                                                                                                                                                            |
 | --------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GIT_LOOPY_MODEL`                           | `claude-opus-5`                | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. With ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's pre-selected cursor and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly. |
+| `GIT_LOOPY_MODEL`                           | `gpt-6.1-sol`                  | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. With ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's pre-selected cursor and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly. |
 | `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
-| `GIT_LOOPY_CONTEXT_TIER`                    | `default`                       | Root-session tier: `default` or `long_context`. `--context-tier` wins, then this value, project Config, global Config, and the default. It constrains every **Routing resolution**, including a legacy `[routing]` model/effort pair, but does **not** suppress per-task-type routing. |
+| `GIT_LOOPY_CONTEXT_TIER`                    | `default`                       | Root-session tier: `default` or `long_context`. `--context-tier` wins, then this value, project Config, global Config, and the default. It constrains every **Routing resolution**, including a legacy `[routing]` model/effort pair, but does **not** suppress per-task-type routing. All recommended models offer long context; opt into it explicitly with `context_tier = "long_context"` or `--context-tier long_context`. |
 | `GIT_LOOPY_ROUTE_POLICY`                    | unset (`unselected`)            | Which **Route policy** this Run uses. `unselected` is a named legacy choice for one Run. Leaving it unset on a local Run with no Config refuses before work. Local saved Config still requires an explicit Static/Dynamic choice before work. Unselected non-local Runs retain legacy behavior. A selected Static route on GitHub Actions proceeds only when that host reports its own listing and both listings accept it. `static` selects the **Static route** (ADR-0057): your `model` / `reasoning_effort` / `context_tier` are verified against the **authenticated harness this Run spawns** and then honoured exactly, rather than being passed through the built-in model roster's capability gate. `--route-policy` wins, then this value, project Config, global Config. A settings combination the harness does not support **fails before any work** instead of being quietly downgraded. `dynamic` selects the **Dynamic route** (ADR-0057): each issue's pair is elected from live Artificial Analysis evidence by a bounded **Route selector**, and needs `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` plus a deadline, a credit allowance, a selector concurrency and a verified `[route_associations]` table. An explicit run-wide model or effort override bypasses those dynamic prerequisites, but its Static settings must still pass live harness validation. |
 | `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or a `vX.Y.Z` Release-target label back at **Pickup** (ADR-0029, ADR-0066). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
@@ -1331,6 +1334,41 @@ above (`model`, `reasoning_effort`, `context_tier`, `route_policy`,
 `include_prs`, `otel_enabled`, `send_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
+
+### Quality-first static recipe
+
+The recommended seven routes are a maintainer-selected quality-first preset,
+not a measured ranking. Their models, efforts and long-context support were
+verified through the SDK-pinned harness on 2026-10-09:
+
+| Task type | Model | Reasoning effort |
+| --- | --- | --- |
+| `planning` | `gpt-6.1-sol` | `xhigh` |
+| `review` | `claude-sonnet-5.5` | `xhigh` |
+| `implementation` | `gpt-6.1-sol` | `high` |
+| `test` | `claude-sonnet-5.5` | `high` |
+| `docs` | `gpt-6.1-sol` | `low` |
+| `chore` | `gpt-6-luna` | `medium` |
+| `bugfix` | `gpt-6.1-sol` | `xhigh` |
+
+`init` offers this optional static recipe; `config routing use-recommended`
+adopts its pairs without silently rewriting existing Config. Static entries
+inherit the run-level `context_tier`. The tracked project Config explicitly
+selects this recipe, `long_context` and the Static policy. To adopt long
+context in another scope, use `config set context_tier long_context`; adopting
+the recommended pairs alone does not change that scope's tier. The built-in
+fallback stays `default` where neither Config scope supplies a tier. A global
+tier is inherited where a project omits its own; a project can opt out with
+`context_tier = "default"` without changing the global preset.
+Review is a different vendor from implementation/docs, and every route leaves
+the `gpt-6.1-sol @ max` legacy escalation rung distinct. Static retries change
+pairs only with an explicitly configured `[escalation]` block.
+
+See [ADR-0048's current preset](../../docs/adr/0048-the-recommended-routing-table-is-retuned.md#quality-first-retune-2026-10-09)
+for the reported window and prompt caps. Those limits are not a static runtime
+budget: context fill still uses live telemetry, the bounded working budget is
+unchanged, and long context may cost more. Dynamic routing continues to elect
+its own per-issue triples from live evidence, not this static recommendation.
 
 ### The Route policy and the Static route
 
@@ -2146,15 +2184,18 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | Model id                      | Reasoning efforts                        |
 | ----------------------------- | ---------------------------------------- |
 | `auto`                        | _(none - effort forced unset)_           |
+| `claude-sonnet-5.5`           | `low` `medium` `high` `xhigh` `max`      |
 | `claude-sonnet-5`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-sonnet-4.6`           | `low` `medium` `high` `max`              |
 | `claude-sonnet-4.5`           | _(none - effort forced unset)_           |
+| `claude-haiku-5.5`            | `low` `medium` `high` `xhigh` `max`      |
 | `claude-haiku-4.5`            | _(none - effort forced unset)_           |
 | `claude-opus-5.5`             | `low` `medium` `high` `xhigh` `max`      |
-| `claude-opus-5` (default)     | `low` `medium` `high` `xhigh` `max`      |
+| `claude-opus-5`               | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.8`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.7`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.6`             | `low` `medium` `high` `max`              |
+| `gpt-6.1-sol` (default)       | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-6-astra`                 | `low` `medium` `high` `xhigh` `max`      |
 | `gpt-6-luna`                  | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-6-sol`                   | `none` `low` `medium` `high` `xhigh` `max` |
@@ -2176,11 +2217,13 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `mai-code-1.1-flash`          | `low` `medium` `high`                    |
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
 
-This fallback covers all 23 models returned by the SDK-pinned CLI `1.0.85`
-on the upgrade account, plus seven retained compatibility entries:
-`claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-opus-4.6`, all three Gemini
-rows, and `mai-code-1-flash-picker`. Those seven were not offered by that
-account; their retained efforts are not a claim of current availability.
+This fallback covers the 21 entries returned by the SDK-pinned CLI `1.0.85`
+on 2026-10-09, plus 12 retained account-unlisted compatibility entries:
+`claude-sonnet-4.6`, `claude-sonnet-4.5`, all five Opus rows, `gpt-6-astra`,
+all three Gemini rows, and `mai-code-1-flash-picker`. Their retained efforts
+are not a claim of current availability. Context tiers are captured for the
+20 concrete listed models; `auto` remains model-dependent, and no tier is
+invented for a compatibility-only model.
 `gemini-3.8-flash` is not one of those existing entries and remains off-roster:
 its configured model and effort pass through with a warning rather than being
 gated against an unverified effort set. Live Harness capabilities remain

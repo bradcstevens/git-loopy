@@ -175,15 +175,18 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
 
     expected = {
         "auto": frozenset(),
+        "claude-sonnet-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-sonnet-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
         "claude-sonnet-4.5": frozenset(),
+        "claude-haiku-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-haiku-4.5": frozenset(),
         "claude-opus-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
+        "gpt-6.1-sol": frozenset({"none", "low", "medium", "high", "xhigh", "max"}),
         "gpt-6-astra": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "gpt-6-luna": frozenset(
             {"none", "low", "medium", "high", "xhigh", "max"}
@@ -233,22 +236,20 @@ def test_recommended_routing_is_the_locked_core() -> None:
     surfaces present. ``bugfix`` is the seventh key (#294) and is **appended**,
     so the original six keep the sequence the guided walk shipped with.
 
-    These are ADR-0048's values with ADR-0057's ``test`` row, which moved that
-    route off ``gemini-3.6-flash`` once the authenticated harness began
-    advertising it as pending deprecation. ``review`` is deliberately not
-    ``gpt-5.6-sol`` — a rule ADR-0035 established and both successors keep —
-    and no row holds ``max``, which is the escalation rung.
+    These are ADR-0048's 2026-10-09 quality-first values. Review stays on
+    Anthropic, implementation/docs on OpenAI, and no row spends the ``max``
+    escalation rung.
     """
     from git_loopy.config import RECOMMENDED_ROUTING
 
     assert dict(RECOMMENDED_ROUTING) == {
-        "planning": ("claude-opus-5", "xhigh"),
-        "review": ("claude-opus-5", "high"),
-        "implementation": ("gpt-5.6-terra", "high"),
-        "test": ("claude-sonnet-5", "high"),
-        "docs": ("gpt-5.6-terra", "low"),
-        "chore": ("gpt-5.6-luna", "medium"),
-        "bugfix": ("claude-opus-5", "xhigh"),
+        "planning": ("gpt-6.1-sol", "xhigh"),
+        "review": ("claude-sonnet-5.5", "xhigh"),
+        "implementation": ("gpt-6.1-sol", "high"),
+        "test": ("claude-sonnet-5.5", "high"),
+        "docs": ("gpt-6.1-sol", "low"),
+        "chore": ("gpt-6-luna", "medium"),
+        "bugfix": ("gpt-6.1-sol", "xhigh"),
     }
     # Ladder order is load-bearing: the guided walk presents the core in this
     # sequence, so a plain set/dict-equality check is not enough.
@@ -303,8 +304,54 @@ def test_recommended_routing_pairs_are_valid_against_the_roster() -> None:
         assert gated.warning is None, key
 
 
+@pytest.mark.parametrize(
+    ("task_type", "model", "effort"),
+    [
+        ("planning", "gpt-6.1-sol", "xhigh"),
+        ("review", "claude-sonnet-5.5", "xhigh"),
+        ("implementation", "gpt-6.1-sol", "high"),
+        ("test", "claude-sonnet-5.5", "high"),
+        ("docs", "gpt-6.1-sol", "low"),
+        ("chore", "gpt-6-luna", "medium"),
+        ("bugfix", "gpt-6.1-sol", "xhigh"),
+    ],
+)
+def test_quality_first_recommended_routes_resolve_with_explicit_long_context(
+    task_type: str, model: str, effort: str,
+) -> None:
+    from git_loopy import cli
+    from git_loopy.config import (
+        MODEL_CONTEXT_TIERS,
+        RECOMMENDED_ROUTING,
+        resolve_iteration_model,
+    )
+
+    warnings: list[str] = []
+    run = cli.resolve_config(
+        cli.build_parser().parse_args([]),
+        {},
+        project={
+            "context_tier": "long_context",
+            "routing": {
+                key: {"model": pair[0], "effort": pair[1]}
+                for key, pair in RECOMMENDED_ROUTING.items()
+            },
+        },
+        global_={},
+        warn=warnings.append,
+    ).run
+    resolution = resolve_iteration_model(run, [f"task-type:{task_type}"])
+
+    assert (
+        resolution.model, resolution.reasoning_effort, resolution.context_tier,
+    ) == (model, effort, "long_context")
+    assert resolution.gate_warnings == ()
+    assert warnings == []
+    assert "long_context" in MODEL_CONTEXT_TIERS[model]
+
+
 def test_the_default_pair_spends_the_ceiling_and_no_routed_pair_does() -> None:
-    """The run-wide default is ``claude-opus-5 @ max`` — the top of the ladder.
+    """The run-wide default is ``gpt-6.1-sol @ max`` — the top of the ladder.
 
     ADR-0056 supersedes ADR-0036, which held the default one rung *below* the
     escalation rung so that unclassified work had somewhere to escalate to.
@@ -321,7 +368,7 @@ def test_the_default_pair_spends_the_ceiling_and_no_routed_pair_does() -> None:
     from git_loopy.config import RECOMMENDED_ROUTING, REASONING_EFFORT_ORDER
 
     assert (cli._DEFAULT_MODEL, cli._DEFAULT_REASONING_EFFORT) == (
-        "claude-opus-5",
+        "gpt-6.1-sol",
         "max",
     )
     rung_effort = "max"
@@ -371,11 +418,12 @@ def _pin_built_in_roster(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_the_tracked_project_config_preserves_its_default_override(
+def test_the_tracked_project_config_uses_the_quality_first_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Project choices override, rather than redefine, the kit's defaults."""
+    """The tracked static preset explicitly selects the verified default triple."""
     from git_loopy import cli
+    from git_loopy.static_route import RoutePolicy
 
     _pin_built_in_roster(monkeypatch)
     warnings: list[str] = []
@@ -387,7 +435,10 @@ def test_the_tracked_project_config_preserves_its_default_override(
         warn=warnings.append,
     ).run
 
-    assert (run.model, run.reasoning_effort) == ("claude-opus-5.5", "medium")
+    assert (run.model, run.reasoning_effort, run.context_tier) == (
+        "gpt-6.1-sol", "max", "long_context",
+    )
+    assert run.route_policy is RoutePolicy.STATIC
     assert warnings == []
 
 
@@ -417,12 +468,12 @@ def test_the_tracked_project_config_preserves_all_task_type_routes(
     ).run
 
     assert dict(run.routing) == {
-        "planning": ("claude-opus-5.5", "max"),
-        "review": ("claude-opus-5.5", "max"),
-        "implementation": ("grok-4.7", "high"),
-        "test": ("claude-opus-5.5", "high"),
-        "docs": ("gpt-6-sol", "low"),
-        "chore": ("gpt-6-sol", "low"),
-        "bugfix": ("claude-opus-5.5", "high"),
+        "planning": ("gpt-6.1-sol", "xhigh"),
+        "review": ("claude-sonnet-5.5", "xhigh"),
+        "implementation": ("gpt-6.1-sol", "high"),
+        "test": ("claude-sonnet-5.5", "high"),
+        "docs": ("gpt-6.1-sol", "low"),
+        "chore": ("gpt-6-luna", "medium"),
+        "bugfix": ("gpt-6.1-sol", "xhigh"),
     }
     assert warnings == []

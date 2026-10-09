@@ -7,6 +7,15 @@ replaces the run-level-only tier rule and warn-and-downgrade routing gates for t
 per-issue policy. Live capacity reporting and the working-budget/compaction policy remain.
 Delivery is judged against that amendment; the original decision is preserved below.
 
+**Preset retune (2026-10-09):** the maintainer's quality-first project and
+global Config explicitly select `long_context`; all three models used by
+the recommended static recipe offer it, verified against the SDK-pinned harness.
+[ADR-0048](0048-the-recommended-routing-table-is-retuned.md#quality-first-retune-2026-10-09)
+records the reported prompt caps. The built-in fallback remains `default`
+where neither Config scope supplies a tier. The legacy gate's unsupported-tier
+downgrade, live context gauge and working-budget/compaction policy
+below are unchanged; a larger available window is not a larger working budget.
+
 Copilot exposes a third model dial alongside model and reasoning effort: a
 **context tier** (`default` or `long_context`) that selects the prompt-token budget a
 session is given. git-loopy modelled neither the dial nor its consequences, so the tier

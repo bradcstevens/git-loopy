@@ -92,15 +92,18 @@ TASK_TYPE_LABEL_PREFIX = "task-type:"
 #: Compatibility rows retained for saved Config are not account-availability claims.
 MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "auto": frozenset(),
+    "claude-sonnet-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-sonnet-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
     "claude-sonnet-4.5": frozenset(),
+    "claude-haiku-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-haiku-4.5": frozenset(),
     "claude-opus-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
+    "gpt-6.1-sol": frozenset({"none", "low", "medium", "high", "xhigh", "max"}),
     "gpt-6-astra": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "gpt-6-luna": frozenset(
         {"none", "low", "medium", "high", "xhigh", "max"}
@@ -139,8 +142,9 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
 #: :data:`MODEL_REASONING_EFFORTS` — the stamp
 #: ``conformance/model-roster.json`` already carries, restated in-language so a
 #: **Run** can read it without reaching for a fixture that is not packaged
-#: (#410). The Conformance suite holds the two in lockstep. Account-unlisted
-#: compatibility rows retain their earlier values; context tiers remain unpopulated.
+#: (#410). The Conformance suite holds the two in lockstep. The 2026-10-09
+#: refresh used this same pinned harness for both efforts and context tiers;
+#: account-unlisted compatibility rows retain their earlier efforts.
 #:
 #: The roster is a **function of CLI version** (ADR-0019): ``models.list``
 #: discards the vendor's advertised reasoning-effort array and substitutes a
@@ -189,15 +193,32 @@ DEFAULT_CONTEXT_TIER = "default"
 #: "unknown": the tier passes through untouched, exactly as an off-roster model
 #: keeps its effort, because the live Copilot CLI is the authority.
 #:
-#: It ships **empty** on purpose. ADR-0017 put tier capability on the roster
-#: rather than in a parallel table, and made verification against the harness
-#: the kit actually spawns a precondition of extending it — the candidate list
-#: of tier-less models comes from a source whose harness claims have already
-#: been wrong more than once, and ADR-0019 requires a roster row and its
-#: ``cli_version`` stamp to move as one regeneration. Populating it is that
-#: regeneration; the gate below is live and pinned in the meantime, so the data
-#: is the only thing owed.
-MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
+#: Captured from the SDK-pinned CLI 1.0.85 on 2026-10-09 (ADR-0019), not
+#: inferred from a model's maximum window. ``auto`` is model-dependent.
+#: Compatibility-only models have no tier row: their earlier effort data does
+#: not establish current tier support.
+MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {
+    "claude-sonnet-5": frozenset({"default", "long_context"}),
+    "claude-haiku-4.5": frozenset({"default"}),
+    "gpt-5.6-sol": frozenset({"default", "long_context"}),
+    "gpt-5.6-sol-fast": frozenset({"default", "long_context"}),
+    "gpt-5.6-terra": frozenset({"default", "long_context"}),
+    "gpt-5.6-luna": frozenset({"default", "long_context"}),
+    "gpt-5.5": frozenset({"default", "long_context"}),
+    "gpt-5.4": frozenset({"default", "long_context"}),
+    "gpt-5.4-mini": frozenset({"default"}),
+    "gpt-5.3-codex": frozenset({"default"}),
+    "gpt-5-mini": frozenset({"default"}),
+    "mai-code-1.1-flash": frozenset({"default"}),
+    "grok-4.5": frozenset({"default", "long_context"}),
+    "claude-haiku-5.5": frozenset({"default", "long_context"}),
+    "claude-sonnet-5.5": frozenset({"default", "long_context"}),
+    "gpt-6.1-sol": frozenset({"default", "long_context"}),
+    "gpt-6-luna": frozenset({"default", "long_context"}),
+    "gpt-6-sol": frozenset({"default", "long_context"}),
+    "grok-4.6": frozenset({"default", "long_context"}),
+    "grok-4.7": frozenset({"default", "long_context"}),
+}
 
 #: The seven permitted ``task-type`` -> ``(model, effort)`` routes
 #: (decision #110). The guided setup surfaces, seeds, and renders this fixed
@@ -210,29 +231,24 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
 #: ==================  ====================  ========
 #: task-type key       Model                 Effort
 #: ==================  ====================  ========
-#: ``planning``        ``claude-opus-5``     ``xhigh``
-#: ``review``          ``claude-opus-5``     ``high``
-#: ``implementation``  ``gpt-5.6-terra``     ``high``
-#: ``test``            ``claude-sonnet-5``   ``high``
-#: ``docs``            ``gpt-5.6-terra``     ``low``
-#: ``chore``           ``gpt-5.6-luna``      ``medium``
-#: ``bugfix``          ``claude-opus-5``     ``xhigh``
+#: ``planning``        ``gpt-6.1-sol``       ``xhigh``
+#: ``review``          ``claude-sonnet-5.5`` ``xhigh``
+#: ``implementation``  ``gpt-6.1-sol``       ``high``
+#: ``test``            ``claude-sonnet-5.5`` ``high``
+#: ``docs``            ``gpt-6.1-sol``       ``low``
+#: ``chore``           ``gpt-6-luna``        ``medium``
+#: ``bugfix``          ``gpt-6.1-sol``       ``xhigh``
 #: ==================  ====================  ========
 #:
-#: **Provenance.** Retuned on **2026-08-22** and recorded in ADR-0048, which
-#: supersedes the *values* ADR-0035 locked — sourced from the model-routing run
-#: of 2026-07-24 (#280, #285, #294) — while leaving every *rule* ADR-0035
-#: established standing. The rules that outlived the values, because each one is
-#: what a future reader will otherwise undo:
+#: **Provenance.** The quality-first maintainer retune of **2026-10-09** is
+#: recorded in ADR-0048. Availability, efforts and tiers were verified against
+#: the SDK-pinned harness, agreeing with the supplied 2026-10-08 catalog; model
+#: quality is a recommendation, not a new benchmark measurement. Every chosen
+#: model supports the authored preset's ``long_context`` tier.
 #:
-#: * **No routed pair holds** ``max``. ``claude-opus-5 @ max`` is #291's
-#:   escalation rung, so a routed pair equal to the rung makes escalation a
-#:   no-op — the retry would reuse the identical pair. ADR-0035's ``planning``
-#:   spent the rung outright and bought that dead retry; every row now sits
-#:   below it, so escalation is live for all seven Task types. This rule is
-#:   what keeps ADR-0056 — which spends the rung on the *run-wide default* —
-#:   from making escalation inert everywhere rather than only for unclassified
-#:   work.
+#: * **No routed pair holds** ``max``. The built-in legacy escalation rung is
+#:   ``gpt-6.1-sol @ max``, a real pair change from every recommended route.
+#:   ADR-0056 still spends that rung on the independent run-wide default.
 #: * **A reasoning-incapable model is unroutable through** ``[routing]``. An
 #:   effort supplied to an effort-incapable model — ``claude-haiku-4.5``,
 #:   ``claude-sonnet-4.5``, ``auto``, whose roster entries are the empty set —
@@ -242,44 +258,19 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
 #:   ``settings.table_routing``'s exactly-``{model, effort}`` demand, ``init``'s
 #:   ``supported_efforts`` filter, and ``tests/test_config.py``'s uniform
 #:   gates-clean assertion.
-#: * **Never** ``gpt-5.6-sol`` **on** ``review``. The run's whole mitigation for
-#:   Sol's measured task-cheating is that it "writes no files and has no metric
-#:   to game" — true of the ``code-review`` *subagent* and false of the
-#:   ``review`` *Task type*, which is a full write-capable Lane holding
-#:   authority to close its own issue.
-#: * **Cross-vendor review holds by construction, not by mechanism.**
-#:   ``review`` is Anthropic while ``implementation`` and ``docs`` are OpenAI,
-#:   so a Lane never reviews its own vendor's work. There is no vendor map, no
-#:   cross-entry check and no warning enforcing it.
-#:
-#: ``bugfix`` stays at ``xhigh``, which since ADR-0056 is one rung *below* the
-#: run-wide default (``claude-opus-5 @ max``) rather than equal to it. ADR-0048
-#: chose it over ``high`` so that labelling a bug was not *cheaper* than leaving
-#: it unlabelled; moving the default to the ceiling inverted that relation, and
-#: ADR-0056 records the inversion as the first thing a table retune should
-#: reconsider. The values here are measured, so they are left alone until one is.
-#:
-#: ``test`` moved off ``gemini-3.6-flash`` on **2026-09-15** (ADR-0057): the
-#: authenticated harness began advertising that model with a
-#: ``model_pending_deprecation`` notice for 2026-10-02. It is no longer pinned
-#: to its model's ceiling — ``claude-sonnet-5`` offers ``xhigh`` and ``max``
-#: above ``high`` — so that row is now bounded by the no-``max`` rule above
-#: rather than by its roster entry.
-#:
-#: ``planning`` and ``bugfix`` sit at ``claude-opus-5 @ xhigh``, which ADR-0036
-#: had made *equal* to the **global default**. ADR-0056 moved that default up to
-#: ``max``, so they are a rung below it again. Either way it is a coincidence of
-#: value, not mechanism — the default is an independent constant in ``cli.py``
-#: and is never derived from this table.
+#: * **Cross-vendor review holds by construction.** ``review`` remains
+#:   Anthropic while ``implementation`` and ``docs`` remain OpenAI, preserving
+#:   ADR-0035's exclusion of ``gpt-5.6-sol`` from a write-capable review Lane.
+#:   No vendor map or cross-entry mechanism enforces the preference.
 RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
-        "planning": ("claude-opus-5", "xhigh"),
-        "review": ("claude-opus-5", "high"),
-        "implementation": ("gpt-5.6-terra", "high"),
-        "test": ("claude-sonnet-5", "high"),
-        "docs": ("gpt-5.6-terra", "low"),
-        "chore": ("gpt-5.6-luna", "medium"),
-        "bugfix": ("claude-opus-5", "xhigh"),
+        "planning": ("gpt-6.1-sol", "xhigh"),
+        "review": ("claude-sonnet-5.5", "xhigh"),
+        "implementation": ("gpt-6.1-sol", "high"),
+        "test": ("claude-sonnet-5.5", "high"),
+        "docs": ("gpt-6.1-sol", "low"),
+        "chore": ("gpt-6-luna", "medium"),
+        "bugfix": ("gpt-6.1-sol", "xhigh"),
     }
 )
 

@@ -833,7 +833,7 @@ $Defaults = Resolve-GitLoopyConfig `
     -Arguments @() `
     -Environment $EmptyEnvironment
 Assert-Equal 0 $Defaults.MaxIterations "default iteration cap"
-Assert-Equal "claude-opus-5" $Defaults.Model "default model"
+Assert-Equal "gpt-6.1-sol" $Defaults.Model "default model"
 Assert-Equal "max" $Defaults.ReasoningEffort "default reasoning effort"
 Assert-Equal "github" $Defaults.IssueSource "default issue source"
 Assert-Equal 3 $Defaults.MaxNmtStrikes "default Strike threshold"

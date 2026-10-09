@@ -190,7 +190,7 @@ def test_switching_out_of_recorded_setup_preserves_destination_static_rows(
     saved = settings.load_config_table(global_path)
     assert saved["routing"] == {
         **routes,
-        **({"planning": {"model": "claude-opus-5", "effort": "xhigh"}}
+        **({"planning": {"model": "gpt-6.1-sol", "effort": "xhigh"}}
            if keep_planning else {}),
     }
     assert "route_policy" not in saved

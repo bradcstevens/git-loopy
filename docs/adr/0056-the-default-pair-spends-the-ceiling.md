@@ -7,6 +7,14 @@ does not use this pair as a fallback for unavailable dynamic routing. It records
 accepted default policy, without retuning the values or rewriting this entry's
 historical rationale.
 
+**Preset retune (2026-10-09):** the built-in pair is now
+`gpt-6.1-sol @ max`, in all three Orchestrators, after the authenticated
+SDK-pinned harness confirmed its availability and effort dial. The ceiling
+policy and default-equals-legacy-rung consequence below are unchanged.
+[ADR-0048](0048-the-recommended-routing-table-is-retuned.md#quality-first-retune-2026-10-09)
+records the new values and their recommendation-level, not benchmark-level,
+provenance. The original Opus rationale below is historical.
+
 Supersedes [ADR-0036](0036-the-default-pair-reserves-the-ceiling.md), which set the same model
 one effort rung lower and named the reservation as its whole point. The model is unchanged and
 every argument ADR-0036 gives for `claude-opus-5` stands. Only the effort moves: **`xhigh` →
