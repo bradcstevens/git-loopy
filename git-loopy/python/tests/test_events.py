@@ -289,6 +289,7 @@ def test_contribution_scoped_lifecycle_types_are_the_pinned_set() -> None:
             "wrapper.integration.branch_observed",
             "wrapper.integration.recovery_started",
             "wrapper.integration.published",
+            "wrapper.integration.push_failed",
         }
     )
     assert events_module.CONTRIBUTION_IDENTITY_KEYS == (

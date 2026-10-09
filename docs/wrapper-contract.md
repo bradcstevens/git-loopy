@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.22 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.23 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1103,7 +1103,7 @@ contribution.start
       ( end[unchanged_branch]
       | [parked] admitted started branch_observed recovery_started{0..3}
           ( published auto_close [release.advanced] end[published]
-          | end[serial_fallback] ) )
+          | [push_failed] end[serial_fallback] ) )
   | end[checkpoint_failed | unchanged_branch | operator_stop] )
 ```
 
@@ -1281,7 +1281,8 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
 `wrapper.contribution.work_finished`, `wrapper.integration.parked`,
 `wrapper.integration.admitted`, `wrapper.integration.started`,
 `wrapper.integration.branch_observed`, `wrapper.integration.recovery_started`,
-`wrapper.integration.published`, and `wrapper.contribution.end`. Scheduler-scoped:
+`wrapper.integration.published`, `wrapper.integration.push_failed`, and
+`wrapper.contribution.end`. Scheduler-scoped:
 `wrapper.pool.refreshed`, `wrapper.concurrency.changed`, `wrapper.serial.requested`,
 `wrapper.rolling.refill_turn`, `wrapper.parallel.serial_fallback`, and `wrapper.parallel.degraded`.
 
@@ -1299,8 +1300,29 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
 - **Stamped existing records.** A Lane's ordinary records — `assistant.*`, `tool.*`,
   `usage.tokens`, `usage.context_window`, `subagent.started`, `subagent.completed`,
   `subagent.failed`, `agent.output`, `wrapper.commit.recorded`, `wrapper.checkpoint.recorded`,
-  `wrapper.auto_close` — carry the same triple when they belong to a contribution. The same
-  literals remain valid, unstamped, for serial Iterations.
+  `wrapper.push.recorded`, `wrapper.auto_close` — carry the same triple when they belong to a
+  contribution. The same literals remain valid, unstamped, for serial Iterations.
+- **Durable before closure (contract 2.23, #418).** After a green local base advancement
+  and any Release-line commit, Integration MUST push current base to its configured
+  upstream before tracker closure or `wrapper.integration.published`. Upstream presence
+  MUST be read from configuration, never inferred from push-error text. No upstream
+  means local is the whole publication and requires no push or warning. An acknowledged
+  push emits the existing `wrapper.push.recorded` with contribution identity. A failed
+  or rejected push, unreadable upstream configuration, or denied push Lease fence
+  preserves the verified commits on local base and the Lane branch, leaves the issue
+  open, warns with the issue and reason, and emits `wrapper.integration.push_failed`
+  with the identity triple and `message`. That contribution finalizes unpublished;
+  neither publication nor closure is attested. The push MUST have its own immediate
+  Lease fence. This failure is terminal even when Recovery produced the green stage:
+  once base advances, the Orchestrator MUST NOT start another Recovery Agent for that
+  stage, repeat its Release-line advance, or post a recovery-exhaustion breadcrumb.
+  No retry loop or rollback is required; later publication or serial
+  auto-push may carry the work. Serial Checkpoint pushes remain best-effort and
+  non-fatal (ADR-0004). Python produces the failure event; shell and PowerShell
+  declare and serialize it but waive native Lane publication as out of scope under
+  their `parallel_mode: false` capability; Rust accepts the additive record through
+  its consumer seam. The Event fixture revision is 1.5, separate from contract 2.23;
+  compatibility schema remains 1 and historical streams keep their interpretation.
 - **Scope separation.** A Lane contribution MUST NOT emit `wrapper.iteration.start` or
   `wrapper.iteration.end`; a serial Iteration keeps both and its positive `iter`.
 - **`wrapper.contribution.end` is the finalized Parallel row and the Strike transition.** Its
@@ -2159,11 +2181,12 @@ since advanced to 2.15 with the behavioural `contribution_events` obligation
 carried 2.17 (Awaiting merge, §3.3.1), and both have since advanced to 2.18
 with parking and admission (§12, #682), 2.19 with Integration start and
 branch drift (§12, #684), 2.20 with Recovery attempts (§12, #685), 2.21 with
-the refill turn (§12, #686) and 2.22 with the per-issue Strike record (§6,
-ADR-0070).
+the refill turn (§12, #686), 2.22 with the per-issue Strike record (§6,
+ADR-0070) and 2.23 with upstream-durable Integration publication (§12, #418).
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
-(§3.1). Event wire compatibility is 1.4, advanced with the per-issue Strike
-record (§6), and historical streams' interpretation is unchanged.
+(§3.1). The Event fixture revision is 1.5, advanced with the additive
+Integration push-failure record (§12); compatibility schema remains 1 and
+historical streams' interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
@@ -2654,10 +2677,17 @@ restarts the stage at `alpha` when the line starts or its target rises
 it MUST NOT be performed in a Lane contribution. The resulting Release-line commit is therefore a
 post-Integration fact, not work a Lane proposes.
 
+Parallel Integration prepares this commit after the verified stage advances local base,
+before pushing current base to its upstream and closing the issue (§12). This places the
+issue's work and its Release-line commit in the same acknowledged push. If upstream
+durability fails, the commit remains on local base, but the issue remains open and the
+Orchestrator MUST NOT repeat the advance for that stage or emit `wrapper.release.advanced`.
+
 After a successful Release-line commit, the Orchestrator MUST emit
 `wrapper.release.advanced` with the closed `issue`, its `bump_class`, the
 ratcheted `release_target`, and the committed `release_version`. An issue with
-no Release-target label and a failed advance emit no such Event. A closed
+no Release-target label, a failed advance, and a Parallel publication whose upstream
+durability failed emit no such Event. A closed
 `vX.Y.Z` milestone may **Promote** the current prerelease line to stable from
 any stage, but does not select the target, and it is the only Promotion
 trigger: no Bump class Promotes unattended. Moving a line to `beta` or `rc` is

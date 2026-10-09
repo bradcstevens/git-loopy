@@ -58,6 +58,7 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_INTEGRATION_BRANCH_OBSERVED]="wrapper.integration.branch_observed"
   [WRAPPER_INTEGRATION_RECOVERY_STARTED]="wrapper.integration.recovery_started"
   [WRAPPER_INTEGRATION_PUBLISHED]="wrapper.integration.published"
+  [WRAPPER_INTEGRATION_PUSH_FAILED]="wrapper.integration.push_failed"
   [WRAPPER_CONTRIBUTION_END]="wrapper.contribution.end"
   [WRAPPER_CONCURRENCY_CHANGED]="wrapper.concurrency.changed"
   [WRAPPER_SERIAL_REQUESTED]="wrapper.serial.requested"

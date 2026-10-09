@@ -1296,10 +1296,14 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     axis to 1.4: ``wrapper.strike``'s ``strikes`` is now the named issue's
     count rather than the Run's, so a 1.3 consumer that reads it as a
     Run-wide ceiling shows a different number than the stream means.
+
+    2.23 makes upstream durability part of Integration publication (#418).
+    The additive push-failure record advances the fixture revision to 1.5;
+    compatibility schema stays 1 and historical streams retain their meaning.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.4"
-    assert _EVENT_SCHEMA["contract_version"] == "2.22"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.5"
+    assert _EVENT_SCHEMA["contract_version"] == "2.23"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -2480,13 +2484,15 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
+    # 1.14 reconciles the Subagent lifecycle fixture (1.13 on this branch,
+    # ADR-0022) with the 2.23 / 1.5 version pins main took at its own 1.13.
     # 1.13 initializes Subagent-capable windows at zero and records their
-    # lifecycle lines (ADR-0022). 1.12 charges Strikes per issue, so an advance
+    # lifecycle lines. 1.12 charges Strikes per issue, so an advance
     # resets none (ADR-0070).
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.13"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.14"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -4545,9 +4551,10 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
     # note and not the other. Compare every advance each note names, and bind
     # the latest to the version both advanced fixtures actually declare.
     advance = re.compile(r"\b(2\.\d+) with\b")
-    policy_history = policy.split("carried it at 2.10", 1)[1].split(
-        "Wire compatibility", 1
-    )[0]
+    policy_history, anchor, _ = policy.split("carried it at 2.10", 1)[1].partition(
+        "The Event fixture revision"
+    )
+    assert anchor, "routing provenance must delimit contract advances from Event revisions"
     written_history = written.split("carried it at 2.10", 1)[1].split(
         "`discriminator.json` reached", 1
     )[0]

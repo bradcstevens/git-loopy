@@ -110,6 +110,7 @@ __all__ = [
     "WRAPPER_INTEGRATION_BRANCH_OBSERVED",
     "WRAPPER_INTEGRATION_RECOVERY_STARTED",
     "WRAPPER_INTEGRATION_PUBLISHED",
+    "WRAPPER_INTEGRATION_PUSH_FAILED",
     "WRAPPER_CONTRIBUTION_END",
     "WRAPPER_CONCURRENCY_CHANGED",
     "WRAPPER_SERIAL_REQUESTED",
@@ -341,10 +342,9 @@ ROUTE_PREPARATION_REUSABLE = "reusable"
 ROUTE_PREPARATION_UNAVAILABLE = "unavailable"
 WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
-# Emitted once per iteration when the runner's auto-push (ADR-0004) succeeds in
-# pushing the current branch to its upstream after new commits. A push FAILURE
-# is non-fatal and emits no event (it only warns), mirroring how a failed
-# Checkpoint emits nothing — see ``_Loop._maybe_push``.
+# Successful serial auto-push or contribution-stamped Integration upstream push.
+# Serial failures only warn (ADR-0004); Integration failures additionally emit
+# wrapper.integration.push_failed and prevent tracker closure (#418).
 WRAPPER_PUSH_RECORDED = "wrapper.push.recorded"
 WRAPPER_AUTO_CLOSE = "wrapper.auto_close"
 WRAPPER_RELEASE_ADVANCED = "wrapper.release.advanced"
@@ -368,6 +368,7 @@ WRAPPER_INTEGRATION_STARTED = "wrapper.integration.started"
 WRAPPER_INTEGRATION_BRANCH_OBSERVED = "wrapper.integration.branch_observed"
 WRAPPER_INTEGRATION_RECOVERY_STARTED = "wrapper.integration.recovery_started"
 WRAPPER_INTEGRATION_PUBLISHED = "wrapper.integration.published"
+WRAPPER_INTEGRATION_PUSH_FAILED = "wrapper.integration.push_failed"
 WRAPPER_CONTRIBUTION_END = "wrapper.contribution.end"
 WRAPPER_CONCURRENCY_CHANGED = "wrapper.concurrency.changed"
 WRAPPER_SERIAL_REQUESTED = "wrapper.serial.requested"
@@ -426,6 +427,7 @@ CONTRIBUTION_SCOPED_EVENT_TYPES: frozenset[str] = frozenset(
         WRAPPER_INTEGRATION_BRANCH_OBSERVED,
         WRAPPER_INTEGRATION_RECOVERY_STARTED,
         WRAPPER_INTEGRATION_PUBLISHED,
+        WRAPPER_INTEGRATION_PUSH_FAILED,
     }
 )
 
