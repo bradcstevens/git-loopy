@@ -8,6 +8,7 @@ fetch it again. Saved Config needs explicit migration authority.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Mapping
 
@@ -212,9 +213,20 @@ async def resolve_run_routing_preflight(
             )
 
     async def live_capabilities() -> FreshHarnessCapabilities | None:
-        if harness_evidence_fetch is not None:
-            return await harness_evidence_fetch()
-        return await refresh_harness_evidence(warn=warn)
+        async def fetch() -> FreshHarnessCapabilities | None:
+            if harness_evidence_fetch is not None:
+                return await harness_evidence_fetch()
+            return await refresh_harness_evidence(warn=warn)
+
+        if ledger is None:
+            return await fetch()
+        remaining = ledger.remaining_seconds()
+        if remaining <= 0:
+            return None
+        try:
+            return await asyncio.wait_for(fetch(), timeout=remaining)
+        except TimeoutError:
+            return None
 
     routes = _configured_static_routes(config)
     preflight_listing: FreshHarnessCapabilities | None = None
@@ -281,7 +293,7 @@ async def resolve_run_routing_preflight(
         return RunRoutingPreflight(
             dynamic_refusal=dynamic_refusal,
             admission_ledger=ledger,
-            capabilities=capabilities,
+            capabilities=capabilities if routes else None,
             host_capabilities=recorded_host,
         )
     assert ledger is not None
@@ -309,7 +321,7 @@ async def resolve_run_routing_preflight(
             if isinstance(inputs, RoutingUnavailable)
             else None
         ),
-        capabilities=capabilities,
+        capabilities=capabilities if routes else None,
         host_capabilities=recorded_host,
     )
 

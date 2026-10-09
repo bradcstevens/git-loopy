@@ -415,13 +415,10 @@ async def refresh_harness_capabilities(
             warn(f"{type(exc).__name__}: {exc}")
         return None
     # Observing the harness is also how the kit learns which models exist on
-    # *this* operator's CLI (ADR-0019). Recording it here rather than at the
-    # call sites keeps one choke point: a Run preflight and `git-loopy doctor`
-    # both arrive through this function, and a second place to remember would be
-    # a second place to forget. Guarded so that nothing about an advisory cache
-    # — including resolving its module — can escape a function whose contract is
-    # that every failure answers ``None``. The eligibility decision above is
-    # still made from the fresh listing, never from what was remembered.
+    # *this* operator's CLI (ADR-0019). The cache writer is total, so an
+    # unwritable home cannot fail this capability read. The lazy import avoids
+    # the config -> static_route -> roster_cache -> config cycle; the eligibility
+    # decision above is still made from the fresh listing, never from memory.
     from git_loopy.roster_cache import record_observed_roster
 
     record_observed_roster(capabilities)

@@ -5665,7 +5665,29 @@ def test_a_dynamic_evidence_failure_cannot_skip_the_user_roster_refresh(
     )
 
     assert verdict.dynamic_refusal is not None
+    assert verdict.capabilities is None
     assert asked == [1]
+
+
+def test_the_run_roster_refresh_obeys_the_dynamic_deadline(monkeypatch) -> None:
+    """A hung harness cannot outlive the operator's routing wall-clock bound."""
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+
+    async def stalled_listing() -> dynamic_route.FreshHarnessCapabilities:
+        await asyncio.sleep(1)
+        raise AssertionError("the routing deadline did not cancel the listing")
+
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            _dynamic_config(routing_deadline_seconds=0.01),
+            os.environ,
+            harness_evidence_fetch=stalled_listing,
+            refresh_roster=True,
+        )
+    )
+
+    assert verdict.dynamic_refusal is not None
+    assert "deadline" in verdict.dynamic_refusal.lower()
 
 
 def test_a_dynamic_run_verifies_the_routing_entries_that_still_win(
