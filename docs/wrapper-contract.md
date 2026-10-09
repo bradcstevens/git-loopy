@@ -2185,7 +2185,9 @@ the refill turn (§12, #686), 2.22 with the per-issue Strike record (§6,
 ADR-0070) and 2.23 with upstream-durable Integration publication (§12, #418).
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1). The Event fixture revision is 1.5, advanced with the additive
-Integration push-failure record (§12); compatibility schema remains 1 and
+Integration push-failure record (§12); the Subagent lifecycle types, the
+`subagents` capability key and the `usage.tokens` attribution fields ride the
+same revision without one of their own. Compatibility schema remains 1 and
 historical streams' interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the

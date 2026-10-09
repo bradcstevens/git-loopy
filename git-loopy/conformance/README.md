@@ -49,7 +49,8 @@ PowerShell serialize the same stream through their event seams but declare nativ
 Lane publication out of scope (`parallel_mode: false`); Rust folds it through
 `DashboardSession::ingest` as an additive record. Successful Integration pushes
 reuse `wrapper.push.recorded` with contribution identity. Dashboard fixture revision
-1.13 updates its contract/Event provenance only. Routing fixture revision 3 updates
+1.13 updated its contract/Event provenance only; revision 1.14 adds the Subagent
+lifecycle lines and counts. Routing fixture revision 3 updates
 the same provenance note without changing routing decisions or its 2.22 contract pin.
 
 `repository-identity.json` is exercised by all three Orchestrators: Python's

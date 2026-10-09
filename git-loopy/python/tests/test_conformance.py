@@ -2484,11 +2484,10 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.14 reconciles the Subagent lifecycle fixture (1.13 on this branch,
-    # ADR-0022) with the 2.23 / 1.5 version pins main took at its own 1.13.
-    # 1.13 initializes Subagent-capable windows at zero and records their
-    # lifecycle lines. 1.12 charges Strikes per issue, so an advance
-    # resets none (ADR-0070).
+    # 1.14 initializes Subagent-capable windows at zero and records their
+    # lifecycle lines (ADR-0022). 1.13 moved the contract/Event provenance to
+    # 2.23 / 1.5. 1.12 charges Strikes per issue, so an advance resets none
+    # (ADR-0070).
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
