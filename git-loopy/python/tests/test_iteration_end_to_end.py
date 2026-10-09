@@ -5610,14 +5610,56 @@ def test_a_dynamic_prerequisite_refusal_still_refreshes_the_user_roster(
     monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
     asked: list[int] = []
 
-    async def refresh() -> None:
+    async def refresh(**_kwargs: Any) -> dynamic_route.FreshHarnessCapabilities:
         asked.append(1)
+        return dynamic_route.FreshHarnessCapabilities(
+            retrieved_at=datetime(2026, 10, 8, tzinfo=timezone.utc),
+            capabilities=static_route.HarnessCapabilities.from_listing([]),
+            tier_capacities={},
+        )
 
     verdict = asyncio.run(
         resolve_run_routing_preflight(
             _dynamic_config(),
             os.environ,
-            capabilities_fetch=refresh,
+            harness_evidence_fetch=refresh,
+            refresh_roster=True,
+        )
+    )
+
+    assert verdict.dynamic_refusal is not None
+    assert asked == [1]
+
+
+def test_a_dynamic_evidence_failure_cannot_skip_the_user_roster_refresh(
+    monkeypatch,
+) -> None:
+    """Artificial Analysis can fail first without leaving availability stale."""
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    asked: list[int] = []
+
+    async def refresh(**_kwargs: Any) -> dynamic_route.FreshHarnessCapabilities:
+        asked.append(1)
+        return dynamic_route.FreshHarnessCapabilities(
+            retrieved_at=datetime(2026, 10, 8, tzinfo=timezone.utc),
+            capabilities=static_route.HarnessCapabilities.from_listing(
+                [_listed_model("gpt-5.6-terra", ["high"])]
+            ),
+            tier_capacities={
+                ("gpt-5.6-terra", "default"): 400_000,
+            },
+        )
+
+    async def fail_evidence(_self: Any) -> Any:
+        raise RuntimeError("evidence source unavailable")
+
+    monkeypatch.setattr(dynamic_route.ArtificialAnalysisSource, "fetch", fail_evidence)
+
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            _dynamic_config(),
+            os.environ,
+            harness_evidence_fetch=refresh,
             refresh_roster=True,
         )
     )

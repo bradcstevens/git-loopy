@@ -29,6 +29,7 @@ from git_loopy.static_route import (
     LONG_CONTEXT_TIER,
     HarnessCapabilities,
     HarnessModel,
+    _record_observed_roster,
     default_capability_fetch,
 )
 
@@ -807,12 +808,7 @@ async def refresh_harness_evidence(
         if warn is not None:
             warn(f"{type(exc).__name__}: {exc}")
         return None
-    try:
-        from git_loopy.roster_cache import record_observed_roster
-
-        record_observed_roster(evidence.capabilities)
-    except Exception:
-        pass
+    _record_observed_roster(evidence.capabilities)
     return evidence
 
 

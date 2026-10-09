@@ -162,6 +162,11 @@ therefore stops producing false "not in the kit's supported set" warnings, and
 a model removed from this account stops appearing supported on the next Run,
 without a fixture edit and without an SDK pin bump.
 
+This amendment explicitly supersedes the earlier union rule for the advisory
+supported-model set. The seven compatibility rows remain in the committed
+fixture for offline fallback and cross-language conformance, but they are not
+added back after this account has supplied a successful live listing.
+
 Four properties make this safe rather than a second source of truth:
 
 - **Replacement on success.** The current account's successful listing is the

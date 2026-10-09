@@ -422,13 +422,18 @@ async def refresh_harness_capabilities(
     # — including resolving its module — can escape a function whose contract is
     # that every failure answers ``None``. The eligibility decision above is
     # still made from the fresh listing, never from what was remembered.
+    _record_observed_roster(capabilities)
+    return capabilities
+
+
+def _record_observed_roster(capabilities: HarnessCapabilities) -> None:
+    """Remember one successful listing without making its cache load-bearing."""
     try:
         from git_loopy.roster_cache import record_observed_roster
 
         record_observed_roster(capabilities)
     except Exception:
         pass
-    return capabilities
 
 
 def default_capability_fetch() -> Any:
