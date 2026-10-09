@@ -5343,8 +5343,8 @@ def test_every_configured_static_route_is_checked_not_just_the_default(
     assert "ghost-model" in err and "docs" in err
 
 
-def test_an_unselected_policy_asks_the_harness_nothing(tmp_path, monkeypatch) -> None:
-    """The legacy Run pays for no capability round trip and refuses nothing."""
+def test_an_unselected_policy_refreshes_the_user_roster(tmp_path, monkeypatch) -> None:
+    """Every Run refreshes availability without turning it into a route gate."""
     _write_runnable_feedback_loop(tmp_path)
     fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
     asked: list[int] = []
@@ -5369,7 +5369,7 @@ def test_an_unselected_policy_asks_the_harness_nothing(tmp_path, monkeypatch) ->
     )
 
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
-    assert asked == [], "an unselected policy reached for harness capabilities"
+    assert asked == [1], "the Run did not refresh the user's model roster once"
     assert fake_client.create_calls, "no work session was opened"
 
 
@@ -5601,6 +5601,29 @@ def test_an_unselected_policy_resolves_no_dynamic_prerequisites(monkeypatch) -> 
     )
     assert verdict.passed
     assert verdict.prerequisites is None
+
+
+def test_a_dynamic_prerequisite_refusal_still_refreshes_the_user_roster(
+    monkeypatch,
+) -> None:
+    """A refused selector does not skip the Run-wide availability refresh."""
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    asked: list[int] = []
+
+    async def refresh() -> None:
+        asked.append(1)
+
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            _dynamic_config(),
+            os.environ,
+            capabilities_fetch=refresh,
+            refresh_roster=True,
+        )
+    )
+
+    assert verdict.dynamic_refusal is not None
+    assert asked == [1]
 
 
 def test_a_dynamic_run_verifies_the_routing_entries_that_still_win(

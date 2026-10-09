@@ -153,13 +153,16 @@ async def resolve_run_routing_preflight(
     ] | None = None,
     warn: Callable[[str], None] | None = None,
     host_capabilities: HostCapabilityReport | None = None,
+    refresh_roster: bool = False,
 ) -> RunRoutingPreflight:
     """Resolve authorization, Static settings and live Dynamic readiness.
 
     No selector, classifier, Calibration, tracker write, or Config write is
     performed. An election with no issue input checks the verified candidate
     intersection, not whether a particular issue will fit or whether these
-    inputs will still be current at Pickup.
+    inputs will still be current at Pickup. ``refresh_roster`` is reserved for
+    an actual Run: reusable callers such as doctor and init stay offline when
+    their selected policy does not otherwise require a listing.
     """
     if (
         refusal := routing_choice_refusal(config, host_capabilities=host_capabilities)
@@ -172,6 +175,11 @@ async def resolve_run_routing_preflight(
         else None
     )
     if config.route_policy is RoutePolicy.UNSELECTED:
+        if refresh_roster:
+            if capabilities_fetch is None:
+                await refresh_harness_capabilities(warn=warn)
+            else:
+                await capabilities_fetch()
         return RunRoutingPreflight()
 
     prerequisites = None
@@ -253,6 +261,11 @@ async def resolve_run_routing_preflight(
                     )
                 )
     if prerequisites is None:
+        if refresh_roster and capabilities is None:
+            if capabilities_fetch is None:
+                await refresh_harness_capabilities(warn=warn)
+            else:
+                await capabilities_fetch()
         return RunRoutingPreflight(
             dynamic_refusal=dynamic_refusal,
             admission_ledger=ledger,

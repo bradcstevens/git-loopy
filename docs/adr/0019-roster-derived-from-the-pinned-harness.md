@@ -151,21 +151,25 @@ That is a pin the original decision never argued for. ADR-0019 already says the
 **live catalogue defines the supported-model set**; only the offline surfaces
 had no way to reach it.
 
-**Decision.** The capability refresh that already reads the authenticated
-harness — `static_route.refresh_harness_capabilities`, the one read both a Run's
-preflight and `git-loopy doctor` arrive through — now records the model ids it
-observed to `<config-home>/git-loopy/model-roster.json`. The advisory surfaces
-read the built-in roster **unioned** with that observation
-(`git_loopy.roster_cache.supported_models`). A newer CLI therefore stops
-producing false "not in the kit's supported set" warnings, and stops refusing
-valid Config, without a fixture edit and without an SDK pin bump.
+**Decision.** Every Run reads the authenticated harness once during routing
+preflight, including an unselected Run, and records the model ids it observed to
+`<config-home>/git-loopy/model-roster.json`. Static routing records its
+capability read; Dynamic routing records the richer eligibility-and-capacity
+read it already needs. The advisory surfaces use that successful observation as
+the operator's supported set (`git_loopy.roster_cache.supported_models`), with
+the built-in fixture only when no valid observation exists. A newer CLI
+therefore stops producing false "not in the kit's supported set" warnings, and
+a model removed from this account stops appearing supported on the next Run,
+without a fixture edit and without an SDK pin bump.
 
 Four properties make this safe rather than a second source of truth:
 
-- **Union, never replacement.** The SDK 1.0.14 record above deliberately retains
-  seven account-unlisted compatibility rows so existing saved Config keeps
-  resolving. Replacing the roster with one account's listing would delete exactly
-  those. Union only ever *adds* a model somebody's harness actually offered.
+- **Replacement on success.** The current account's successful listing is the
+  authority for model identity, including a successful empty listing. Models
+  removed from that account therefore leave the advisory roster on the next
+  Run. A failed or malformed read does not overwrite the previous observation;
+  if no valid observation exists, the stamped fixture remains the offline
+  fallback.
 - **Models, not capability.** Only model *identity* is remembered. No effort set
   and no context tier is inferred from an observation, so this introduces no
   unverified capability gate — the hazard the SDK 1.0.14 record named when it
@@ -176,9 +180,10 @@ Four properties make this safe rather than a second source of truth:
   the **fresh** listing read at that moment. An eligibility decision is never
   made from a remembered answer, which is ADR-0057's requirement unchanged.
 - **Best-effort, and never load-bearing.** An unwritable config home, a malformed
-  document, a future schema, or an empty listing all degrade to the built-in
-  roster. The cache can never fail the capability read that produces it, and an
-  account that lists nothing is not evidence that nothing exists.
+  document, a future schema, or a failed listing preserve the last valid answer
+  or degrade to the built-in roster when there is none. The cache can never fail
+  the capability read that produces it. A successful empty listing is distinct
+  from a failed read and remains authoritative.
 
 The fixture keeps its job and its stamp: it remains the offline fallback, the
 cross-language contract, and the thing CI holds against
