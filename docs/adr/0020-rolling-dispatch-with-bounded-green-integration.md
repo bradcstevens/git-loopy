@@ -11,8 +11,11 @@ closure. Acknowledgement is required only where an upstream exists; without one,
 remains the whole publication. Failure preserves landed local commits and the Lane branch,
 leaves the issue open, warns with the issue and reason, emits
 `wrapper.integration.push_failed`, and finalizes unpublished through the existing serial
-handoff. No push retry loop is introduced; a later publish or serial push may carry the
-work. Recovery of a lost acknowledgement or torn worktree by SHA remains #419.
+handoff. This is terminal even when Recovery produced the green stage: once base
+advances, a durability failure starts no further Recovery Agent, repeats no Release-line
+advance, and posts no recovery-exhaustion breadcrumb. No push retry loop is introduced;
+a later publish or serial push may carry the work. Recovery of a lost acknowledgement or
+torn worktree by SHA remains #419.
 
 **Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
 for the Python Runner, a Lane's **Strike** is charged by its session's ending, not by its

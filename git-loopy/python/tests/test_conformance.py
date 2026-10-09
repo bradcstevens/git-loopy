@@ -4512,9 +4512,10 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
     # note and not the other. Compare every advance each note names, and bind
     # the latest to the version both advanced fixtures actually declare.
     advance = re.compile(r"\b(2\.\d+) with\b")
-    policy_history = policy.split("carried it at 2.10", 1)[1].split(
-        "Wire compatibility", 1
-    )[0]
+    policy_history, anchor, _ = policy.split("carried it at 2.10", 1)[1].partition(
+        "The Event fixture revision"
+    )
+    assert anchor, "routing provenance must delimit contract advances from Event revisions"
     written_history = written.split("carried it at 2.10", 1)[1].split(
         "`discriminator.json` reached", 1
     )[0]

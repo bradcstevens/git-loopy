@@ -123,6 +123,51 @@ def test_rejected_publication_keeps_local_work_and_issue_open(
     } for e in events)
 
 
+@pytest.mark.parametrize("green_attempt", [1, 2, 3])
+def test_recovery_publication_push_failure_is_terminal(
+    tmp_path, monkeypatch, green_attempt
+):
+    git, gh, client = _wire(tmp_path, monkeypatch, release=True)
+    before = git.head_sha()
+    git.configured_upstream = ("origin", "refs/heads/main")
+    git.push_error = git_module.GitError(["git", "push"], 1, "push rejected")
+    gate = FakeGateRunner(outcomes=[False] * green_attempt + [True])
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: gate)
+
+    assert _run() == 0
+
+    assert git.head_sha() != before
+    assert len(git.merge_calls) == 1
+    assert git.push_calls == 1
+    assert len(client.created) == 1 + green_attempt
+    assert len(git.commit_paths_calls) == 1
+    assert git.commit_paths_calls[0][0].startswith("chore(release):")
+    assert gh.issue_close_calls == []
+    assert gh.issue_view(42).state == "OPEN"
+    assert gh.issue_comment_calls == []
+    assert lp._lane_branch_deletes(git) == []
+
+    events = lp._logged_events(tmp_path)
+    recovery = [
+        e for e in events if e["type"] == "wrapper.integration.recovery_started"
+    ]
+    assert [e["attempt"] for e in recovery] == list(range(1, green_attempt + 1))
+    failures = [
+        e for e in events if e["type"] == "wrapper.integration.push_failed"
+    ]
+    assert len(failures) == 1
+    ends = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert len(ends) == 1
+    assert ends[0]["published"] is False
+    assert failures[0]["contribution_id"] == ends[0]["contribution_id"]
+    assert events.index(recovery[-1]) < events.index(failures[0]) < events.index(ends[0])
+    assert not any(e["type"] in {
+        "wrapper.integration.published", "wrapper.auto_close",
+        "wrapper.push.recorded", "wrapper.release.advanced",
+        "wrapper.iteration.start",
+    } for e in events)
+
+
 def test_local_publication_does_not_attempt_a_push_or_escalate(
     tmp_path, monkeypatch
 ):

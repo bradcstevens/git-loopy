@@ -7616,7 +7616,10 @@ class _ParallelLoop:
         (:meth:`_run_resolution_session`) and re-gates it. The first **green**
         attempt publishes that verified stage onto base
         (:meth:`_publish_stage`), closes the issue, deletes the (now-landed)
-        Lane branch, and returns ``True``. If all K attempts stay red the
+        Lane branch, and returns ``True``. If base advances but upstream
+        durability fails, return ``False`` immediately: the work is already
+        on base and must not buy another Recovery session or Release advance.
+        If all K attempts stay red the
         contribution falls back to a serial Iteration
         (:meth:`_fallback_lane_to_serial`) and returns ``False``, keeping its
         Lane branch as a breadcrumb.
@@ -7650,8 +7653,10 @@ class _ParallelLoop:
                 ref, f"auto-resolution attempt {attempt}", stage.path
             ):
                 continue
-            if self._publish_stage(contribution, lane_work, stage):
-                return True
+            pre_publications = self._base_publications
+            published = self._publish_stage(contribution, lane_work, stage)
+            if published or self._base_publications > pre_publications:
+                return published
         self._fallback_lane_to_serial(lane_work)
         return False
 
