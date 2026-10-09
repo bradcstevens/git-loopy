@@ -25,6 +25,9 @@ corrects the diagnosis recorded in [#282](https://github.com/bradcstevens/git-lo
 
 ## Backend-catalog refresh: 2026-10-09
 
+**Historical:** the SDK 1.0.17rc3 record below supersedes this refresh. The
+present tense here describes the earlier SDK 1.0.14 / CLI 1.0.85 capture.
+
 The maintainer's authenticated 2026-10-08 catalog, exported through Copilot
 CLI `1.0.95-0`, is an input, not permission to restamp the Runner's roster
 against another binary. A fresh `models.list` through the unchanged
@@ -163,6 +166,26 @@ recommended routes change. The tracked project Config moves to the new rows in
 the same change, but that is an operator's edit, not a migration of saved
 choices. The SDK 1.0.14rc1 record above is now historical evidence, not the
 current pin.
+
+## Corporate-compatible upgrade record: SDK 1.0.17rc3
+
+On 2026-10-09 the Microsoft corporate feed carried SDK 1.0.17rc3 as its newest
+available release. This upgrade moves the pin from 1.0.14 to that published
+prerelease wheel without sourcing packages or metadata elsewhere. The wheel
+injects `CLI_VERSION = "1.0.92-3"`, and `spawned_harness_version()` reports the
+same value, so the roster stamp moves with the SDK and lockfile.
+
+The live listing captured through CLI 1.0.92-3 returned 20 distinct model ids
+after duplicate rows were collapsed by id. It includes
+`claude-sonnet-5.5`, `claude-haiku-5.5`, and `gpt-6.1-sol`; `grok-4.7` accepts
+`xhigh`. The committed fallback retains compatibility rows that are not in this
+account's current listing, so saved configurations remain readable offline.
+The same listing captures context tiers for the 20 concrete models; `auto`
+remains model-dependent and is not recorded. The fixture's own revision moves
+to `2` for this roster refresh, and its tier rows are stamped to this CLI.
+`gemini-3.8-flash` remains off-roster on the warning-and-pass-through terms
+recorded above. Neither the kit's defaults nor the recommended routes change.
+The SDK 1.0.14 record above is now historical evidence, not the current pin.
 
 ## Amendment: the roster follows the harness you are running
 

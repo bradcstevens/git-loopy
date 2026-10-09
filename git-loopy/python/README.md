@@ -89,16 +89,15 @@ a fallback. The other prerequisites (`gh` signed in, `git`, `copilot`) are liste
 The bootstrap is per-clone; subsequent invocations of `git-loopy` use
 the cached environment under `git-loopy/python/.venv/`.
 
-The corporate-compatible Runner pins `github-copilot-sdk==1.0.14`, which runs
-Copilot CLI `1.0.85` by default. Updating the separate `copilot` command on `PATH`
+The corporate-compatible Runner pins `github-copilot-sdk==1.0.17rc3`, which runs
+Copilot CLI `1.0.92-3` by default. Updating the separate `copilot` command on `PATH`
 does not update that harness. `python -m git_loopy.sdk_feed` reports when the
 corporate feed has ingested a newer release; it does not change the pin, and it
 is not an Integration feedback loop because an unreachable feed must not redden
-a Lane merge. The 2026-10-09 backend-catalog refresh recognizes
-`claude-sonnet-5.5`, `claude-haiku-5.5` and `gpt-6.1-sol` (each including
-`max` reasoning), and captures the concrete models' context tiers through
-that same pinned harness. Previously captured Opus/Astra rows remain
-compatibility data, not currently available defaults. The
+a Lane merge. The refreshed roster recognizes `claude-sonnet-5.5`,
+`claude-haiku-5.5`, and `gpt-6.1-sol`, and records `grok-4.7`'s `xhigh`
+capability. The same pinned harness confirms context tiers for the 20 concrete
+models; `auto` remains model-dependent. The
 pinned-harness listing did not offer Gemini 3.8 on the account used for this
 upgrade, so no unverified effort set is added for it: configured
 `gemini-3.8-flash` selections and efforts stay unchanged, with the usual
@@ -2184,8 +2183,8 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | Model id                      | Reasoning efforts                        |
 | ----------------------------- | ---------------------------------------- |
 | `auto`                        | _(none - effort forced unset)_           |
-| `claude-sonnet-5.5`           | `low` `medium` `high` `xhigh` `max`      |
 | `claude-sonnet-5`             | `low` `medium` `high` `xhigh` `max`      |
+| `claude-sonnet-5.5`           | `low` `medium` `high` `xhigh` `max`      |
 | `claude-sonnet-4.6`           | `low` `medium` `high` `max`              |
 | `claude-sonnet-4.5`           | _(none - effort forced unset)_           |
 | `claude-haiku-5.5`            | `low` `medium` `high` `xhigh` `max`      |
@@ -2195,8 +2194,8 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `claude-opus-4.8`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.7`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.6`             | `low` `medium` `high` `max`              |
-| `gpt-6.1-sol` (default)       | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-6-astra`                 | `low` `medium` `high` `xhigh` `max`      |
+| `gpt-6.1-sol`                 | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-6-luna`                  | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-6-sol`                   | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-5.5`                     | `none` `low` `medium` `high` `xhigh`     |
@@ -2213,17 +2212,17 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `gpt-5.6-terra`               | `none` `low` `medium` `high` `xhigh` `max` |
 | `grok-4.5`                    | `low` `medium` `high`                    |
 | `grok-4.6`                    | `low` `medium` `high` `xhigh`            |
-| `grok-4.7`                    | `low` `medium` `high`                    |
+| `grok-4.7`                    | `low` `medium` `high` `xhigh`            |
 | `mai-code-1.1-flash`          | `low` `medium` `high`                    |
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
 
-This fallback covers the 21 entries returned by the SDK-pinned CLI `1.0.85`
-on 2026-10-09, plus 12 retained account-unlisted compatibility entries:
+This fallback carries the observed rows returned by the SDK-pinned CLI
+`1.0.92-3`, plus retained compatibility entries:
 `claude-sonnet-4.6`, `claude-sonnet-4.5`, all five Opus rows, `gpt-6-astra`,
-all three Gemini rows, and `mai-code-1-flash-picker`. Their retained efforts
-are not a claim of current availability. Context tiers are captured for the
-20 concrete listed models; `auto` remains model-dependent, and no tier is
-invented for a compatibility-only model.
+all three Gemini rows, and `mai-code-1-flash-picker`. Those 12 were not offered
+by that account; their retained efforts are not a claim of current availability.
+Context tiers are captured for the 20 concrete listed models; `auto` remains
+model-dependent, and no tier is invented for a compatibility-only model.
 `gemini-3.8-flash` is not one of those existing entries and remains off-roster:
 its configured model and effort pass through with a warning rather than being
 gated against an unverified effort set. Live Harness capabilities remain

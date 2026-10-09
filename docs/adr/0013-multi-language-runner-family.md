@@ -4,6 +4,12 @@
 **Supersedes:** [ADR-0002](0002-retire-bash-runner.md) (retire the bash runner) and
 [ADR-0007](0007-single-python-entrypoint-retire-afk-sh.md) (single Python entrypoint)
 
+**Superseded in part by [ADR-0073](0073-language-paths-release-and-gate-independently.md):**
+the family is no longer a full-current-feature-parity or synchronized-delivery promise.
+Its monorepo, shared brand, shared compatibility authorities, and anti-drift rationale
+remain; each Language path now declares its supported contract surface and releases
+independently.
+
 ## Context
 
 ADR-0002 retired the second (bash) runner and made the Python runner the sole AFK runner;

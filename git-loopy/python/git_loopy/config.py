@@ -92,19 +92,25 @@ TASK_TYPE_LABEL_PREFIX = "task-type:"
 #: Compatibility rows retained for saved Config are not account-availability claims.
 MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "auto": frozenset(),
-    "claude-sonnet-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-sonnet-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
+    "claude-sonnet-5.5": frozenset(
+        {"low", "medium", "high", "xhigh", "max"}
+    ),
     "claude-sonnet-4.6": frozenset({"low", "medium", "high", "max"}),
     "claude-sonnet-4.5": frozenset(),
-    "claude-haiku-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
+    "claude-haiku-5.5": frozenset(
+        {"low", "medium", "high", "xhigh", "max"}
+    ),
     "claude-haiku-4.5": frozenset(),
     "claude-opus-5.5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
-    "gpt-6.1-sol": frozenset({"none", "low", "medium", "high", "xhigh", "max"}),
     "gpt-6-astra": frozenset({"low", "medium", "high", "xhigh", "max"}),
+    "gpt-6.1-sol": frozenset(
+        {"none", "low", "medium", "high", "xhigh", "max"}
+    ),
     "gpt-6-luna": frozenset(
         {"none", "low", "medium", "high", "xhigh", "max"}
     ),
@@ -133,7 +139,7 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     ),
     "grok-4.5": frozenset({"low", "medium", "high"}),
     "grok-4.6": frozenset({"low", "medium", "high", "xhigh"}),
-    "grok-4.7": frozenset({"low", "medium", "high"}),
+    "grok-4.7": frozenset({"low", "medium", "high", "xhigh"}),
     "mai-code-1.1-flash": frozenset({"low", "medium", "high"}),
     "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
 }
@@ -142,9 +148,9 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
 #: :data:`MODEL_REASONING_EFFORTS` — the stamp
 #: ``conformance/model-roster.json`` already carries, restated in-language so a
 #: **Run** can read it without reaching for a fixture that is not packaged
-#: (#410). The Conformance suite holds the two in lockstep. The 2026-10-09
-#: refresh used this same pinned harness for both efforts and context tiers;
-#: account-unlisted compatibility rows retain their earlier efforts.
+#: (#410). The Conformance suite holds the two in lockstep. Account-unlisted
+#: compatibility rows retain their earlier effort values; context-tier fallback
+#: rows are populated only when captured against this exact version.
 #:
 #: The roster is a **function of CLI version** (ADR-0019): ``models.list``
 #: discards the vendor's advertised reasoning-effort array and substitutes a
@@ -152,7 +158,7 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
 #: differs from the CLI the SDK actually spawns, every gate verdict in the Run
 #: was reached against a description of some *other* binary, and the divergence
 #: is what the **Run readback** reports at Run start.
-MODEL_ROSTER_CLI_VERSION = "1.0.85"
+MODEL_ROSTER_CLI_VERSION = "1.0.92-3"
 
 #: The model ids the kit officially supports (the keys of
 #: :data:`MODEL_REASONING_EFFORTS`). :mod:`git_loopy.cli` uses this to
@@ -193,7 +199,7 @@ DEFAULT_CONTEXT_TIER = "default"
 #: "unknown": the tier passes through untouched, exactly as an off-roster model
 #: keeps its effort, because the live Copilot CLI is the authority.
 #:
-#: Captured from the SDK-pinned CLI 1.0.85 on 2026-10-09 (ADR-0019), not
+#: Captured from the SDK-pinned CLI 1.0.92-3 on 2026-10-09 (ADR-0019), not
 #: inferred from a model's maximum window. ``auto`` is model-dependent.
 #: Compatibility-only models have no tier row: their earlier effort data does
 #: not establish current tier support.

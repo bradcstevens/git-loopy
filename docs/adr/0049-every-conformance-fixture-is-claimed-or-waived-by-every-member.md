@@ -2,6 +2,12 @@
 
 **Status:** accepted
 
+**Superseded in part by [ADR-0073](0073-language-paths-release-and-gate-independently.md):**
+claim/waiver vocabulary, mutation-test rigor, and the no-silence rule remain. The
+completeness domain changes from every fixture and every family member to every
+fixture inside a Language path's declared Contract support and every member of
+that path.
+
 Decided by [#466](https://github.com/bradcstevens/git-loopy/issues/466).
 
 Every fixture in `git-loopy/conformance/` is **accounted for** by every member of the **Runner

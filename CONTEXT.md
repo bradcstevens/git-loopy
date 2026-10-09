@@ -44,6 +44,47 @@ proposal until the **Loop engineer** approves its recorded revision; it never
 turns planning documents into autonomous work.
 _Avoid_: Orchestrator (deterministic runner code), decomposer, auto-decomposer.
 
+**Reviewer**:
+The independent **Agent profile** whose verdict gates closure after an Agent
+finishes any result the Orchestrator would publish and close. It uses the `review`
+**Task type** and its own **Routed pair**, judges the exact result on separate
+**Spec** and **Standards** axes through the required `/code-review` Skill, and
+returns findings to a fresh implementation Agent without charging a **Strike**
+or changing the **Attempt lifecycle**.
+_Avoid_: self-review, feedback-loop gate.
+
+**Review stage**:
+The pre-publication stage after serial feedback loops or Parallel Lane work and
+before closure or admission to **Integration**. Parallel contributions may be
+reviewed concurrently; a **Recovery** that changes code sends the changed result
+through a fresh Review stage before publication, and the **Orchestrator** alone
+publishes and closes an approved result. A Reviewer session that produces no
+verdict uses the existing **Session outcome**, **Strike**, and **Attempt
+lifecycle** accounting; a completed rejection does not. The stage is never
+bypassed for route availability, latency, or resource pressure.
+_Avoid_: QA, post-publication review, Integration gate.
+
+**Review verdict**:
+The head-bound judgment produced by one Review stage, recording separate Spec
+and Standards outcomes, findings or approval, its ordinal, and the Reviewer
+profile and route. Its closed vocabulary is **approved** or
+**changes_requested**; it is durable both as a structured Run Event and as an
+issue comment.
+_Avoid_: review summary, annotation, test result.
+
+**Review ref**:
+The Runner-owned remote ref that makes an exact pre-publication result durable
+for review. It advances only by fast-forward through remediation, is deleted
+after green publication makes its commits reachable from base, and is retained
+as the **Review handoff** breadcrumb otherwise.
+_Avoid_: pull request, Lane branch, local review branch.
+
+**Review handoff**:
+The per-Run disposition reached when an issue's third Reviewer verdict still
+requests changes. The exact rejected head and findings remain durable, the issue
+stays open and ineligible for more work in that Run, and unrelated work continues.
+_Avoid_: review failure, Strike, Run stop.
+
 **Meta-engineering**:
 Working on the system that builds and operates the software rather than on the
 software directly. The loop engineer's leverage: an improvement to a workflow,
@@ -294,6 +335,14 @@ runner from the pool at **Pickup** and bound for the length of that work. In
 issue it is working; it does not choose.
 _Avoid_: current task, current ticket.
 
+**Path-owned issue**:
+An executable issue assigned to exactly one **Language path**, whose closure may
+advance only that path's **Release target**. Shared-authority gate fan-out changes
+no ownership; work that intentionally changes several paths is split into linked
+issues. Ownership is recorded by one `path:<key>` tracker label and is never
+inferred from the files changed.
+_Avoid_: multi-path issue, repository issue, inferred path.
+
 **Working marker**:
 The agent's explicit, up-front restatement of its active issue, used to attribute the
 iteration's timing and streamed output to that issue in real time. Because the runner
@@ -431,20 +480,23 @@ _Avoid_: backlog, list.
 An issue's lifecycle within a run: **queued** (seen, not yet worked), **active**
 (being worked now — several at once in **Parallel mode**, one per **Lane**, and left the
 moment a **Lane contribution**'s Lane work finishes), **parked** (finished, still holding
-its Lane, waiting for the **Integration backlog** to admit it), **admitted** (in the
-Integration backlog, waiting its turn) — parked, admitted, and integrating each show their phase age,
-the time since the row entered that Status — **integrating** (being merged and gated in its
-**Integration stage**), **recovering** (in **Recovery** after that merge or gate failed),
-**closed**
-(finished and closed via a commit close-keyword), **advanced** (progressed but not
-closed), **no-progress** (worked without meaningful change), **gone** (left the Run's view
-without resolution — it was seen in a pool or a **Membership read**, and a later
+its Lane, waiting for review capacity or for the **Integration backlog** to admit it),
+**reviewing** (its exact result is in the **Review stage**), **admitted**
+(reviewed and in the Integration backlog, waiting its turn) — parked, admitted,
+and integrating each show their phase age, the time since the row entered that
+Status — **integrating** (being merged and gated in its **Integration stage**),
+**recovering** (in **Recovery** after that merge or gate failed), **closed**
+(finished and closed via a commit close-keyword), **advanced** (progressed but
+not closed), **review-handoff** (three review verdicts requested changes, so the
+issue remains open and ineligible for more work in this Run), **no-progress**
+(worked without meaningful change), **gone** (left the Run's view without
+resolution — it was seen in a pool or a **Membership read**, and a later
 authoritative pool no longer lists it).
 
 **Closed**:
 The successful terminal **Status** in which the source issue has actually been
 closed. It alone has a closure timestamp; **advanced**, **no-progress**, and
-**gone** are not completions.
+**review-handoff**, and **gone** are not completions.
 _Avoid_: completed, ended (when the source issue remains open).
 
 **Issue elapsed**:
@@ -714,20 +766,21 @@ _Avoid_: picker mode, interactive model prompt.
 
 **git-loopy**:
 The GitHub Copilot SDK loop-engineering framework and brand for encoding specialized
-engineering knowledge into repeatable, autonomous workflows. It ships a **Runner
-family**: the Python reference runner (the globally-installed `git-loopy` console
-command; `git loopy` also works as a git subcommand) plus the planned **shell**,
-**PowerShell**, and **Rust** ports, all implementing one **Wrapper contract**.
-Written `git-loopy` as the distribution, console command, and on-disk/brand
+engineering knowledge into repeatable, autonomous workflows. It hosts a **Runner
+family** of independently released **Language paths** that share versioned
+compatibility authorities; the Python path owns the globally-installed
+`git-loopy` console command (`git loopy` also works as a git subcommand).
+Written `git-loopy` as the framework, Python distribution, console command, and on-disk/brand
 spelling; `git_loopy` as the importable Python package. Supersedes the retired
 **copiloop** and **ralph-afk** brands.
 _Avoid_: copiloop, ralph-afk, "the runner" as a proper name.
 
 **Release version**:
-The Semantic Versioning identity assigned to one published git-loopy distribution.
-Every included **Orchestrator** and **TUI helper** shares it; the **installed catalog**
-does not, because a distribution carries no Skills — only the pin naming the revision
-to install. Contract and schema versions remain separate compatibility identities.
+The Semantic Versioning identity assigned to one published **Language path**.
+Each path advances its own Release line independently, so version equality across
+paths has no meaning. The Python path retains the unqualified `vX.Y.Z` release
+namespace; other paths qualify theirs. Contract and schema versions remain
+separate compatibility identities.
 _Avoid_: component version, protocol version, schema version.
 
 **Release target**:
@@ -1408,11 +1461,44 @@ _Avoid_: rollback, regression.
 
 ### The runner family
 
+**Language path**:
+One independently versioned and gated stream of git-loopy development for a
+host-language stack inside the shared repository. Paths share interoperability
+authorities but never wait on another path's implementation, Release line, or
+feedback loops.
+_Avoid_: separate repository, family member, port (one implementation within a path).
+
+**Path manifest**:
+The repository record that names one **Language path**'s Release authority,
+**Contract support**, Event-schema support, members, artifacts, and **Path gate**.
+It is the authority CI and publication read instead of inferring path ownership
+from directories. Its compatibility declarations only advance; removing support
+requires an explicit retirement decision.
+_Avoid_: package manifest, workflow matrix, path configuration.
+
+**Path baseline**:
+The last shared family Release and the exact contract and schema support a
+**Language path** proved when independent histories began. A path advances from
+that snapshot without rewriting or inheriting another path's later history.
+_Avoid_: fork point, initial version, copied version.
+
+**Dormant path**:
+A **Language path** held at its last declared **Release version** and declared
+**Contract support** while another path advances. Its own or still-supported
+shared surfaces remain gated, but newer contracts create no debt for it.
+_Avoid_: deprecated path, retired port, unsupported code.
+
+**Path artifact**:
+A published artifact owned and versioned by exactly one **Language path**.
+Another path may consume a compatible release through a contract or schema, but
+never shares its Release identity.
+_Avoid_: shared-version artifact, family artifact, duplicated artifact.
+
 **Runner family**:
-The set of interchangeable git-loopy runners that each implement the same **Wrapper contract**
-in a different host language — the Python reference runner plus the planned **shell**,
-**PowerShell**, and **Rust** ports. One family, one contract, many languages; an operator picks
-the runner that matches their OS and the language they are comfortable with.
+The compatibility family of git-loopy **Language paths** sharing the brand,
+**Wrapper contract** series, **Event schema**, and **Conformance suite** vocabulary.
+Paths may support different contract versions and Release independently;
+interchangeability is limited to their common declared compatibility surface.
 _Avoid_: variants, flavors, backends.
 
 **Orchestrator**:
@@ -1434,11 +1520,11 @@ _Avoid_: "the TUI" (ambiguous with the Python Textual app), frontend, renderer (
 Python `Renderer`).
 
 **Event schema**:
-The single JSONL event vocabulary every **Orchestrator** emits and the **TUI helper** and the
-replay log both consume — low-level live records plus authoritative lifecycle and accounting
-records, all sharing the envelope (`ts`, `run_id`, `iter`, `type`, payload) and fixed type
-string literals (`git_loopy.events`). The string *literals*, not the constant names, are the
-contract downstream tooling reads.
+The versioned JSONL event vocabulary **Orchestrators** emit and live-interface
+artifacts and replay logs consume — low-level live records plus authoritative
+lifecycle and accounting records sharing one envelope and fixed type literals.
+Each **Language path** declares the versions and capabilities it emits or consumes;
+cross-path compatibility is negotiated rather than inferred from Release equality.
 _Avoid_: log format, event stream (as the name), telemetry.
 
 **Insight capability**:
@@ -1451,18 +1537,33 @@ coming.
 _Avoid_: renderer feature, best-effort metric.
 
 **Wrapper contract**:
-The language-neutral behavioural specification every **Orchestrator** must satisfy —
+The versioned language-neutral behavioural specification **Language paths** may
+implement at different supported versions —
 `ready-for-agent` collection, the `## What to build` + `## Acceptance criteria` discriminator, the
 pool-whitelisted `Closes/Fixes/Resolves #N` backstop, progress/**Strike** accounting,
 **Checkpoint** + push, the exit-code table, and the `GIT_LOOPY_*` env surface. Versioned in
-`docs/wrapper-contract.md`; enforced across the family by the **Conformance suite**.
+`docs/wrapper-contract.md`; enforced within each path's declared **Contract support**
+by the **Conformance suite**.
 _Avoid_: runner contract, "the spec" (informal).
+
+**Contract support**:
+The newest **Wrapper contract** version a **Language path** declares and proves.
+Two paths are behaviourally interchangeable only within the contract surface both
+support; neither path's newer features create debt for the other.
+_Avoid_: contract pin, latest contract, family parity.
+
+**Path gate**:
+The blocking feedback-loop set owned by one **Language path**. A shared-authority
+change fans out to every path whose **Contract support** includes the affected
+surface; unrelated paths never block one another.
+_Avoid_: family gate, repository gate, advisory suite.
 
 **Conformance suite**:
 The language-neutral fixture set — golden cases for the discriminator, the close-keyword regex,
-progress/strike accounting, and the exit-code table — that every **Orchestrator** runs in CI and
-must pass, keeping the **Runner family** from drifting. The generalized successor to the deleted
-two-runner cross-parity test (ADR-0002).
+progress/strike accounting, and the exit-code table — that each **Language path**
+runs through its declared **Contract support**. Every member of that path must
+claim or role-waive every fixture in that surface; newer fixtures create no
+obligation until the path advances its support.
 _Avoid_: parity test (the retired two-runner name), integration tests.
 
 **Fixture claim**:
@@ -1472,8 +1573,8 @@ it against what the member's production seam returns. The test is falsifiable �
 field one of that member's asserted cases reads, and that member's suite goes red. A filename in a
 README, a doc comment or production code no test drives is a mention, and a mention claims nothing.
 One qualifying case is a claim; how much of the fixture a member covers is a separate question.
-Every fixture is claimed or waived by every member; the verdicts live in
-`conformance/fixture-claims.json` (ADR-0049).
+Every fixture inside a path's **Contract support** is claimed or waived by every
+member of that path; the verdicts live in `conformance/fixture-claims.json`.
 _Avoid_: mention, reference, coverage; claim unqualified (that word's other job here is the
 **Lease** a run takes); **Permanent waiver** and **Owed waiver** (the two ways a fixture is
 accounted for *without* being exercised).
@@ -1520,8 +1621,9 @@ _Avoid_: Wave, batch, cohort, sliding window.
 
 **Lane**:
 One reusable concurrent execution slot in **Parallel mode**. A Lane works one
-**Parallel-safe** issue at a time in its own **Lane workspace** and branch, then becomes
-available for refill once its finished branch is admitted to **Integration**. Shown as one
+**Parallel-safe** issue at a time in its own **Lane workspace** and branch, retains
+that issue through review and remediation, then becomes available for refill once
+the reviewed branch is admitted to **Integration** or reaches **Review handoff**. Shown as one
 active row in the **Dashboard**, with its own timer and **Log**.
 _Avoid_: worker, thread.
 

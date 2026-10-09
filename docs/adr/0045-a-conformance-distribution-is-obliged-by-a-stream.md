@@ -5,6 +5,11 @@
 under which a rolling stream no longer carries types no producer emits. The fold-to-pinned-view
 rule below stands.
 
+**Scoped by [ADR-0073](0073-language-paths-release-and-gate-independently.md):**
+the producer-versus-consumer obligation still defines how a member exercises an
+in-scope stream, but a fixture obliges only paths whose declared Contract support
+includes it.
+
 Decided by [#432](https://github.com/bradcstevens/git-loopy/issues/432).
 
 `distributions` on a Conformance stream case has meant "this member round-trips these bytes through
