@@ -386,19 +386,13 @@ The contract is enforced across every port by the
 [Conformance suite](../conformance/README.md) in CI, so this PowerShell port and
 the Python and shell ports never drift.
 
-Run this port's suites from the repository root:
+---
 
-```powershell
-Get-ChildItem git-loopy/powershell/tests/test-*.ps1 | ForEach-Object {
-    pwsh -NoLogo -NoProfile -File $_.FullName
-    if ($LASTEXITCODE -ne 0) { throw "PowerShell suite failed: $($_.Name)" }
-}
-```
+## Contributor validation
 
-The boundary suite exercises the Windows in-process `gh.ps1` fake on every
-host as well as each host's normal launcher. An in-process fake receives
-GraphQL requests through PowerShell pipeline input, not `Console.In`; the
-regression verifies the carried pull-request ID and production query arrive.
+The validation commands live in [`AGENTS.md`](../../AGENTS.md). The boundary
+suite also checks in-process GraphQL pipeline input on every host, catching
+the Windows fake's input-transport regression outside Windows CI.
 
 ---
 
