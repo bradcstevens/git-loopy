@@ -17,3 +17,18 @@ def test_parallel_mode_guide_explains_initial_capacity_and_queue_depth() -> None
     assert "cap of 10 opens three Lanes at first" in guide
     assert "every issue the Run has read" in guide
     assert "deeper than the number of running Lanes" in guide
+
+
+def test_parallel_mode_guide_names_the_serial_drain_and_the_parallel_safe_lever() -> None:
+    """#428: the wait is named, and the one way to avoid it is the label."""
+    guide = " ".join(
+        (Path(__file__).resolve().parents[3] / "docs" / "parallel-mode.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+
+    assert "**Serial drain**" in guide
+    assert "slowest Lane in flight" in guide
+    assert "Nothing is cancelled" in guide
+    assert "label it `parallel-safe`" in guide
+    assert "no other way for a plain issue to run beside live Lanes" in guide

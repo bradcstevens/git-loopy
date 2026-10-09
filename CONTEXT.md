@@ -1794,11 +1794,22 @@ worked as a serial **Iteration** — the unlabelled issues, pull requests, and
 local-markdown items a **Parallel mode** Run must still drain. It is invisible to
 **Rolling dispatch**, whose **Pool** membership cache only ever surfaces Parallel-safe
 candidates, so the runner discovers it by its own reading of the Pool. Finding any
-latches serial demand: refill stops, started Lane work drains, and one unchanged serial
-Iteration is granted exclusive use of the base worktree before **Rolling dispatch** gets
-one full refill turn back — except while a **Pin**'s serial Iteration could not read the
-pin, which keeps serial ownership for it (ADR-0032).
+latches serial demand: refill stops, started Lane work drains (the **Serial drain**), and
+one unchanged serial Iteration is granted exclusive use of the base worktree before
+**Rolling dispatch** gets one full refill turn back — except while a **Pin**'s serial
+Iteration could not read the pin, which keeps serial ownership for it (ADR-0032).
 _Avoid_: plain work, non-parallel work, leftover.
+
+**Serial drain**:
+The span between a **Parallel mode** Run latching serial demand and the serial **Iteration**
+it is granted. Refill stops at once and nothing is cancelled: every started **Lane
+contribution** — setup, session, parked branch, **Integration** and **Recovery** — finishes
+first, so the span ends only at full quiescence. Its length is set by the cohort in flight
+when the latch landed, so Lanes the Run never opened add nothing. A **Pin** that is
+**Serial-required** latches before the first reservation, so its Iteration meets an empty
+pipeline and has no drain
+([ADR-0074](docs/adr/0074-the-serial-drain-waits-for-the-whole-lane-cohort.md)).
+_Avoid_: stall, pause, **Wind-down** (that is a Stop or a cap, not serial demand).
 
 **Serial fallback**:
 A serial **Iteration** a **Parallel mode** Run works because **Rolling dispatch** found

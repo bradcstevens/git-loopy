@@ -33,6 +33,13 @@ closure remain necessary, but are not sufficient if the base commit exists
 only locally. This adds a durability condition to publication, not a
 reversal of green-before-publication ordering.
 
+**Amended by [ADR-0074](0074-the-serial-drain-waits-for-the-whole-lane-cohort.md):**
+the Serial interleave below stands as written — a serial turn waits for full quiescence and
+Lane work keeps default precedence — and the wait is now named the **Serial drain**. No plain
+issue runs beside live Lanes; overlap is obtained by asserting `parallel-safe`. A human-asserted
+`priority` serial-required issue will latch serial demand before new Lane reservations, as the
+Pin does (accepted design, not yet shipped).
+
 **Partially superseded by:** [ADR-0065](0065-a-declared-rolling-event-is-seen-emitted-or-retired.md)
 only for the Parallel lifecycle list below, from which `wrapper.pipeline.quiescent` is retired, and
 for the "serial fallback" and "serial working" live statuses, which fold into existing Statuses.
