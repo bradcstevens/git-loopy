@@ -40,12 +40,13 @@ def test_recovery_output_cannot_restart_lane_work_or_its_phase_age() -> None:
 
     now = 0.0
     state = LiveRunState(monotonic=lambda: now)
-    identity = {"issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
     state.render({"type": "wrapper.contribution.start", **identity})
     now = 3.0
     state.render({"type": "wrapper.contribution.work_finished", **identity})
     now = 4.0
-    state.render({"type": "wrapper.integration.recovery_started", **identity})
+    state.render({"type": "wrapper.integration.recovery_started", **identity,
+                  "attempt": 1, "max_attempts": 3})
     now = 8.0
     state.stream_reasoning("Recovering", issue=42)
     state.render({"type": "usage.tokens", "lane_issue": 42, "input": 10, "output": 2})
@@ -56,6 +57,39 @@ def test_recovery_output_cannot_restart_lane_work_or_its_phase_age() -> None:
     assert row["active_seconds"] == 3.0
     assert row["phase_age_seconds"] == 6.0
     assert row["tokens_in"] == 10
+
+
+def test_contribution_end_cannot_replace_lane_timing_with_iteration_row_timing() -> None:
+    from datetime import datetime, timezone
+
+    from git_loopy.interactive.state import LiveRunState
+
+    now = 0.0
+    state = LiveRunState(
+        monotonic=lambda: now,
+        wall_clock=lambda: datetime(2026, 5, 16, tzinfo=timezone.utc),
+    )
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.contribution.start", **identity})
+    now = 10.0
+    state.render({"type": "wrapper.contribution.work_finished", **identity})
+    now = 30.0
+    state.render({
+        "type": "wrapper.contribution.end", **identity,
+        "ts": "2026-05-16T00:00:20Z",
+        "summary": {"closure_outcome": "closed", "agent_seconds": 10.0},
+        "issues": [{
+            "issue": 42, "status": "closed", "cumulative_active_seconds": 30.0,
+            "first_started_at": "2020-01-01T00:00:00Z",
+            "closed_at": "2099-01-01T00:00:00Z", "issue_elapsed_seconds": 900.0,
+        }],
+    })
+    projected = view_model.project_run_view(state, None, issue=42)
+    row = projected["dashboard"]["queue"]["rows"][0]
+    assert row["active_seconds"] == 10.0
+    assert row["started_at"] == "2026-05-16T00:00:00+00:00"
+    assert row["closed_at"] == "2026-05-16T00:00:20+00:00"
+    assert projected["drill_in"]["detail_header"]["issue_elapsed_seconds"] is None
 
 
 @pytest.mark.parametrize(
@@ -110,12 +144,40 @@ def test_each_posture_event_makes_parallel_available_and_ends_a_refill_turn(
     assert posture["pressure"] is None
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"reservations": 1},
+        {"effective_lane_limit": 2},
+        {"reservations": -1, "effective_lane_limit": 2},
+        {"reservations": 1, "effective_lane_limit": -1},
+        {"reservations": True, "effective_lane_limit": 2},
+        {"reservations": 1, "effective_lane_limit": 2.0},
+        {"reservations": 2**63, "effective_lane_limit": 2},
+    ],
+)
+@pytest.mark.parametrize("previous_turn", [False, True])
+def test_invalid_refill_turn_is_not_an_observed_posture(
+    payload: dict, previous_turn: bool,
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    state = LiveRunState()
+    if previous_turn:
+        state.render({"type": "wrapper.rolling.refill_turn", "reservations": 0,
+                      "effective_lane_limit": 2})
+    before = view_model.project_run_view(state, None, issue=42)["dashboard"]["header"]["parallel"]
+    state.render({"type": "wrapper.rolling.refill_turn", **payload})
+    after = view_model.project_run_view(state, None, issue=42)["dashboard"]["header"]["parallel"]
+    assert after == before
+
+
 def test_backlog_counts_contributions_once_until_they_end_not_until_publication() -> None:
     from git_loopy.interactive.state import LiveRunState
 
     state = LiveRunState()
-    first = {"issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
-    second = {"issue": 43, "contribution_id": "c-43", "lane_id": "lane-2"}
+    first = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    second = {"iter": None, "issue": 43, "contribution_id": "c-43", "lane_id": "lane-2"}
     for identity in [first, second]:
         state.render({"type": "wrapper.integration.parked", **identity})
         state.render({"type": "wrapper.integration.parked", **identity})
@@ -136,6 +198,78 @@ def test_backlog_counts_contributions_once_until_they_end_not_until_publication(
 
 
 @pytest.mark.parametrize(
+    "identity",
+    [
+        {"issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"},
+        {"iter": 2, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"},
+        {"iter": None, "issue": 42, "contribution_id": "", "lane_id": "lane-1"},
+        {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": ""},
+        {"iter": None, "issue": "", "contribution_id": "c-42", "lane_id": "lane-1"},
+        {"iter": None, "issue": True, "contribution_id": "c-42", "lane_id": "lane-1"},
+        {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": []},
+    ],
+)
+@pytest.mark.parametrize(
+    "etype",
+    [
+        "wrapper.integration.parked", "wrapper.integration.admitted",
+        "wrapper.integration.started", "wrapper.integration.branch_observed",
+        "wrapper.integration.recovery_started", "wrapper.contribution.end",
+    ],
+)
+def test_rolling_accounting_requires_a_whole_contribution_identity(
+    identity: dict, etype: str,
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    state = LiveRunState(monotonic=lambda: 0.0)
+    valid = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.contribution.start", **valid})
+    state.render({"type": "wrapper.integration.admitted", **valid})
+    before = view_model.project_run_view(state, None, issue=42)["dashboard"]
+    state.render({
+        "type": etype, **identity,
+        "attempt": 1, "max_attempts": 3, "base_publications_since_cut": 2,
+    })
+    after = view_model.project_run_view(state, None, issue=42)["dashboard"]
+    assert after["queue"] == before["queue"]
+    assert after["header"]["parallel"] == before["header"]["parallel"]
+    state.render({"type": "wrapper.contribution.end", **valid})
+    row = view_model.project_run_view(state, None, issue=42)["drill_in"][
+        "iteration_breakdown"
+    ]["rows"][0]
+    assert row["drift"] is None
+
+
+@pytest.mark.parametrize(
+    "pair",
+    [
+        {},
+        {"attempt": 1},
+        {"attempt": 0, "max_attempts": 3},
+        {"attempt": 5, "max_attempts": 3},
+        {"attempt": True, "max_attempts": 3},
+        {"attempt": 1, "max_attempts": 2**32},
+    ],
+)
+def test_invalid_recovery_attempt_cannot_change_integration_status(pair: dict) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    now = 0.0
+    state = LiveRunState(monotonic=lambda: now)
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.contribution.start", **identity})
+    state.render({"type": "wrapper.contribution.work_finished", **identity})
+    state.render({"type": "wrapper.integration.admitted", **identity})
+    now = 5.0
+    state.render({"type": "wrapper.integration.recovery_started", **identity, **pair})
+    row = view_model.project_run_view(state, None, issue=42)["dashboard"]["queue"]["rows"][0]
+    assert row["status"] == "admitted"
+    assert row["phase_age_seconds"] == 5.0
+    assert row["active_seconds"] == 0.0
+
+
+@pytest.mark.parametrize(
     ("summary", "issues", "expected"),
     [
         ({}, [], "no-progress"),
@@ -150,7 +284,7 @@ def test_contribution_end_projects_summary_without_requiring_issue_rows(
     from git_loopy.interactive.state import LiveRunState
 
     state = LiveRunState()
-    identity = {"issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
     state.render({"type": "wrapper.contribution.start", **identity})
     state.render({"type": "wrapper.contribution.end", **identity,
                   "summary": summary, "issues": issues, "reason": "unchanged_branch"})

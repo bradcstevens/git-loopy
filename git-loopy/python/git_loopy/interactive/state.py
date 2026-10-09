@@ -23,7 +23,8 @@ The model carries what the live **header band** needs (run id, model +
 reasoning effort, run-start wall clock, live-ticking elapsed timer, iteration
 number, run status, strike count ``x/N``) and, from issue #25, the **per-run
 ledger**: a record keyed by issue ref of every issue seen in any pool this run,
-with its status (queued / active / closed / advanced / no-progress / gone) and
+with its status (queued / active / parked / admitted / integrating / recovering /
+closed / advanced / no-progress / gone) and
 its waiting + active timing. The active issue is attributed from the
 Orchestrator's immutable ``wrapper.issue.activated`` event; marker and fallback
 selection stay producer-owned.
@@ -792,9 +793,7 @@ class LiveRunState:
             self._render_lane_event(str(etype), lane_issue, event, now)
             return
         if (
-            event.get("issue") is not None
-            and isinstance(event.get("contribution_id"), str)
-            and event.get("lane_id") is not None
+            _has_contribution_identity(event)
             and etype in _LANE_EVENTS
         ):
             self._render_lane_event(str(etype), event["issue"], event, now)
@@ -831,15 +830,18 @@ class LiveRunState:
                 return
             key = self._normalize_ref(issue)
             self._finish_activity_contribution(key, event)
-            self._finalize_contribution(key, event, now)
+            whole_identity = _has_contribution_identity(event)
+            if whole_identity:
+                self._finalize_contribution(key, event, now)
+                self._lane_work_finished.discard(key)
             contribution_id = event.get("contribution_id")
             if isinstance(contribution_id, str):
-                self.parallel.admitted_open.discard(contribution_id)
-                self.parallel.parked_open.discard(contribution_id)
+                if whole_identity:
+                    self.parallel.admitted_open.discard(contribution_id)
+                    self.parallel.parked_open.discard(contribution_id)
                 self._activity_contribution_pickups.pop(contribution_id, None)
                 self._activity_starts.pop(contribution_id, None)
                 self._activity_contributions.pop(contribution_id, None)
-            self._lane_work_finished.discard(key)
             return
         if etype in {
             _CONCURRENCY_CHANGED, _PARALLEL_DEGRADED, _PARALLEL_SERIAL_FALLBACK,
@@ -996,8 +998,9 @@ class LiveRunState:
             issue = event.get("issue")
             if issue is not None:
                 key = self._normalize_ref(issue)
-                self._lane_work_finished.add(key)
-                self._deactivate(key, at=now)
+                if _has_contribution_identity(event):
+                    self._lane_work_finished.add(key)
+                    self._deactivate(key, at=now)
                 self._finish_activity_contribution(key, event)
         elif etype == _INTEGRATION_RECOVERY_STARTED:
             self._record_integration(str(etype), event, now)
@@ -1023,6 +1026,19 @@ class LiveRunState:
         self, etype: str, event: Mapping[str, Any]
     ) -> None:
         posture = self.parallel
+        if etype == _ROLLING_REFILL_TURN:
+            reservations = _observed_count(event.get("reservations"))
+            limit = _observed_count(event.get("effective_lane_limit"))
+            if (
+                reservations is None or limit is None
+                or reservations > 2**63 - 1 or limit > 2**63 - 1
+            ):
+                return
+            posture.observed = True
+            posture.refill_turn = {
+                "reservations": reservations, "effective_lane_limit": limit,
+            }
+            return
         posture.observed = True
         posture.refill_turn = None
         if etype == _CONCURRENCY_CHANGED:
@@ -1052,13 +1068,6 @@ class LiveRunState:
                 posture.refill_stopped = event["refill_stopped"]
             if "serial_required" in event:
                 posture.serial_required = _observed_count(event["serial_required"])
-        elif etype == _ROLLING_REFILL_TURN:
-            reservations = _observed_count(event.get("reservations"))
-            limit = _observed_count(event.get("effective_lane_limit"))
-            if reservations is not None and limit is not None:
-                posture.refill_turn = {
-                    "reservations": reservations, "effective_lane_limit": limit,
-                }
 
     def _record_integration(
         self, etype: str, event: Mapping[str, Any], now: float
@@ -1066,9 +1075,11 @@ class LiveRunState:
         issue = event.get("issue")
         contribution_id = event.get("contribution_id")
         if (
-            issue is None or not isinstance(contribution_id, str)
-            or event.get("lane_id") is None
+            not _has_contribution_identity(event)
+            or not isinstance(contribution_id, str)
         ):
+            return
+        if etype == _INTEGRATION_RECOVERY_STARTED and _recovery_pair(event)[0] is None:
             return
         if etype == _INTEGRATION_BRANCH_OBSERVED:
             self._branch_drift[contribution_id] = _observed_count(
@@ -1879,7 +1890,7 @@ class LiveRunState:
             window.subagent_ids.discard(identity)
 
     def _start_integration_window(self, event: Mapping[str, Any], now: float) -> None:
-        issue = event.get("issue")
+        issue = _identity_key(event.get("issue"))
         if issue is None:
             return
         contribution_id = event.get("contribution_id")
@@ -2081,7 +2092,7 @@ class LiveRunState:
                 "issues": [normalized],
             },
             lane_keys={key},
-            rolling=event,
+            contribution_end=event,
         )
 
     def _record_pool(self, issues: Any, now: float) -> None:
@@ -2301,7 +2312,7 @@ class LiveRunState:
         event: Mapping[str, Any],
         *,
         lane_keys: set[int | str] | None = None,
-        rolling: Mapping[str, Any] | None = None,
+        contribution_end: Mapping[str, Any] | None = None,
     ) -> None:
         """Project authoritative finalized issue rows from a scope's end.
 
@@ -2309,6 +2320,8 @@ class LiveRunState:
         contribution** for (#310). A serial Iteration's end leaves it ``None``
         and falls back to the per-Iteration Lane refs a Wave-era round
         accumulated, so historical logs still read their Lanes as Lanes.
+        ``contribution_end`` supplies rolling identity and drift; its issue row
+        cannot overwrite the Lane timer or carry Iteration-only timing fields.
         """
         issues = event.get("issues")
         if not isinstance(issues, list):
@@ -2363,12 +2376,14 @@ class LiveRunState:
             )
             route = self._iter_routes.get(key)
             contribution = IssueContribution(
-                kind="contribution" if rolling is not None else (
+                kind="contribution" if contribution_end is not None else (
                     "lane" if is_lane else "iteration"
                 ),
-                contribution_id=str(rolling.get("contribution_id") or "") if rolling else "",
+                contribution_id=str(contribution_end.get("contribution_id") or "")
+                if contribution_end is not None else "",
                 iteration=None if is_lane else iter_num,
-                lane=_activity_lane(rolling.get("lane_id")) if rolling else (
+                lane=_activity_lane(contribution_end.get("lane_id"))
+                if contribution_end is not None else (
                     key if is_lane else None
                 ),
                 outcome=outcome,
@@ -2383,8 +2398,8 @@ class LiveRunState:
                 peak_context_window=_context_window_snapshot(
                     payload.get("peak_context_window")
                 ),
-                drift=self._branch_drift.get(str(rolling.get("contribution_id")))
-                if rolling else None,
+                drift=self._branch_drift.get(str(contribution_end.get("contribution_id")))
+                if contribution_end is not None else None,
             )
             entry.contributions.append(contribution)
             entry.usage_observed = any(
@@ -2392,25 +2407,25 @@ class LiveRunState:
             )
             entry.status = contribution.status
             entry.phase_since = None
-            entry.active_duration = max(
-                0.0,
-                _coerce_float(
-                    payload.get("cumulative_active_seconds"),
-                    entry.active_duration,
-                ),
-            )
-            started = self._local_timestamp(payload.get("first_started_at"))
-            if started is not None:
-                entry.started_wall = started
-            if rolling is not None:
+            if contribution_end is not None:
                 if entry.status == STATUS_CLOSED:
-                    entry.closed_wall = self._wall_at(self._monotonic())
+                    entry.closed_wall = self._local_timestamp(contribution_end.get("ts"))
             else:
+                entry.active_duration = max(
+                    0.0,
+                    _coerce_float(
+                        payload.get("cumulative_active_seconds"),
+                        entry.active_duration,
+                    ),
+                )
+                started = self._local_timestamp(payload.get("first_started_at"))
+                if started is not None:
+                    entry.started_wall = started
                 entry.closed_wall = self._local_timestamp(payload.get("closed_at"))
-            elapsed = payload.get("issue_elapsed_seconds")
-            entry.issue_elapsed_seconds = (
-                max(0.0, float(elapsed)) if isinstance(elapsed, (int, float)) else None
-            )
+                elapsed = payload.get("issue_elapsed_seconds")
+                entry.issue_elapsed_seconds = (
+                    max(0.0, float(elapsed)) if isinstance(elapsed, (int, float)) else None
+                )
             entry.usage = UsageTally()
             for item in entry.contributions:
                 entry.usage.merge(item.usage)
@@ -2467,6 +2482,26 @@ def _activity_lane(value: Any) -> int | str | None:
     if isinstance(value, bool):
         return None
     return value if isinstance(value, (int, str)) else None
+
+
+def _has_contribution_identity(event: Mapping[str, Any]) -> bool:
+    """A whole non-empty triple and a present null Iteration (ADR-0044)."""
+    if "iter" not in event or event["iter"] is not None:
+        return False
+    contribution_id = event.get("contribution_id")
+    if not isinstance(contribution_id, str) or not contribution_id:
+        return False
+    return all(_identity_key(event.get(key)) is not None for key in ("issue", "lane_id"))
+
+
+def _identity_key(value: Any) -> int | str | None:
+    value = _activity_lane(value)
+    if (
+        value is None or value == ""
+        or (isinstance(value, int) and not -(2**63) <= value < 2**63)
+    ):
+        return None
+    return value
 
 
 def _activity_lane_sort_key(lane: int | str) -> tuple[int, int | str]:
@@ -2596,7 +2631,7 @@ def _recovery_pair(event: Mapping[str, Any]) -> tuple[int | None, int | None]:
         or not isinstance(max_attempts, int)
     ):
         return None, None
-    if attempt < 1 or max_attempts < 1 or attempt > max_attempts:
+    if attempt < 1 or max_attempts < 1 or attempt > max_attempts or max_attempts >= 2**32:
         return None, None
     return attempt, max_attempts
 

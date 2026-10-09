@@ -2746,7 +2746,7 @@ def _assert_queue_row_fields(
 ) -> None:
     """Required Queue fields, then any declared optional keys that this row carries.
 
-    ``phase_age_seconds`` is present only while the row is parked or admitted,
+    ``phase_age_seconds`` is present only while the row is in an Integration Status,
     so it cannot be required without forcing every shared snapshot to invent one.
     """
     required = fields["queue_row"]

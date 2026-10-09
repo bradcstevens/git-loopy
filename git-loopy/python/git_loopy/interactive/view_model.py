@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 __all__ = ["project_run_view"]
 
+_INTEGRATION_HIGH_WATER = 2
 
 _QUEUE_COLUMNS = [
     "issue",
@@ -234,7 +235,9 @@ def _parallel(state: LiveRunState) -> dict[str, Any]:
         "integration_wip": (
             len(posture.admitted_open) if posture.integration_observed else None
         ),
-        "integration_high_water": 2 if posture.integration_observed else None,
+        "integration_high_water": (
+            _INTEGRATION_HIGH_WATER if posture.integration_observed else None
+        ),
         "parked_count": (
             len(posture.parked_open) if posture.integration_observed else None
         ),

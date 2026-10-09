@@ -508,6 +508,14 @@ def test_state_event_type_constants_match_events() -> None:
     assert state_module._AUTO_CLOSE == events_module.WRAPPER_AUTO_CLOSE
     assert state_module._PR_ADVANCED == events_module.WRAPPER_PR_ADVANCED
     assert state_module._ITERATION_END == events_module.WRAPPER_ITERATION_END
+    for name in (
+        "CONTRIBUTION_START", "CONTRIBUTION_END", "CONTRIBUTION_WORK_FINISHED",
+        "INTEGRATION_PARKED", "INTEGRATION_ADMITTED", "INTEGRATION_STARTED",
+        "INTEGRATION_BRANCH_OBSERVED", "INTEGRATION_RECOVERY_STARTED",
+        "INTEGRATION_PUBLISHED", "CONCURRENCY_CHANGED", "PARALLEL_DEGRADED",
+        "PARALLEL_SERIAL_FALLBACK", "SERIAL_REQUESTED", "ROLLING_REFILL_TURN",
+    ):
+        assert getattr(state_module, f"_{name}") == getattr(events_module, f"WRAPPER_{name}")
     assert state_module._ASSISTANT_MESSAGE == events_module.ASSISTANT_MESSAGE
     assert state_module._AGENT_OUTPUT == events_module.AGENT_OUTPUT
     # Log-driving literals (issue #34).

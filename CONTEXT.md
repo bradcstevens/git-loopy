@@ -483,7 +483,7 @@ moment a **Lane contribution**'s Lane work finishes), **parked** (finished, stil
 its Lane, waiting for review capacity or for the **Integration backlog** to admit it),
 **reviewing** (its exact result is in the **Review stage**), **admitted**
 (reviewed and in the Integration backlog, waiting its turn) — parked, admitted,
-and integrating each show their phase age, the time since the row entered that
+integrating, and recovering each show their phase age, the time since the row entered that
 Status — **integrating** (being merged and gated in its **Integration stage**),
 **recovering** (in **Recovery** after that merge or gate failed), **closed**
 (finished and closed via a commit close-keyword), **advanced** (progressed but
