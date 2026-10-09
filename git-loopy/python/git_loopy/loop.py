@@ -4358,8 +4358,9 @@ class _ParallelLoop:
     pickup, immediately before reservation
     (:meth:`~git_loopy.sources.RollingIssueSource.pickup`) — both already
     handled internally by :meth:`~git_loopy.rolling_scheduler.RollingScheduler.reserve`.
-    An issue whose agent session has started may never take a second Lane in
-    this Run (the scheduler's own ``_worked`` guard, #219 §1.7).
+    An issue holds at most one Lane at a time (the scheduler's own ``_worked``
+    guard, #219 §1.7); one whose Lane ended charging a **Strike** and is still
+    under ``max_nmt_strikes`` is released for a new Lane (ADR-0070).
 
     **Integration (#62, #63, #307, ADR-0020)** merges the Lane branch into a
     private **Integration stage** worktree, re-gates *that stage* from the
@@ -5242,7 +5243,13 @@ class _ParallelLoop:
                     # Pool can prove there is no Lane work before that driver
                     # has run at all, so give it the first turn rather than
                     # ending with a scheduler-only outcome.
-                    if terminal_outcome == "empty_pool" and scheduler._units_spent == 0:
+                    # A Lane-skipped issue leaves the cache, so a Pool emptied
+                    # by skips reads as empty too; the serial walk is what
+                    # reports it ``all_skipped`` (#703).
+                    if terminal_outcome == "empty_pool" and (
+                        scheduler._units_spent == 0
+                        or self._serial._attempts.any_skipped()
+                    ):
                         self._report_serial_fallback(scheduler)
                         outcome, _commits, _closures = (
                             await self._serial._run_one_iteration(
@@ -7082,6 +7089,12 @@ class _ParallelLoop:
             else rolling_scheduler.STRIKE_NONE
         )
         contribution.strike_reaction = strike_reaction
+        if (
+            strike_reaction == rolling_scheduler.STRIKE_ADD
+            and not self._serial._attempts.skipped(contribution.ref)
+            and self._scheduler is not None
+        ):
+            self._scheduler.release_for_retry(contribution.ref)
         try:
             rollup = self._serial._rollup.finish(
                 iter_num=scope.iter_num,
