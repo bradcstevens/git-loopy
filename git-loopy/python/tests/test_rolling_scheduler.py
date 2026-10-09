@@ -238,12 +238,12 @@ def test_contribution_ids_are_unique_within_the_run() -> None:
     assert ids == ["c1", "c2", "c3"]
 
 
-def test_worked_guard_latches_at_session_start_and_never_releases() -> None:
-    """#219 §1.7: one issue may take at most one Lane in a Run.
+def test_worked_guard_latches_at_session_start_and_holds_until_a_strike_releases_it() -> None:
+    """#219 §1.7: one issue may take at most one Lane at a time.
 
     The source keeps listing 11 — it is still open and still labelled, because
     a terminal unpublished contribution does not close anything. Only the
-    Run-scoped guard keeps it out of a second Lane.
+    worked guard keeps it out of a second concurrent Lane.
     """
     scheduler, source, clock = _scheduler_with_clock([11], lane_cap=2)
     scheduler.start()
@@ -282,6 +282,19 @@ def test_blamefree_host_failure_releases_the_provisional_session_claim() -> None
     assert scheduler.remaining_units == 5
     clock.advance(120.0)
     assert [reservation.item.ref for reservation in scheduler.reserve()] == [11]
+
+
+def test_a_reoffered_lane_still_counts_as_laned_for_the_serial_fallback() -> None:
+    """A terminal reoffer must not forget that the issue really took a Lane."""
+    scheduler, _source, _clock = _scheduler_with_clock([11], lane_cap=1, max_iterations=5)
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+    scheduler.finish_terminal_failure(
+        contribution, reoffer=True, reason=REASON_UNCHANGED_BRANCH
+    )
+
+    assert 11 in scheduler._laned
+    assert 11 not in scheduler._worked
 
 
 def test_a_host_failure_finalizes_with_the_reason_the_run_chose() -> None:

@@ -748,7 +748,6 @@ class RollingScheduler:
         if reoffer:
             self._units_spent -= 1
             self._worked.discard(contribution.ref)
-            self._laned.discard(contribution.ref)
         return TERMINAL
 
     def finalize(

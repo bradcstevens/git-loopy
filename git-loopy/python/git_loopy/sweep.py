@@ -29,7 +29,6 @@ residue did not work that issue.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -41,11 +40,7 @@ from git_loopy.wrapper import checkpoint_message, is_checkpoint_message
 
 __all__ = ["SweepReport", "resolve_base_ref", "sweep"]
 
-_BRANCH_RE = re.compile(
-    r"^git-loopy/(?P<run_id>[^/]+)(?:/attempt-[1-9]\d*)?"
-    r"(?:/(?P<stage>integrate|materialized))?"
-    r"/issue-(?P<issue>\d+)$"
-)
+_BRANCH_RE = git_module.RESERVED_BRANCH_RE
 
 
 def resolve_base_ref(git: git_module.GitClient) -> str:

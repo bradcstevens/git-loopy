@@ -356,6 +356,35 @@ def test_uninstall_detects_a_live_integration_stage(
         control.close()
 
 
+def test_uninstall_recognises_a_live_retry_lane_namespace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A retry Lane's ``attempt-N`` branch belongs to its live Run too."""
+    from git_loopy import uninstallcmd
+    from git_loopy.git import Worktree
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    control_dir = repo / ".git-loopy" / "logs"
+    control_dir.mkdir(parents=True)
+    lane = tmp_path / "repo.worktrees" / "RUNLIVE" / "attempt-2" / "issue-529"
+    lane.mkdir(parents=True)
+
+    class Git:
+        def list_worktrees(self) -> list[object]:
+            return [
+                Worktree(repo, "main"),
+                Worktree(lane, "git-loopy/RUNLIVE/attempt-2/issue-529"),
+            ]
+
+    control = RunControlArtifact.acquire(control_dir / "live-RUNLIVE.jsonl")
+    try:
+        monkeypatch.setattr(uninstallcmd, "SubprocessGitClient", lambda _root: Git())
+        assert uninstallcmd.find_live_lanes(repo) == (lane,)
+    finally:
+        control.close()
+
+
 def test_uninstall_refuses_a_global_scope_that_contains_preserved_project_files(
     tmp_path: Path,
 ) -> None:

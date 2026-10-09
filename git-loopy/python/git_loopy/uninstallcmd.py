@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -13,13 +12,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from git_loopy import installation, skill_install, tui_release
-from git_loopy.git import GitError, SubprocessGitClient, reserved_worktrees
+from git_loopy.git import (
+    RESERVED_BRANCH_RE,
+    GitError,
+    SubprocessGitClient,
+    reserved_worktrees,
+)
 from git_loopy.run_control import hold_uninstall_lock, is_run_alive
 from git_loopy.settings import global_dir
 
-_RESERVED_BRANCH = re.compile(
-    r"^git-loopy/(?P<run_id>[^/]+)(?:/(?:integrate|materialized))?/issue-\d+$"
-)
+_RESERVED_BRANCH = RESERVED_BRANCH_RE
 _WINDOWS_COMMAND_CHARACTERS = frozenset("&|<>()%^!\"")
 
 

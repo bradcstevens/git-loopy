@@ -318,6 +318,15 @@ def _stderr_tail(stderr: str | None) -> str:
 # --------------------------------------------------------------------------- #
 
 
+# The one reading of a reserved Lane branch name, retry namespace included
+# (``git-loopy/<run>/attempt-<N>/...``); sweep and uninstall both parse with it.
+RESERVED_BRANCH_RE = re.compile(
+    r"^git-loopy/(?P<run_id>[^/]+)(?:/attempt-[1-9]\d*)?"
+    r"(?:/(?P<stage>integrate|materialized))?"
+    r"/issue-(?P<issue>\d+)$"
+)
+
+
 def is_reserved_branch(branch: str) -> bool:
     """Return whether ``branch`` is one git-loopy cut for itself.
 

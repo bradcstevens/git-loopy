@@ -515,11 +515,12 @@ Refusal is **not eviction**. The candidate MUST stay in the scheduler's cache, b
 contract 2.17, a closing pull request that stops being open — makes it
 candidate-eligible on the following refresh, with no Run restarted and no human touching the issue.
 This is what separates readiness from an **Attempt-lifecycle** defeat, which nothing inside the Run
-can undo and which therefore does evict.
+can undo and which therefore keeps the issue out of candidacy for the rest of the Run.
 
 Readiness **composes** with the other candidacy predicates and MUST NOT replace any of them: a
 candidate must still carry `parallel-safe`, must still pass the Attempt-lifecycle skip, and the
-scheduler's own collision guard is untouched.
+scheduler's own collision guard still applies while an attempt's contribution is open, though it is
+released once that contribution finalizes having charged a Strike (ADR-0070).
 
 Because both seams read the same assertion, **both orders MUST agree**: a Lane MUST NOT reserve an
 issue a serial Iteration of the same Run already found Blocked or Awaiting merge, and a serial

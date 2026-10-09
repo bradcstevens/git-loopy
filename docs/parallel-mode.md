@@ -182,6 +182,10 @@ git directory:
 <repo>/.git/git-loopy/<run_id>/integrate/issue-<N>  ← its Integration stage
 ```
 
+A retry Lane of the same issue (ADR-0070) lives under
+`git-loopy/<run_id>/attempt-<N>/…` instead, so an earlier attempt's branch and
+workspace are preserved.
+
 That location is chosen so a live Lane cannot get in the way of the very
 commands the agents in it are running. The git directory is not *content* in any
 working tree, so a workspace never appears in `git status`, cannot be picked up
@@ -197,7 +201,8 @@ down as soon as its contribution finishes.
 
 **`git-loopy/` is a reserved branch namespace.** Every branch the runner cuts
 for itself lives under it — `git-loopy/<run_id>/issue-<N>` for a Lane and
-`git-loopy/<run_id>/integrate/issue-<N>` for its stage — and it is the *only*
+`git-loopy/<run_id>/integrate/issue-<N>` for its stage, with a retry attempt's
+branches under `git-loopy/<run_id>/attempt-<N>/` — and it is the *only*
 thing git-loopy will ever use to decide that a workspace is its own to reclaim.
 Don't put your own branches there.
 

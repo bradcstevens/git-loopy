@@ -824,6 +824,9 @@ def _integration_worktree_path(
     issue. Bounded auto-resolution for a red / conflicting contribution reuses
     the stage that contribution was already staged in, so recovery costs no
     extra workspace.
+
+    ``run_id`` is the Lane's workspace namespace, so a retry Lane passes
+    ``<run_id>/attempt-<N>`` and its stage nests beneath that.
     """
     return (
         common_git_dir / "git-loopy" / run_id / "integrate" / f"issue-{issue_number}"
@@ -6483,6 +6486,9 @@ class _ParallelLoop:
                 # be logged and then quietly omitted from the accounting.
                 lane_issue=contribution.ref,
                 iter=None,
+                # A retry Lane's host saw the attempt-suffixed identity; the
+                # stream belongs to the actual Run.
+                run_id=self._run_id,
             )
             self._serial._emitter.dispatch(envelope)
             # The Run-scoped Consumption observer, which the emitter does not

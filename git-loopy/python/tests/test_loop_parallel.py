@@ -899,6 +899,27 @@ def test_parallel_lane_with_an_unconfigured_canonical_task_type_uses_default(
     assert by_dir["issue-42"]["reasoning_effort"] == "max"
 
 
+def test_ingested_remote_events_carry_the_actual_run_id() -> None:
+    """A retry Lane's host saw ``<run>-attempt-N``; the stream is the Run's."""
+    from types import SimpleNamespace
+
+    dispatched: list[dict[str, Any]] = []
+    stub = SimpleNamespace(
+        _run_id="RUN1",
+        _serial=SimpleNamespace(
+            _emitter=SimpleNamespace(dispatch=dispatched.append),
+            _observe_ingested_consumption=lambda _envelope: None,
+        ),
+    )
+    contribution = SimpleNamespace(contribution_id="c1", lane_id=0, ref=42)
+
+    loop_module._ParallelLoop._ingest_contribution_events(
+        stub, contribution, [{"type": "x", "run_id": "RUN1-attempt-2"}]
+    )
+
+    assert dispatched[0]["run_id"] == "RUN1"
+
+
 def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> None:
     """Each Lane's streamed events carry the deterministic ``lane_issue`` (#66).
 
@@ -8360,7 +8381,7 @@ def test_a_lane_stall_and_a_serial_stall_defeat_one_issue_between_them(
     ]
 
 
-def test_a_defeated_issue_stops_being_a_lane_candidate(tmp_path, monkeypatch) -> None:
+def test_a_defeated_issue_is_not_a_lane_candidate(tmp_path, monkeypatch) -> None:
     """A **Lane** Pickup is a Pickup, so the **Skip** has to reach it too (#412).
 
     The Parallel scheduler's collision guard latches at session *start*, so
