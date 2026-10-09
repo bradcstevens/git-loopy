@@ -77,10 +77,12 @@ does.
 
 ## What this does not do
 
-It does not give a **Lane**-stalled issue a second Lane. Rolling dispatch still gives an issue one
-Lane per Run, so a Parallel-safe issue whose Lane ends charges one Strike and is retried only if a
-serial round takes it — the gap ADR-0041 recorded, unchanged here and tracked as its own
-follow-up.
+Rolling dispatch retries a **Lane**-ended issue (#703). The Run-scoped worked guard still keeps an
+issue to one Lane at a time, held through parking, Integration and recovery. When a contribution
+finalizes having charged its issue a Strike and the issue is still `retrying`, the guard lifts and
+the issue is eligible for a new Lane in the same Run, so a Parallel-safe issue gets the same N-Strike
+budget a Sequential Run gives it. A `skipped` issue never takes another Lane. The Strike count stays
+the only retry counter.
 
 It does not change the shell or PowerShell Orchestrators. Their **Pickup** binds an issue, but
 they hold no **Attempt lifecycle** to charge it to, so they keep counting consecutive no-progress

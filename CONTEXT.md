@@ -1745,7 +1745,11 @@ The serialized **Parallel mode** stage that consumes the **Integration backlog**
 contribution at a time. It merges each finished Lane branch into a private **Integration
 stage**, re-runs the feedback loops *there*, and only then publishes the verified result
 to the base branch and closes the issue — the issue is closed only after its contribution
-is verifiably published green. A conflicting or loop-failing contribution enters
+is verifiably published green.
+Where base has a configured upstream, the Python Runner also requires an acknowledged
+push of current base there before closure; a failed push leaves the issue open with its
+work on local base. With no upstream, local is the whole publication.
+A conflicting or loop-failing contribution enters
 **Recovery** in that same stage, and an exhausted Recovery ends in a **Recovery handoff**
 to the serial path. Runner-owned — it never waits on a human.
 _Avoid_: merge (as the name for this step), landing.

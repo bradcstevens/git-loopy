@@ -2,6 +2,16 @@
 
 **Status:** accepted
 
+**Implemented amendment ([#418](https://github.com/bradcstevens/git-loopy/issues/418)):**
+the Python Runner's Parallel Integration now pushes current base to its configured
+upstream after the green merge and any Release-line commit, before attempting tracker
+closure. It reads upstream configuration explicitly; a missing upstream retains local-only
+publication, while an unreadable configuration, denied push Lease fence or failed/rejected
+push keeps the landed work local and the issue open. A warning and contribution-stamped
+`wrapper.integration.push_failed` record the failure; an acknowledged push emits
+`wrapper.push.recorded`. No retry or rollback is added. Serial Checkpoints retain the
+non-fatal, best-effort auto-push below: tracker-attested publication is the exception.
+
 **Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
 for the Python Runner, a **Strike** is charged to the issue whose **Session** ended, and the Run
 never aborts on Strikes. Checkpoints stay excluded from progress, so a Session that left only
