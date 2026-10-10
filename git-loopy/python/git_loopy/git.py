@@ -318,6 +318,15 @@ def _stderr_tail(stderr: str | None) -> str:
 # --------------------------------------------------------------------------- #
 
 
+# The one reading of a reserved Lane branch name, retry namespace included
+# (``git-loopy/<run>/attempt-<A>/...``); sweep and uninstall both parse with it.
+RESERVED_BRANCH_RE = re.compile(
+    r"^git-loopy/(?P<run_id>[^/]+)(?:/attempt-[1-9]\d*)?"
+    r"(?:/(?P<stage>integrate|materialized))?"
+    r"/issue-(?P<issue>\d+)$"
+)
+
+
 def is_reserved_branch(branch: str) -> bool:
     """Return whether ``branch`` is one git-loopy cut for itself.
 
@@ -384,8 +393,10 @@ def lane_branch_name(run_id: str, issue_number: int) -> str:
     the convention under test here.
 
     Args:
-        run_id: The run identifier (a 26-char ULID in production, but any
-            string is accepted — the helper is a pure formatter).
+        run_id: The workspace namespace: the Run ULID for the first setup,
+            or ``<run_id>/attempt-<A>`` for a later setup of the issue.
+            This is not the hyphenated host identity or an Event's ``run_id``.
+            Any string is accepted — the helper is a pure formatter.
         issue_number: The Lane's ``parallel-safe`` issue number.
 
     Returns:
@@ -395,7 +406,7 @@ def lane_branch_name(run_id: str, issue_number: int) -> str:
 
 
 def integration_branch_name(run_id: str, issue_number: int) -> str:
-    """Return the branch name for a Parallel-mode auto-resolution attempt.
+    """Return the branch name for a Parallel-mode **Integration stage**.
 
     Integration recovery (#63, ADR-0009) merges a red / conflicting **Lane** on a
     dedicated *integration* branch in its own worktree, so the base branch is
@@ -405,7 +416,8 @@ def integration_branch_name(run_id: str, issue_number: int) -> str:
     (:func:`lane_branch_name`): ``git-loopy/<run_id>/integrate/issue-<N>``.
 
     Args:
-        run_id: The run identifier.
+        run_id: The same workspace namespace as :func:`lane_branch_name`,
+            including ``/attempt-<A>`` for a later setup of the issue.
         issue_number: The Lane's ``parallel-safe`` issue number.
 
     Returns:

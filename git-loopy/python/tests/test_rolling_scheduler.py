@@ -3,7 +3,7 @@
 Covers PRD #219 §1 ("Rolling scheduler state machine") and §3 ("Reservation,
 setup, and Lane-work boundary"), plus the §7 bookkeeping the scheduler owns:
 reusable **Lane** slots, provisional reservations, **Lane contribution**
-lifecycle, the Run-scoped worked guard, ``max_iterations`` reservation, the H=2
+lifecycle, retained issue ownership, ``max_iterations`` reservation, the H=2
 **Integration** backlog, the serial-demand latch, and quiescence.
 
 Every test drives the public :class:`~git_loopy.rolling_scheduler.RollingScheduler`
@@ -197,7 +197,7 @@ def test_a_reservation_still_in_setup_holds_its_lane() -> None:
 
 
 def test_a_refresh_cannot_re_offer_a_ref_already_in_setup() -> None:
-    """A provisional reservation excludes its ref before the worked guard exists."""
+    """A provisional reservation excludes its ref before session ownership latches."""
     scheduler, source, clock = _scheduler_with_clock([11], lane_cap=3)
     scheduler.start()
     (first,) = scheduler.reserve()
@@ -238,12 +238,13 @@ def test_contribution_ids_are_unique_within_the_run() -> None:
     assert ids == ["c1", "c2", "c3"]
 
 
-def test_worked_guard_latches_at_session_start_and_never_releases() -> None:
-    """#219 §1.7: one issue may take at most one Lane in a Run.
+def test_ownership_latches_at_session_start_and_holds_without_a_charge() -> None:
+    """#219 §1.7: one issue may take at most one Lane at a time.
 
     The source keeps listing 11 — it is still open and still labelled, because
     a terminal unpublished contribution does not close anything. Only the
-    Run-scoped guard keeps it out of a second Lane.
+    retained ownership keeps it out of another Lane until a charged attempt
+    releases it; finalizing an uncharged contribution alone does not release it.
     """
     scheduler, source, clock = _scheduler_with_clock([11], lane_cap=2)
     scheduler.start()
@@ -257,8 +258,8 @@ def test_worked_guard_latches_at_session_start_and_never_releases() -> None:
     assert source.membership_calls > 1
 
 
-def test_a_worked_candidate_does_not_block_the_final_empty_refresh() -> None:
-    """A lifecycle refusal cannot be re-cached behind the scheduler's guard."""
+def test_a_candidate_with_retained_ownership_is_not_recached_on_refresh() -> None:
+    """The scheduler's ownership guard composes into the cache predicate."""
     scheduler, _source = _scheduler([11], lane_cap=1)
     scheduler.start()
     (reservation,) = scheduler.reserve()
@@ -280,6 +281,24 @@ def test_blamefree_host_failure_releases_the_provisional_session_claim() -> None
 
     assert disposition == "terminal"
     assert scheduler.remaining_units == 5
+    clock.advance(120.0)
+    assert [reservation.item.ref for reservation in scheduler.reserve()] == [11]
+
+
+def test_a_reoffered_lane_still_counts_as_laned_for_the_serial_fallback() -> None:
+    """A terminal reoffer must not forget that the issue really took a Lane."""
+    scheduler, _source, clock = _scheduler_with_clock([11], lane_cap=1, max_iterations=5)
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+    scheduler.finish_terminal_failure(
+        contribution, reoffer=True, reason=REASON_UNCHANGED_BRANCH
+    )
+
+    fallback = scheduler.serial_fallback()
+    assert fallback is not None
+    assert fallback.reason == "all_parallel_safe_worked"
+    assert fallback.worked == 1
+
     clock.advance(120.0)
     assert [reservation.item.ref for reservation in scheduler.reserve()] == [11]
 
@@ -377,6 +396,43 @@ def test_a_terminal_contribution_releases_its_lane_for_refill() -> None:
     refill = scheduler.reserve()
 
     assert [(r.lane_id, r.item.ref) for r in refill] == [("L1", 12)]
+
+
+@pytest.mark.parametrize("state", ["setup", "open", "admitted", "parked"])
+def test_attempt_ownership_cannot_release_before_finalization(state) -> None:
+    scheduler, _source = _scheduler([11, 12, 13], lane_cap=3)
+    scheduler.start()
+    reservations = scheduler.reserve()
+    ref = 11
+    if state != "setup":
+        contributions = [scheduler.start_session(r) for r in reservations]
+        if state == "admitted":
+            scheduler.finish_work(contributions[0], changed=True)
+        elif state == "parked":
+            for contribution in contributions:
+                scheduler.finish_work(contribution, changed=True)
+            ref = 13
+
+    with pytest.raises(RuntimeError, match="cannot release active Lane ownership"):
+        scheduler.release_attempt(ref)
+    assert scheduler.reserve() == ()
+
+
+def test_a_finalized_attempt_can_retry_but_never_spend_past_the_cap() -> None:
+    scheduler, source, clock = _scheduler_with_clock([11], max_iterations=2)
+    scheduler.start()
+    first = scheduler.start_session(scheduler.reserve()[0])
+    scheduler.finish_work(first, changed=False)
+    scheduler.release_attempt(11)
+    clock.advance(60)
+    second = scheduler.start_session(scheduler.reserve()[0])
+    assert second.ref == first.ref
+    assert second.contribution_id != first.contribution_id
+    scheduler.finish_work(second, changed=False)
+    scheduler.release_attempt(11)
+    assert scheduler.remaining_units == 0
+    assert scheduler.reserve() == ()
+    assert source.pickup_calls == [11, 11]
 
 
 # --------------------------------------------------------------------------- #
@@ -822,11 +878,11 @@ def test_serial_fallback_reports_no_parallel_safe_candidates() -> None:
 
 
 def test_serial_fallback_distinguishes_already_worked_candidates() -> None:
-    """Eligible candidates existed — this Run already worked all of them (#304).
+    """No eligible candidates remain and the Run has Lane history (#304).
 
-    A different operator situation from "label some issues": the Run-scoped
-    worked guard (#219 §1.7) latches at agent-session start and never releases,
-    so the same issue can never take a second Lane in this Run.
+    Starting a session records history and retains ownership. This test leaves
+    that contribution open, so ownership still excludes a second concurrent
+    Lane. The fallback reports history, not whether ownership was released.
     """
     scheduler, _source = _scheduler([11], lane_cap=3)
     scheduler.start()
@@ -838,6 +894,24 @@ def test_serial_fallback_distinguishes_already_worked_candidates() -> None:
     assert fallback is not None
     assert fallback.reason == "all_parallel_safe_worked"
     assert (fallback.eligible, fallback.unavailable, fallback.worked) == (0, 0, 1)
+
+
+def test_serial_fallback_keeps_worked_reason_after_a_skipped_issue_is_released() -> None:
+    scheduler, _source = _scheduler([11], lane_cap=3)
+    skipped: set[int] = set()
+    inner = scheduler.pool.eligible
+    scheduler.pool.eligible = lambda c: inner(c) and c.ref not in skipped
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+    skipped.add(11)
+    scheduler.finish_work(contribution, changed=False)
+    scheduler.release_attempt(11)
+
+    fallback = scheduler.serial_fallback()
+
+    assert fallback is not None
+    assert fallback.reason == "all_parallel_safe_worked"
+    assert fallback.worked == 1
 
 
 def test_serial_fallback_reports_unreadable_candidates_as_unavailable() -> None:

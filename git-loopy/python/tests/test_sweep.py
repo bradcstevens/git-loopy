@@ -718,8 +718,9 @@ def test_sweep_reaps_workspace_skeletons_no_worktree_owns(tmp_path: Path) -> Non
     }
 
 
+@pytest.mark.parametrize("namespace", ["RUNDEAD", "RUNDEAD/attempt-2"])
 def test_sweep_collects_an_unmerged_lane_branch_only_once_its_issue_closes(
-    tmp_path: Path,
+    tmp_path: Path, namespace: str,
 ) -> None:
     """Resolution, not merged-ness, is what makes a Lane branch collectable.
 
@@ -731,8 +732,8 @@ def test_sweep_collects_an_unmerged_lane_branch_only_once_its_issue_closes(
     """
     git = FakeGitClient(tmp_path, branch="main")
     for number in (7, 8):
-        path = tmp_path / ".git" / "git-loopy" / "RUNDEAD" / f"issue-{number}"
-        lane = git.add_worktree(path, branch=lane_branch_name("RUNDEAD", number), base="main")
+        path = tmp_path / ".git" / "git-loopy" / namespace / f"issue-{number}"
+        lane = git.add_worktree(path, branch=lane_branch_name(namespace, number), base="main")
         lane.commit(f"unmerged work for #{number}")
         git.remove_worktree(path)
     github = FakeGitHubClient(
@@ -748,9 +749,9 @@ def test_sweep_collects_an_unmerged_lane_branch_only_once_its_issue_closes(
         dry_run=False,
     )
 
-    assert report.branches == (lane_branch_name("RUNDEAD", 7),)
-    assert git.branch_deletes == [lane_branch_name("RUNDEAD", 7)]
-    assert lane_branch_name("RUNDEAD", 8) in git.list_branches()
+    assert report.branches == (lane_branch_name(namespace, 7),)
+    assert git.branch_deletes == [lane_branch_name(namespace, 7)]
+    assert lane_branch_name(namespace, 8) in git.list_branches()
 
 
 def test_sweep_leaves_an_operators_own_dirty_worktree_entirely_alone(

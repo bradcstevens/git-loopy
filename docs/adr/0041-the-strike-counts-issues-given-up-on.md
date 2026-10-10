@@ -6,7 +6,9 @@
 now charged to the issue whose **Session** ended, against that issue's own budget of
 `max_nmt_strikes`, and the Python Runner never stops on Strikes: there is no Run-wide ceiling, no
 `stuck`, and no revocable `strike_limit` drain. The `all_skipped` termination this decision
-introduced stands.
+introduced stands. ADR-0070's #703 amendment also supersedes the one-Lane-per-Run
+limitation recorded under "What this does not do": finalized charged attempts
+below the issue's budget may now receive another Lane in that Run.
 
 Implemented by [#413](https://github.com/bradcstevens/git-loopy/issues/413), under the per-issue
 routing spec [#400](https://github.com/bradcstevens/git-loopy/issues/400). Completes
@@ -81,13 +83,16 @@ turn at which the answer could differ.
 
 ## What this does not do
 
-It does not narrow the gap between a Lane-stalled issue and a second attempt. Rolling dispatch
-still gives an issue one Lane per Run, so a **Parallel-safe** issue whose Lane ends in a
-*retryable* ending gets its second attempt only if a serial round happens to take it — and where
-the Pool is entirely Parallel-safe, no serial round ever is. Such a Run drains its Lanes and ends
-`empty_pool` on a Pool that still holds `retrying` issues. That is the same scheduler question
-ADR-0040 recorded and deliberately did not open; it is more visible now, because the strike
-accounting used to end those Runs before they got there.
+*Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md) (#703): rolling dispatch now
+gives a `retrying` issue a new Lane once its earlier charged contribution has finalized,
+or a later serial Iteration charges a Strike and releases retained ownership. A contribution
+still parked, admitted or recovering holds the issue regardless of its Strike count.
+The gap below is closed.*
+
+When this ADR was written it did not narrow the gap between a Lane-stalled issue and a second
+attempt. Rolling dispatch gave an issue one Lane per Run, so a **Parallel-safe** issue whose Lane
+ended in a *retryable* ending got its second attempt only if a serial round happened to take it,
+and a Run over an entirely Parallel-safe Pool ended `empty_pool` while `retrying` issues remained.
 
 Nothing renders the ledger. Neither the **Dashboard**'s **Queue** nor the **Run readback** shows
 which issues a Run has abandoned, so the Strike count is still a number without the names behind

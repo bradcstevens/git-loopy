@@ -99,10 +99,6 @@ class AttemptLedger:
         """
         return self.state(ref) is AttemptState.SKIPPED
 
-    def any_skipped(self) -> bool:
-        """Whether this Run has skipped at least one issue."""
-        return any(n >= self.max_strikes for n in self._strikes.values())
-
     def lifecycle_position(self, ref: int | str) -> RoutingLifecyclePosition:
         """``ref``'s state as the **Routing resolution** vocabulary spells it.
 

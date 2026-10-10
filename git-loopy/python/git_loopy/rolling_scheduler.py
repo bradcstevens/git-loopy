@@ -29,11 +29,13 @@ Design notes:
   minted at :meth:`start_session`, not at :meth:`reserve`. But a provisional
   reservation still holds its Lane and still reserves a cap unit *against
   further reservations*, so concurrent setup cannot oversubscribe either.
-* **The worked guard latches at session start.** §1.7: once an issue's agent
+* **The ownership guard latches at session start.** §1.7: once an issue's agent
   session has started it may not take a second Lane while its contribution is
   open, parked, admitted or recovering. It releases only through
-  :meth:`release_for_retry`, when the contribution has finalized having charged
-  a **Strike** and the issue is still under budget (ADR-0070). Before session start there is no guard — only the reservation
+  :meth:`release_attempt`, when the contribution has finalized having charged
+  a **Strike**, or when a later serial Iteration charges one (ADR-0070). Pickup's independent lifecycle predicate then
+  decides whether another attempt is owed. Before session start there is no
+  guard — only the reservation
   itself, which is what makes §3.3's "leave the candidate eligible" true.
 * **Admission is a consequence of finishing, not a separate question.** §3.9 and
   §4.2-4.3: a changed durable branch is offered, and it either fits the H=2
@@ -156,9 +158,9 @@ PHASE_DRAINING_FOR_STOP = "draining_for_stop"
 #                                 human assertion the runner never infers, this
 #                                 is the overwhelmingly common cause and the
 #                                 fix is triage.
-# ``all_parallel_safe_worked``    eligible candidates existed, but this Run has
-#                                 already worked every one of them (#219 §1.7's
-#                                 monotonic worked guard). Nothing is wrong.
+# ``all_parallel_safe_worked``    no eligible candidates remain, and this Run's
+#                                 ever-Laned history is non-empty. This history
+#                                 survives release of retained ownership.
 # ``parallel_safe_unavailable``   the Pool still holds ``parallel-safe``
 #                                 candidates, but every one is quarantined
 #                                 because its authoritative read failed (#219
@@ -186,7 +188,7 @@ class SerialFallback:
             "it found zero" is the whole point of the report.
         unavailable: Quarantined ``parallel-safe`` candidates: labelled, but
             not currently readable.
-        worked: Issues this Run has already worked in a Lane.
+        worked: Issues this Run has ever worked in a Lane, even if released.
         reason: One of :data:`SERIAL_FALLBACK_REASONS`.
     """
 
@@ -314,16 +316,20 @@ class RollingScheduler:
     )
     _stop_latched: bool = field(default=False, init=False)
     _phase: str = field(default=PHASE_ROLLING, init=False)
+    # Retained issue ownership, not a history of every attempt this Run worked.
     _worked: set[int | str] = field(default_factory=set, init=False)
+    # Issues ever Laned this Run; unlike `_worked` it survives release, so the
+    # serial-fallback reason stays accurate once a skipped issue is released.
+    _laned: set[int | str] = field(default_factory=set, init=False)
     _in_setup: set[int | str] = field(default_factory=set, init=False)
     _next_contribution: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
-        # Compose the Run-scoped worked-issue guard into both Pool predicates
+        # Compose the retained-ownership guard into both Pool predicates
         # (#219 §2.15). The guard deliberately does not live in the cache: it
         # is Run state this scheduler owns, and a cache could only ever
         # approximate it. A candidate unready only because it is **Blocked**
-        # remains cacheable; one this Run already claimed does not.
+        # remains cacheable; one whose Lane ownership is still held does not.
         inner = self.pool.eligible
         self.pool.eligible = lambda c: inner(c) and self._unclaimed(c)
         cache_inner = self.pool.cacheable
@@ -333,12 +339,13 @@ class RollingScheduler:
         )
 
     def _unclaimed(self, candidate: PoolCandidate) -> bool:
-        """Whether this Run has neither worked ``candidate`` nor reserved it.
+        """Whether this Run has no retained claim on ``candidate``.
 
         Two distinct claims, because they have different lifetimes.
         :attr:`_worked` latches at an Agent session start. A host result proving
-        that no session started releases it again; every actual session keeps
-        the guard for the Run. :attr:`_in_setup` covers the window a reservation
+        that no session started releases it again; a finalized charged attempt
+        releases it through :meth:`release_attempt`. Lifecycle eligibility is a
+        separate Pickup predicate. :attr:`_in_setup` covers the window a reservation
         is still provisional — the candidate is gone from the cache but a
         membership refresh would re-list it, and §3.3 makes it eligible again
         only if that setup *fails*.
@@ -501,8 +508,8 @@ class RollingScheduler:
         carried no ``parallel-safe`` issue reasonably concluded the flag was
         broken. This is the runner's answer, derived from state it already
         holds — the **Pool**'s current membership cache and this Run's own
-        worked guard — so asking costs no tracker read and changes no dispatch
-        decision.
+        history of issues ever Laned — so asking costs no tracker read and
+        changes no dispatch decision.
 
         Returns:
             ``None`` when eligible Lane work remains, because a serial
@@ -514,7 +521,7 @@ class RollingScheduler:
         if eligible > 0:
             return None
         unavailable = self.pool.unavailable_count
-        worked = len(self._worked)
+        worked = len(self._laned)
         if unavailable:
             reason = SERIAL_FALLBACK_UNAVAILABLE
         elif worked:
@@ -643,8 +650,9 @@ class RollingScheduler:
         The agent session starting is the single moment #219 §3.4 makes
         everything real at once: one ``max_iterations`` unit is spent (§7.9), a
         stable ``contribution_id`` is minted (§7.2), the issue latches into the
-        Run-scoped worked guard for good (§1.7), and the resolved model/effort
-        pair binds for both this Lane's work and its later recovery (#148),
+        ownership guard through finalization (§1.7, amended by ADR-0070), and
+        the resolved model/effort pair binds for both this Lane's work and its
+        later recovery (#148),
         together with the run-level context tier that pair was gated against.
         """
         self._next_contribution += 1
@@ -659,6 +667,7 @@ class RollingScheduler:
         self._units_spent += 1
         self._in_setup.discard(contribution.ref)
         self._worked.add(contribution.ref)
+        self._laned.add(contribution.ref)
         self._open[contribution.contribution_id] = contribution
         self._lanes_held[reservation.lane_id] = contribution
         return contribution
@@ -869,29 +878,19 @@ class RollingScheduler:
         self._release_lane(contribution)
         self._finalized.append(contribution)
 
-    def release_for_retry(self, ref: int | str) -> bool:
-        """Lift the worked guard so a finalized issue may take another Lane.
+    def release_attempt(self, ref: int | str) -> None:
+        """Release retained Lane ownership, not the issue's lifecycle verdict.
 
-        ADR-0070: an issue whose Lane ended charging a **Strike** and that is
-        still under its budget is retried in the same Run. The caller owns that
-        verdict; this only refuses while any contribution or reservation still
-        holds the issue, so one issue never holds two Lanes at once.
+        The driver calls this after a charged contribution finalizes, or after
+        a later serial Iteration charges a Strike. Pickup independently
+        excludes skipped issues; retaining them in membership allows the
+        terminal read to distinguish an all-skipped Pool from an empty one.
+        ``_open`` includes parked, admitted and recovering contributions.
+        A premature release is a programming error, never a silent refusal.
         """
-        if ref in self._in_setup or any(
-            holder.ref == ref for holder in self._open.values()
-        ):
-            return False
-        if any(
-            getattr(holder, "item", None) is not None and holder.item.ref == ref
-            for holder in self._lanes_held.values()
-        ):
-            return False
-        if any(entry[1].ref == ref for entry in self._parked) or any(
-            c.ref == ref for c in self._admitted
-        ):
-            return False
+        if ref in self._in_setup or any(c.ref == ref for c in self._open.values()):
+            raise RuntimeError(f"cannot release active Lane ownership for issue {ref}")
         self._worked.discard(ref)
-        return True
 
     def _release_lane(self, contribution: Contribution) -> None:
         for lane_id, holder in list(self._lanes_held.items()):
