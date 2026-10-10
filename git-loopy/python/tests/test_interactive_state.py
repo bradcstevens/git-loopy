@@ -19,10 +19,13 @@ import ast
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from git_loopy import events as events_module
 from git_loopy import sinks as sinks_module
 from git_loopy.interactive import state as state_module
 from git_loopy.interactive.state import LiveRunState, format_header
+from git_loopy.interactive.view_model import project_run_view
 
 
 class _FakeClock:
@@ -82,6 +85,171 @@ def test_iteration_start_updates_current_iteration() -> None:
     state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 4})
     assert state.iteration == 4
     assert state.status == "running"
+
+
+@pytest.mark.parametrize("available", [None, False, True])
+def test_contribution_stamped_context_window_sample_leaves_the_header_alone(
+    available: bool | None,
+) -> None:
+    state = _make_state()
+    state.render(
+        {
+            "type": events_module.WRAPPER_RUN_START,
+            "insight_capabilities": {"context_window": available},
+        }
+    )
+    header = project_run_view(state, None, issue=7)["dashboard"]["header"]
+    state.render(
+        {
+            "type": events_module.USAGE_CONTEXT_WINDOW,
+            "iter": None,
+            "contribution_id": "c-1",
+            "issue": 7,
+            "lane_id": "lane-1",
+            "current_tokens": 50,
+            "token_limit": 32_000,
+        }
+    )
+
+    assert state.context_window is None
+    assert state.peak_context_window is None
+    assert project_run_view(state, None, issue=7)["dashboard"]["header"] == header
+
+
+def test_contribution_stamped_context_window_sample_updates_only_its_activity() -> None:
+    state = _make_state()
+    state.render({
+        "type": events_module.WRAPPER_RUN_START,
+        "insight_capabilities": {"context_window": True},
+    })
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "issue": 9})
+    state.render({
+        "type": events_module.USAGE_CONTEXT_WINDOW,
+        "current_tokens": 12_000,
+        "token_limit": 32_000,
+    })
+    header = project_run_view(state, None, issue=7)["dashboard"]["header"]
+    identity = {
+        "iter": None, "contribution_id": "c-7", "issue": 7, "lane_id": "lane-1",
+    }
+    sibling = {
+        "iter": None, "contribution_id": "c-8", "issue": 8, "lane_id": "lane-2",
+    }
+    for stamp in (identity, sibling):
+        state.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **stamp})
+        state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, **stamp})
+    state.render({
+        "type": events_module.USAGE_CONTEXT_WINDOW, **identity,
+        "current_tokens": 50_000, "token_limit": 100_000,
+    })
+
+    view = project_run_view(state, None, issue=7)
+    windows = view["dashboard"]["activity"]["windows"]
+    matching = next(window for window in windows if window["issue"] == 7)
+    assert matching["context_fill"] == {
+        "availability": "available",
+        "current_tokens": 50_000,
+        "token_limit": 100_000,
+        "percentage": 50.0,
+        "effective_target_tokens": None,
+        "effective_ceiling_tokens": None,
+    }
+    other = next(window for window in windows if window["issue"] == 8)
+    assert other["context_fill"]["availability"] == "not_observed"
+    serial = next(window for window in windows if window["issue"] == 9)
+    assert serial["context_fill"]["current_tokens"] == 12_000
+    assert view["dashboard"]["header"] == header
+
+
+@pytest.mark.parametrize("activated", [False, True])
+def test_contribution_context_without_live_activity_cannot_update_serial_or_refill(
+    activated: bool,
+) -> None:
+    state = _make_state()
+    state.render({"type": events_module.WRAPPER_RUN_START})
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "issue": 9})
+    identity = {
+        "iter": None, "contribution_id": "c-7", "issue": 7, "lane_id": "lane-1",
+    }
+    state.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **identity})
+    if activated:
+        state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, **identity})
+        state.render({
+            "type": events_module.WRAPPER_CONTRIBUTION_WORK_FINISHED, **identity,
+        })
+    refill = {
+        "iter": None, "contribution_id": "c-8", "issue": 8, "lane_id": "lane-1",
+    }
+    state.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **refill})
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, **refill})
+    before = project_run_view(state, None, issue=7)["dashboard"]
+    state.render({
+        "type": events_module.USAGE_CONTEXT_WINDOW, **identity,
+        "current_tokens": 50_000, "token_limit": 100_000,
+    })
+    after = project_run_view(state, None, issue=7)["dashboard"]
+    assert after == before
+
+
+@pytest.mark.parametrize("activated", [False, True])
+def test_contribution_stamped_subagent_lines_need_no_live_activity(
+    activated: bool,
+) -> None:
+    clock = _FakeClock()
+    state = _make_state(monotonic=clock)
+    state.render({
+        "type": events_module.WRAPPER_RUN_START,
+        "insight_capabilities": {"subagents": True},
+    })
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "issue": 9})
+    identity = {
+        "iter": None, "contribution_id": "c-7", "issue": 7, "lane_id": "lane-1",
+    }
+    sibling = {
+        "iter": None, "contribution_id": "c-8", "issue": 8, "lane_id": "lane-2",
+    }
+    state.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **sibling})
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, **sibling})
+    state.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **identity})
+    if activated:
+        state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, **identity})
+        clock.advance(3)
+        state.render({
+            "type": events_module.WRAPPER_CONTRIBUTION_WORK_FINISHED, **identity,
+        })
+    clock.advance(5)
+    before = project_run_view(state, None, issue=7)["dashboard"]
+    expected = [
+        "Subagent started: Code explorer @ gpt-5-mini",
+        "Subagent completed: Code explorer @ gpt-5-mini (2.50s, 100 tokens, 3 tool calls)",
+        "Subagent failed: Code explorer @ gpt-5-mini: agent crashed",
+    ]
+    for etype, text in zip(
+        (
+            events_module.SUBAGENT_STARTED,
+            events_module.SUBAGENT_COMPLETED,
+            events_module.SUBAGENT_FAILED,
+        ),
+        expected,
+        strict=True,
+    ):
+        state.render({
+            "type": etype, **identity, "tool_call_id": "call-7",
+            "agent_display_name": "Code explorer", "model": "gpt-5-mini",
+            "duration_seconds": 2.5, "total_tokens": 100, "total_tool_calls": 3,
+            "error": "agent crashed",
+        })
+        view = project_run_view(state, None, issue=7)
+        assert view["drill_in"]["log"]["lines"][-1]["text"] == text
+        assert view["dashboard"]["queue"] == before["queue"]
+        windows = view["dashboard"]["activity"]["windows"]
+        assert len(windows) == (3 if activated else 2)
+        assert all(window["subagents"] == 0 for window in windows)
+        assert all(
+            not window["lines"] for window in windows if window["issue"] in {8, 9}
+        )
+    assert [line["text"] for line in view["drill_in"]["log"]["lines"]] == expected
+    assert state.active_ref == 9
 
 
 def test_context_window_samples_are_iteration_scoped_and_retain_peak() -> None:
@@ -508,6 +676,14 @@ def test_state_event_type_constants_match_events() -> None:
     assert state_module._AUTO_CLOSE == events_module.WRAPPER_AUTO_CLOSE
     assert state_module._PR_ADVANCED == events_module.WRAPPER_PR_ADVANCED
     assert state_module._ITERATION_END == events_module.WRAPPER_ITERATION_END
+    for name in (
+        "CONTRIBUTION_START", "CONTRIBUTION_END", "CONTRIBUTION_WORK_FINISHED",
+        "INTEGRATION_PARKED", "INTEGRATION_ADMITTED", "INTEGRATION_STARTED",
+        "INTEGRATION_BRANCH_OBSERVED", "INTEGRATION_RECOVERY_STARTED",
+        "INTEGRATION_PUBLISHED", "CONCURRENCY_CHANGED", "PARALLEL_DEGRADED",
+        "PARALLEL_SERIAL_FALLBACK", "SERIAL_REQUESTED", "ROLLING_REFILL_TURN",
+    ):
+        assert getattr(state_module, f"_{name}") == getattr(events_module, f"WRAPPER_{name}")
     assert state_module._ASSISTANT_MESSAGE == events_module.ASSISTANT_MESSAGE
     assert state_module._AGENT_OUTPUT == events_module.AGENT_OUTPUT
     # Log-driving literals (issue #34).
@@ -524,11 +700,12 @@ def test_state_module_imports_are_constrained() -> None:
     The interactive sink must stay unit-testable without a TTY and must never
     import Textual or the SDK (issue #23 acceptance criterion; ADR-0001
     import-guard convention, mirroring ``git_loopy.sinks``). The **only**
-    first-party import allowed is :mod:`git_loopy.usage` (issue #41) — the shared
+    first-party value imports include :mod:`git_loopy.usage` (issue #41) — the shared
     ``UsageTally`` **Consumption** value object the per-Active-issue accrual folds
     onto. It is itself deep and pure (stdlib + :mod:`git_loopy.pricing`), so
     ``state.py`` imports ``usage``, **not** ``pricing`` / Textual / the SDK
-    directly. Any other first-party import (or Textual / the SDK) still fails.
+    directly — and the stdlib-only contribution identity decoder (#687),
+    shared with the Summary. Any other first-party import still fails.
     """
     source = Path(state_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -541,11 +718,12 @@ def test_state_module_imports_are_constrained() -> None:
         "dataclasses",
         "datetime",
         "typing",
-        # The one first-party allowance (issue #41): the shared UsageTally
+        # The shared UsageTally (issue #41):
         # Consumption value object. Deep and pure (stdlib + git_loopy.pricing);
         # state.py folds its per-Active-issue Consumption onto it. NOT a Textual /
         # SDK / pricing coupling — state.py imports usage, not pricing directly.
         "git_loopy.usage",
+        "git_loopy.contribution_identity",
     }
     seen: set[str] = set()
     for node in ast.walk(tree):
@@ -563,6 +741,18 @@ def test_state_module_imports_are_constrained() -> None:
     # is exactly one hop deep: state.py imports usage, not pricing directly.
     assert "git_loopy.usage" in seen, "state.py folds Consumption through UsageTally"
     assert "git_loopy.pricing" not in seen, "state.py imports usage, not pricing"
+
+
+def test_contribution_identity_decoder_has_only_stdlib_imports() -> None:
+    from git_loopy import contribution_identity
+
+    tree = ast.parse(Path(contribution_identity.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(alias.name in {"typing", "__future__"} for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level == 0
+            assert node.module in {"typing", "__future__"}
 
 
 # --------------------------------------------------------------------------- #

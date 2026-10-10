@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from git_loopy.interactive import view_model
 
 
@@ -31,6 +33,337 @@ def test_view_model_module_has_no_renderer_dependency() -> None:
     assert not seen - allowed
     assert "textual" not in seen
     assert "rich" not in seen
+
+
+def test_recovery_output_cannot_restart_lane_work_or_its_phase_age() -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    now = 0.0
+    state = LiveRunState(monotonic=lambda: now)
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.contribution.start", **identity})
+    now = 3.0
+    state.render({"type": "wrapper.contribution.work_finished", **identity})
+    now = 4.0
+    state.render({"type": "wrapper.integration.recovery_started", **identity,
+                  "attempt": 1, "max_attempts": 3})
+    now = 8.0
+    state.stream_reasoning("Recovering", issue=42)
+    state.render({"type": "usage.tokens", "lane_issue": 42, "input": 10, "output": 2})
+    now = 10.0
+
+    row = view_model.project_run_view(state, None, issue=42)["dashboard"]["queue"]["rows"][0]
+    assert row["status"] == "recovering"
+    assert row["active_seconds"] == 3.0
+    assert row["phase_age_seconds"] == 6.0
+    assert row["tokens_in"] == 10
+
+
+def test_contribution_end_cannot_replace_lane_timing_with_iteration_row_timing() -> None:
+    from datetime import datetime, timezone
+
+    from git_loopy.interactive.state import LiveRunState
+
+    now = 0.0
+    state = LiveRunState(
+        monotonic=lambda: now,
+        wall_clock=lambda: datetime(2026, 5, 16, tzinfo=timezone.utc),
+    )
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.contribution.start", **identity})
+    now = 10.0
+    state.render({"type": "wrapper.contribution.work_finished", **identity})
+    now = 30.0
+    state.render({
+        "type": "wrapper.contribution.end", **identity,
+        "ts": "2026-05-16T00:00:20Z",
+        "summary": {"closure_outcome": "closed", "agent_seconds": 10.0},
+        "issues": [{
+            "issue": 42, "status": "closed", "cumulative_active_seconds": 30.0,
+            "first_started_at": "2020-01-01T00:00:00Z",
+            "closed_at": "2099-01-01T00:00:00Z", "issue_elapsed_seconds": 900.0,
+        }],
+    })
+    projected = view_model.project_run_view(state, None, issue=42)
+    row = projected["dashboard"]["queue"]["rows"][0]
+    assert row["active_seconds"] == 10.0
+    assert row["started_at"] == "2026-05-16T00:00:00+00:00"
+    assert row["closed_at"] == "2026-05-16T00:00:20+00:00"
+    assert projected["drill_in"]["detail_header"]["issue_elapsed_seconds"] is None
+
+
+@pytest.mark.parametrize(
+    ("etype", "terminal"), [("wrapper.auto_close", "closed"), ("wrapper.pr.advanced", "advanced")],
+)
+@pytest.mark.parametrize("lane_stamp", [False, True])
+def test_rolling_closure_is_log_only_until_contribution_end(
+    etype: str, terminal: str, lane_stamp: bool,
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    now = 0.0
+    state = LiveRunState(monotonic=lambda: now)
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.contribution.start", **identity})
+    now = 3.0
+    state.render({"type": "wrapper.contribution.work_finished", **identity})
+    now = 4.0
+    state.render({"type": "wrapper.integration.started", **identity})
+    now = 10.0
+    stamp = {"lane_issue": 42} if lane_stamp else identity
+    state.render({"type": etype, **stamp, "issue": 42, "pr": 42})
+    projected = view_model.project_run_view(state, None, issue=42)
+    row = projected["dashboard"]["queue"]["rows"][0]
+    assert row["status"] == "integrating"
+    assert row["active_seconds"] == 3.0
+    assert row["phase_age_seconds"] == 6.0
+    assert projected["drill_in"]["log"]["lines"][-1]["kind"] == "event"
+    state.render({"type": "wrapper.contribution.end", **identity,
+                  "summary": {"closure_outcome": terminal}})
+    row = view_model.project_run_view(state, None, issue=42)["dashboard"]["queue"]["rows"][0]
+    assert row["status"] == terminal
+    assert "phase_age_seconds" not in row
+
+
+@pytest.mark.parametrize(
+    "override",
+    [{"iter": 2}, {"lane_id": ""}, {"issue": ""}, {"issue": True}, {"lane_id": None}],
+)
+def test_malformed_contribution_end_cannot_finalize_the_summary(override: dict) -> None:
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.ui.summary import RunSummary
+
+    state = LiveRunState()
+    summary = RunSummary()
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    start = {"type": "wrapper.contribution.start", **identity}
+    state.render(start)
+    summary.on_contribution_start(start)
+    end = {"type": "wrapper.contribution.end", **identity, "reason": "published",
+           "summary": {"closure_outcome": "closed"}}
+    malformed = {**end, **override}
+    state.render(malformed)
+    summary.on_contribution_end(malformed)
+    projected = view_model.project_run_view(state, summary, issue=42)
+    assert projected["dashboard"]["summary"]["rows"] == []
+    assert projected["drill_in"]["iteration_breakdown"]["rows"] == []
+    assert projected["dashboard"]["queue"]["rows"][0]["status"] == "active"
+    state.render(end)
+    summary.on_contribution_end(end)
+    projected = view_model.project_run_view(state, summary, issue=42)
+    assert len(projected["dashboard"]["summary"]["rows"]) == 1
+    assert len(projected["drill_in"]["iteration_breakdown"]["rows"]) == 1
+    assert projected["dashboard"]["queue"]["rows"][0]["status"] == "closed"
+
+
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    [
+        (
+            {"type": "wrapper.concurrency.changed", "configured_lane_limit": 3,
+             "effective_lane_limit": 1, "pressure": "host"},
+            {"configured_lane_limit": 3, "effective_lane_limit": 1, "pressure": "host"},
+        ),
+        (
+            {"type": "wrapper.parallel.degraded", "lane_cap": 3, "reason": "no_isolation"},
+            {"configured_lane_limit": 3, "degraded": True, "degraded_reason": "no_isolation"},
+        ),
+        (
+            {"type": "wrapper.parallel.serial_fallback", "lane_cap": 2,
+             "reason": "serial_required"},
+            {"configured_lane_limit": 2, "serial_fallback_reason": "serial_required"},
+        ),
+        (
+            {"type": "wrapper.serial.requested", "serial_required": 2,
+             "refill_stopped": True},
+            {"serial_required": 2, "refill_stopped": True},
+        ),
+        (
+            {"type": "wrapper.rolling.refill_turn", "reservations": 0,
+             "effective_lane_limit": 2},
+            {"refill_turn": {"reservations": 0, "effective_lane_limit": 2}},
+        ),
+    ],
+)
+def test_each_posture_event_makes_parallel_available_and_ends_a_refill_turn(
+    event: dict, expected: dict,
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    state = LiveRunState()
+    state.render({"type": "wrapper.run.start", "parallel_capabilities": {"parallel_mode": True}})
+    assert view_model.project_run_view(state, None, issue=42)["dashboard"]["header"][
+        "parallel"
+    ]["availability"] == "not_declared"
+    state.render(event)
+    posture = view_model.project_run_view(state, None, issue=42)["dashboard"]["header"]["parallel"]
+    assert posture["availability"] == "available"
+    for key, value in expected.items():
+        assert posture[key] == value
+    state.render({"type": "wrapper.rolling.refill_turn", "reservations": 1,
+                  "effective_lane_limit": 1})
+    state.render({"type": "wrapper.concurrency.changed", "pressure": None})
+    posture = view_model.project_run_view(state, None, issue=42)["dashboard"]["header"]["parallel"]
+    assert posture["refill_turn"] is None
+    assert posture["pressure"] is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"reservations": 1},
+        {"effective_lane_limit": 2},
+        {"reservations": -1, "effective_lane_limit": 2},
+        {"reservations": 1, "effective_lane_limit": -1},
+        {"reservations": True, "effective_lane_limit": 2},
+        {"reservations": 1, "effective_lane_limit": 2.0},
+        {"reservations": 2**63, "effective_lane_limit": 2},
+    ],
+)
+@pytest.mark.parametrize("previous_turn", [False, True])
+def test_invalid_refill_turn_is_not_an_observed_posture(
+    payload: dict, previous_turn: bool,
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    state = LiveRunState()
+    if previous_turn:
+        state.render({"type": "wrapper.rolling.refill_turn", "reservations": 0,
+                      "effective_lane_limit": 2})
+    before = view_model.project_run_view(state, None, issue=42)["dashboard"]["header"]["parallel"]
+    state.render({"type": "wrapper.rolling.refill_turn", **payload})
+    after = view_model.project_run_view(state, None, issue=42)["dashboard"]["header"]["parallel"]
+    assert after == before
+
+
+def test_backlog_counts_contributions_once_until_they_end_not_until_publication() -> None:
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.rolling_scheduler import INTEGRATION_HIGH_WATER
+
+    state = LiveRunState()
+    first = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    second = {"iter": None, "issue": 43, "contribution_id": "c-43", "lane_id": "lane-2"}
+    for identity in [first, second]:
+        state.render({"type": "wrapper.integration.parked", **identity})
+        state.render({"type": "wrapper.integration.parked", **identity})
+    state.render({"type": "wrapper.integration.admitted", **first})
+    state.render({"type": "wrapper.integration.admitted", **first})
+    state.render({"type": "wrapper.integration.parked", **first})
+    state.render({"type": "wrapper.integration.published", **first})
+    posture = view_model.project_run_view(state, None, issue=42)["dashboard"]["header"]["parallel"]
+    assert posture["availability"] == "not_declared"
+    assert posture["integration_wip"] == 1
+    assert posture["integration_high_water"] == 2
+    assert posture["integration_high_water"] == INTEGRATION_HIGH_WATER
+    assert posture["parked_count"] == 1
+    for identity in [first, second]:
+        state.render({"type": "wrapper.contribution.end", **identity})
+    posture = view_model.project_run_view(state, None, issue=42)["dashboard"]["header"]["parallel"]
+    assert posture["integration_observed"] is True
+    assert posture["integration_wip"] == posture["parked_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"},
+        {"iter": 2, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"},
+        {"iter": None, "issue": 42, "contribution_id": "", "lane_id": "lane-1"},
+        {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": ""},
+        {"iter": None, "issue": "", "contribution_id": "c-42", "lane_id": "lane-1"},
+        {"iter": None, "issue": True, "contribution_id": "c-42", "lane_id": "lane-1"},
+        {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": []},
+    ],
+)
+@pytest.mark.parametrize(
+    "etype",
+    [
+        "wrapper.integration.parked", "wrapper.integration.admitted",
+        "wrapper.integration.started", "wrapper.integration.branch_observed",
+        "wrapper.integration.recovery_started", "wrapper.contribution.end",
+    ],
+)
+def test_rolling_accounting_requires_a_whole_contribution_identity(
+    identity: dict, etype: str,
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    state = LiveRunState(monotonic=lambda: 0.0)
+    valid = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.contribution.start", **valid})
+    state.render({"type": "wrapper.integration.admitted", **valid})
+    before = view_model.project_run_view(state, None, issue=42)["dashboard"]
+    state.render({
+        "type": etype, **identity,
+        "attempt": 1, "max_attempts": 3, "base_publications_since_cut": 2,
+    })
+    after = view_model.project_run_view(state, None, issue=42)["dashboard"]
+    assert after["queue"] == before["queue"]
+    assert after["header"]["parallel"] == before["header"]["parallel"]
+    state.render({"type": "wrapper.contribution.end", **valid})
+    row = view_model.project_run_view(state, None, issue=42)["drill_in"][
+        "iteration_breakdown"
+    ]["rows"][0]
+    assert row["drift"] is None
+
+
+@pytest.mark.parametrize(
+    "pair",
+    [
+        {},
+        {"attempt": 1},
+        {"attempt": 0, "max_attempts": 3},
+        {"attempt": 5, "max_attempts": 3},
+        {"attempt": True, "max_attempts": 3},
+        {"attempt": 1, "max_attempts": 2**32},
+    ],
+)
+def test_invalid_recovery_attempt_cannot_change_integration_status(pair: dict) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    now = 0.0
+    state = LiveRunState(monotonic=lambda: now)
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.contribution.start", **identity})
+    state.render({"type": "wrapper.contribution.work_finished", **identity})
+    state.render({"type": "wrapper.integration.admitted", **identity})
+    now = 5.0
+    state.render({"type": "wrapper.integration.recovery_started", **identity, **pair})
+    row = view_model.project_run_view(state, None, issue=42)["dashboard"]["queue"]["rows"][0]
+    assert row["status"] == "admitted"
+    assert row["phase_age_seconds"] == 5.0
+    assert row["active_seconds"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("summary", "issues", "expected"),
+    [
+        ({}, [], "no-progress"),
+        ({"closure_outcome": "closed"}, [], "closed"),
+        ({"closure_outcome": "no_progress"}, [{"issue": 42, "status": "no-progress"}],
+         "no-progress"),
+    ],
+)
+def test_contribution_end_projects_summary_without_requiring_issue_rows(
+    summary: dict, issues: list[dict], expected: str,
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    state = LiveRunState()
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.contribution.start", **identity})
+    state.render({"type": "wrapper.contribution.end", **identity,
+                  "summary": summary, "issues": issues, "reason": "unchanged_branch"})
+    projected = view_model.project_run_view(state, None, issue=42)
+    row = projected["drill_in"]["iteration_breakdown"]["rows"][0]
+    assert row["status"] == expected
+    assert row["kind"] == "contribution"
+    assert row["contribution_id"] == "c-42"
+    assert row["lane"] == "lane-1"
+    assert row["outcome"] == "unchanged_branch"
+    assert row["drift"] is None
+    assert projected["dashboard"]["queue"]["rows"][0]["status"] == expected
+    assert "phase_age_seconds" not in projected["dashboard"]["queue"]["rows"][0]
 
 
 def test_observing_one_agents_subagent_does_not_fabricate_a_siblings_zero() -> None:
@@ -250,6 +583,75 @@ def test_recovery_subagent_lifecycle_updates_the_live_integration_window() -> No
         "Subagent started: Recovery explorer @ gpt-5.6-terra" in line["text"]
         for line in integration["lines"]
     )
+
+
+@pytest.mark.parametrize("lane_stamp", [False, True])
+@pytest.mark.parametrize("recovering", [False, True])
+def test_rolling_subagent_lifecycle_preserves_lane_and_recovery_projection(
+    lane_stamp: bool, recovering: bool,
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    now = 0.0
+    state = LiveRunState(monotonic=lambda: now)
+    state.render({
+        "type": "wrapper.run.start",
+        "insight_capabilities": {"subagents": True},
+    })
+    identity = {
+        "iter": None, "issue": 605, "lane_id": "lane-1", "contribution_id": "c-605",
+    }
+    sibling = {
+        "iter": None, "issue": 606, "lane_id": "lane-2", "contribution_id": "c-606",
+    }
+    for stamp in (identity, sibling):
+        state.render({"type": "wrapper.contribution.start", **stamp})
+        state.render({
+            "type": "wrapper.issue.activated", **stamp, "lane_issue": stamp["issue"],
+        })
+    if recovering:
+        now = 3.0
+        state.render({"type": "wrapper.contribution.work_finished", **identity})
+        now = 4.0
+        state.render({
+            "type": "wrapper.integration.recovery_started", **identity,
+            "attempt": 1, "max_attempts": 2,
+        })
+    now = 8.0
+    before = view_model.project_run_view(state, None, issue=605)["dashboard"]
+    stamp = {**identity, **({"lane_issue": 605} if lane_stamp else {})}
+    for etype, expected_count in (
+        ("subagent.started", 1), ("subagent.completed", 0),
+        ("subagent.started", 1), ("subagent.failed", 0),
+    ):
+        state.render({
+            "type": etype, **stamp, "tool_call_id": "call-605",
+            "agent_name": "explorer", "model": "gpt-5-mini",
+            "total_tokens": 2345, "error": "fixture failure",
+        })
+        projected = view_model.project_run_view(state, None, issue=605)
+        dashboard = projected["dashboard"]
+        window = next(
+            window for window in dashboard["activity"]["windows"]
+            if window["issue"] == 605 and window["kind"] == (
+                "integration" if recovering else "lane"
+            )
+        )
+        assert window["subagents"] == expected_count
+        assert window["lines"][-1]["text"] == projected["drill_in"]["log"]["lines"][-1]["text"]
+        assert dashboard["queue"] == before["queue"]
+        assert dashboard["header"]["parallel"] == before["header"]["parallel"]
+        sibling_window = next(
+            window for window in dashboard["activity"]["windows"]
+            if window["issue"] == 606
+        )
+        assert sibling_window["subagents"] == 0
+        assert not sibling_window["lines"]
+    row = next(row for row in dashboard["queue"]["rows"] if row["issue"] == 605)
+    assert row["status"] == ("recovering" if recovering else "active")
+    assert row["active_seconds"] == (3.0 if recovering else 8.0)
+    if recovering:
+        assert row["phase_age_seconds"] == 4.0
 
 
 def test_late_subagent_completion_after_work_finished_stays_in_the_issue_log() -> None:

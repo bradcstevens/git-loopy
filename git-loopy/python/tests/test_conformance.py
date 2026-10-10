@@ -2807,7 +2807,7 @@ def _assert_queue_row_fields(
 ) -> None:
     """Required Queue fields, then any declared optional keys that this row carries.
 
-    ``phase_age_seconds`` is present only while the row is parked or admitted,
+    ``phase_age_seconds`` is present only while the row is in an Integration Status,
     so it cannot be required without forcing every shared snapshot to invent one.
     """
     required = fields["queue_row"]
@@ -2931,10 +2931,9 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     renamed without the column following.
 
     The rolling-dispatch case is swept here too. It is deliberately not one of
-    the shared cases -- only the Rust core folds a rolling stream, and replaying
-    it through Python would demand the posture reducer #687 owns --
-    but staying private must not mean staying unasserted, and the inventory is a
-    fixture-internal claim that needs no second projection to check.
+    the serial/Wave cases, but both Python and Rust compare its full projection.
+    The inventory is still a fixture-internal claim: it checks the declared
+    shape independently of either member's replay.
     """
     contract = _DASHBOARD_INSIGHTS["semantic_contract"]
     fields = contract["projection_fields"]
@@ -3248,63 +3247,70 @@ def test_native_dashboard_cases_are_producer_verified() -> None:
             ).is_integer(), case["id"]
 
 
-def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None:
-    for case in _DASHBOARD_INSIGHTS["cases"]:
-        offset = timezone(timedelta(minutes=case["inputs"]["local_utc_offset_minutes"]))
-        run_started = datetime.fromisoformat(
-            case["events"][0]["ts"].replace("Z", "+00:00")
-        )
-        clock = _FixtureClock()
-        wall = _FixtureWallClock(run_started.astimezone(offset))
-        state = LiveRunState(
-            model=case["inputs"]["model"],
-            reasoning_effort=case["inputs"]["reasoning_effort"],
-            monotonic=clock,
-            wall_clock=wall,
-        )
-        summary = RunSummary(
-            denomination=BilledCreditsDenomination()
-        )
-        renderer = Renderer(
-            console=Console(file=StringIO(), force_terminal=False),
-            summary=summary,
-        )
+@pytest.mark.parametrize(
+    "case",
+    [
+        *_DASHBOARD_INSIGHTS["cases"],
+        *_DASHBOARD_INSIGHTS["rolling_dashboard_cases"],
+    ],
+    ids=lambda case: case["id"],
+)
+def test_python_semantic_view_matches_every_dashboard_fixture_snapshot(
+    case: dict[str, Any],
+) -> None:
+    offset = timezone(timedelta(minutes=case["inputs"]["local_utc_offset_minutes"]))
+    run_started = datetime.fromisoformat(
+        case["events"][0]["ts"].replace("Z", "+00:00")
+    )
+    clock = _FixtureClock()
+    wall = _FixtureWallClock(run_started.astimezone(offset))
+    state = LiveRunState(
+        model=case["inputs"]["model"],
+        reasoning_effort=case["inputs"]["reasoning_effort"],
+        monotonic=clock,
+        wall_clock=wall,
+    )
+    summary = RunSummary(denomination=BilledCreditsDenomination())
+    renderer = Renderer(
+        console=Console(file=StringIO(), force_terminal=False),
+        summary=summary,
+    )
 
-        applied = 0
-        for snapshot in case["snapshots"]:
-            for event in case["events"][applied : snapshot["after_event_count"]]:
-                at = datetime.fromisoformat(event["ts"].replace("Z", "+00:00"))
-                # The Orchestrator's two clocks are independent axes of the seam:
-                # the envelope ``ts`` is its wall clock, ``observed_monotonic``
-                # its monotonic clock. A case that omits the latter advances both
-                # together, which is every trace with no wall-clock adjustment.
-                wall.value = at.astimezone(offset)
-                clock.value = _fixture_monotonic(
-                    event.get("observed_monotonic"), at, run_started
-                )
-                state.render(event)
-                renderer.render(event)
-            applied = snapshot["after_event_count"]
-            render_at = datetime.fromisoformat(
-                snapshot["render_at_utc"].replace("Z", "+00:00")
-            )
-            wall.value = render_at.astimezone(offset)
+    applied = 0
+    for snapshot in case["snapshots"]:
+        for event in case["events"][applied : snapshot["after_event_count"]]:
+            at = datetime.fromisoformat(event["ts"].replace("Z", "+00:00"))
+            # The Orchestrator's two clocks are independent axes of the seam:
+            # the envelope ``ts`` is its wall clock, ``observed_monotonic``
+            # its monotonic clock. A case that omits the latter advances both
+            # together, which is every trace with no wall-clock adjustment.
+            wall.value = at.astimezone(offset)
             clock.value = _fixture_monotonic(
-                snapshot.get("render_at_monotonic"), render_at, run_started
+                event.get("observed_monotonic"), at, run_started
             )
+            state.render(event)
+            renderer.render(event)
+        applied = snapshot["after_event_count"]
+        render_at = datetime.fromisoformat(
+            snapshot["render_at_utc"].replace("Z", "+00:00")
+        )
+        wall.value = render_at.astimezone(offset)
+        clock.value = _fixture_monotonic(
+            snapshot.get("render_at_monotonic"), render_at, run_started
+        )
 
-            actual = project_run_view(
-                state,
-                summary,
-                issue=case["inputs"]["drill_in_issue"],
-            )
-            assert list(actual["dashboard"]) == _DASHBOARD_INSIGHTS[
-                "semantic_contract"
-            ]["dashboard_band_order"]
-            assert list(actual["drill_in"]) == _DASHBOARD_INSIGHTS[
-                "semantic_contract"
-            ]["drill_in_band_order"]
-            assert actual == snapshot["expected"]
+        actual = project_run_view(
+            state,
+            summary,
+            issue=case["inputs"]["drill_in_issue"],
+        )
+        assert list(actual["dashboard"]) == _DASHBOARD_INSIGHTS[
+            "semantic_contract"
+        ]["dashboard_band_order"]
+        assert list(actual["drill_in"]) == _DASHBOARD_INSIGHTS[
+            "semantic_contract"
+        ]["drill_in_band_order"]
+        assert actual == snapshot["expected"], (case["id"], snapshot["after_event_count"])
 
 
 @pytest.mark.parametrize(

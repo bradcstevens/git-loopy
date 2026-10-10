@@ -57,6 +57,7 @@ from rich.table import Table
 from rich.text import Text
 
 from git_loopy.denomination import BilledCreditsDenomination, CostDenomination
+from git_loopy.contribution_identity import has_contribution_identity
 from git_loopy.usage import BillingSample, UsageTally
 
 from .console import STYLES
@@ -176,9 +177,13 @@ class IterationSnapshot:
     normalized_observed_tokens: Optional[int] = None
     has_normalized_rollup: bool = False
     #: Normalized-rollup measurement keys the producing Orchestrator declared
-    #: unavailable (sent as ``null``). Renderers project these as the unknown
+    #: unavailable (null, or omitted on contribution summaries). Renderers
+    #: project these as the unknown
     #: em dash; an observed none stays ``0`` / ``[]`` and never appears here.
     unavailable_measurements: frozenset[str] = frozenset()
+    contribution_id: str | None = None
+    lane: int | str | None = None
+    contribution_reason: str | None = None
 
     def measurement_observed(self, key: str) -> bool:
         """Whether this Iteration's producer actually observed ``key``.
@@ -399,6 +404,8 @@ class RunSummary:
             iter_num=len(self.completed) + len(self.open_contributions) + 1,
             issue_num=issue if isinstance(issue, int) else None,
             started_at=datetime.now(timezone.utc),
+            contribution_id=contribution_id,
+            lane=event.get("lane_id"),
         )
         self.open_contributions[contribution_id] = snap
         return snap
@@ -414,6 +421,8 @@ class RunSummary:
         therefore has no partial row. Returns ``None`` for an end whose start
         was never seen (a mid-Run attach), which must not crash the render.
         """
+        if not has_contribution_identity(event):
+            return None
         contribution_id = event.get("contribution_id")
         snap = (
             self.open_contributions.pop(contribution_id, None)
@@ -454,7 +463,7 @@ class RunSummary:
                 "skills_consulted",
                 "peak_context_window",
             )
-            if summary.get(key, 0) is None
+            if summary.get(key) is None
         )
         snap.unavailable_measurements = unavailable
         model = summary.get("model")
@@ -484,6 +493,8 @@ class RunSummary:
             None if observed_tokens is None else _rollup_int(observed_tokens)
         )
         snap.has_normalized_rollup = True
+        reason = event.get("reason")
+        snap.contribution_reason = reason if isinstance(reason, str) else None
         snap.tool_count = _rollup_int(summary.get("tool_count"))
         snap.skill_count = _rollup_int(summary.get("skill_call_count"))
         snap.skills_consulted = {

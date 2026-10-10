@@ -1,4 +1,4 @@
-"""Toolkit-neutral semantic projection for the live Dashboard and drill-in."""
+"""Toolkit-neutral replay oracle for the Dashboard and drill-in."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 __all__ = ["project_run_view"]
 
+_INTEGRATION_HIGH_WATER = 2
 
 _QUEUE_COLUMNS = [
     "issue",
@@ -185,7 +186,7 @@ def _header(state: LiveRunState) -> dict[str, Any]:
         # it is a composite: `availability` gates eight further facts about the
         # Lane ceilings, the pressure narrowing them, and whether the Run
         # degraded to serial.
-        "parallel": _undeclared_parallel(),
+        "parallel": _parallel(state),
         # Where this Run's work ran, and behind what boundary (Spec #445 §K).
         # Never inferred: a trace written before the declaration existed keeps
         # the wire's own `unknown`, because every Run to date having been local
@@ -225,41 +226,30 @@ def _wind_down(state: LiveRunState) -> dict[str, Any]:
     }
 
 
-def _undeclared_parallel() -> dict[str, Any]:
-    """The Header's Parallel posture, for a Run that has declared none.
-
-    The posture is folded from the Run-scoped posture Events, including
-    ``wrapper.rolling.refill_turn``, and this Dashboard reduces none of them:
-    the Textual renderer has no Parallel surface to feed, so #687 owns the
-    reducer that will replace this. Until then the constant is truthful for
-    every trace the shared Conformance fixture holds -- none of its cases
-    carries a posture Event, and a Run that emits none has no posture, which
-    is what ``not_declared`` with every detail absent says.
-
-    The Integration backlog fields, and ``refill_turn``, travel with that
-    constant so the field inventory stays one list. They stay unobserved
-    here: this oracle does not fold ``wrapper.integration.admitted``,
-    ``.parked``, or ``wrapper.rolling.refill_turn``.
-
-    It becomes a lie the first time this Dashboard projects a live **Parallel**
-    Run, which is the moment #687 must replace it rather than extend it
-    (ADR-0051 records the debt; #687 owns the successor).
-    """
+def _parallel(state: LiveRunState) -> dict[str, Any]:
+    """ADR-0063 gates availability on posture Events, not capabilities."""
+    posture = state.parallel
     return {
-        "availability": "not_declared",
-        "configured_lane_limit": None,
-        "effective_lane_limit": None,
-        "pressure": None,
-        "degraded": False,
-        "degraded_reason": None,
-        "serial_fallback_reason": None,
-        "serial_required": None,
-        "refill_stopped": False,
-        "integration_observed": False,
-        "integration_wip": None,
-        "integration_high_water": None,
-        "parked_count": None,
-        "refill_turn": None,
+        "availability": "available" if posture.observed else "not_declared",
+        "configured_lane_limit": posture.configured_lane_limit,
+        "effective_lane_limit": posture.effective_lane_limit,
+        "pressure": posture.pressure,
+        "degraded": posture.degraded,
+        "degraded_reason": posture.degraded_reason,
+        "serial_fallback_reason": posture.serial_fallback_reason,
+        "serial_required": posture.serial_required,
+        "refill_stopped": posture.refill_stopped,
+        "integration_observed": posture.integration_observed,
+        "integration_wip": (
+            len(posture.admitted_open) if posture.integration_observed else None
+        ),
+        "integration_high_water": (
+            _INTEGRATION_HIGH_WATER if posture.integration_observed else None
+        ),
+        "parked_count": (
+            len(posture.parked_open) if posture.integration_observed else None
+        ),
+        "refill_turn": dict(posture.refill_turn) if posture.refill_turn is not None else None,
     }
 
 
@@ -347,6 +337,10 @@ def _queue_row(row: QueueRow, *, denomination: CostDenomination) -> dict[str, An
         "tokens_out": row.usage.tokens_out if row.usage_observed else None,
         "credits": _decimal_float(denomination.cost(row.usage)),
         "premium_requests": _decimal_float(row.usage.premium_requests),
+        **(
+            {"phase_age_seconds": row.phase_age_seconds}
+            if row.phase_age_seconds is not None else {}
+        ),
     }
 
 
@@ -360,10 +354,13 @@ def _summary_row(
         return None if key in unavailable else value
 
     return {
-        "kind": "iteration",
-        "iteration": snapshot.iter_num,
-        "lane": None,
-        "outcome": snapshot.outcome,
+        "kind": "contribution" if snapshot.contribution_id is not None else "iteration",
+        "iteration": None if snapshot.contribution_id is not None else snapshot.iter_num,
+        "lane": snapshot.lane,
+        "outcome": (
+            snapshot.contribution_reason
+            if snapshot.contribution_id is not None else snapshot.outcome
+        ),
         "duration_seconds": snapshot.duration_seconds,
         "model": observed("model", snapshot.model),
         "tokens_in": observed("tokens_in", snapshot.tokens_in),
@@ -423,9 +420,7 @@ def _contribution_row(
         "outcome": contribution.outcome,
         "duration_seconds": contribution.duration_seconds,
         "status": contribution.status,
-        # Folding a rolling stream stays with #687, so a live row has not
-        # observed drift. Null is that unknown, not a guessed zero.
-        "drift": None,
+        "drift": contribution.drift,
         "active_seconds": contribution.active_seconds,
         "route": _route(contribution.route),
         "consumption": {

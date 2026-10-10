@@ -76,8 +76,8 @@ fn drill_in_frame(case_id: &str, issue: &str) -> DashboardFrame {
 ///
 /// The rolling stream is pinned under the same fixture's own
 /// `rolling_dashboard_cases` key rather than the shared `cases` array
-/// (ADR-0051), because only the Rust core folds it. It is still the same
-/// oracle, reached by a second key.
+/// (ADR-0051). Both Rust and Python fold the same rolling oracle (#687),
+/// reached by a second key.
 fn rolling_drill_in_frame(case_id: &str) -> DashboardFrame {
     let fixture = fixture();
     let case = fixture["rolling_dashboard_cases"]
