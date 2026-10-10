@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.25",
+  "distributions": ["python"],
+  "description": "Python Rolling dispatch, complete Run with a one-unit budget. These cases do not oblige serial-only Orchestrators or Dashboard consumers.",
+  "cases": [
+    {
+      "name": "priority-serial-takes-the-only-unit",
+      "issues": [
+        {"number": 42, "labels": ["ready-for-agent", "parallel-safe"]},
+        {"number": 44, "labels": ["ready-for-agent", "priority"]}
+      ],
+      "pin": null,
+      "expected_binding": [44, "priority"],
+      "first_work": "wrapper.iteration.start"
+    },
+    {
+      "name": "mixed-priority-older-lane-keeps-its-class",
+      "issues": [
+        {"number": 41, "labels": ["ready-for-agent", "priority", "parallel-safe"]},
+        {"number": 44, "labels": ["ready-for-agent", "priority"]},
+        {"number": 46, "labels": ["ready-for-agent", "parallel-safe"]}
+      ],
+      "pin": null,
+      "expected_binding": [41, "priority"],
+      "first_work": "wrapper.contribution.start"
+    },
+    {
+      "name": "mixed-priority-older-serial-takes-the-unit",
+      "issues": [
+        {"number": 41, "labels": ["ready-for-agent", "priority"]},
+        {"number": 44, "labels": ["ready-for-agent", "priority", "parallel-safe"]},
+        {"number": 46, "labels": ["ready-for-agent", "parallel-safe"]}
+      ],
+      "pin": null,
+      "expected_binding": [41, "priority"],
+      "first_work": "wrapper.iteration.start"
+    },
+    {
+      "name": "unasserted-serial-retains-lane-first",
+      "issues": [
+        {"number": 41, "labels": ["ready-for-agent"]},
+        {"number": 44, "labels": ["ready-for-agent", "parallel-safe"]}
+      ],
+      "pin": null,
+      "expected_binding": [44, "order"],
+      "first_work": "wrapper.contribution.start"
+    },
+    {
+      "name": "priority-parallel-safe-remains-lane-work",
+      "issues": [
+        {"number": 41, "labels": ["ready-for-agent"]},
+        {"number": 44, "labels": ["ready-for-agent", "priority", "parallel-safe"]}
+      ],
+      "pin": null,
+      "expected_binding": [44, "priority"],
+      "first_work": "wrapper.contribution.start"
+    },
+    {
+      "name": "serial-pin-outranks-priority",
+      "issues": [
+        {"number": 41, "labels": ["ready-for-agent", "priority"]},
+        {"number": 44, "labels": ["ready-for-agent"]}
+      ],
+      "pin": 44,
+      "expected_binding": [44, "pin"],
+      "first_work": "wrapper.iteration.start"
+    },
+    {
+      "name": "parallel-safe-pin-outranks-priority",
+      "issues": [
+        {"number": 41, "labels": ["ready-for-agent", "priority"]},
+        {"number": 44, "labels": ["ready-for-agent", "parallel-safe"]}
+      ],
+      "pin": 44,
+      "expected_binding": [44, "pin"],
+      "first_work": "wrapper.contribution.start"
+    },
+    {
+      "name": "priority-serial-reuses-creation-order",
+      "issues": [
+        {"number": 41, "labels": ["ready-for-agent", "priority"], "created_at": "2026-10-02T00:00:00Z"},
+        {"number": 42, "labels": ["ready-for-agent", "parallel-safe"], "created_at": "2026-09-01T00:00:00Z"},
+        {"number": 44, "labels": ["ready-for-agent", "priority"], "created_at": "2026-10-01T00:00:00Z"}
+      ],
+      "pin": null,
+      "expected_binding": [44, "priority"],
+      "first_work": "wrapper.iteration.start"
+    }
+  ]
+}

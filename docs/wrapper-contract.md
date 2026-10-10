@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.24 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.25 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -250,6 +250,49 @@ around, never blocked on.
 carries. Eligibility is deliberately **absent** from that fixture: it is `discriminator.json`'s
 decision and the `ready-for-agent` label's, and restating it beside the order would give one
 rule two homes that could disagree.
+
+#### Priority across new Lane reservations (contract 2.25, Python Rolling dispatch)
+
+In the Python Runner's **Rolling dispatch**, a Ready **Priority** **Serial-required**
+issue MUST latch serial demand before new ordinary Lane reservations, at startup and
+when discovered later (ADR-0032, ADR-0074). A live **Pin** remains stronger, including
+its unread-Pin behavior. Priority `parallel-safe` work remains Lane work; without a
+Pin or Ready Priority serial assertion, ordinary serial demand retains Lane-first
+precedence.
+
+Within Priority, the existing creation-instant/issue-number order still applies.
+An admissible Parallel-safe prefix MAY receive Lane reservations before a later
+Priority serial issue latches; no ordinary candidate may join that reservation
+decision. Once latched, even a prefix issue's retry waits for the serial turn and
+refill. The serial Pickup leaves still-open Priority Parallel-safe candidates to
+Lane Pickup, including a candidate whose earlier unread admission now succeeds.
+
+The peek MUST establish current Pickup admission — executable/open/ready membership,
+Readiness, route availability, Lease policy and the Run's remaining attempt budget —
+without binding an Active issue or taking a Lease. A refused or unread candidate MUST
+NOT gain the Priority exception. Pickup still revalidates admission when granted.
+Waiting for an earlier Priority Lane prefix MUST preserve unmet-demand refresh for
+that prefix even when ordinary cached candidates could fill all slots. Repeated
+peeks MUST reuse settled preparation and freshly validate a nonbinding proposal
+without buying another assessment; unexpected preparation failures retain the desk's
+explicit diagnostic and leave the candidate to its own Pickup.
+An unread revalidation MUST preserve the paid proposal for a later fresh check.
+Expired or changed proposals and cancelled speculation may be prepared again under
+the existing routing allowance; they are not permanent admission refusals.
+Started setup, sessions, parked contributions, admitted waiters, Integration and Recovery
+MUST finish unchanged before serial ownership at full quiescence; nothing is cancelled.
+Retries remain subject to finalization, one-Lane ownership and their per-issue Strike budget,
+and MUST NOT receive new reservations while serial demand is latched.
+
+One full refill turn MUST follow every serial Iteration even when further Priority
+serial work waits; the pre-reservation peek MUST NOT relatch before that turn is spent.
+The stronger unread-Pin exception is unchanged. These are Python Rolling-dispatch
+obligations, not new obligations for the shell or PowerShell serial-only Orchestrators.
+Proof is `rolling-priority.json`, consumed at the scripted complete-Run/Event-log
+seam in Python's `test_loop_parallel.py`, with the same file's deeper admission,
+drain, refill and retry regressions. Its Fixture claims waive serial-only members
+and the Dashboard as out of scope. Family-wide ordering fixtures and the Event
+wire schema are unchanged.
 
 #### The Pin (contract 1.14, MUST)
 
@@ -2188,6 +2231,10 @@ branch drift (§12, #684), 2.20 with Recovery attempts (§12, #685), 2.21 with
 the refill turn (§12, #686), 2.22 with the per-issue Strike record (§6,
 ADR-0070), 2.23 with upstream-durable Integration publication (§12, #418),
 and 2.24 with Subagent lifecycle telemetry and Activity totals (ADR-0022).
+Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
+in the new Python-only `rolling-priority.json`, proved through complete Runs in
+`test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
+it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1). The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;

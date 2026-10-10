@@ -309,7 +309,9 @@ class RollingPool:
         """Perform the one unconditional refresh at Run startup (#219 §2.1)."""
         self._refresh()
 
-    def service(self, *, refillable: int) -> None:
+    def service(
+        self, *, refillable: int, only: frozenset[int | str] | None = None
+    ) -> None:
         """Refresh membership if unmet demand and the backoff window allow it.
 
         Args:
@@ -319,7 +321,14 @@ class RollingPool:
                 demand, and no demand means no refresh — that single number is
                 how #219 §2.6-2.7 are enforced.
         """
-        unmet = refillable > self.available_count
+        available = (
+            self.available_count if only is None else sum(
+                1 for entry in self._entries
+                if entry.candidate.ref in only
+                and not entry.quarantined and self.eligible(entry.candidate)
+            )
+        )
+        unmet = refillable > available
         if not unmet:
             # Demand met (or absent). Forget the wait: if demand reappears it is
             # new evidence, not a continuation of the old unanswered question.
@@ -338,7 +347,7 @@ class RollingPool:
 
     # -- reservation -------------------------------------------------------- #
 
-    def take(self) -> PoolTake:
+    def take(self, *, only: frozenset[int | str] | None = None) -> PoolTake:
         """Validate candidates in FIFO order and return the first dispatchable one.
 
         This is the only path from a cached candidate to Lane work, and it
@@ -352,6 +361,8 @@ class RollingPool:
         complete refresh still lists it, so one unreachable issue can never
         head-of-line-block the candidates behind it — except
         :attr:`lane_first`, which the walk retries and will not pass (#430).
+        ``only`` fences this walk to a Priority prefix without changing the
+        FIFO or touching ordinary candidates before serial demand latches.
 
         Returns:
             The walk (#397): the validated, enriched item — removed from the
@@ -364,6 +375,8 @@ class RollingPool:
         first = self.lane_first()
         now = self.clock()
         for position, entry in enumerate(walked, start=1):
+            if only is not None and entry.candidate.ref not in only:
+                continue
             held = first is not None and entry.candidate.ref == first
             if held and not self.eligible(entry.candidate):
                 # The walk passes the Pin over (#644): a proven open blocker is

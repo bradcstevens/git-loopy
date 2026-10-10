@@ -97,6 +97,15 @@ class PreparedRoute:
     proposal: RoutingProposal | None = None
     reason: RoutingUnavailableReason | None = None
     detail: str | None = None
+    retryable: bool = False
+
+    @property
+    def may_retry(self) -> bool:
+        """Unread live routing sources do not settle a candidate's admission."""
+        return self.retryable or self.reason in {
+            RoutingUnavailableReason.SOURCE_UNAVAILABLE,
+            RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE,
+        }
 
     @property
     def halting(self) -> bool:
@@ -293,15 +302,14 @@ class RoutePreparation:
     def _cancelled(self, ref: int | str) -> None:
         if ref in self._settled:
             return
-        self._settled.add(ref)
-        if self._on_prepared is not None:
-            self._on_prepared(
-                PreparedRoute(
-                    ref=ref,
-                    outcome=PreparationOutcome.UNAVAILABLE,
-                    detail="preparation cancelled; Pickup must validate its own route",
-                )
+        self.remember(
+            PreparedRoute(
+                ref=ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                detail="preparation cancelled; Pickup must validate its own route",
+                retryable=True,
             )
+        )
 
     def take(self, ref: int | str) -> RoutingProposal | None:
         """Hand this issue's proposal to its **Pickup**, once and only if live.
@@ -329,6 +337,20 @@ class RoutePreparation:
             return None
         return entry.proposal
 
+    def peek(self, ref: int | str) -> PreparedRoute | None:
+        """Read a settled preparation without consuming its proposal or re-assessing."""
+        return self._prepared.get(ref)
+
+    async def prepare_for_peek(
+        self, candidate: _Candidate, prepare: Callable[[], Awaitable[PreparedRoute]]
+    ) -> PreparedRoute:
+        """Apply the desk's explicit failure containment to a scheduling read."""
+        outcome = await self._prepare_one(
+            candidate, prepare=prepare, preserve_proposal_on_failure=True
+        )
+        assert outcome is not None
+        return outcome
+
     def forget(self, refs: Iterable[int | str]) -> None:
         """Drop what this Run knows about ``refs`` so they may be prepared again.
 
@@ -342,10 +364,28 @@ class RoutePreparation:
             self._settled.discard(ref)
             self._pickups.discard(ref)
 
-    async def _prepare_one(self, candidate: _Candidate) -> PreparedRoute | None:
+    def remember(self, outcome: PreparedRoute) -> None:
+        """Keep a scheduling peek's proposal for authoritative Pickup to revalidate."""
+        self._settled.add(outcome.ref)
+        self._prepared[outcome.ref] = outcome
+        if outcome.halting:
+            self._halted = True
+            if self._diag is not None:
+                self._diag.info(
+                    "route preparation stopped for this Run: %s",
+                    outcome.reason.value if outcome.reason is not None else "exhausted",
+                )
+        if self._on_prepared is not None:
+            self._on_prepared(outcome)
+
+    async def _prepare_one(
+        self, candidate: _Candidate, *,
+        prepare: Callable[[], Awaitable[PreparedRoute]] | None = None,
+        preserve_proposal_on_failure: bool = False,
+    ) -> PreparedRoute | None:
         ref = candidate.ref
         try:
-            outcome = await self._prepare(candidate)
+            outcome = await (prepare() if prepare is not None else self._prepare(candidate))
         except Exception as exc:  # noqa: BLE001 - preparation never fails a Run
             # Preparing ahead is an optimisation on top of a **Pickup** that
             # still works without it, so no way of failing to prepare may
@@ -364,16 +404,12 @@ class RoutePreparation:
                 reason=RoutingUnavailableReason.SELECTOR_UNAVAILABLE,
                 detail="preparation failed; see Run diagnostics",
             )
-        self._settled.add(ref)
-        if outcome.outcome is PreparationOutcome.PROPOSED:
-            self._prepared[ref] = outcome
-        if outcome.halting:
-            self._halted = True
-            if self._diag is not None:
-                self._diag.info(
-                    "route preparation stopped for this Run: %s",
-                    outcome.reason.value if outcome.reason is not None else "exhausted",
-                )
-        if self._on_prepared is not None:
-            self._on_prepared(outcome)
+        cached = self._prepared.get(ref)
+        preserve = (
+            preserve_proposal_on_failure and cached is not None
+            and cached.proposal is not None
+            and outcome.outcome is PreparationOutcome.UNAVAILABLE
+        )
+        if not preserve and cached != outcome:
+            self.remember(outcome)
         return outcome

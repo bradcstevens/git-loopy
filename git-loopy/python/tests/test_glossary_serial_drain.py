@@ -1,9 +1,8 @@
 """The glossary entry and reopen conditions #428 decided (ADR-0074).
 
 ``CONTEXT.md`` records *shipped reality*. The **Serial drain** is shipped behaviour that had no
-name, so it is defined now; ``priority`` crossing the Lane boundary is accepted design that has
-not shipped, so the **Priority** entry does not describe it yet (ADR-0019's precedent, and the
-reason ``test_glossary_calibration_terms`` holds a term out in both directions).
+name, so it is defined now; Python Rolling dispatch's ``priority`` crossing is shipped by
+#720 and proved through complete Runs in ``test_loop_parallel.py``.
 
 Documentation-only and deliberately narrow. Every assertion is a claim a future slice could
 contradict without noticing — the drain decaying into a pause that cancels work, or the reopen
@@ -78,15 +77,6 @@ def test_the_glossary_defines_the_serial_drain_as_a_wait_that_cancels_nothing() 
 
 def test_serial_required_points_at_the_serial_drain() -> None:
     assert "(the **Serial drain**)" in _entry("Serial-required")
-
-
-def test_priority_crossing_the_lane_boundary_is_not_in_the_glossary_until_it_ships() -> None:
-    """ADR-0074 decision 3 is accepted design, so ``CONTEXT.md`` does not describe it yet.
-
-    The slice that ships it moves it into the **Priority** entry and deletes this test; until
-    then a glossary sentence about it would be a term written ahead of its code.
-    """
-    assert "Lane" not in _entry("Priority")
 
 
 def test_adr_0074_keeps_the_conditions_that_reopen_the_decision() -> None:

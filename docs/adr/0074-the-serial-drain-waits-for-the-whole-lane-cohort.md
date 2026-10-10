@@ -40,12 +40,16 @@ stopped being one.
    base" would duplicate it, and reading a Lane's label as a licence for every plain issue would
    be the opt-out ADR-0008 rejected as assuming independence by default. Overlap is obtained by
    asserting `parallel-safe`; there is no new vocabulary.
-3. **`priority` crosses the boundary for new reservations** (accepted design, not yet shipped). A
-   Ready **Priority** serial-required issue latches serial demand before the next reservation, as
+3. **`priority` crosses the boundary for new reservations** (shipped in Python Rolling dispatch,
+   [#720](https://github.com/bradcstevens/git-loopy/issues/720)). A
+   Ready **Priority** serial-required issue latches serial demand before new ordinary reservations, as
    the **Pin** does before the first ([#430](https://github.com/bradcstevens/git-loopy/issues/430)).
    Started Lanes still drain, and the refill turn still follows each serial Iteration. A Priority
    issue that Pickup would skip — **Blocked**, **Awaiting merge**, its **Lease** held elsewhere —
    never holds Lanes back. Within the plain class the order is already Priority first, then oldest.
+   The shipped [ADR-0032 amendment](0032-the-runner-picks-the-oldest-eligible-issue.md#amendment-priority-crosses-the-lane-boundary-for-new-reservations-428-720)
+   preserves the total order within Priority: an earlier admissible Parallel-safe prefix can
+   reserve before the latch; its still-open issues and retries stay Lane work for the refill.
 4. **The drain is made legible by derivation**, as a separate increment. The header shows the
    cohort (live sessions, parked, integrating), the oldest live Lane's age and the elapsed drain,
    derived from contribution events and **Queue** statuses already on the wire
@@ -107,9 +111,9 @@ workload was overloaded and nonstationary, so it supports no conclusion about st
 
 ## Consequences
 
-- Two increments follow as tickets: `priority` crossing (3), which also moves ADR-0032's amendment
-  and the **Priority** and **Pin** glossary entries from accepted design to shipped; and the
-  derive-only legibility (4), which edits the Dashboard renderers in both languages and the shared
+- The Python `priority` crossing (3) ships with #720, including ADR-0032's amendment and the
+  **Priority** and **Pin** glossary entries. The derive-only legibility (4) remains a separate
+  increment, which edits the Dashboard renderers in both languages and the shared
   `dashboard-insights` fixture.
 - `docs/parallel-mode.md` states the cost and the lever. The exposure grows with the number of
   issues carrying `parallel-safe`, not with the host's capacity alone.

@@ -3,6 +3,12 @@
   "contract_version": "2.0",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
+    "rolling-priority.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_loop_parallel.py drives every case through the complete Run/Event-log seam, observing actual bindings, first work and verified closures."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "Contract 2.25 scopes Priority crossing to Python Rolling dispatch; the shell Orchestrator is serial-only."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "Contract 2.25 scopes Priority crossing to Python Rolling dispatch; the PowerShell Orchestrator is serial-only."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard consumes Events and does not reserve Lanes or grant serial ownership."}
+    },
     "attempt-lifecycle.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives AttemptLedger and EscalationLedger with fixture cases."},
       "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator owns the contract Attempt lifecycle but its suite does not exercise this fixture.", "issue": 553},

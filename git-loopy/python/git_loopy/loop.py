@@ -152,6 +152,7 @@ from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
+from git_loopy.issue_order import LABEL_PRIORITY
 from git_loopy.attempt_evidence import AttemptEvidenceLedger
 from git_loopy.attempt_lifecycle import AttemptLedger
 from git_loopy.config import (
@@ -1401,6 +1402,8 @@ class _Loop:
         #: every later read.
         self._live_pin: int | None = config.issue_pin
         self._pin_unread = False
+        self._priority_lanes_deferred = False
+        self._priority_lane_eligible: Callable[[PoolCandidate], bool] | None = None
         self._pin_lease_unread = False
         #: This Run's **Lease**s, or ``None`` when Leases are not in force —
         #: the PRDs backend has no remote to contend on, and a clone with no
@@ -1988,7 +1991,8 @@ class _Loop:
     # -- iteration body ----------------------------------------------------
 
     async def _run_one_iteration(
-        self, iter_num: int, *, holding_for_pin: bool = False
+        self, iter_num: int, *, holding_for_pin: bool = False,
+        preserve_priority_lanes: bool = False,
     ) -> tuple[str, int, int]:
         """Run one AFK Iteration and give back every **Lease** it took.
 
@@ -1996,6 +2000,9 @@ class _Loop:
         latched for the **Pin** (#430): a failed read of the Pin makes it bind
         nothing rather than the next candidate. A Pin it reads and skips (for
         example as **Blocked**) is passed over as in any Pickup.
+
+        ``preserve_priority_lanes`` keeps the Priority exception's serial
+        grant from consuming still-open Parallel-safe Priority work on base.
 
         The release is in a ``finally`` because a Lease must not outlive the
         Iteration that took it *however* that Iteration ends — returned,
@@ -2005,12 +2012,16 @@ class _Loop:
         the one case expiry is for.
         """
         try:
-            return await self._iterate(iter_num, holding_for_pin=holding_for_pin)
+            return await self._iterate(
+                iter_num, holding_for_pin=holding_for_pin,
+                preserve_priority_lanes=preserve_priority_lanes,
+            )
         finally:
             self._release_all_leases()
 
     async def _iterate(
-        self, iter_num: int, *, holding_for_pin: bool = False
+        self, iter_num: int, *, holding_for_pin: bool = False,
+        preserve_priority_lanes: bool = False,
     ) -> tuple[str, int, int]:
         """Run a single AFK iteration.
 
@@ -2036,6 +2047,7 @@ class _Loop:
         spans); see
         ``tests/test_iteration_end_to_end.py::test_loop_emits_otel_span_tree_when_enabled``.
         """
+        self._priority_lanes_deferred = False
         with telemetry.span(
             "git_loopy.iteration", iter=iter_num
         ) as iteration_span:
@@ -2111,6 +2123,26 @@ class _Loop:
                 issues=pool_refs,
                 excluded=len(collection.exclusions),
             )
+            if preserve_priority_lanes and not holding_for_pin:
+                lane_refs = {
+                    item.ref for item in pool
+                    if LABEL_PRIORITY in item.labels and LABEL_PARALLEL_SAFE in item.labels
+                }
+                self._priority_lanes_deferred = any(
+                    item.ref in lane_refs
+                    and self._priority_lane_eligible is not None
+                    and self._priority_lane_eligible(PoolCandidate(
+                        ref=item.ref, title=item.title, labels=tuple(item.labels),
+                        blocked_by=item.blocked_by,
+                    ))
+                    for item in pool
+                )
+                if lane_refs:
+                    self._diag.info(
+                        "serial Priority turn leaves Parallel-safe Priority issues "
+                        "to the Lane refill: %s", sorted(lane_refs, key=str),
+                    )
+                    pool = [item for item in pool if item.ref not in lane_refs]
             if not pool:
                 if not confirms_empty_pool(
                     complete=collection.complete, remaining=len(pool)
@@ -3085,7 +3117,9 @@ class _Loop:
         except Exception as exc:  # noqa: BLE001 - see the docstring
             self._diag.warning("route preparation pass failed: %s", exc)
 
-    async def _prepare_route(self, item: AfkReadyItem) -> PreparedRoute:
+    async def _prepare_route(
+        self, item: AfkReadyItem, *, priority_parallel_safe: bool | None = None
+    ) -> PreparedRoute:
         """Prepare one eligible candidate's proposal, or say why there is none.
 
         The order is AC3's, exactly: a missing **Task type** is classified
@@ -3109,9 +3143,18 @@ class _Loop:
                 ref=item.ref,
                 outcome=PreparationOutcome.UNAVAILABLE,
                 detail=f"current candidate eligibility {current.outcome}; no routing call",
+                retryable=current.outcome == PICKUP_UNAVAILABLE,
             )
         assert current.item is not None
         item = current.item
+        if priority_parallel_safe is not None and (
+            LABEL_PRIORITY not in item.labels
+            or (LABEL_PARALLEL_SAFE in item.labels) != priority_parallel_safe
+        ):
+            return PreparedRoute(
+                ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                detail="current candidate changed its Priority scheduling class",
+            )
         if self._attempts.defeated_by(item.ref) is not None:
             return PreparedRoute(
                 ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
@@ -3124,6 +3167,7 @@ class _Loop:
                 outcome=PreparationOutcome.UNAVAILABLE,
                 reason=labelled.reason,
                 detail=labelled.reason.value,
+                retryable=True,
             )
         try:
             resolution = self._resolve_route(labelled, warn=lambda _message: None)
@@ -3138,9 +3182,45 @@ class _Loop:
             )
         if static_route_applies(resolution):
             return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.STATIC)
-        if self._reusable_routes_for(item.ref):
-            return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.REUSABLE)
-        proposal = await router.prepare(self._routing_request(labelled, resolution))
+        request = self._routing_request(labelled, resolution)
+        cached = (
+            self._preparation.peek(item.ref)
+            if priority_parallel_safe is not None and self._preparation is not None
+            else None
+        )
+        if cached is not None and cached.outcome is not PreparationOutcome.REUSABLE:
+            if cached.proposal is None:
+                if not cached.may_retry:
+                    return PreparedRoute(
+                        ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                        reason=cached.reason,
+                        detail=cached.detail or "preparation already settled; leaving to Pickup",
+                    )
+            else:
+                available = await router.proposal_available(cached.proposal, request)
+                if isinstance(available, RoutingUnavailable):
+                    return PreparedRoute(
+                        ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                        reason=available.reason, detail=available.reason.value,
+                    )
+                if available:
+                    return cached
+            assert self._preparation is not None
+            self._preparation.forget((item.ref,))
+        reusable = self._reusable_routes_for(item.ref)
+        if reusable:
+            available = (
+                await router.reusable_available(reusable, request)
+                if priority_parallel_safe is not None else True
+            )
+            if isinstance(available, RoutingUnavailable):
+                return PreparedRoute(
+                    ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                    reason=available.reason, detail=available.reason.value,
+                )
+            if available:
+                return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.REUSABLE)
+        proposal = await router.prepare(request)
         if isinstance(proposal, RoutingUnavailable):
             return PreparedRoute(
                 ref=item.ref,
@@ -5010,12 +5090,14 @@ class _ParallelLoop:
     async def _drive_rolling(self) -> tuple[str, int, int]:
         """Drive Rolling dispatch to its terminal outcome (#219, ADR-0020).
 
-        Each turn: reserve every currently refillable **Lane**
+        Each ordinary turn first checks Ready **Priority** serial demand, then
+        reserves every currently refillable **Lane**
         (:meth:`~git_loopy.rolling_scheduler.RollingScheduler.reserve`) and
         spawn one lifecycle task per reservation (:meth:`_run_lane_lifecycle`)
-        FIRST — so a single freshly eligible ``parallel-safe`` issue is never
-        made to wait behind co-occurring **serial-required** work (#219 §1.4,
-        criterion #9) — no barrier: a finished Lane's slot refills the instant
+        — so without a human Pin or Priority assertion a freshly eligible
+        ``parallel-safe`` issue still goes ahead of co-occurring
+        **serial-required** work (#219 §1.4, criterion #9). No barrier: a
+        finished Lane's slot refills the instant
         its contribution is admitted or terminates, while every other Lane's
         worktree setup and session continue unblocked. THEN latch serial
         demand for any serial-required (non-``parallel-safe``)
@@ -5039,14 +5121,16 @@ class _ParallelLoop:
         :meth:`_service_serial_required_work` to have seen the whole other half
         this turn (#219 §2.13, criteria #5/#6).
 
-        The reserve-first rule has exactly one exception, the **Pin**'s serial
-        Iteration: a **Serial-required** Pin latches serial ownership before the
-        first reservation (:meth:`_latch_serial_required_pin`, #430).
+        A live **Pin** goes first (#430). Otherwise Ready **Priority**
+        Serial-required work latches before new reservations (#720), except
+        during the full refill turn owed after each serial Iteration.
         """
         assert self._scheduler is not None  # guarded by `self._rolling_capable`
         scheduler = self._scheduler
+        self._serial._priority_lane_eligible = scheduler.pool.eligible
         scheduler.start()
         self._crash = None
+        priority_serial_latched = False
         pin_iteration_pending = self._latch_serial_required_pin()
 
         try:
@@ -5089,7 +5173,35 @@ class _ParallelLoop:
                 spending_refill_turn = (
                     scheduler.phase == rolling_scheduler.PHASE_ROLLING_REFILL_TURN
                 )
-                reservations = scheduler.reserve()
+                collection = None
+                priority_demand = None
+                if (
+                    not spending_refill_turn
+                    and not scheduler.serial_latched
+                    and scheduler.may_start_work
+                    and self._serial.live_pin is None
+                ):
+                    collection = self._collect_pool_safely()
+                    priority_demand = await self._priority_serial_work(collection)
+                # Earlier Priority Lane work keeps its class and position.
+                # Reserve only that prefix before latching; ordinary work never
+                # gets a reservation in the gap, which contains no await.
+                reservations = (
+                    scheduler.reserve(only=priority_demand[0])
+                    if priority_demand is not None and priority_demand[0]
+                    else ()
+                )
+                if priority_demand is not None:
+                    assert collection is not None
+                    serial_required = _serial_required(collection.items)
+                    if all(scheduler.owns(ref) for ref in priority_demand[0]):
+                        self._latch_serial_demand(
+                            ref=priority_demand[1], serial_required=len(serial_required)
+                        )
+                        priority_serial_latched = True
+                        self._prepare_serial_drain(serial_required)
+                if priority_demand is None or not priority_demand[0]:
+                    reservations = scheduler.reserve()
                 if spending_refill_turn:
                     self._report_refill_turn(
                         reservations=len(reservations),
@@ -5108,11 +5220,23 @@ class _ParallelLoop:
                 # it (#645), so the serial peek waits too: latching serial
                 # demand now would stop the refill the Pin's binding releases,
                 # or, with the Pin's Lane freed, take the turn it is owed.
+                if (
+                    collection is None and not scheduler.serial_latched
+                    and not scheduler.lane_first_awaited
+                ):
+                    collection = self._collect_pool_safely()
                 serial_pool_seen = (
                     False
-                    if scheduler.lane_first_awaited
-                    else self._service_serial_required_work()
+                    if scheduler.lane_first_awaited or (
+                        priority_demand is not None and not scheduler.serial_latched
+                    )
+                    else self._service_serial_required_work(collection)
                 )
+                if (
+                    scheduler.serial_latched and collection is not None
+                    and any(LABEL_PRIORITY in item.labels for item in _serial_required(collection.items))
+                ):
+                    priority_serial_latched = True
 
                 # `serial_turn()` itself has neither `max_iterations` nor Stop
                 # awareness (it only gates on the serial latch + full
@@ -5132,6 +5256,7 @@ class _ParallelLoop:
                         await self._serial._run_one_iteration(
                             self._alloc_iter_num(),
                             holding_for_pin=pin_iteration_pending,
+                            preserve_priority_lanes=priority_serial_latched,
                         )
                     )
                     pin_unread = False
@@ -5157,12 +5282,16 @@ class _ParallelLoop:
                             exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
                             scheduler._units_spent,
                         )
-                    if outcome in _SERIAL_DEFEATED_OUTCOMES:
+                    if (
+                        outcome in _SERIAL_DEFEATED_OUTCOMES
+                        and not self._serial._priority_lanes_deferred
+                    ):
                         # #413, and terminal *here* rather than latched for the
                         # idle-check, because the scheduler grants a serial turn
                         # only once every Lane has drained (`quiescent`): a
                         # serial Pickup that binds nothing at that moment has
-                        # walked the whole Pool — both halves — with nothing in
+                        # walked the whole Pool — both halves — unless Priority
+                        # Lane work was deliberately deferred to refill. Nothing in
                         # flight behind it. Continuing would re-latch the same
                         # serial demand, run the same Iteration and skip the same
                         # candidates for as long as the Run has units, which is
@@ -5200,6 +5329,7 @@ class _ParallelLoop:
                         self._latch_serial_demand(ref=pin, serial_required=None)
                         continue
                     scheduler.serial_finished()
+                    priority_serial_latched = False
                     continue
 
                 if self._pending:
@@ -5443,7 +5573,7 @@ class _ParallelLoop:
     def _latch_serial_required_pin(self) -> bool:
         """Give a **Serial-required** Pin serial ownership before any Lane (#430).
 
-        The one exception to the reserve-first rule (#219 §1.4) in
+        The stronger exception to the reserve-first rule (#219 §1.4) in
         :meth:`_drive_rolling`: the Pin is worked ahead of every other issue in
         the Run (ADR-0032), and reserving Lanes first would let them spend an
         explicit ``max_iterations`` cap before the Pin's serial Iteration is
@@ -5542,7 +5672,108 @@ class _ParallelLoop:
             serial_required=serial_required,
         )
 
-    def _service_serial_required_work(self) -> bool:
+    async def _priority_serial_work(
+        self, collection: PoolCollection
+    ) -> tuple[frozenset[int | str], int | str] | None:
+        """Find Priority demand and its preceding admissible Priority Lane prefix.
+
+        This is a scheduling peek, not a Pickup: it takes no Lease, binds no
+        Active issue, and leaves the actual serial walk to revalidate admission
+        at full quiescence. Unread and refused candidates retain their normal
+        Pickup/terminal paths rather than gaining a scheduling barrier.
+        """
+        assert self._scheduler is not None
+        if not any(
+            item.kind == "issue" and LABEL_PRIORITY in item.labels
+            for item in _serial_required(collection.items)
+        ):
+            return None
+        preceding_lanes: set[int | str] = set()
+        for item in collection.items:
+            if item.kind != "issue" or LABEL_PRIORITY not in item.labels:
+                continue
+            if self._serial._attempts.defeated_by(item.ref) is not None:
+                continue
+            current = await asyncio.to_thread(self._source.refresh_for_preparation, item)
+            if current.outcome != PICKUP_VALIDATED:
+                if current.outcome == PICKUP_UNAVAILABLE:
+                    self._diag.warning(
+                        "Priority peek could not prove admission for #%s; "
+                        "leaving it to Pickup",
+                        item.ref,
+                    )
+                continue
+            assert current.item is not None
+            item = current.item
+            if LABEL_PRIORITY not in item.labels:
+                continue
+            parallel_safe = LABEL_PARALLEL_SAFE in item.labels
+            if parallel_safe:
+                if item.ref in self._rolling_refused:
+                    continue
+                if self._scheduler.owns(item.ref):
+                    preceding_lanes.add(item.ref)
+                    continue
+            try:
+                resolution = self._serial._resolve_route(
+                    item, warn=self._diag.warning
+                )
+                self._serial._require_route_selector(resolution)
+            except (TaskTypeError, DynamicRouteUnavailable) as exc:
+                self._diag.warning("Priority peek skipped #%s: %s", item.ref, exc)
+                continue
+            if (
+                self._lease is not None
+                and isinstance(item.ref, int)
+                and not await asyncio.to_thread(self._lease.claimable, item.ref)
+            ):
+                continue
+            router = self._serial._dynamic_router
+            if router is not None and not static_route_applies(resolution):
+                desk = self._serial._preparation
+                prioritizing = desk is not None and desk.peek(item.ref) is None
+                if prioritizing:
+                    assert desk is not None
+                    await desk.prioritize(item.ref)
+                try:
+                    async def prepare() -> PreparedRoute:
+                        return await self._serial._prepare_route(
+                            item, priority_parallel_safe=parallel_safe
+                        )
+                    prepared = (
+                        await desk.prepare_for_peek(item, prepare)
+                        if desk is not None else await prepare()
+                    )
+                finally:
+                    if prioritizing:
+                        assert desk is not None
+                        await desk.finish_pickup(item.ref)
+                if prepared.outcome not in (
+                    PreparationOutcome.STATIC, PreparationOutcome.PROPOSED,
+                    PreparationOutcome.REUSABLE,
+                ):
+                    self._diag.warning(
+                        "Priority peek skipped #%s: %s",
+                        item.ref, prepared.detail or prepared.outcome.value,
+                    )
+                    continue
+            if parallel_safe:
+                preceding_lanes.add(item.ref)
+                continue
+            return frozenset(preceding_lanes), item.ref
+        return None
+
+    def _prepare_serial_drain(self, items: Sequence[AfkReadyItem]) -> None:
+        """Give discovered serial work preparation priority while Lanes drain."""
+        assert self._scheduler is not None
+        if self._lane_work and self._scheduler.may_start_work:
+            if self._serial._preparation is not None:
+                self._serial._preparation.interrupt_ahead()
+            self._serial._start_preparation_pass(items, beside=None)
+
+    def _service_serial_required_work(
+        self, collection: PoolCollection | None = None
+    ) -> bool:
         """Latch serial demand for **serial-required** work, and say what was seen.
 
         #219 §1.4 retires the Wave's ">= 2 eligible" threshold for
@@ -5579,7 +5810,8 @@ class _ParallelLoop:
             # full `collect_pool` per drain turn to learn that would cost real
             # API capacity. Nothing was seen, so nothing may be claimed.
             return False
-        collection = self._collect_pool_safely()
+        if collection is None:
+            collection = self._collect_pool_safely()
         serial_required = _serial_required(collection.items)
         if serial_required:
             # The whole peek is counted before the latch, not just the first
@@ -5590,10 +5822,7 @@ class _ParallelLoop:
                 ref=serial_required[0].ref,
                 serial_required=len(serial_required),
             )
-            if self._lane_work and self._scheduler.may_start_work:
-                if self._serial._preparation is not None:
-                    self._serial._preparation.interrupt_ahead()
-                self._serial._start_preparation_pass(serial_required, beside=None)
+            self._prepare_serial_drain(serial_required)
         return collection.complete
 
     def _report_serial_latch(
