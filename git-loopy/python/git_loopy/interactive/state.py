@@ -809,12 +809,12 @@ class LiveRunState:
                     self._render_lane_event(str(etype), event["issue"], event, now)
                 return
             if window.kind == "integration":
-                self._record_activity_subagent(str(etype), event)
                 key = self._normalize_ref(window.issue)
-                self._emit_event_line(
+                self._record_subagent_event(
+                    str(etype),
+                    event,
                     self._lane_stream_state(key),
                     self._lane_provider(key),
-                    _subagent_event_text(str(etype), event),
                 )
             else:
                 self._render_lane_event(str(etype), window.issue, event, now)
@@ -1019,8 +1019,9 @@ class LiveRunState:
                     ):
                         self.peak_context_window = snapshot
         elif etype in {_SUBAGENT_STARTED, _SUBAGENT_COMPLETED, _SUBAGENT_FAILED}:
-            self._record_activity_subagent(str(etype), event)
-            self._record_event_line(_subagent_event_text(str(etype), event))
+            self._record_subagent_event(
+                str(etype), event, self._stream, self._commit_buffer
+            )
         elif etype == _CONTRIBUTION_WORK_FINISHED:
             issue = event.get("issue")
             if issue is not None:
@@ -1717,8 +1718,7 @@ class LiveRunState:
             if snapshot is not None:
                 self._set_activity_context(event, snapshot)
         elif etype in {_SUBAGENT_STARTED, _SUBAGENT_COMPLETED, _SUBAGENT_FAILED}:
-            self._record_activity_subagent(etype, event)
-            self._emit_event_line(st, provider, _subagent_event_text(etype, event))
+            self._record_subagent_event(etype, event, st, provider)
 
     # -- internals ----------------------------------------------------------
 
@@ -1941,18 +1941,23 @@ class LiveRunState:
         elif identity in window.subagent_ids:
             window.subagent_ids.discard(identity)
 
+    def _record_subagent_event(
+        self,
+        etype: str,
+        event: Mapping[str, Any],
+        stream: _StreamState,
+        provider: Callable[[], deque[LogLine]],
+    ) -> None:
+        self._record_activity_subagent(etype, event)
+        self._emit_event_line(stream, provider, _subagent_event_text(etype, event))
+
     def _activity_window_for_contribution(
         self, contribution_id: str
     ) -> ActivityWindow | None:
         integration = self._activity_integration
-        if (
-            integration is not None
-            and integration.live
-            and integration.contribution_id == contribution_id
-        ):
+        if integration is not None and integration.contribution_id == contribution_id:
             return integration
-        window = self._activity_contributions.get(contribution_id)
-        return window if window is not None and window.live else None
+        return self._activity_contributions.get(contribution_id)
 
     def _start_integration_window(self, event: Mapping[str, Any], now: float) -> None:
         issue = identity_key(event.get("issue"))

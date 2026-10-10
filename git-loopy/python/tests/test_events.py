@@ -1115,6 +1115,23 @@ def test_map_sdk_event_subagent_selection_events_remain_unmapped() -> None:
         assert map_sdk_event(_wrap_sdk(event_type, SimpleNamespace())) is None
 
 
+def test_map_sdk_event_subagent_start_keeps_an_unreported_model_nullable() -> None:
+    out = map_sdk_event(
+        _wrap_sdk(
+            SessionEventType.SUBAGENT_STARTED,
+            SimpleNamespace(
+                tool_call_id="call-1",
+                agent_name="reviewer",
+                agent_display_name="Code reviewer",
+                model=None,
+            ),
+        )
+    )
+    assert out is not None
+    assert out["type"] == "subagent.started"
+    assert out["model"] is None
+
+
 def test_map_sdk_event_usage_carries_subagent_attribution_handles() -> None:
     data = SimpleNamespace(
         model="gpt-5.6-terra",

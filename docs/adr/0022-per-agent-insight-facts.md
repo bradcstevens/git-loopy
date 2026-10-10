@@ -76,7 +76,9 @@ Carry the per-Agent facts on the existing **Event schema**, additively.
 ## Consequences
 
 - The Event schema grows additively; `INSIGHT_CAPABILITY_NAMES` grows by one. Existing
-  consumers ignore unknown keys and types, so no version break is required.
+  consumers ignore unknown keys and types, so no compatibility-major break is required.
+  The producer's three new lifecycle types advance `event_schema_version` from 1.5 to 1.6,
+  and the required `subagents` capability advances the Wrapper contract from 2.23 to 2.24.
 - **Subagent** and **Agent** enter `CONTEXT.md`; **Context fill** is redefined from
   Iteration-scoped to Agent-scoped.
 - Two Orchestrators declare a capability `false` on arrival. That is the contract working

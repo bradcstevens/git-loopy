@@ -1678,12 +1678,17 @@ _Avoid_: worker count, target concurrency.
 
 **Effective Lane limit**:
 The number of **Lanes** **Rolling dispatch** may actually fill right now. It starts at
-a static-safe value below the **Lane cap**, contracts under sustained 429, AI-credit,
-host/setup, or **Integration backlog** pressure, and expands one Lane at a time against
-sustained evidence of health — never above the Lane cap, which never moves. It may reach
-zero, at which point started work and Integration still drain; nothing is cancelled for
-it. A pressure signal the Run cannot observe is shown unknown and never estimated, which
-also means it can never be used to justify an expansion.
+the bound **Execution host**'s declared capacity (the **Lane cap**) when host load is
+observable, or at the static-safe `min(Lane cap, 3)` fallback when it is unobservable. Missing credit
+telemetry or an unset credit budget alone does not force an observable host to three.
+It contracts under sustained 429, AI-credit, host/setup, or **Integration backlog**
+pressure, and expands one Lane at a time against sustained evidence of health — never
+above the Lane cap, which never moves; a Run whose host load was unobservable at startup
+cannot expand beyond the static-safe fallback. Capacity is not a promise of eligible
+`parallel-safe` supply, and Integration backpressure can prevent refill. It may reach
+zero, at which point started work and Integration still drain; nothing is cancelled
+for it. A pressure signal the Run cannot observe is shown unknown and never estimated,
+which also means it can never be used to justify an expansion.
 _Avoid_: dynamic cap, current cap, throttle, adjusted Lane cap.
 
 **Pressure signal**:

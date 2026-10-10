@@ -1300,10 +1300,15 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.23 makes upstream durability part of Integration publication (#418).
     The additive push-failure record advances the fixture revision to 1.5;
     compatibility schema stays 1 and historical streams retain their meaning.
+
+    2.24 makes Subagent lifecycle observable through the required distribution
+    capability and pins the Run-wide Activity total. The three newly produced
+    lifecycle types advance the Event fixture revision to 1.6; compatibility
+    schema stays 1.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.5"
-    assert _EVENT_SCHEMA["contract_version"] == "2.23"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.6"
+    assert _EVENT_SCHEMA["contract_version"] == "2.24"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1344,6 +1349,11 @@ def test_event_fixture_pins_the_calibration_record_contract() -> None:
     assert set(identity["lifecycle_types"]) == set(
         events_module.CALIBRATION_SCOPED_EVENT_TYPES
     )
+    assert {
+        "subagent.started",
+        "subagent.completed",
+        "subagent.failed",
+    }.issubset(identity["stamped_types"])
     assert {
         "wrapper.iteration.start",
         "wrapper.iteration.end",
@@ -1537,6 +1547,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "agent_display_name",
                 "model",
             ],
+            "nullable": ["model"],
         },
         "subagent.completed": {
             "required_when_present": [
@@ -1545,6 +1556,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "agent_display_name",
                 "model",
             ],
+            "nullable": ["model"],
             "optional": ["duration_seconds", "total_tokens", "total_tool_calls"],
         },
         "subagent.failed": {
@@ -1555,6 +1567,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "model",
                 "error",
             ],
+            "nullable": ["model"],
             "optional": ["duration_seconds", "total_tokens", "total_tool_calls"],
         },
         "usage.tokens": {
@@ -2484,14 +2497,14 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.14 initializes Subagent-capable windows at zero and records their
-    # lifecycle lines (ADR-0022). 1.13 moved the contract/Event provenance to
-    # 2.23 / 1.5. 1.12 charges Strikes per issue, so an advance resets none
-    # (ADR-0070).
+    # 1.15 adds the Run-wide Subagent count. 1.14 initialized Subagent-capable
+    # windows at zero and recorded their lifecycle lines (ADR-0022). 1.13 moved
+    # contract/Event provenance to 2.23 / 1.5.
+    # 1.12 charges Strikes per issue, so an advance resets none (ADR-0070).
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.14"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.15"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -2566,11 +2579,17 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "summary_row": "iteration_or_lane_contribution",
         "iteration_breakdown": "issue_contributions",
         "activity": "current_active_issue",
+        "subagents": "run_total_across_agent_windows",
         "activity_windows": "per_agent_slot",
         "log": "issue_across_contributions",
         "route": "issue_latest_routing_resolution",
     }
-    assert contract["projection_fields"]["activity"] == ["issue", "lines", "windows"]
+    assert contract["projection_fields"]["activity"] == [
+        "issue",
+        "lines",
+        "subagents",
+        "windows",
+    ]
     assert contract["projection_fields"]["activity_window"] == [
         "kind",
         "lane",
@@ -3328,8 +3347,10 @@ def test_python_activity_windows_match_the_shared_fixture(
             state,
             None,
             issue=case["inputs"]["drill_in_issue"],
-        )["dashboard"]["activity"]["windows"]
-        assert actual == snapshot["expected"]
+        )["dashboard"]["activity"]
+        assert actual["windows"] == snapshot["expected"]
+        if "expected_subagents" in snapshot:
+            assert actual["subagents"] == snapshot["expected_subagents"]
 
 
 def test_activity_window_fixture_counts_distinct_subagent_lifecycles() -> None:
@@ -3355,6 +3376,9 @@ def test_activity_window_fixture_counts_distinct_subagent_lifecycles() -> None:
     assert [
         snapshot["expected"][0]["subagents"] for snapshot in case["snapshots"][:4]
     ] == [1, 2, 1, 0]
+    assert [
+        snapshot["expected_subagents"] for snapshot in case["snapshots"]
+    ] == [2, 3, 2, 1, 1]
 
 
 @pytest.mark.parametrize(
@@ -4535,8 +4559,9 @@ def test_the_contract_states_a_task_type_labels_origin_is_unobservable() -> None
 def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> None:
     """The fixture note and §14.4 state one fact about the two advanced fixtures.
 
-    ``routing-resolution.json`` declared that provenance at 2.10 and has since
-    moved to 2.22 for its retry cases. Its sentence about
+    ``routing-resolution.json`` declared that provenance at 2.10 and moved to
+    2.22 for its retry cases, then to 2.24 with the Subagent contract update.
+    Its sentence about
     ``event-schema.json`` and ``dashboard-insights.json`` must name the same
     later advances the contract names, or a bump leaves the notes disagreeing,
     and the latest advance named must be the version those fixtures declare.
@@ -4557,7 +4582,7 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
     # the latest to the version both advanced fixtures actually declare.
     advance = re.compile(r"\b(2\.\d+) with\b")
     policy_history, anchor, _ = policy.split("carried it at 2.10", 1)[1].partition(
-        "The Event fixture revision"
+        "The Event fixture"
     )
     assert anchor, "routing provenance must delimit contract advances from Event revisions"
     written_history = written.split("carried it at 2.10", 1)[1].split(
@@ -4574,7 +4599,7 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
 
 
 @pytest.mark.parametrize(("fixture", "expected"), [
-    ("routing-resolution.json", "2.22"),
+    ("routing-resolution.json", "2.24"),
     ("calibration-search.json", "2.5"),
 ])
 def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(

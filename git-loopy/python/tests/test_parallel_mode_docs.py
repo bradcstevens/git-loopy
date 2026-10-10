@@ -12,9 +12,25 @@ def test_parallel_mode_guide_explains_initial_capacity_and_queue_depth() -> None
         .split()
     )
 
-    assert "starts at `min(Lane cap, 3)`" in guide
+    assert (
+        "starts at the bound **Execution host**'s declared capacity "
+        "when host load is observable"
+    ) in guide
+    assert (
+        "When host load is unobservable, it starts at `min(Lane cap, 3)`, "
+        "the static-safe fallback"
+    ) in guide
+    assert "that Run cannot expand beyond this fallback" in guide
+    assert (
+        "With an observable host and a Lane cap of 10, "
+        "the initial limit is 10, not three"
+    ) in guide
+    assert (
+        "Missing credit telemetry or an unset credit budget alone "
+        "does not force an observable host to three"
+    ) in guide
     assert "expands one Lane at a time" in guide
-    assert "cap of 10 opens three Lanes at first" in guide
+    assert "cap of 10 opens three Lanes at first" not in guide
     assert "every issue the Run has read" in guide
     assert "deeper than the number of running Lanes" in guide
 
