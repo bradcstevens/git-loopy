@@ -342,6 +342,21 @@ class RoutePreparation:
             self._settled.discard(ref)
             self._pickups.discard(ref)
 
+    def remember(self, outcome: PreparedRoute) -> None:
+        """Keep a scheduling peek's proposal for authoritative Pickup to revalidate."""
+        self._settled.add(outcome.ref)
+        if outcome.outcome is PreparationOutcome.PROPOSED:
+            self._prepared[outcome.ref] = outcome
+        if outcome.halting:
+            self._halted = True
+            if self._diag is not None:
+                self._diag.info(
+                    "route preparation stopped for this Run: %s",
+                    outcome.reason.value if outcome.reason is not None else "exhausted",
+                )
+        if self._on_prepared is not None:
+            self._on_prepared(outcome)
+
     async def _prepare_one(self, candidate: _Candidate) -> PreparedRoute | None:
         ref = candidate.ref
         try:
@@ -364,16 +379,5 @@ class RoutePreparation:
                 reason=RoutingUnavailableReason.SELECTOR_UNAVAILABLE,
                 detail="preparation failed; see Run diagnostics",
             )
-        self._settled.add(ref)
-        if outcome.outcome is PreparationOutcome.PROPOSED:
-            self._prepared[ref] = outcome
-        if outcome.halting:
-            self._halted = True
-            if self._diag is not None:
-                self._diag.info(
-                    "route preparation stopped for this Run: %s",
-                    outcome.reason.value if outcome.reason is not None else "exhausted",
-                )
-        if self._on_prepared is not None:
-            self._on_prepared(outcome)
+        self.remember(outcome)
         return outcome

@@ -283,6 +283,16 @@ stops, the Lanes already running drain, and one serial Iteration is granted
 exclusive use of the base worktree. Rolling dispatch then gets one full refill
 turn before serial demand can latch again, so neither side starves the other.
 
+In the Python Runner, a Ready `priority` issue without `parallel-safe` latches
+that demand **before new ordinary Lane reservations**, at startup and when it is
+discovered later. With a one-Iteration budget, that issue takes the unit rather
+than a new Lane. Priority bypasses no Pickup check: Blocked, Awaiting-merge,
+externally Leased, stale, non-executable, route-refused and unread candidates do
+not earn this exception. A live `--issue` pin remains stronger, including when
+its authoritative read fails. Priority `parallel-safe` work remains Lane work.
+Without either human assertion, Lane work still goes first. The full refill turn
+after each serial Iteration remains mandatory even when more Priority work waits.
+
 That span is the **Serial drain**, and it is a real wait. It ends only when every
 started Lane contribution has finished — its session, any parked branch, Integration
 and any recovery — so a serial-required issue waits for the slowest Lane in flight

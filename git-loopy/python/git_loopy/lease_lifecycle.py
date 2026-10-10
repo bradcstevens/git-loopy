@@ -28,6 +28,7 @@ from .issue_lease import (
     LeaseHold,
     LeaseRefPort,
     LeaseTransport,
+    decide_lease_action,
     is_permanent_lease_write_refusal,
 )
 from .lease_heartbeat import LeaseHeartbeat
@@ -295,6 +296,22 @@ class LeaseLifecycle:
         except GitError:
             return False
         return True
+
+    def claimable(self, issue: int) -> bool:
+        """Peek at Pickup's Lease policy without taking or renewing a Lease."""
+        if self._disabled:
+            return True
+        if issue in self._lost:
+            return False
+        try:
+            observation = self._transport.observe(issue, now=self._now())
+        except GitError as exc:
+            self._warn(f"Lease for issue #{issue} could not be read: {exc}")
+            return False
+        return decide_lease_action(
+            "claim", state=observation.state, owner=observation.owner,
+            run_id=self._run_id,
+        ) != "refuse"
 
     def lost(self, issue: int) -> bool:
         """Whether this Run has already been shown to have lost ``issue``."""

@@ -132,16 +132,23 @@ pin, as §3.3 does for any candidate; holding for it is **Rolling dispatch** beh
 stays under the two exceptions above. The bounds on a pin whose reads keep failing stay with
 [#647](https://github.com/bradcstevens/git-loopy/issues/647).
 
-## Amendment: Priority crosses the Lane boundary for new reservations (#428, accepted design)
+## Amendment: Priority crosses the Lane boundary for new reservations (#428, #720)
 
 [ADR-0074](0074-the-serial-drain-waits-for-the-whole-lane-cohort.md) decides that `priority`
 sorts ahead of everything else across the class boundary under **Rolling dispatch**, as the pin
-already does. A Ready **Priority** serial-required issue latches serial demand before the next
-Lane reservation; today the driver reserves Lanes first, so a Priority plain issue waits behind
-every freshly eligible Lane issue. Started Lanes still drain, nothing is cancelled, the mandatory
-refill turn still follows each serial Iteration, and a Priority issue that Pickup would skip —
-**Blocked**, **Awaiting merge**, its **Lease** held elsewhere — holds no Lane back. With no human
-assertion, Lane work keeps default precedence.
+already does. Implemented in the Python Runner by
+[#720](https://github.com/bradcstevens/git-loopy/issues/720): a Ready **Priority**
+Serial-required issue latches serial demand before new ordinary Lane reservations, at startup
+and when discovered later. The scheduling peek reuses current eligibility, Readiness, routing
+and Lease policy without binding an Active issue or taking a Lease. Pickup revalidates at
+full quiescence. A live Pin remains stronger, including the unread-Pin exceptions above;
+Priority `parallel-safe` work stays Lane work.
 
-This is accepted design, not shipped. Until its ticket lands the behaviour above is not in effect,
-and **Priority** and **Pin** in `CONTEXT.md` are unchanged.
+Started contributions still drain in full, nothing is cancelled, and the mandatory full
+refill turn still follows each serial Iteration even when further Priority work waits.
+A Priority issue that Pickup would skip — **Blocked**, **Awaiting merge**, externally
+Leased, stale, non-executable or route-refused — holds no Lane back merely by its label.
+An authoritative read that failed proves no Ready assertion and retains the existing
+unknown and terminal semantics. With no human assertion, Lane work keeps default precedence.
+Retries still wait for contribution finalization and get no new reservation during a latch.
+This amendment is Python Rolling-dispatch behavior, not a new serial-only Runner obligation.

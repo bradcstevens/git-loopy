@@ -1786,6 +1786,24 @@ class DynamicRouter:
         """Current Run-wide routing usage, including interrupted assessments."""
         return self._ledger.snapshot()
 
+    async def reusable_available(
+        self, reusable: Sequence[ReusableRoute], request: RoutingRequest
+    ) -> bool | RoutingUnavailable:
+        """Check reusable route admission without binding or buying an assessment."""
+        inputs = await self._live.read(
+            request.bounded_input_tokens, work_context_tier=request.work_context_tier
+        )
+        if isinstance(inputs, RoutingUnavailable):
+            return inputs
+        identity = _relevant_input_identity(request, inputs.evidence, inputs.capabilities)
+        return any(
+            candidate.relevant_input_identity == identity
+            and _verified_reuse(
+                candidate, request, inputs.evidence, inputs.capabilities
+            ) is not None
+            for candidate in reusable
+        )
+
     async def prepare(
         self, request: RoutingRequest
     ) -> RoutingProposal | RoutingUnavailable:

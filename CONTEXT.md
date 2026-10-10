@@ -443,13 +443,21 @@ about work), lock, reservation, hold.
 The axis on which an issue is worked ahead of older ones, carried as a label and read
 at selection. It is orthogonal to **Task type**, which selects a **Routed pair** and
 never affects order. Priority reorders work; it does not change what is eligible, and
-it never lets an issue past a **Lease**.
+it never lets an issue past a **Lease**. In the Python Runner's **Rolling dispatch**,
+a Ready Priority **Serial-required** issue latches serial demand before new ordinary
+**Lane** reservations, at startup and when discovered later. Started contributions
+still drain in full, and one full refill turn still follows each serial Iteration.
+A candidate Pickup would skip, or whose admission could not be read, earns no
+Priority exception. Priority `parallel-safe` work stays Lane work; without a live
+Pin or Ready Priority serial assertion, Lane work retains default precedence.
 _Avoid_: severity, urgency, task type.
 
 **Pin**:
 One issue an operator names for one invocation (`--issue N`), worked ahead of the head
 of the order and ahead of **Priority** — it outranks the label because a human said so
-directly rather than in advance. A pin bypasses order and *nothing else*: the issue
+directly rather than in advance. Its Rolling-dispatch precedence also outranks
+Priority's serial-demand peek, including when the pin's read fails.
+A pin bypasses order and *nothing else*: the issue
 still has to be eligible, and a pin that is not fails the invocation rather than
 falling back to the order, because silently working a different issue than the one
 named is worse than stopping. Under **Rolling dispatch** the pin also goes ahead of

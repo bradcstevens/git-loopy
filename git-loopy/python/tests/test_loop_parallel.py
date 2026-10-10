@@ -5988,6 +5988,376 @@ def _bindings(events: list[dict[str, Any]]) -> list[tuple[int, str]]:
     ]
 
 
+@pytest.mark.parametrize(
+    "case",
+    json.loads(
+        (Path(__file__).resolve().parents[2] / "conformance" / "rolling-priority.json")
+        .read_text(encoding="utf-8")
+    )["cases"],
+    ids=lambda case: case["name"],
+)
+def test_rolling_priority_fixture_at_the_complete_run_seam(
+    tmp_path, monkeypatch, case
+) -> None:
+    fake_gh = _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            dataclass_replace(
+                _make_issue(issue["number"], labels=issue["labels"]),
+                created_at=issue.get("created_at"),
+            )
+            for issue in case["issues"]
+        ],
+    )
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=1), issue_pin=case["pin"])
+
+    asyncio.run(loop_module.run(cfg))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [tuple(case["expected_binding"])]
+    assert _first_work(events)["type"] == case["first_work"]
+    assert [n for n, _comment in fake_gh.issue_close_calls] == [case["expected_binding"][0]]
+    if case["first_work"] == "wrapper.iteration.start":
+        assert not any(e["type"] == "wrapper.contribution.start" for e in events)
+        latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+        assert latch["issue"] == case["expected_binding"][0]
+        assert events.index(latch) < events.index(_first_work(events))
+
+
+def test_priority_serial_iterations_still_earn_a_full_lane_refill_turn(
+    tmp_path, monkeypatch
+) -> None:
+    fake_gh = _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "priority"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent", "priority"]),
+        ],
+        client_cls=_TimelineFakeClient,
+    )
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=0), issue_pin=None)
+    assert asyncio.run(loop_module.run(cfg)) == 0
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(41, "priority"), (42, "order"), (44, "priority")]
+    refill = next(e for e in events if e["type"] == "wrapper.rolling.refill_turn")
+    assert refill["reservations"] == 1
+    second_latch = [e for e in events if e["type"] == "wrapper.serial.requested"][1]
+    assert events.index(refill) < events.index(second_latch)
+    lane_end = next(e for e in events if e["type"] == "wrapper.contribution.end")
+    second_serial = [e for e in events if e["type"] == "wrapper.iteration.start"][1]
+    assert events.index(lane_end) < events.index(second_serial)
+    assert [n for n, _comment in fake_gh.issue_close_calls] == [41, 42, 44]
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    ["blocked", "awaiting_merge", "route", "unread_readiness", "malformed",
+     "planning", "stale", "unread_view", "lost_ready", "lost_priority"],
+)
+def test_inadmissible_priority_serial_candidates_do_not_take_the_lane_turn(
+    tmp_path, monkeypatch, refusal
+) -> None:
+    priority = _make_issue(44, labels=["ready-for-agent", "priority"])
+    kwargs = {}
+    if refusal == "blocked":
+        priority = dataclass_replace(priority, blocked_by=BlockedByRead(
+            total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+        ))
+    elif refusal == "awaiting_merge":
+        priority = dataclass_replace(priority, closing_references=gh_module.ClosingReferences(
+            complete=True,
+            nodes=(gh_module.ClosingReference(node_id="PR_90", ref="x/y#90"),),
+        ))
+        kwargs["pull_request_states_by_id"] = {"PR_90": "open"}
+    elif refusal == "route":
+        priority = dataclass_replace(
+            priority, labels=[*priority.labels, "task-type:not-a-route"]
+        )
+    elif refusal == "unread_readiness":
+        priority = dataclass_replace(priority, blocked_by=BlockedByRead(
+            total_count=1, nodes=()
+        ))
+    elif refusal == "malformed":
+        priority = dataclass_replace(priority, body="not executable")
+    elif refusal == "planning":
+        priority = dataclass_replace(priority, title="Spec: a planning document")
+
+    class ChangedPriority(FakeGitHubClient):
+        def issue_view(self, number):
+            issue = super().issue_view(number)
+            if number != 44:
+                return issue
+            if refusal == "stale":
+                return dataclass_replace(issue, state="CLOSED")
+            if refusal == "unread_view":
+                raise gh_module.GhError(["gh", "issue", "view"], 1, "tracker unavailable")
+            if refusal in ("lost_ready", "lost_priority"):
+                label = "ready-for-agent" if refusal == "lost_ready" else "priority"
+                return dataclass_replace(issue, labels=[v for v in issue.labels if v != label])
+            return issue
+
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [_make_issue(42, labels=["ready-for-agent", "parallel-safe"]), priority],
+        gh_cls=ChangedPriority, **kwargs,
+    )
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=1), issue_pin=None)
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(42, "order")]
+    assert _first_work(events)["type"] == "wrapper.contribution.start"
+    assert not any(e["type"] == "wrapper.iteration.start" for e in events)
+
+
+def test_unread_serial_pin_still_holds_priority_and_lanes_back(
+    tmp_path, monkeypatch
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "priority"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+        gh_cls=_UnreadableViewGitHubClient, unreadable=44, nth=3,
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    asyncio.run(loop_module.run(_pinned_config(44, max_iterations=2)))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(44, "pin")]
+    assert not any(e["type"] == "wrapper.contribution.start" for e in events)
+
+
+@pytest.mark.parametrize("unread", [False, True])
+def test_priority_peek_takes_no_lease_and_preserves_refused_lease_semantics(
+    tmp_path, monkeypatch, unread
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent", "priority"]),
+        ],
+    )
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:bradcstevens/git-loopy.git"}
+    rival_sha = _rival_lease(fake_git, 44)
+    real_probe = fake_git.probe_remote_ref
+
+    def probe(remote, ref):
+        if unread and ref == lease_ref(44):
+            raise git_module.GitError(["git", "ls-remote"], 128, "no route")
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=0), issue_pin=None)
+    exit_code = asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(42, "order")]
+    assert _first_work(events)["type"] == "wrapper.contribution.start"
+    assert _lease_swaps(fake_git, 44) == []
+    assert real_probe("origin", lease_ref(44)) == rival_sha
+    end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert end["outcome"] == ("preflight_failed" if unread else "all_skipped")
+    assert exit_code == loop_module.exit_code_for(end["outcome"])
+    if unread:
+        assert "could not be read" in _diag_log(tmp_path)
+
+
+def test_later_priority_demand_withholds_retry_until_serial_and_refill(
+    tmp_path, monkeypatch
+) -> None:
+    fake_gh = _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+
+    class DemandDuringLane(_NoProgressFakeSession):
+        async def send_and_wait(self, prompt, *, timeout=60.0, **extra):
+            if self._working_directory:
+                fake_gh.seed_issue(_make_issue(
+                    44, labels=["ready-for-agent", "priority"]
+                ))
+            return await super().send_and_wait(prompt, timeout=timeout, **extra)
+
+    client = _TimelineFakeClient(
+        fake_git=loop_module._make_git_client(),
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    client._session_cls = DemandDuringLane
+    monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+    cfg = dataclass_replace(
+        _pinned_config(44, max_iterations=3, max_nmt_strikes=2), issue_pin=None
+    )
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(42, "order"), (44, "priority"), (42, "order")]
+    lanes = [e for e in events if e["type"] == "wrapper.contribution.start"]
+    ends = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    serial_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
+    latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+    assert latch["issue"] == 44
+    assert events.index(lanes[0]) < events.index(ends[0]) < events.index(latch)
+    assert events.index(ends[0]) < events.index(serial_end) < events.index(lanes[1])
+    assert [
+        e["strikes"] for e in events if e["type"] == "wrapper.strike" and e["issue"] == 42
+    ] == [1, 2]
+    assert [live for wd, live in client.live_worktrees if wd is None] == [()]
+    refill = next(e for e in events if e["type"] == "wrapper.rolling.refill_turn")
+    assert refill["reservations"] == 1
+
+
+@pytest.mark.parametrize("route_ready", [False, True])
+def test_priority_dynamic_admission_prepares_without_binding_and_pickup_revalidates(
+    tmp_path, monkeypatch, route_ready
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]),
+            _make_issue(44, labels=["ready-for-agent", "priority", "task-type:implementation"]),
+        ],
+    )
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(
+        monkeypatch,
+        answer=_elects_lane_model("claude-opus-5") if route_ready else lambda _request: None,
+    )
+    cfg = _dynamic_parallel_config(
+        max_iterations=1, routing={"docs": ("gpt-5.6-terra", "high")}
+    )
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == ([(44, "priority")] if route_ready else [(42, "order")])
+    assert len(spied["assessments"]) == 1
+    prepared = [
+        e for e in events if e["type"] == "wrapper.routing.prepared" and e["issue"] == 44
+    ]
+    assert prepared
+    if route_ready:
+        latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+        binding = next(e for e in events if e["type"] == "wrapper.pickup.bound")
+        assert events.index(prepared[0]) < events.index(latch) < events.index(binding)
+        assert binding["model"] == "claude-opus-5"
+        assert not any(e["type"] == "wrapper.contribution.start" for e in events)
+    else:
+        assert _first_work(events)["type"] == "wrapper.contribution.start"
+
+
+def test_priority_reusable_route_needs_no_new_selector_credit(
+    tmp_path, monkeypatch
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]),
+            _make_issue(44, labels=["ready-for-agent", "priority", "task-type:implementation"]),
+        ],
+        client_cls=_NoProgressFakeClient,
+    )
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    cfg = _dynamic_parallel_config(
+        max_iterations=1, routing={"docs": ("gpt-5.6-terra", "high")}
+    )
+    asyncio.run(loop_module.run(cfg))
+    assert len(spied["assessments"]) == 1
+    first_log = next((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+
+    asyncio.run(loop_module.run(dataclass_replace(cfg, routing_credit_allowance=Decimal("0"))))
+
+    logs = list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    second_log = next(path for path in logs if path != first_log)
+    events = [json.loads(line) for line in second_log.read_text().splitlines()]
+    assert _bindings(events) == [(44, "priority")]
+    assert len(spied["assessments"]) == 1
+    assert not any(e["type"] == "wrapper.contribution.start" for e in events)
+    resolved = next(e for e in events if e["type"] == "wrapper.routing.resolved")
+    assert resolved["reused_proposal_id"]
+
+
+def test_priority_discovered_beside_started_setup_drains_it_before_serial(
+    tmp_path, monkeypatch
+) -> None:
+    import threading
+    from git_loopy.interactive.state import LiveRunState
+
+    fake_gh = _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    started = asyncio.Event()
+    release = threading.Event()
+    completed = threading.Event()
+    observations = []
+
+    class DemandDuringSession(_ParallelFakeSession):
+        async def send_and_wait(self, prompt, *, timeout=60.0, **extra):
+            if str(self._working_directory).endswith("issue-42"):
+                await asyncio.wait_for(started.wait(), timeout=5)
+                fake_gh.seed_issue(_make_issue(45, labels=["ready-for-agent", "priority"]))
+                fake_gh.seed_issue(_make_issue(44, labels=["ready-for-agent", "parallel-safe"]))
+            return await super().send_and_wait(prompt, timeout=timeout, **extra)
+
+    client = _TimelineFakeClient(
+        fake_git=loop_module._make_git_client(),
+        scripted_events=[_usage_event("claude-opus-4.8-max")], serial_closes=True,
+    )
+    client._session_cls = DemandDuringSession
+    monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+
+    class ObservingState(LiveRunState):
+        def render(self, event):
+            super().render(event)
+            if event["type"] == "wrapper.serial.requested":
+                observations.append((started.is_set(), completed.is_set()))
+                release.set()
+
+    async def scenario():
+        event_loop = asyncio.get_running_loop()
+
+        class HeldSetup:
+            def run(self, worktree):
+                if Path(worktree).name == "issue-43":
+                    event_loop.call_soon_threadsafe(started.set)
+                    if not release.wait(timeout=5):
+                        raise RuntimeError("Priority demand did not release started setup")
+                    completed.set()
+                return SetupResult(command="prepared")
+
+        monkeypatch.setattr(loop_module, "_make_worktree_setup", lambda: HeldSetup())
+        cfg = dataclass_replace(_pinned_config(45, max_iterations=4), issue_pin=None)
+        return await asyncio.wait_for(
+            loop_module.run(cfg, driver=_ObservingDriver(ObservingState())), timeout=15
+        )
+
+    try:
+        assert asyncio.run(scenario()) == 0
+    finally:
+        release.set()
+    events = _logged_events(tmp_path)
+    assert observations == [(True, False)]
+    assert _bindings(events) == [(42, "order"), (43, "order"), (45, "priority"), (44, "order")]
+    grant = next(e for e in events if e["type"] == "wrapper.iteration.start")
+    for issue in (42, 43):
+        end = next(
+            e for e in events if e["type"] == "wrapper.contribution.end" and e["issue"] == issue
+        )
+        assert events.index(end) < events.index(grant)
+        assert end["reason"] == "published"
+    assert [live for wd, live in client.live_worktrees if wd is None] == [()]
+
+
 def test_the_run_built_source_accepts_a_serial_required_pin(
     tmp_path, monkeypatch
 ) -> None:
@@ -12175,8 +12545,9 @@ def test_a_lane_whose_lease_remote_cannot_be_read_passes_over_and_ends(
     ], skips
 
 
+@pytest.mark.parametrize("priority_arrives", [False, True])
 def test_a_parked_contribution_keeps_its_lease_until_it_is_integrated(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, priority_arrives
 ) -> None:
     """A Lease outlives the Lane task when the contribution does (ADR-0033 §5.1).
 
@@ -12235,7 +12606,7 @@ def test_a_parked_contribution_keeps_its_lease_until_it_is_integrated(
         rolling_scheduler.RollingScheduler, "finish_work", spy_finish_work
     )
 
-    class _GatedClient(_ParallelFakeClient):
+    class _GatedClient(_TimelineFakeClient):
         async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
             session = await super().create_session(**kwargs)
             working_directory = str(kwargs.get("working_directory") or "")
@@ -12255,6 +12626,13 @@ def test_a_parked_contribution_keeps_its_lease_until_it_is_integrated(
                 if announce is not None:
                     announce.set()
                 await gate_on.wait()
+                if priority_arrives and working_directory.endswith("issue-44"):
+                    fake_gh.seed_issue(_make_issue(
+                        45, labels=["ready-for-agent", "priority"]
+                    ))
+                    fake_gh.seed_issue(_make_issue(
+                        46, labels=["ready-for-agent", "parallel-safe"]
+                    ))
                 return await real_send_and_wait(prompt, timeout=timeout, **extra)
 
             session.send_and_wait = gated_send_and_wait  # type: ignore[method-assign]
@@ -12263,6 +12641,7 @@ def test_a_parked_contribution_keeps_its_lease_until_it_is_integrated(
     fake_client = _GatedClient(
         fake_git=fake_git,
         scripted_events=[_usage_event("claude-opus-4.8-max")],
+        serial_closes=True,
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
@@ -12302,3 +12681,32 @@ def test_a_parked_contribution_keeps_its_lease_until_it_is_integrated(
     # And the Lease was still given back once the contribution was done.
     assert _lease_swaps(fake_git, 43), "#43 never took a Lease"
     assert fake_git.probe_remote_ref("origin", lease_ref(43)) is None
+    if priority_arrives:
+        events = _logged_events(tmp_path)
+        latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+        assert latch["issue"] == 45
+        grant = next(e for e in events if e["type"] == "wrapper.iteration.start")
+        for issue in (42, 43, 44):
+            end = next(
+                e for e in events
+                if e["type"] == "wrapper.contribution.end" and e["issue"] == issue
+            )
+            assert events.index(end) < events.index(grant)
+            assert end["reason"] == "published"
+        assert any(
+            e["type"] == "wrapper.integration.parked" and e["issue"] == 43
+            for e in events
+        )
+        assert any(e["type"] == "wrapper.integration.recovery_started" for e in events)
+        assert events.index(latch) < events.index(grant)
+        serial_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
+        next_lane = next(
+            e for e in events
+            if e["type"] == "wrapper.contribution.start" and e["issue"] == 46
+        )
+        assert events.index(serial_end) < events.index(next_lane)
+        assert (45, "priority") in _bindings(events)
+        assert [
+            live for wd, live in fake_client.live_worktrees if wd is None
+        ] == [()]
+        assert sorted(n for n, _comment in fake_gh.issue_close_calls) == [42, 43, 44, 45, 46]
