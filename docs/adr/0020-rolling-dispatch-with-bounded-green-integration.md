@@ -187,7 +187,16 @@ Validated serial demand and Rolling dispatch alternate service opportunities:
 
 ### Bounded adaptive Lane control
 
-The effective Lane limit starts at `min(configured Lane cap, 3)`. H remains 2.
+The original decision started the effective Lane limit at
+`min(configured Lane cap, 3)`. For the Python Runner,
+[#456](https://github.com/bradcstevens/git-loopy/issues/456) superseded that
+unconditional startup rule: when host load is observable, the limit starts at
+the bound **Execution host**'s declared capacity (the immutable Lane cap).
+When host load is unobservable, startup retains the static-safe
+`min(Lane cap, 3)` fallback, and that Run cannot expand beyond it. Missing credit
+telemetry or an unset credit budget alone does not force an observable host to
+three. Capacity still requires eligible `parallel-safe` supply and remains
+subject to Integration backpressure. H remains 2.
 
 | Observed state | Reaction |
 | --- | --- |
@@ -198,11 +207,17 @@ The effective Lane limit starts at `min(configured Lane cap, 3)`. H remains 2.
 | Several signals trigger together | Apply only the strongest reaction: 429's -2 wins, otherwise one -1 |
 | A previous contraction is still draining | Suppress another contraction |
 | Five-observation cooldown followed by ten healthy observations | Expand by 1, never above the configured Lane cap |
-| A required signal or configuration is unavailable | Freeze at `min(configured Lane cap, 3)` with H=2; show unknown rather than estimate |
+| Host load is unobservable at Run startup | Start at `min(Lane cap, 3)` and keep that as the Run's expansion ceiling; observed pressure can still contract the limit |
+| A pressure signal or its configuration is unavailable | Show unknown rather than estimate; missing credit or rate-limit telemetry alone does not veto recovery on an observable host |
 
-A healthy observation has zero 429s, no parked work, H full in at most 1 of the last
-6 observations, available credit and host signals below 85% of their targets, and
-remaining eligible demand. Parked contributions consume their Lane slots. Effective
+The original health rule required zero 429s, no parked work, H full in at most 1
+of the last 6 observations, available credit and host signals below 85% of their
+targets, and remaining eligible demand. After #456, credit is a contraction
+signal, not a recovery gate: the Python Runner requires no observed 429s, no
+parked work, H full in at most 1 of the last 6 observations, observed host load
+below 85% of its budget, and remaining eligible demand. Unknown signals are not
+evidence of health; host-load observability bounds recovery as described above.
+Parked contributions consume their Lane slots. Effective
 concurrency may reach zero; started work is never cancelled, Integration keeps draining,
 and the same healthy rule permits recovery from zero.
 

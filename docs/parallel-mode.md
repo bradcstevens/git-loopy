@@ -141,9 +141,14 @@ malfunctioning. The reasons it holds back:
   mid-Run, with nothing restarted.
 - **Integration backpressure** (below).
 - **A contracted Effective Lane limit.** The number of Lanes the runner may fill
-  *right now* starts at `min(Lane cap, 3)`. A Lane cap of 10 opens three Lanes
-  at first when eligible work is available; that is normal startup, not a
-  fault. It moves against **Pressure signals**: sustained API rate limiting,
+  *right now* starts at the bound **Execution host**'s declared capacity when
+  host load is observable. With an observable host and a Lane cap of 10, the
+  initial limit is 10, not three; eligible `parallel-safe` supply and Integration
+  backpressure still determine how many Lanes actually open. When host load is
+  unobservable, it starts at `min(Lane cap, 3)`, the static-safe fallback; that
+  Run cannot expand beyond this fallback. Missing credit telemetry or an unset
+  credit budget alone does not force an observable host to three. It moves
+  against **Pressure signals**: sustained API rate limiting,
   AI-credit burn against a configured ceiling, host or worktree-setup load, and
   the **Integration backlog**. It contracts quickly and expands one Lane at a
   time against sustained evidence of health, and never above host capacity. A
@@ -152,6 +157,11 @@ malfunctioning. The reasons it holds back:
 
 Each authoritative change emits `wrapper.concurrency.changed` carrying both the
 immutable host-declared cap and the current effective limit.
+
+Both startup forms and recovery without credit telemetry are pinned by the
+existing [`test_rolling_concurrency.py`](../git-loopy/python/tests/test_rolling_concurrency.py)
+regressions; [`test_rolling_pressure.py`](../git-loopy/python/tests/test_rolling_pressure.py)
+proves host-load observability selects the startup form.
 
 ## Integration: the serialized stage, and its backpressure
 
