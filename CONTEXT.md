@@ -1678,8 +1678,8 @@ _Avoid_: worker count, target concurrency.
 
 **Effective Lane limit**:
 The number of **Lanes** **Rolling dispatch** may actually fill right now. It starts at
-the bound **Execution host**'s declared capacity when host load is observable, or at
-the static-safe `min(Lane cap, 3)` fallback when it is unobservable. Missing credit
+the bound **Execution host**'s declared capacity (the **Lane cap**) when host load is
+observable, or at the static-safe `min(Lane cap, 3)` fallback when it is unobservable. Missing credit
 telemetry or an unset credit budget alone does not force an observable host to three.
 It contracts under sustained 429, AI-credit, host/setup, or **Integration backlog**
 pressure, and expands one Lane at a time against sustained evidence of health — never

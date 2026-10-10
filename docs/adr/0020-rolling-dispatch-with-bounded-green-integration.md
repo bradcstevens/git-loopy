@@ -187,8 +187,12 @@ Validated serial demand and Rolling dispatch alternate service opportunities:
 
 ### Bounded adaptive Lane control
 
+**Implemented amendment
+([#456](https://github.com/bradcstevens/git-loopy/issues/456)):**
+
 The original decision started the effective Lane limit at
-`min(configured Lane cap, 3)`. For the Python Runner,
+`min(configured Lane cap, 3)` and froze there with H=2 when a required signal or
+configuration was unavailable. For the Python Runner,
 [#456](https://github.com/bradcstevens/git-loopy/issues/456) superseded that
 unconditional startup rule: when host load is observable, the limit starts at
 the bound **Execution host**'s declared capacity (the immutable Lane cap).
@@ -214,8 +218,8 @@ The original health rule required zero 429s, no parked work, H full in at most 1
 of the last 6 observations, available credit and host signals below 85% of their
 targets, and remaining eligible demand. After #456, credit is a contraction
 signal, not a recovery gate: the Python Runner requires no observed 429s, no
-parked work, H full in at most 1 of the last 6 observations, observed host load
-below 85% of its budget, and remaining eligible demand. Unknown signals are not
+parked work, H full in at most 1 of the last 6 observations, no observed host load
+at or above 85% of its budget, and remaining eligible demand. Unknown signals are not
 evidence of health; host-load observability bounds recovery as described above.
 Parked contributions consume their Lane slots. Effective
 concurrency may reach zero; started work is never cancelled, Integration keeps draining,
