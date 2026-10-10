@@ -278,6 +278,21 @@ stops, the Lanes already running drain, and one serial Iteration is granted
 exclusive use of the base worktree. Rolling dispatch then gets one full refill
 turn before serial demand can latch again, so neither side starves the other.
 
+That span is the **Serial drain**, and it is a real wait. It ends only when every
+started Lane contribution has finished — its session, any parked branch, Integration
+and any recovery — so a serial-required issue waits for the slowest Lane in flight
+and for the serialized Integration of all of them. Nothing is cancelled, and the wait
+is set by the cohort in flight when the latch landed: Lanes the Run never opened add
+nothing. While it lasts the Dashboard header reads `lane refill
+stopped: N serial-required`. Serial work that meets an empty pipeline is granted at
+once, and a **Serial-required** pin never drains, because it latches before any Lane
+is reserved.
+
+The lever is the label. If you can assert that an issue is independent of the work in
+flight, label it `parallel-safe` and it runs as a Lane instead of waiting for one.
+There is no other way for a plain issue to run beside live Lanes
+([ADR-0074](adr/0074-the-serial-drain-waits-for-the-whole-lane-cohort.md)).
+
 A serial Iteration granted *alongside* remaining eligible Lane work is
 interleaving, not a fallback, and is reported as neither.
 

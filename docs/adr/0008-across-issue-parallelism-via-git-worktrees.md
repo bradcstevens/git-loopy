@@ -13,6 +13,11 @@ the option set, not the judgement that Lanes need separate trees.
 The flags and environment variables described below are historical for the
 Python Runner; ADR-0067 retires its mode switches.
 
+**Reaffirmed by [ADR-0074](0074-the-serial-drain-waits-for-the-whole-lane-cohort.md):**
+only `parallel-safe` issues run concurrently. The rule was reopened so that a plain issue could
+run beside live Lanes, and it stands: the independence assertion such a plain issue would need is
+`parallel-safe`, which already makes it a Lane.
+
 ## Context
 
 The AFK runner works triaged issues **strictly one at a time, in place** on the base
