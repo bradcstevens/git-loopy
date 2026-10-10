@@ -6050,6 +6050,150 @@ def test_priority_serial_iterations_still_earn_a_full_lane_refill_turn(
     assert [n for n, _comment in fake_gh.issue_close_calls] == [41, 42, 44]
 
 
+@pytest.mark.parametrize("lane_first", [False, True])
+@pytest.mark.parametrize("progress", [False, True])
+def test_mixed_priority_keeps_parallel_safe_work_in_lanes_and_preserves_order(
+    tmp_path, monkeypatch, lane_first, progress
+) -> None:
+    lane = 41 if lane_first else 44
+    serial = 44 if lane_first else 41
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(lane, labels=["ready-for-agent", "priority", "parallel-safe"]),
+            _make_issue(serial, labels=["ready-for-agent", "priority"]),
+            _make_issue(46, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+        client_cls=_ParallelFakeClient if progress else _NoProgressFakeClient,
+    )
+    cfg = dataclass_replace(
+        _pinned_config(serial, max_iterations=5, max_nmt_strikes=2), issue_pin=None
+    )
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    bindings = [
+        e for e in events if e["type"] == "wrapper.pickup.bound"
+    ]
+    assert bindings[0]["issue"] == (lane if lane_first else serial)
+    lane_bindings = [e for e in bindings if e["issue"] == lane]
+    assert lane_bindings
+    assert all(e["iter"] is None for e in lane_bindings)
+    serial_bindings = [e for e in bindings if e["issue"] == serial]
+    assert serial_bindings
+    assert all(e["iter"] is not None for e in serial_bindings)
+    latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+    ordinary = [
+        e for e in events if e["type"] == "wrapper.contribution.start" and e["issue"] == 46
+    ]
+    if ordinary:
+        grant = next(e for e in events if e["type"] == "wrapper.iteration.start")
+        assert events.index(latch) < events.index(grant) < events.index(ordinary[0])
+    if not progress and lane_first:
+        lane_end = next(
+            e for e in events
+            if e["type"] == "wrapper.contribution.end" and e["issue"] == lane
+        )
+        grant = next(e for e in events if e["type"] == "wrapper.iteration.start")
+        assert events.index(latch) < events.index(lane_end) < events.index(grant)
+        assert events.index(grant) < events.index(lane_bindings[1])
+
+
+def test_unread_priority_lane_is_not_taken_serially_when_its_read_recovers(
+    tmp_path, monkeypatch
+) -> None:
+    class UnreadPriorityLane(FakeGitHubClient):
+        unread = True
+
+        def issue_view(self, number):
+            if (
+                number == 41 and self.unread
+                and any(frame.function == "refresh_for_preparation" for frame in inspect.stack())
+            ):
+                self.unread = False
+                raise gh_module.GhError(["gh", "issue", "view"], 1, "tracker unavailable")
+            return super().issue_view(number)
+
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "priority", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent", "priority"]),
+        ],
+        gh_cls=UnreadPriorityLane,
+    )
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=2), issue_pin=None)
+    asyncio.run(loop_module.run(cfg))
+    bindings = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+    assert [(e["issue"], e["iter"] is None) for e in bindings] == [
+        (44, False), (41, True),
+    ]
+    assert "Priority peek could not prove admission for #41" in _diag_log(tmp_path)
+
+
+def test_priority_lane_prefix_larger_than_capacity_preserves_selection_order(
+    tmp_path, monkeypatch
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            *[
+                _make_issue(ref, labels=["ready-for-agent", "priority", "parallel-safe"])
+                for ref in (41, 42, 43)
+            ],
+            _make_issue(44, labels=["ready-for-agent", "priority"]),
+            _make_issue(46, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=4), issue_pin=None)
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [
+        (41, "priority"), (42, "priority"), (43, "priority"), (44, "priority"),
+    ]
+    latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+    grant = next(e for e in events if e["type"] == "wrapper.iteration.start")
+    assert latch["issue"] == 44
+    assert all(
+        events.index(e) < events.index(grant)
+        for e in events if e["type"] == "wrapper.contribution.end"
+    )
+
+
+def test_refused_priority_serial_pickup_still_refills_deferred_priority_lanes(
+    tmp_path, monkeypatch
+) -> None:
+    class RefusedAtSerialPickup(FakeGitHubClient):
+        def issue_view(self, number):
+            issue = super().issue_view(number)
+            if (
+                number == 41
+                and any(frame.function == "_iterate" for frame in inspect.stack())
+            ):
+                return dataclass_replace(
+                    issue, labels=[*issue.labels, "task-type:not-a-route"]
+                )
+            return issue
+
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "priority"]),
+            _make_issue(44, labels=["ready-for-agent", "priority", "parallel-safe"]),
+        ],
+        gh_cls=RefusedAtSerialPickup,
+    )
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=2), issue_pin=None)
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(44, "priority")]
+    serial_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
+    assert serial_end["outcome"] == "all_skipped"
+    lane = next(e for e in events if e["type"] == "wrapper.contribution.start")
+    assert events.index(serial_end) < events.index(lane)
+    refill = next(e for e in events if e["type"] == "wrapper.rolling.refill_turn")
+    assert refill["reservations"] == 1
+
+
 @pytest.mark.parametrize(
     "refusal",
     ["blocked", "awaiting_merge", "route", "unread_readiness", "malformed",
@@ -6246,6 +6390,44 @@ def test_priority_dynamic_admission_prepares_without_binding_and_pickup_revalida
         assert not any(e["type"] == "wrapper.contribution.start" for e in events)
     else:
         assert _first_work(events)["type"] == "wrapper.contribution.start"
+
+
+def test_mixed_priority_dynamic_routes_keep_proposals_for_their_own_pickups(
+    tmp_path, monkeypatch
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(
+                41, labels=[
+                    "ready-for-agent", "priority", "parallel-safe", "task-type:implementation"
+                ],
+            ),
+            _make_issue(44, labels=["ready-for-agent", "priority", "task-type:implementation"]),
+            _make_issue(46, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]),
+        ],
+        client_cls=_NoProgressFakeClient,
+    )
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    cfg = _dynamic_parallel_config(
+        max_iterations=4, max_nmt_strikes=2,
+        routing={"docs": ("gpt-5.6-terra", "high")},
+    )
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    bindings = [e for e in events if e["type"] == "wrapper.pickup.bound"]
+    assert [(e["issue"], e["iter"] is None) for e in bindings] == [
+        (41, True), (44, False), (46, True), (41, True),
+    ]
+    assert all(e["model"] == "claude-opus-5" for e in bindings if e["issue"] != 46)
+    assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
+    latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+    lane_end = next(e for e in events if e["type"] == "wrapper.contribution.end")
+    assert events.index(latch) < events.index(lane_end) < events.index(bindings[1])
 
 
 def test_priority_reusable_route_needs_no_new_selector_credit(
@@ -11967,8 +12149,9 @@ def test_rolling_preparation_rereads_queued_readiness_without_spending(
     )
 
 
+@pytest.mark.parametrize("priority", [False, True])
 def test_serial_required_work_is_prepared_while_existing_lanes_drain(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, priority
 ) -> None:
     discovered = False
     observed_during_work = []
@@ -11978,7 +12161,9 @@ def test_serial_required_work_is_prepared_while_existing_lanes_drain(
         if session._working_directory is None:
             return
         if not discovered:
-            tracker.seed_issue(_make_issue(44, labels=["ready-for-agent"]))
+            tracker.seed_issue(_make_issue(
+                44, labels=["ready-for-agent", *(["priority"] if priority else [])]
+            ))
             discovered = True
             return
 
@@ -12002,6 +12187,56 @@ def test_serial_required_work_is_prepared_while_existing_lanes_drain(
     assert client.create_calls[-1]["model"] == "claude-opus-5"
     assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
     assert observed_during_work == ["issue-43"]
+
+
+def test_priority_serial_discovery_interrupts_speculative_lane_preparation(
+    tmp_path, monkeypatch
+) -> None:
+    tail_started = asyncio.Event()
+    tail_cancelled = asyncio.Event()
+    serial_started = asyncio.Event()
+
+    async def answer(request):
+        if "#45:" in request.issue:
+            tail_started.set()
+            try:
+                await asyncio.wait_for(serial_started.wait(), timeout=2)
+            except asyncio.CancelledError:
+                tail_cancelled.set()
+                raise
+        return _elects_lane_model("claude-opus-5")(request)
+
+    async def work(session, tracker):
+        if session._working_directory is None:
+            serial_started.set()
+        elif Path(session._working_directory).name == "issue-42":
+            await asyncio.wait_for(tail_started.wait(), timeout=2)
+            tracker.seed_issue(_make_issue(44, labels=["ready-for-agent", "priority"]))
+        else:
+            await asyncio.wait_for(tail_cancelled.wait(), timeout=2)
+
+    client, spied, exit_code = _rolling_dynamic_run(
+        tmp_path, monkeypatch,
+        issues=[
+            _make_issue(ref, labels=["ready-for-agent", "parallel-safe"])
+            for ref in (42, 43, 45)
+        ],
+        answer=answer, on_work=work, max_iterations=3,
+    )
+    assert exit_code == 0
+    assert tail_cancelled.is_set() and serial_started.is_set()
+    assert [call["working_directory"] is None for call in client.create_calls] == [
+        False, False, True,
+    ]
+    assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
+    events = _logged_events(tmp_path)
+    latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+    grant = next(e for e in events if e["type"] == "wrapper.iteration.start")
+    assert latch["issue"] == 44
+    assert all(
+        events.index(e) < events.index(grant)
+        for e in events if e["type"] == "wrapper.contribution.end"
+    )
 
 
 def test_a_rolling_run_prepares_the_candidates_no_lane_has_taken(

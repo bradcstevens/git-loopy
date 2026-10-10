@@ -260,6 +260,13 @@ its unread-Pin behavior. Priority `parallel-safe` work remains Lane work; withou
 Pin or Ready Priority serial assertion, ordinary serial demand retains Lane-first
 precedence.
 
+Within Priority, the existing creation-instant/issue-number order still applies.
+An admissible Parallel-safe prefix MAY receive Lane reservations before a later
+Priority serial issue latches; no ordinary candidate may join that reservation
+decision. Once latched, even a prefix issue's retry waits for the serial turn and
+refill. The serial Pickup leaves still-open Priority Parallel-safe candidates to
+Lane Pickup, including a candidate whose earlier unread admission now succeeds.
+
 The peek MUST establish current Pickup admission — executable/open/ready membership,
 Readiness, route availability, Lease policy and the Run's remaining attempt budget —
 without binding an Active issue or taking a Lease. A refused or unread candidate MUST

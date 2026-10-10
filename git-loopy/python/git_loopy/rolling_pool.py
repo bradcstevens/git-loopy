@@ -338,7 +338,7 @@ class RollingPool:
 
     # -- reservation -------------------------------------------------------- #
 
-    def take(self) -> PoolTake:
+    def take(self, *, only: frozenset[int | str] | None = None) -> PoolTake:
         """Validate candidates in FIFO order and return the first dispatchable one.
 
         This is the only path from a cached candidate to Lane work, and it
@@ -352,6 +352,8 @@ class RollingPool:
         complete refresh still lists it, so one unreachable issue can never
         head-of-line-block the candidates behind it — except
         :attr:`lane_first`, which the walk retries and will not pass (#430).
+        ``only`` fences this walk to a Priority prefix without changing the
+        FIFO or touching ordinary candidates before serial demand latches.
 
         Returns:
             The walk (#397): the validated, enriched item — removed from the
@@ -364,6 +366,8 @@ class RollingPool:
         first = self.lane_first()
         now = self.clock()
         for position, entry in enumerate(walked, start=1):
+            if only is not None and entry.candidate.ref not in only:
+                continue
             held = first is not None and entry.candidate.ref == first
             if held and not self.eligible(entry.candidate):
                 # The walk passes the Pin over (#644): a proven open blocker is

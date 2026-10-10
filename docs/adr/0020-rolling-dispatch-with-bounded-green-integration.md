@@ -40,8 +40,9 @@ reversal of green-before-publication ordering.
 the Serial interleave below stands as written — a serial turn waits for full quiescence and
 Lane work keeps default precedence — and the wait is now named the **Serial drain**. No plain
 issue runs beside live Lanes; overlap is obtained by asserting `parallel-safe`. A human-asserted
-`priority` serial-required issue will latch serial demand before new Lane reservations, as the
-Pin does (accepted design, not yet shipped).
+`priority` serial-required issue latches serial demand before new ordinary Lane reservations in
+Python Rolling dispatch, as the Pin does (shipped by
+[#720](https://github.com/bradcstevens/git-loopy/issues/720)).
 
 **Partially superseded by:** [ADR-0065](0065-a-declared-rolling-event-is-seen-emitted-or-retired.md)
 only for the Parallel lifecycle list below, from which `wrapper.pipeline.quiescent` is retired, and

@@ -142,7 +142,10 @@ Serial-required issue latches serial demand before new ordinary Lane reservation
 and when discovered later. The scheduling peek reuses current eligibility, Readiness, routing
 and Lease policy without binding an Active issue or taking a Lease. Pickup revalidates at
 full quiescence. A live Pin remains stronger, including the unread-Pin exceptions above;
-Priority `parallel-safe` work stays Lane work.
+Priority `parallel-safe` work stays Lane work. The existing total order within Priority
+still applies: an admissible Lane prefix can reserve before a later Priority serial
+issue latches, with no ordinary Lane in that decision. The serial Pickup leaves
+still-open Priority Lane candidates, including retries, for the full refill turn.
 
 Started contributions still drain in full, nothing is cancelled, and the mandatory full
 refill turn still follows each serial Iteration even when further Priority work waits.

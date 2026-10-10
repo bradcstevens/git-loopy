@@ -350,7 +350,11 @@ class RollingScheduler:
         membership refresh would re-list it, and §3.3 makes it eligible again
         only if that setup *fails*.
         """
-        return candidate.ref not in self._worked and candidate.ref not in self._in_setup
+        return not self.owns(candidate.ref)
+
+    def owns(self, ref: int | str) -> bool:
+        """Whether setup or an unfinalized contribution still owns this issue."""
+        return ref in self._worked or ref in self._in_setup
 
     @property
     def effective_limit(self) -> int:
@@ -589,12 +593,14 @@ class RollingScheduler:
         """
         return self.lane_first_in_setup or self.pool.lane_first_paced()
 
-    def reserve(self) -> tuple[Reservation, ...]:
-        """Reserve every currently refillable **Lane** in one decision (#219 §1.3)."""
+    def reserve(
+        self, *, only: frozenset[int | str] | None = None
+    ) -> tuple[Reservation, ...]:
+        """Reserve refillable Lanes, optionally only a Priority prefix (#720)."""
         self.pool.service(refillable=self.refillable)
         reservations: list[Reservation] = []
         while self.refillable > 0 and not self.lane_first_in_setup:
-            take = self.pool.take()
+            take = self.pool.take(only=only)
             item = take.item
             if item is None:
                 break

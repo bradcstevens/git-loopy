@@ -40,7 +40,8 @@ stopped being one.
    base" would duplicate it, and reading a Lane's label as a licence for every plain issue would
    be the opt-out ADR-0008 rejected as assuming independence by default. Overlap is obtained by
    asserting `parallel-safe`; there is no new vocabulary.
-3. **`priority` crosses the boundary for new reservations** (accepted design, not yet shipped). A
+3. **`priority` crosses the boundary for new reservations** (shipped in Python Rolling dispatch,
+   [#720](https://github.com/bradcstevens/git-loopy/issues/720)). A
    Ready **Priority** serial-required issue latches serial demand before the next reservation, as
    the **Pin** does before the first ([#430](https://github.com/bradcstevens/git-loopy/issues/430)).
    Started Lanes still drain, and the refill turn still follows each serial Iteration. A Priority
@@ -107,9 +108,9 @@ workload was overloaded and nonstationary, so it supports no conclusion about st
 
 ## Consequences
 
-- Two increments follow as tickets: `priority` crossing (3), which also moves ADR-0032's amendment
-  and the **Priority** and **Pin** glossary entries from accepted design to shipped; and the
-  derive-only legibility (4), which edits the Dashboard renderers in both languages and the shared
+- The Python `priority` crossing (3) ships with #720, including ADR-0032's amendment and the
+  **Priority** and **Pin** glossary entries. The derive-only legibility (4) remains a separate
+  increment, which edits the Dashboard renderers in both languages and the shared
   `dashboard-insights` fixture.
 - `docs/parallel-mode.md` states the cost and the lever. The exposure grows with the number of
   issues carrying `parallel-safe`, not with the host's capacity alone.
