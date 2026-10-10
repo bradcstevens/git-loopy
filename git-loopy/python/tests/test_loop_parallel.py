@@ -6711,6 +6711,46 @@ def test_dynamic_priority_peek_recovers_its_second_unread_candidate_read(
     )
 
 
+def test_first_priority_routing_source_failure_does_not_settle_admission(
+    tmp_path, monkeypatch
+) -> None:
+    original = dynamic_route.DynamicRouter.prepare
+    failed = False
+
+    async def prepare(router, request):
+        nonlocal failed
+        if request.issue_ref == 49 and not failed:
+            failed = True
+            return dynamic_route.RoutingUnavailable(
+                reason=dynamic_route.RoutingUnavailableReason.SOURCE_UNAVAILABLE,
+                usage=router.usage,
+            )
+        return await original(router, request)
+
+    monkeypatch.setattr(dynamic_route.DynamicRouter, "prepare", prepare)
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]),
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]),
+            _make_issue(49, labels=["ready-for-agent", "priority", "task-type:implementation"]),
+        ],
+    )
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    cfg = _dynamic_parallel_config(
+        max_iterations=3, routing={"docs": ("gpt-5.6-terra", "high")}
+    )
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    assert failed
+    assert (49, "priority") in _bindings(events)
+    assert sum("#49:" in request.issue for _, request in spied["assessments"]) == 1
+
+
 @pytest.mark.parametrize("unexpected", [False, True])
 def test_refused_priority_preparation_is_not_rebought_or_allowed_to_crash_lanes(
     tmp_path, monkeypatch, unexpected

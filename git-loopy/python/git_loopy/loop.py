@@ -3190,7 +3190,7 @@ class _Loop:
         )
         if cached is not None and cached.outcome is not PreparationOutcome.REUSABLE:
             if cached.proposal is None:
-                if not cached.retryable:
+                if not cached.may_retry:
                     return PreparedRoute(
                         ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
                         reason=cached.reason,

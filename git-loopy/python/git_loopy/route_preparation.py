@@ -100,6 +100,14 @@ class PreparedRoute:
     retryable: bool = False
 
     @property
+    def may_retry(self) -> bool:
+        """Unread live routing sources do not settle a candidate's admission."""
+        return self.retryable or self.reason in {
+            RoutingUnavailableReason.SOURCE_UNAVAILABLE,
+            RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE,
+        }
+
+    @property
     def halting(self) -> bool:
         """Does this outcome end preparation for the rest of the Run?"""
         return self.reason in HALTING_REASONS
