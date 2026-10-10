@@ -1917,6 +1917,83 @@ fn a_zero_reservation_refill_turn_is_posture_until_the_next_posture_event() {
 }
 
 #[test]
+fn a_serial_drain_whose_latch_instant_is_unobserved_has_no_elapsed_wait() {
+    // The Python replay oracle always has a clock, so this branch of the
+    // Serial drain (ADR-0074) is pinned here rather than in the shared fixture.
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let apply = |state: &mut DashboardState, value: serde_json::Value| {
+        state.apply(&Event::from_json(&value).expect("a drain Event decodes"));
+    };
+    apply(
+        &mut state,
+        serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "iter": null,
+            "type": "wrapper.contribution.start",
+            "contribution_id": "c-1", "issue": 42, "lane_id": "lane-1",
+        }),
+    );
+    apply(
+        &mut state,
+        serde_json::json!({
+            "type": "wrapper.serial.requested",
+            "issue": 45, "serial_required": 1, "refill_stopped": true,
+        }),
+    );
+    let latched = view(
+        &state,
+        &context("2026-05-16T00:00:05Z", 0),
+        IssueRef::number(42),
+    );
+    let drain = &latched["dashboard"]["header"]["parallel"]["serial_drain"];
+    assert!(drain["elapsed_seconds"].is_null(), "no instant, no wait");
+    assert_eq!(drain["oldest_lane_age_seconds"], 4.0);
+    assert_eq!(drain["cohort"]["setup"], 1);
+
+    // A malformed refill turn is not a spent one, so it grants nothing.
+    apply(
+        &mut state,
+        serde_json::json!({"type": "wrapper.rolling.refill_turn", "issue": 42}),
+    );
+    let still = view(
+        &state,
+        &context("2026-05-16T00:00:06Z", 0),
+        IssueRef::number(42),
+    );
+    assert!(!still["dashboard"]["header"]["parallel"]["serial_drain"].is_null());
+
+    apply(
+        &mut state,
+        serde_json::json!({"ts": "2026-05-16T00:00:07.000Z", "type": "wrapper.iteration.start", "iter": 1}),
+    );
+    let granted = view(
+        &state,
+        &context("2026-05-16T00:00:08Z", 0),
+        IssueRef::number(42),
+    );
+    assert!(granted["dashboard"]["header"]["parallel"]["serial_drain"].is_null());
+}
+
+#[test]
+fn a_serial_request_that_keeps_refilling_latches_no_drain() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    state.apply(
+        &Event::from_json(&serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "type": "wrapper.serial.requested",
+            "issue": 45, "serial_required": 1, "refill_stopped": false,
+        }))
+        .expect("a serial request decodes"),
+    );
+    let projected = view(
+        &state,
+        &context("2026-05-16T00:00:02Z", 0),
+        IssueRef::number(42),
+    );
+    assert!(projected["dashboard"]["header"]["parallel"]["serial_drain"].is_null());
+}
+
+#[test]
 fn an_unmodelled_event_type_still_degrades_to_the_additive_fallback() {
     // Tightening the identity must not turn a record this core does not model
     // into a decode failure: an unreadable line is a diagnostic — a record

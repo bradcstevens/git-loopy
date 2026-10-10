@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.15",
+  "fixture_schema_version": "1.16",
   "wrapper_contract_version": "2.24",
   "event_schema_version": "1.6",
   "semantic_contract": {
@@ -267,7 +267,23 @@
         "integration_wip",
         "integration_high_water",
         "parked_count",
-        "refill_turn"
+        "refill_turn",
+        "serial_drain"
+      ],
+      "serial_drain": [
+        "elapsed_seconds",
+        "oldest_lane_age_seconds",
+        "cohort"
+      ],
+      "drain_cohort": [
+        "open",
+        "live_sessions",
+        "setup",
+        "finishing",
+        "parked",
+        "admitted",
+        "integrating",
+        "recovering"
       ],
       "execution_host": [
         "placement",
@@ -896,7 +912,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -1059,7 +1076,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -1453,7 +1471,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -1630,7 +1649,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -2116,7 +2136,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -2322,7 +2343,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -2999,7 +3021,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -3203,7 +3226,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -3452,7 +3476,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -3759,7 +3784,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4304,7 +4330,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4483,7 +4510,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -4893,7 +4921,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -5087,7 +5116,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -5470,7 +5500,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -5633,7 +5664,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6007,7 +6039,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6203,7 +6236,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6646,7 +6680,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -6836,7 +6871,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -7065,7 +7101,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -7304,7 +7341,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -7771,7 +7809,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -7990,7 +8029,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -8312,7 +8352,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -8425,7 +8466,8 @@
                   "integration_wip": null,
                   "integration_high_water": null,
                   "parked_count": null,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -10406,7 +10448,8 @@
                   "integration_wip": 1,
                   "integration_high_water": 2,
                   "parked_count": 0,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -10583,7 +10626,8 @@
                   "integration_wip": 1,
                   "integration_high_water": 2,
                   "parked_count": 1,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -10811,7 +10855,8 @@
                   "integration_wip": 2,
                   "integration_high_water": 2,
                   "parked_count": 0,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -11039,7 +11084,8 @@
                   "integration_wip": 2,
                   "integration_high_water": 2,
                   "parked_count": 0,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -11301,7 +11347,21 @@
                   "integration_wip": 0,
                   "integration_high_water": 2,
                   "parked_count": 0,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": {
+                    "elapsed_seconds": 7.0,
+                    "oldest_lane_age_seconds": null,
+                    "cohort": {
+                      "open": 0,
+                      "live_sessions": 0,
+                      "setup": 0,
+                      "finishing": 0,
+                      "parked": 0,
+                      "admitted": 0,
+                      "integrating": 0,
+                      "recovering": 0
+                    }
+                  }
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -11646,7 +11706,21 @@
                   "integration_wip": 0,
                   "integration_high_water": 2,
                   "parked_count": 0,
-                  "refill_turn": null
+                  "refill_turn": null,
+                  "serial_drain": {
+                    "elapsed_seconds": 16.0,
+                    "oldest_lane_age_seconds": null,
+                    "cohort": {
+                      "open": 0,
+                      "live_sessions": 0,
+                      "setup": 0,
+                      "finishing": 0,
+                      "parked": 0,
+                      "admitted": 0,
+                      "integrating": 0,
+                      "recovering": 0
+                    }
+                  }
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -12033,7 +12107,8 @@
                   "refill_turn": {
                     "reservations": 0,
                     "effective_lane_limit": 1
-                  }
+                  },
+                  "serial_drain": null
                 },
                 "execution_host": {
                   "placement": "unknown",
@@ -12362,6 +12437,3390 @@
                     "text": "\u2713 auto-closed #42"
                   }
                 ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "rolling-serial-drain-derives-its-cohort-and-clocks",
+      "description": "The Serial drain Header (ADR-0074 decision 4, #719) derived from Events already on the wire: a latch before any Lane drains an empty cohort, the next wrapper.iteration.start grants it, and a second latch reads a mixed cohort keyed by contribution_id -- setup, live session (agent and tool evidence), finishing, parked, admitted (a later park never takes it back), Integration and Recovery -- with the oldest Lane measured from its wrapper.contribution.start, never inherited by a retry that reuses the same issue and lane_id, and unknown once a contribution's start is unobserved.",
+      "inputs": {
+        "model": "claude-opus-4.8-max",
+        "reasoning_effort": "max",
+        "max_strikes": 3,
+        "local_utc_offset_minutes": -360,
+        "drill_in_issue": 51
+      },
+      "events": [
+        {
+          "ts": "2026-05-16T00:00:00.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.run.start",
+          "release_version": "0.9.0",
+          "schema_version": 1,
+          "insight_capabilities": {
+            "agent_output": true,
+            "structured_agent_events": true,
+            "token_usage": true,
+            "context_window": true,
+            "skill_consultation": true,
+            "cost": true,
+            "rate_card": true,
+            "routing": true,
+            "subagents": true
+          },
+          "parallel_capabilities": {
+            "parallel_mode": true,
+            "rolling_dispatch": true,
+            "integration_backlog": true,
+            "adaptive_lane_limit": true,
+            "contribution_events": true
+          },
+          "max_nmt_strikes": 3
+        },
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.pool.refreshed",
+          "issues": [
+            50,
+            51,
+            52,
+            53,
+            55
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:02.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.concurrency.changed",
+          "configured_lane_limit": 4,
+          "effective_lane_limit": 4,
+          "pressure": null,
+          "rate_limit_state": "healthy",
+          "credit_state": null,
+          "host_state": "healthy"
+        },
+        {
+          "ts": "2026-05-16T00:00:02.500Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.serial.requested",
+          "issue": 55,
+          "reason": "not_parallel_safe",
+          "serial_required": 1,
+          "refill_stopped": true
+        },
+        {
+          "ts": "2026-05-16T00:00:04.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": 1,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-16T00:00:04.500Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": 1,
+          "type": "wrapper.issue.activated",
+          "issue": 55,
+          "activated_at": "2026-05-16T00:00:04.500Z",
+          "binding_source": "working_marker"
+        },
+        {
+          "ts": "2026-05-16T00:00:08.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": 1,
+          "type": "wrapper.iteration.end",
+          "outcome": "closed",
+          "duration_seconds": 4.0,
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "tokens_in": 100,
+            "tokens_out": 50,
+            "observed_tokens": 150,
+            "tool_count": 0,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 1,
+            "auto_closures": 1,
+            "pr_advances": 0,
+            "strikes": 0
+          },
+          "issues": [
+            {
+              "issue": 55,
+              "status": "closed",
+              "first_started_at": "2026-05-16T00:00:04.500Z",
+              "closed_at": "2026-05-16T00:00:08.000Z",
+              "issue_elapsed_seconds": 3.5,
+              "active_seconds": 3.5,
+              "cumulative_active_seconds": 3.5,
+              "consumption": {
+                "model": "claude-opus-4.8-max",
+                "tokens_in": 100,
+                "tokens_out": 50
+              }
+            }
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:09.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.rolling.refill_turn",
+          "reservations": 4,
+          "effective_lane_limit": 4
+        },
+        {
+          "ts": "2026-05-16T00:00:10.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0101",
+          "issue": 50,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:11.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "agent.output",
+          "contribution_id": "c-0101",
+          "issue": 50,
+          "lane_id": "lane-1",
+          "text": "Working on #50",
+          "kind": "unclassified"
+        },
+        {
+          "ts": "2026-05-16T00:00:12.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0102",
+          "issue": 51,
+          "lane_id": "lane-2"
+        },
+        {
+          "ts": "2026-05-16T00:00:13.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0103",
+          "issue": 52,
+          "lane_id": "lane-3"
+        },
+        {
+          "ts": "2026-05-16T00:00:13.500Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "tool.call",
+          "contribution_id": "c-0103",
+          "issue": 52,
+          "lane_id": "lane-3",
+          "name": "bash",
+          "args_summary": "git status"
+        },
+        {
+          "ts": "2026-05-16T00:00:14.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0104",
+          "issue": 53,
+          "lane_id": "lane-4"
+        },
+        {
+          "ts": "2026-05-16T00:00:15.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.work_finished",
+          "contribution_id": "c-0104",
+          "issue": 53,
+          "lane_id": "lane-4"
+        },
+        {
+          "ts": "2026-05-16T00:00:16.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.integration.parked",
+          "contribution_id": "c-0104",
+          "issue": 53,
+          "lane_id": "lane-4"
+        },
+        {
+          "ts": "2026-05-16T00:00:20.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.serial.requested",
+          "issue": 55,
+          "reason": "not_parallel_safe",
+          "serial_required": 1,
+          "refill_stopped": true
+        },
+        {
+          "ts": "2026-05-16T00:00:22.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.integration.admitted",
+          "contribution_id": "c-0104",
+          "issue": 53,
+          "lane_id": "lane-4"
+        },
+        {
+          "ts": "2026-05-16T00:00:23.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.integration.parked",
+          "contribution_id": "c-0104",
+          "issue": 53,
+          "lane_id": "lane-4"
+        },
+        {
+          "ts": "2026-05-16T00:00:24.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.work_finished",
+          "contribution_id": "c-0101",
+          "issue": 50,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:25.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.integration.started",
+          "contribution_id": "c-0104",
+          "issue": 53,
+          "lane_id": "lane-4"
+        },
+        {
+          "ts": "2026-05-16T00:00:26.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.integration.recovery_started",
+          "contribution_id": "c-0104",
+          "issue": 53,
+          "lane_id": "lane-4",
+          "attempt": 1,
+          "max_attempts": 3
+        },
+        {
+          "ts": "2026-05-16T00:00:27.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.serial.requested",
+          "issue": 55,
+          "reason": "not_parallel_safe",
+          "serial_required": 1,
+          "refill_stopped": true
+        },
+        {
+          "ts": "2026-05-16T00:00:29.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "contribution_id": "c-0102",
+          "issue": 51,
+          "lane_id": "lane-2",
+          "published": false,
+          "reason": "released",
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "observed_tokens": 0,
+            "commits": 0,
+            "closures": 0,
+            "recovery_attempts": 0,
+            "agent_seconds": 1.0,
+            "lifecycle_seconds": 1.0,
+            "strike_reaction": "none"
+          }
+        },
+        {
+          "ts": "2026-05-16T00:00:29.500Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.integration.parked",
+          "contribution_id": "c-0102",
+          "issue": 51,
+          "lane_id": "lane-2"
+        },
+        {
+          "ts": "2026-05-16T00:00:30.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0110",
+          "issue": 51,
+          "lane_id": "lane-2"
+        },
+        {
+          "ts": "2026-05-16T00:00:31.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "contribution_id": "c-0101",
+          "issue": 50,
+          "lane_id": "lane-1",
+          "published": false,
+          "reason": "released",
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "observed_tokens": 0,
+            "commits": 0,
+            "closures": 0,
+            "recovery_attempts": 0,
+            "agent_seconds": 1.0,
+            "lifecycle_seconds": 1.0,
+            "strike_reaction": "none"
+          }
+        },
+        {
+          "ts": "2026-05-16T00:00:31.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "contribution_id": "c-0103",
+          "issue": 52,
+          "lane_id": "lane-3",
+          "published": false,
+          "reason": "released",
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "observed_tokens": 0,
+            "commits": 0,
+            "closures": 0,
+            "recovery_attempts": 0,
+            "agent_seconds": 1.0,
+            "lifecycle_seconds": 1.0,
+            "strike_reaction": "none"
+          }
+        },
+        {
+          "ts": "2026-05-16T00:00:32.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "contribution_id": "c-0104",
+          "issue": 53,
+          "lane_id": "lane-4",
+          "published": false,
+          "reason": "released",
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "observed_tokens": 0,
+            "commits": 0,
+            "closures": 0,
+            "recovery_attempts": 0,
+            "agent_seconds": 1.0,
+            "lifecycle_seconds": 1.0,
+            "strike_reaction": "none"
+          }
+        },
+        {
+          "ts": "2026-05-16T00:00:34.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "contribution_id": "c-0110",
+          "issue": 51,
+          "lane_id": "lane-2",
+          "published": false,
+          "reason": "released",
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "observed_tokens": 0,
+            "commits": 0,
+            "closures": 0,
+            "recovery_attempts": 0,
+            "agent_seconds": 1.0,
+            "lifecycle_seconds": 1.0,
+            "strike_reaction": "none"
+          }
+        },
+        {
+          "ts": "2026-05-16T00:00:36.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": null,
+          "type": "wrapper.integration.parked",
+          "contribution_id": "c-0109",
+          "issue": 54,
+          "lane_id": "lane-5"
+        },
+        {
+          "ts": "2026-05-16T00:00:38.000Z",
+          "run_id": "01HXR0000000000000000000DE",
+          "iter": 2,
+          "type": "wrapper.iteration.start"
+        }
+      ],
+      "snapshots": [
+        {
+          "after_event_count": 4,
+          "render_at_utc": "2026-05-16T00:00:03.500Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DE",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 3.5,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 4,
+                  "effective_lane_limit": 4,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 1,
+                  "refill_stopped": true,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null,
+                  "serial_drain": {
+                    "elapsed_seconds": 1.0,
+                    "oldest_lane_age_seconds": null,
+                    "cohort": {
+                      "open": 0,
+                      "live_sessions": 0,
+                      "setup": 0,
+                      "finishing": 0,
+                      "parked": 0,
+                      "admitted": 0,
+                      "integrating": 0,
+                      "recovering": 0
+                    }
+                  }
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 50,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 51,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 52,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 53,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 55,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": []
+              },
+              "summary": {
+                "rows": []
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "queued",
+                "started_at": null,
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 0.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 51,
+                "lines": []
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 5,
+          "render_at_utc": "2026-05-16T00:00:04.500Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DE",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 4.5,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 4,
+                  "effective_lane_limit": 4,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 1,
+                  "refill_stopped": true,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null,
+                  "serial_drain": null
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 50,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 51,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 52,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 53,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 55,
+                    "status": "queued",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": []
+              },
+              "summary": {
+                "rows": []
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "queued",
+                "started_at": null,
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 0.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 51,
+                "lines": []
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 17,
+          "render_at_utc": "2026-05-16T00:00:21.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DE",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 21.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 4,
+                  "effective_lane_limit": 4,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 1,
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 0,
+                  "integration_high_water": 2,
+                  "parked_count": 1,
+                  "refill_turn": null,
+                  "serial_drain": {
+                    "elapsed_seconds": 1.0,
+                    "oldest_lane_age_seconds": 11.0,
+                    "cohort": {
+                      "open": 4,
+                      "live_sessions": 2,
+                      "setup": 1,
+                      "finishing": 0,
+                      "parked": 1,
+                      "admitted": 0,
+                      "integrating": 0,
+                      "recovering": 0
+                    }
+                  }
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 50,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:10-06:00",
+                    "active_seconds": 11.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 51,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:12-06:00",
+                    "active_seconds": 9.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 52,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:13-06:00",
+                    "active_seconds": 8.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 53,
+                    "status": "parked",
+                    "started_at": "2026-05-15T18:00:14-06:00",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 5.0
+                  },
+                  {
+                    "issue": 55,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:04.500000-06:00",
+                    "active_seconds": 3.5,
+                    "closed_at": "2026-05-15T18:00:08-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": [
+                  {
+                    "kind": "serial",
+                    "lane": null,
+                    "issue": 55,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": []
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "observed_tokens": 150,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "active",
+                "started_at": "2026-05-15T18:00:12-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 9.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 51,
+                "lines": []
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 19,
+          "render_at_utc": "2026-05-16T00:00:23.500Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DE",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 23.5,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 4,
+                  "effective_lane_limit": 4,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 1,
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 1,
+                  "integration_high_water": 2,
+                  "parked_count": 0,
+                  "refill_turn": null,
+                  "serial_drain": {
+                    "elapsed_seconds": 3.5,
+                    "oldest_lane_age_seconds": 13.5,
+                    "cohort": {
+                      "open": 4,
+                      "live_sessions": 2,
+                      "setup": 1,
+                      "finishing": 0,
+                      "parked": 0,
+                      "admitted": 1,
+                      "integrating": 0,
+                      "recovering": 0
+                    }
+                  }
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 50,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:10-06:00",
+                    "active_seconds": 13.5,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 51,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:12-06:00",
+                    "active_seconds": 11.5,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 52,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:13-06:00",
+                    "active_seconds": 10.5,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 53,
+                    "status": "parked",
+                    "started_at": "2026-05-15T18:00:14-06:00",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 0.5
+                  },
+                  {
+                    "issue": 55,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:04.500000-06:00",
+                    "active_seconds": 3.5,
+                    "closed_at": "2026-05-15T18:00:08-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": [
+                  {
+                    "kind": "serial",
+                    "lane": null,
+                    "issue": 55,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": []
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "observed_tokens": 150,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "active",
+                "started_at": "2026-05-15T18:00:12-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 11.5,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 51,
+                "lines": []
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 21,
+          "render_at_utc": "2026-05-16T00:00:25.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DE",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 25.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 4,
+                  "effective_lane_limit": 4,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 1,
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 1,
+                  "integration_high_water": 2,
+                  "parked_count": 0,
+                  "refill_turn": null,
+                  "serial_drain": {
+                    "elapsed_seconds": 5.0,
+                    "oldest_lane_age_seconds": 15.0,
+                    "cohort": {
+                      "open": 4,
+                      "live_sessions": 1,
+                      "setup": 1,
+                      "finishing": 1,
+                      "parked": 0,
+                      "admitted": 0,
+                      "integrating": 1,
+                      "recovering": 0
+                    }
+                  }
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 50,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:10-06:00",
+                    "active_seconds": 14.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 51,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:12-06:00",
+                    "active_seconds": 13.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 52,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:13-06:00",
+                    "active_seconds": 12.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 53,
+                    "status": "integrating",
+                    "started_at": "2026-05-15T18:00:14-06:00",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 0.0
+                  },
+                  {
+                    "issue": 55,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:04.500000-06:00",
+                    "active_seconds": 3.5,
+                    "closed_at": "2026-05-15T18:00:08-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": [
+                  {
+                    "kind": "serial",
+                    "lane": null,
+                    "issue": 55,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": []
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "observed_tokens": 150,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "active",
+                "started_at": "2026-05-15T18:00:12-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 13.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 51,
+                "lines": []
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 23,
+          "render_at_utc": "2026-05-16T00:00:27.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DE",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 27.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 4,
+                  "effective_lane_limit": 4,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 1,
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 1,
+                  "integration_high_water": 2,
+                  "parked_count": 0,
+                  "refill_turn": null,
+                  "serial_drain": {
+                    "elapsed_seconds": 7.0,
+                    "oldest_lane_age_seconds": 17.0,
+                    "cohort": {
+                      "open": 4,
+                      "live_sessions": 1,
+                      "setup": 1,
+                      "finishing": 1,
+                      "parked": 0,
+                      "admitted": 0,
+                      "integrating": 0,
+                      "recovering": 1
+                    }
+                  }
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 50,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:10-06:00",
+                    "active_seconds": 14.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 51,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:12-06:00",
+                    "active_seconds": 15.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 52,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:13-06:00",
+                    "active_seconds": 14.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 53,
+                    "status": "recovering",
+                    "started_at": "2026-05-15T18:00:14-06:00",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 1.0
+                  },
+                  {
+                    "issue": 55,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:04.500000-06:00",
+                    "active_seconds": 3.5,
+                    "closed_at": "2026-05-15T18:00:08-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": [
+                  {
+                    "kind": "serial",
+                    "lane": null,
+                    "issue": 55,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": []
+                  },
+                  {
+                    "kind": "integration",
+                    "lane": null,
+                    "issue": 53,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": true,
+                    "lines": [
+                      {
+                        "at": "2026-05-15T18:00:26-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 1/3"
+                      }
+                    ],
+                    "recovery": {
+                      "attempt": 1,
+                      "max_attempts": 3
+                    }
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "observed_tokens": 150,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "active",
+                "started_at": "2026-05-15T18:00:12-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 15.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 51,
+                "lines": []
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 29,
+          "render_at_utc": "2026-05-16T00:00:33.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DE",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 33.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 4,
+                  "effective_lane_limit": 4,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 1,
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 0,
+                  "integration_high_water": 2,
+                  "parked_count": 1,
+                  "refill_turn": null,
+                  "serial_drain": {
+                    "elapsed_seconds": 13.0,
+                    "oldest_lane_age_seconds": 3.0,
+                    "cohort": {
+                      "open": 1,
+                      "live_sessions": 0,
+                      "setup": 1,
+                      "finishing": 0,
+                      "parked": 0,
+                      "admitted": 0,
+                      "integrating": 0,
+                      "recovering": 0
+                    }
+                  }
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 51,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:12-06:00",
+                    "active_seconds": 20.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 50,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:10-06:00",
+                    "active_seconds": 14.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 52,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:13-06:00",
+                    "active_seconds": 18.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 53,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:14-06:00",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 55,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:04.500000-06:00",
+                    "active_seconds": 3.5,
+                    "closed_at": "2026-05-15T18:00:08-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": [
+                  {
+                    "kind": "serial",
+                    "lane": null,
+                    "issue": 55,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": []
+                  },
+                  {
+                    "kind": "integration",
+                    "lane": null,
+                    "issue": 53,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": [
+                      {
+                        "at": "2026-05-15T18:00:26-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 1/3"
+                      }
+                    ],
+                    "recovery": {
+                      "attempt": 1,
+                      "max_attempts": 3
+                    }
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "observed_tokens": 150,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-3",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-4",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "active",
+                "started_at": "2026-05-15T18:00:12-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 20.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0102",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "status": "no-progress",
+                    "drift": null,
+                    "active_seconds": 1.0,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 0,
+                      "tokens_out": 0,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 51,
+                "lines": []
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 30,
+          "render_at_utc": "2026-05-16T00:00:35.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DE",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 35.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 4,
+                  "effective_lane_limit": 4,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 1,
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 0,
+                  "integration_high_water": 2,
+                  "parked_count": 1,
+                  "refill_turn": null,
+                  "serial_drain": {
+                    "elapsed_seconds": 15.0,
+                    "oldest_lane_age_seconds": null,
+                    "cohort": {
+                      "open": 0,
+                      "live_sessions": 0,
+                      "setup": 0,
+                      "finishing": 0,
+                      "parked": 0,
+                      "admitted": 0,
+                      "integrating": 0,
+                      "recovering": 0
+                    }
+                  }
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 50,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:10-06:00",
+                    "active_seconds": 14.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 51,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:12-06:00",
+                    "active_seconds": 21.0,
+                    "closed_at": null,
+                    "iteration_count": 2,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 52,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:13-06:00",
+                    "active_seconds": 18.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 53,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:14-06:00",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 55,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:04.500000-06:00",
+                    "active_seconds": 3.5,
+                    "closed_at": "2026-05-15T18:00:08-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": [
+                  {
+                    "kind": "serial",
+                    "lane": null,
+                    "issue": 55,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": []
+                  },
+                  {
+                    "kind": "integration",
+                    "lane": null,
+                    "issue": 53,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": [
+                      {
+                        "at": "2026-05-15T18:00:26-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 1/3"
+                      }
+                    ],
+                    "recovery": {
+                      "attempt": 1,
+                      "max_attempts": 3
+                    }
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "observed_tokens": 150,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-3",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-4",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "no-progress",
+                "started_at": "2026-05-15T18:00:12-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 21.0,
+                "iteration_count": 2
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0102",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "status": "no-progress",
+                    "drift": null,
+                    "active_seconds": 1.0,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 0,
+                      "tokens_out": 0,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0110",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "status": "no-progress",
+                    "drift": null,
+                    "active_seconds": 1.0,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 0,
+                      "tokens_out": 0,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 51,
+                "lines": []
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 31,
+          "render_at_utc": "2026-05-16T00:00:37.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DE",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 37.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 4,
+                  "effective_lane_limit": 4,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 1,
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 0,
+                  "integration_high_water": 2,
+                  "parked_count": 2,
+                  "refill_turn": null,
+                  "serial_drain": {
+                    "elapsed_seconds": 17.0,
+                    "oldest_lane_age_seconds": null,
+                    "cohort": {
+                      "open": 1,
+                      "live_sessions": 0,
+                      "setup": 0,
+                      "finishing": 0,
+                      "parked": 1,
+                      "admitted": 0,
+                      "integrating": 0,
+                      "recovering": 0
+                    }
+                  }
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 54,
+                    "status": "parked",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 1.0
+                  },
+                  {
+                    "issue": 50,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:10-06:00",
+                    "active_seconds": 14.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 51,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:12-06:00",
+                    "active_seconds": 21.0,
+                    "closed_at": null,
+                    "iteration_count": 2,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 52,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:13-06:00",
+                    "active_seconds": 18.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 53,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:14-06:00",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 55,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:04.500000-06:00",
+                    "active_seconds": 3.5,
+                    "closed_at": "2026-05-15T18:00:08-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": [
+                  {
+                    "kind": "serial",
+                    "lane": null,
+                    "issue": 55,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": []
+                  },
+                  {
+                    "kind": "integration",
+                    "lane": null,
+                    "issue": 53,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": [
+                      {
+                        "at": "2026-05-15T18:00:26-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 1/3"
+                      }
+                    ],
+                    "recovery": {
+                      "attempt": 1,
+                      "max_attempts": 3
+                    }
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "observed_tokens": 150,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-3",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-4",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "no-progress",
+                "started_at": "2026-05-15T18:00:12-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 21.0,
+                "iteration_count": 2
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0102",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "status": "no-progress",
+                    "drift": null,
+                    "active_seconds": 1.0,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 0,
+                      "tokens_out": 0,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0110",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "status": "no-progress",
+                    "drift": null,
+                    "active_seconds": 1.0,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 0,
+                      "tokens_out": 0,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 51,
+                "lines": []
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 32,
+          "render_at_utc": "2026-05-16T00:00:38.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DE",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 38.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "available",
+                  "configured_lane_limit": 4,
+                  "effective_lane_limit": 4,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": 1,
+                  "refill_stopped": true,
+                  "integration_observed": true,
+                  "integration_wip": 0,
+                  "integration_high_water": 2,
+                  "parked_count": 2,
+                  "refill_turn": null,
+                  "serial_drain": null
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 54,
+                    "status": "parked",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null,
+                    "phase_age_seconds": 2.0
+                  },
+                  {
+                    "issue": 50,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:10-06:00",
+                    "active_seconds": 14.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 51,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:12-06:00",
+                    "active_seconds": 21.0,
+                    "closed_at": null,
+                    "iteration_count": 2,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 52,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:13-06:00",
+                    "active_seconds": 18.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 53,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:14-06:00",
+                    "active_seconds": 1.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 55,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:04.500000-06:00",
+                    "active_seconds": 3.5,
+                    "closed_at": "2026-05-15T18:00:08-06:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": [
+                  {
+                    "kind": "serial",
+                    "lane": null,
+                    "issue": 55,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": []
+                  },
+                  {
+                    "kind": "integration",
+                    "lane": null,
+                    "issue": 53,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": [
+                      {
+                        "at": "2026-05-15T18:00:26-06:00",
+                        "kind": "event",
+                        "text": "Recovery: attempt 1/3"
+                      }
+                    ],
+                    "recovery": {
+                      "attempt": 1,
+                      "max_attempts": 3
+                    }
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "observed_tokens": 150,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-3",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-4",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "observed_tokens": 0,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "no-progress",
+                "started_at": "2026-05-15T18:00:12-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 21.0,
+                "iteration_count": 2
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0102",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "status": "no-progress",
+                    "drift": null,
+                    "active_seconds": 1.0,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 0,
+                      "tokens_out": 0,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0110",
+                    "iteration": null,
+                    "lane": "lane-2",
+                    "outcome": "released",
+                    "duration_seconds": 1.0,
+                    "status": "no-progress",
+                    "drift": null,
+                    "active_seconds": 1.0,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 0,
+                      "tokens_out": 0,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 51,
+                "lines": []
               }
             }
           }

@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::activity::ActivityAgents;
+use crate::drain::SerialDrainTracker;
 use crate::event::{
     AutoClosed, CommitRecorded, ContextWindowSample, ContributionEnd, ContributionIdentity, Event,
     EventPayload, ExecutionHostDeclaration, InsightCapabilities, IssueRef, IterationEnd,
@@ -581,6 +582,8 @@ pub struct DashboardState {
     pub(crate) wind_down_observed: bool,
     /// The folded `parallel` Declaration (ADR-0044).
     pub(crate) parallel: ParallelPosture,
+    /// The latched **Serial drain** and the cohort it waits for (ADR-0074).
+    pub(crate) serial_drain: SerialDrainTracker,
     pub(crate) context_window: Option<ContextWindowSample>,
     /// The last successfully committed **Release line** this Run announced.
     pub(crate) release_line: Option<ReleaseAdvanced>,
@@ -649,6 +652,7 @@ impl DashboardState {
             wind_down: None,
             wind_down_observed: false,
             parallel: ParallelPosture::default(),
+            serial_drain: SerialDrainTracker::default(),
             context_window: None,
             release_line: None,
             active_ref: None,
@@ -726,6 +730,7 @@ impl DashboardState {
             self.first_ts = now;
         }
         let now_monotonic = self.monotonic_at_option(now, event.observed_monotonic);
+        self.serial_drain.apply(event, now_monotonic);
         if let EventPayload::ContributionStart(start) = &event.payload {
             if let Some(contribution_id) = &start.contribution_id {
                 self.contribution_hosts.insert(

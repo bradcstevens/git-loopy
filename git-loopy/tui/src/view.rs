@@ -240,6 +240,39 @@ pub struct ParallelDeclaration {
     ///
     /// A zero `reservations` is a spent turn, not the absence of one.
     pub refill_turn: Option<RefillTurn>,
+    /// The **Serial drain** from latch to grant (ADR-0074). Null otherwise.
+    pub serial_drain: Option<SerialDrainView>,
+}
+
+/// A latched **Serial drain**, derived from Events already on the wire.
+///
+/// Both durations tick with the render clock and neither is a forecast:
+/// `elapsed_seconds` runs from `wrapper.serial.requested`, and
+/// `oldest_lane_age_seconds` from the oldest open contribution's
+/// `wrapper.contribution.start`. Either is null when its start was not
+/// observed; the oldest age is also null when the cohort is empty.
+#[derive(Clone, Debug, Serialize)]
+pub struct SerialDrainView {
+    pub elapsed_seconds: Option<f64>,
+    pub oldest_lane_age_seconds: Option<f64>,
+    pub cohort: DrainCohortView,
+}
+
+/// The open contributions a Serial drain waits for, one count per phase.
+///
+/// Keyed by `contribution_id`, so a retry or a refilled Lane is its own
+/// member. `setup` is started work whose Agent session has not been observed;
+/// `finishing` is finished Lane work not yet parked or admitted.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct DrainCohortView {
+    pub open: i64,
+    pub live_sessions: i64,
+    pub setup: i64,
+    pub finishing: i64,
+    pub parked: i64,
+    pub admitted: i64,
+    pub integrating: i64,
+    pub recovering: i64,
 }
 
 /// The numbers a spent `wrapper.rolling.refill_turn` carried (#686).
@@ -669,7 +702,7 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         cost: Declaration::from_capability(state.capabilities.cost),
         rate_card: Declaration::from_capability(state.capabilities.rate_card),
         routing: Declaration::from_capability(state.capabilities.routing),
-        parallel: parallel_declaration(state),
+        parallel: parallel_declaration(state, context),
         execution_host: execution_host_view(state),
         wind_down: wind_down_declaration(state),
     }
@@ -706,7 +739,7 @@ fn wind_down_declaration(state: &DashboardState) -> WindDownDeclaration {
     }
 }
 
-fn parallel_declaration(state: &DashboardState) -> ParallelDeclaration {
+fn parallel_declaration(state: &DashboardState, context: &ViewContext) -> ParallelDeclaration {
     let posture = &state.parallel;
     ParallelDeclaration {
         availability: if posture.observed {
@@ -730,6 +763,23 @@ fn parallel_declaration(state: &DashboardState) -> ParallelDeclaration {
             reservations: turn.reservations,
             effective_lane_limit: turn.effective_lane_limit,
         }),
+        serial_drain: state
+            .serial_drain
+            .reading(state.monotonic_at(context.now, context.now_monotonic))
+            .map(|drain| SerialDrainView {
+                elapsed_seconds: drain.elapsed_seconds,
+                oldest_lane_age_seconds: drain.oldest_lane_age_seconds,
+                cohort: DrainCohortView {
+                    open: drain.cohort.open,
+                    live_sessions: drain.cohort.live_sessions,
+                    setup: drain.cohort.setup,
+                    finishing: drain.cohort.finishing,
+                    parked: drain.cohort.parked,
+                    admitted: drain.cohort.admitted,
+                    integrating: drain.cohort.integrating,
+                    recovering: drain.cohort.recovering,
+                },
+            }),
     }
 }
 

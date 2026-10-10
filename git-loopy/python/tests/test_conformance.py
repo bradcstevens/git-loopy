@@ -2497,14 +2497,15 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.15 adds the Run-wide Subagent count. 1.14 initialized Subagent-capable
+    # 1.16 derives the Header's Serial drain (ADR-0074, #719): its cohort,
+    # oldest Lane age and elapsed wait. 1.15 adds the Run-wide Subagent count. 1.14 initialized Subagent-capable
     # windows at zero and recorded their lifecycle lines (ADR-0022). 1.13 moved
     # contract/Event provenance to 2.23 / 1.5.
     # 1.12 charges Strikes per issue, so an advance resets none (ADR-0070).
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.15"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.16"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -2843,6 +2844,7 @@ def _empty_inventory_tally() -> dict[str, int]:
         "log_lines": 0,
         "routes": 0,
         "activity_windows": 0,
+        "serial_drains": 0,
     }
 
 
@@ -2873,6 +2875,14 @@ def _sweep_snapshot_inventory(
     # facts hang off that gate, so it declares an inventory of its own
     # rather than borrowing `declaration`'s single field.
     assert list(header["parallel"]) == fields["parallel"], where
+    # The Serial drain is derived, never declared (ADR-0074): null outside a
+    # latch, and inside one an inventory of its own whose cohort counts by
+    # phase rather than borrowing any Lane or Integration field.
+    drain = header["parallel"]["serial_drain"]
+    if drain is not None:
+        assert list(drain) == fields["serial_drain"], where
+        assert list(drain["cohort"]) == fields["drain_cohort"], where
+        counted["serial_drains"] += 1
     # The same device, for the two facts Spec #445 §K adds to the Header. The
     # Execution host needs no gate because the wire declares `unknown` as what
     # a legacy trace means; the Wind-down needs one because a lifted drain and
@@ -2995,6 +3005,25 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
         for snapshot in case["snapshots"]
         for parallel in [snapshot["expected"]["dashboard"]["header"]["parallel"]]
     ), "the rolling case must pin a zero-reservation refill turn"
+    # A latched drain, its known and unknowable oldest Lane, and its grant are
+    # each pinned, or the Serial drain derivation is exercised only in part.
+    assert rolling_counted["serial_drains"] > 0
+    assert counted["serial_drains"] == 0, "no serial/Wave case latches serial demand"
+    drains = [
+        snapshot["expected"]["dashboard"]["header"]["parallel"]["serial_drain"]
+        for case in rolling_cases
+        for snapshot in case["snapshots"]
+    ]
+    assert any(
+        drain and drain["oldest_lane_age_seconds"] is not None for drain in drains
+    ), "the rolling case must pin a measured oldest Lane"
+    assert any(
+        drain and drain["cohort"]["open"] and drain["oldest_lane_age_seconds"] is None
+        for drain in drains
+    ), "the rolling case must pin an oldest Lane whose start was unobserved"
+    assert any(
+        drain and drain["cohort"]["open"] == 0 for drain in drains
+    ), "the rolling case must pin a latch that drains no open contribution"
     assert any(
         window.get("recovery")
         for case in _DASHBOARD_INSIGHTS["activity_window_cases"]
