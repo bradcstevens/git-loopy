@@ -33,6 +33,15 @@ pub(crate) struct ActivityAgents {
 }
 
 impl ActivityAgents {
+    pub(crate) fn total_subagents(&self) -> Option<usize> {
+        (self.subagents_available == Some(true)).then(|| {
+            self.windows
+                .iter()
+                .map(|agent| agent.subagents.unwrap_or(0))
+                .sum()
+        })
+    }
+
     pub(crate) fn apply(&mut self, event: &Event) {
         let scope = event
             .contribution

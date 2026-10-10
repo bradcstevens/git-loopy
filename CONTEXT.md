@@ -128,9 +128,10 @@ outlive it).
 
 **Subagent**:
 An agent an **Agent** spawns inside its own session, on its own model. Its lifecycle —
-start, finish, failure, and the totals it reports — is observable; its output never
-reaches the **Run**'s event stream, so elapsed time is the only account of what it did.
-Its **Consumption** is accounted to its parent **Agent** and never tallied as its own.
+start, finish, failure, and the totals it reports — is observable in the **Run**'s
+event stream; the Subagent's generated output itself does not reach that stream. Its
+reported totals are display detail, while billed **Consumption** remains sourced from
+the parent stream and is never tallied a second time from the Subagent's totals.
 _Avoid_: child agent, nested session, task (the launching tool's name).
 
 **Skill**:

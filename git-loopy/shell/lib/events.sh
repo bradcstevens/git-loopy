@@ -85,6 +85,11 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [TOOL_PERMISSION_DENIED]="tool.permission_denied"
   [USAGE_TOKENS]="usage.tokens"
   [USAGE_CONTEXT_WINDOW]="usage.context_window"
+  # Vocabulary parity only: this port has no SDK event subscription and cannot
+  # observe or emit harness Subagent lifecycle records.
+  [SUBAGENT_STARTED]="subagent.started"
+  [SUBAGENT_COMPLETED]="subagent.completed"
+  [SUBAGENT_FAILED]="subagent.failed"
   # The two harness failure records (contract 1.19, #403): what ended a session
   # that ended badly, in the harness's own structured fields. Carried for
   # vocabulary parity and never emitted here -- this port shells out to the agent
@@ -106,10 +111,11 @@ declare -r GIT_LOOPY_INSIGHT_CAPABILITIES_JSON='{
   "context_window": false,
   "skill_consultation": false,
   "cost": false,
-  "routing": false
+  "routing": false,
+  "subagents": false
 }'
 # What *this Run* obtained, as opposed to what this distribution can observe.
-# The seven above are fixed per binary; a run-scoped capability can differ between
+# The eight above are fixed per binary; a run-scoped capability can differ between
 # two Runs of one binary, so it is composed onto the wire manifest rather than
 # frozen beside them (#334, ADR-0026, Wrapper contract 12).
 #
@@ -142,7 +148,7 @@ declare -r GIT_LOOPY_PARALLEL_CAPABILITIES_JSON='{
 
 # The Run-start Insight manifest as it goes on the wire: the frozen
 # per-distribution capabilities, then this Run's own run-scoped answers. The
-# run-scoped keys come last so the seven a **Dashboard** must find keep the order
+# run-scoped keys come last so the eight a **Dashboard** must find keep the order
 # the family contract lists them in.
 git_loopy_run_insight_capabilities_json() {
   jq -cn \

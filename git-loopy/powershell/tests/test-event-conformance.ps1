@@ -446,7 +446,8 @@ function Get-GovernedMeasurement {
             "context_window",
             "skill_consultation",
             "cost",
-            "routing"
+            "routing",
+            "subagents"
         )
     ) {
         $Governed[$Name] = [Collections.Generic.List[object]]::new()

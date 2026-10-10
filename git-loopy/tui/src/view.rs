@@ -433,6 +433,8 @@ pub struct Activity {
     pub issue: Option<IssueRef>,
     pub lines: Vec<LogLineView>,
     pub windows: Vec<ActivityWindow>,
+    #[serde(skip)]
+    pub(crate) subagents: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -579,6 +581,7 @@ pub fn project_run_view(
             activity: Activity {
                 issue: state.active_ref.clone(),
                 lines: log_lines(state.live_log(), context),
+                subagents: state.agents.total_subagents(),
                 windows: state
                     .agents
                     .windows
