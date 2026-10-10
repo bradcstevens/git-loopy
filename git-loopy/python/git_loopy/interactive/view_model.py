@@ -250,6 +250,9 @@ def _parallel(state: LiveRunState) -> dict[str, Any]:
             len(posture.parked_open) if posture.integration_observed else None
         ),
         "refill_turn": dict(posture.refill_turn) if posture.refill_turn is not None else None,
+        # The **Serial drain** from latch to grant (ADR-0074), read at the
+        # render clock. Derived only: no forecast of what remains.
+        "serial_drain": state.serial_drain.reading(state.monotonic_now()),
     }
 
 

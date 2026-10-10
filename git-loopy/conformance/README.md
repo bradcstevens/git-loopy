@@ -22,7 +22,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits — including the `all_skipped` abort (§10, #413) a Pickup owes when the Pool is non-empty and it could bind none of it — plus `pool_emptiness_cases`, the one rule every member asks before claiming the exit-`0` empty Pool (§2.2, #541): only a *complete* read that found nothing establishes emptiness, so a failed or truncated read that found nothing is unknown rather than empty. plus `unbound_pool_cases`, its refusal-side companion (§3.3.1, #542): a Pool that bound nothing and holds one refusal nobody could read ends under `preflight_failed`, because `all_skipped` and `all_blocked` are claims about the *work* and an unprovable readiness verdict is a report about the *read*. Both rules ride this fixture rather than ones of their own because they decide which of these exits a Run is entitled to |
 | `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.6): exact type literals, exact Run-start Release identity, per-Orchestrator Insight and **Parallel mode** capability manifests, production-seam normalized rollup cases, payload contracts including Subagent lifecycle and usage-attribution fields, the rolling-dispatch **Lane contribution** identity and lifecycle vocabulary, whole ordered rolling Event streams every member serializes through its own seam, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
-| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.15): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory — including the Header's **Parallel** posture composite and its Integration backlog — and per-column field mapping, Queue and Iteration-breakdown columns and scopes, optional Queue phase age on parked, admitted, integrating, and recovering, Subagent lifecycle lines, per-Agent counts and the Run-wide total, drill-in drift, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and the Rust Dashboard core |
+| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.16): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory — including the Header's **Parallel** posture composite, its Integration backlog and its derived **Serial drain** — and per-column field mapping, Queue and Iteration-breakdown columns and scopes, optional Queue phase age on parked, admitted, integrating, and recovering, Subagent lifecycle lines, per-Agent counts and the Run-wide total, drill-in drift, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and the Rust Dashboard core |
 | `unbound-run-notice.json` | The **Unbound-Run notice** (#642, #643, #694). Only a Run that ended `empty_pool`, `all_blocked` or `all_skipped` without binding, activating or contributing to an issue earns one; `unbound_run_outcomes` is that set, and each adapter asserts its own constant against it. The fixture pins the exact lines: the exclusions that emptied a Pool; the blockers outside the Pool, which the Run's `repository` input separates from members; the pull requests to merge, named beside those blockers and grouped by the pull request each **Awaiting merge** candidate waits on, with the inside-the-Pool test applied to blockers only; and each refusal kind, counted once per member. Contract 2.12 adds Run-end `refusals` as the Pool and skip record when present, ahead of any collection; a Membership read remains insufficient. The Rust Dashboard draws the notice over a held Dashboard, and the Python attach client prints it after the Dashboard returns |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `skill-policy.json` | Closed-world **Skill policy** (§17): base-scope selection, explicit empty policy, exact environment replacement, Run overlays with disable-wins, deprecated legacy subtraction, Minimal fallback and its reason, the four validation failures, startup classification, and the redacted `wrapper.skill_policy.resolved` projection |
@@ -51,7 +51,8 @@ Lane publication out of scope (`parallel_mode: false`); Rust folds it through
 `DashboardSession::ingest` as an additive record. Successful Integration pushes
 reuse `wrapper.push.recorded` with contribution identity. Dashboard fixture revision
 1.13 updated its contract/Event provenance only; revision 1.14 adds the Subagent
-lifecycle lines and per-Agent counts; revision 1.15 adds the Run-wide Activity count.
+lifecycle lines and per-Agent counts; revision 1.15 adds the Run-wide Activity count; revision 1.16 adds the
+Header's derived **Serial drain** (ADR-0074, #719) without any Event or contract change.
 Event fixture revision 1.6 and Wrapper contract 2.24 pin the Subagent types and
 capability. Routing fixture revision 3 updates the provenance note to contract
 2.24 without changing routing decisions.
@@ -739,14 +740,19 @@ The existing semantic snapshots and native producer obligations are unchanged.
 This is not a substitute for the composed actual-work-session routing matrix;
 shell/PowerShell routing activation remains deferred.
 
-One case sits outside `cases`, under `rolling_dashboard_cases`, and is replayed by
+Two cases sit outside `cases`, under `rolling_dashboard_cases`, and are replayed by
 both the Rust Dashboard core and the Python replay oracle (#687). A rolling-dispatch
 stream is the trace whose Header carries an observed **Parallel** posture. Keeping
 it out of `cases` lets every serial/Wave snapshot carry the undeclared posture
 truthfully; it is not an exemption from projection parity. Both members compare its
 complete snapshots, including Integration Statuses and phase age, Lane-work-only
 Active time, finalized contribution accounting and drift, backlog counts, Recovery
-attempts, and the refill-turn form. The projection-field inventory sweep covers it
+attempts, and the refill-turn form. A second rolling case pins the **Serial drain**
+(#719): a latch before any Lane drains an empty cohort, the grant clears it, and a
+second latch reads a mixed cohort keyed by `contribution_id` — setup, live session,
+finishing, parked, admitted, Integration and Recovery — with the oldest Lane measured
+from its own start, never inherited by a retry on the same issue and `lane_id`, and
+unknown once a start was unobserved. The projection-field inventory sweep covers both
 alongside the serial/Wave cases.
 
 Focused Python Event-to-view regressions additionally cover contribution-stamped

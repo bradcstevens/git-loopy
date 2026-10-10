@@ -301,10 +301,20 @@ started Lane contribution has finished — its session, any parked branch, Integ
 and any recovery — so a serial-required issue waits for the slowest Lane in flight
 and for the serialized Integration of all of them. Nothing is cancelled, and the wait
 is set by the cohort in flight when the latch landed: Lanes the Run never opened add
-nothing. While it lasts the Dashboard header reads `lane refill
-stopped: N serial-required`. Serial work that meets an empty pipeline is granted at
-once, and a **Serial-required** pin never drains, because it latches before any Lane
-is reserved.
+nothing. While it lasts the Dashboard header reads `serial drain 0:01:23 · oldest
+lane 0:12:34 · 6 open`: the time since the latch, the age of the oldest open Lane
+contribution measured from its `wrapper.contribution.start`, and the cohort still
+open. Where it fits, a second segment splits that cohort by phase — `drain: 2 live,
+1 setup, 1 parked, 2 integration (1 admitted, 1 recovering)` — and a narrow Header
+drops that split first. `setup` is a started contribution whose Agent session has
+not been observed yet; worktree preparation before `wrapper.contribution.start`
+emits no contribution Event, so it is not counted. The Dashboard derives all of this
+from Events already on the wire and estimates nothing: an unobserved start shows
+unknown (`—`), an empty cohort shows `oldest lane none`, and no time remaining is
+ever shown. The drain clears at the grant — the serial Iteration's
+`wrapper.iteration.start` — and a later latch starts a fresh one. Serial work that
+meets an empty pipeline is granted at once, and a **Serial-required** pin never
+drains, because it latches before any Lane is reserved.
 
 The lever is the label. If you can assert that an issue is independent of the work in
 flight, label it `parallel-safe` and it runs as a Lane instead of waiting for one.

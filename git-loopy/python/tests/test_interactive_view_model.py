@@ -236,6 +236,33 @@ def test_invalid_refill_turn_is_not_an_observed_posture(
     assert after == before
 
 
+def test_only_a_spent_refill_turn_or_the_grant_ends_a_serial_drain() -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    def drain(state: LiveRunState) -> dict | None:
+        return view_model.project_run_view(state, None, issue=42)["dashboard"]["header"][
+            "parallel"
+        ]["serial_drain"]
+
+    state = LiveRunState()
+    state.render({"type": "wrapper.serial.requested", "issue": 45,
+                  "serial_required": 1, "refill_stopped": False})
+    assert drain(state) is None, "a request that keeps refilling latches no drain"
+    state.render({"type": "wrapper.serial.requested", "issue": 45,
+                  "serial_required": 1, "refill_stopped": True})
+    assert drain(state) is not None
+    # Rust decodes an incomplete turn as an unmodelled Event (ADR-0074).
+    state.render({"type": "wrapper.rolling.refill_turn", "reservations": 1})
+    assert drain(state) is not None, "a malformed turn spent nothing"
+    state.render({"type": "wrapper.rolling.refill_turn", "reservations": 0,
+                  "effective_lane_limit": 2})
+    assert drain(state) is None
+    state.render({"type": "wrapper.serial.requested", "issue": 45,
+                  "serial_required": 1, "refill_stopped": True})
+    state.render({"type": "wrapper.iteration.start", "iter": 1})
+    assert drain(state) is None, "the grant ends the drain"
+
+
 def test_backlog_counts_contributions_once_until_they_end_not_until_publication() -> None:
     from git_loopy.interactive.state import LiveRunState
     from git_loopy.rolling_scheduler import INTEGRATION_HIGH_WATER

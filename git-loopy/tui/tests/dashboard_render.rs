@@ -9,9 +9,9 @@
 
 use git_loopy_tui::{
     draw_frame, drive_dashboard, project_run_view, DashboardFrame, DashboardSession,
-    DashboardState, DashboardSurface, Event, ExecutionHostView, Input, IssueRef,
-    ParallelDeclaration, RefillTurn, RunInputs, RunView, Screen, TerminalCapabilities, Timestamp,
-    ViewContext, WindDownDeclaration, Zone,
+    DashboardState, DashboardSurface, DrainCohortView, Event, ExecutionHostView, Input, IssueRef,
+    ParallelDeclaration, RefillTurn, RunInputs, RunView, Screen, SerialDrainView,
+    TerminalCapabilities, Timestamp, ViewContext, WindDownDeclaration, Zone,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -1048,6 +1048,7 @@ fn the_header_shows_a_healthy_parallel_run_with_its_effective_and_configured_lan
         integration_high_water: None,
         parked_count: None,
         refill_turn: None,
+        serial_drain: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1092,6 +1093,7 @@ fn the_header_promotes_a_parallel_degradation_with_its_reason() {
         integration_high_water: None,
         parked_count: None,
         refill_turn: None,
+        serial_drain: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1120,6 +1122,7 @@ fn the_header_promotes_a_serial_fallback_with_its_reason() {
         integration_high_water: None,
         parked_count: None,
         refill_turn: None,
+        serial_drain: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1172,6 +1175,7 @@ fn the_header_states_that_lane_refill_stopped_for_serial_required_work() {
         integration_high_water: None,
         parked_count: None,
         refill_turn: None,
+        serial_drain: None,
     };
 
     let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
@@ -1205,6 +1209,7 @@ fn observed_backlog(wip: i64, parked: i64, pressure: Option<&str>) -> ParallelDe
         integration_high_water: Some(2),
         parked_count: Some(parked),
         refill_turn: None,
+        serial_drain: None,
     }
 }
 
@@ -1303,6 +1308,7 @@ fn parallel_posture_snapshots_pin_its_responsive_priority() {
         integration_high_water: None,
         parked_count: None,
         refill_turn: None,
+        serial_drain: None,
     };
     let degraded = ParallelDeclaration {
         availability: "available",
@@ -1319,6 +1325,7 @@ fn parallel_posture_snapshots_pin_its_responsive_priority() {
         integration_high_water: None,
         parked_count: None,
         refill_turn: None,
+        serial_drain: None,
     };
 
     let mut healthy_view = fixture_view("parallel-lanes-and-non-closure-outcomes");
@@ -1337,6 +1344,122 @@ fn parallel_posture_snapshots_pin_its_responsive_priority() {
     assert_snapshot(
         "parallel-posture-degraded-narrow",
         frame_text(&degraded_view, 100, 16, TerminalCapabilities::default()),
+    );
+}
+
+fn draining(drain: SerialDrainView) -> ParallelDeclaration {
+    ParallelDeclaration {
+        availability: "available",
+        configured_lane_limit: Some(4),
+        effective_lane_limit: Some(4),
+        pressure: None,
+        degraded: false,
+        degraded_reason: None,
+        serial_fallback_reason: None,
+        serial_required: Some(1),
+        refill_stopped: true,
+        integration_observed: true,
+        integration_wip: Some(1),
+        integration_high_water: Some(2),
+        parked_count: Some(1),
+        refill_turn: None,
+        serial_drain: Some(drain),
+    }
+}
+
+#[test]
+fn the_header_shows_a_serial_drain_cohort_oldest_lane_and_wait() {
+    let mixed = SerialDrainView {
+        elapsed_seconds: Some(83.0),
+        oldest_lane_age_seconds: Some(754.0),
+        cohort: DrainCohortView {
+            open: 6,
+            live_sessions: 2,
+            setup: 1,
+            finishing: 0,
+            parked: 1,
+            admitted: 1,
+            integrating: 0,
+            recovering: 1,
+        },
+    };
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.header.parallel = draining(mixed);
+    let lines = render_lines(&view, 320, 36, TerminalCapabilities::default());
+    let header = band(&lines, "git-loopy").join("\n");
+    assert!(
+        header.contains("serial drain 0:01:23 · oldest lane 0:12:34 · 6 open"),
+        "the drain names its wait, its oldest Lane and its cohort, in:\n{header}"
+    );
+    assert!(
+        header
+            .contains("drain: 2 live, 1 setup, 1 parked, 2 integration (1 admitted, 1 recovering)"),
+        "the cohort is split by phase, in:\n{header}"
+    );
+    assert_snapshot(
+        "serial-drain-wide",
+        frame_text(&view, 160, 16, TerminalCapabilities::default()),
+    );
+    // Narrow, the phase split yields before the wait and the oldest Lane do.
+    assert_snapshot(
+        "serial-drain-narrow",
+        frame_text(&view, 100, 16, TerminalCapabilities::default()),
+    );
+
+    let unknown = SerialDrainView {
+        elapsed_seconds: None,
+        oldest_lane_age_seconds: None,
+        cohort: DrainCohortView {
+            open: 1,
+            parked: 1,
+            ..DrainCohortView::default()
+        },
+    };
+    view.dashboard.header.parallel = draining(unknown);
+    let header = band(
+        &render_lines(&view, 200, 36, TerminalCapabilities::default()),
+        "git-loopy",
+    )
+    .join("\n");
+    assert!(
+        header.contains("serial drain — · oldest lane — · 1 open"),
+        "an unobserved instant is unknown, never zero, in:\n{header}"
+    );
+
+    let empty = SerialDrainView {
+        elapsed_seconds: Some(4.0),
+        oldest_lane_age_seconds: None,
+        cohort: DrainCohortView::default(),
+    };
+    view.dashboard.header.parallel = draining(empty);
+    let header = band(
+        &render_lines(&view, 200, 36, TerminalCapabilities::default()),
+        "git-loopy",
+    )
+    .join("\n");
+    assert!(
+        header.contains("serial drain 0:00:04 · oldest lane none · 0 open"),
+        "an empty cohort has no oldest Lane, in:\n{header}"
+    );
+
+    let mut refilling = draining(SerialDrainView {
+        elapsed_seconds: Some(4.0),
+        oldest_lane_age_seconds: None,
+        cohort: DrainCohortView::default(),
+    });
+    refilling.refill_turn = Some(RefillTurn {
+        reservations: 0,
+        effective_lane_limit: 4,
+    });
+    view.dashboard.header.parallel = refilling;
+    let header = band(
+        &render_lines(&view, 200, 36, TerminalCapabilities::default()),
+        "git-loopy",
+    )
+    .join("\n");
+    assert!(
+        !header.contains("serial drain"),
+        "a refill turn ends the drain, in:\n{header}"
     );
 }
 

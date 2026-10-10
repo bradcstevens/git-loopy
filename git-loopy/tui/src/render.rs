@@ -641,6 +641,7 @@ fn draw_header(
     segments.extend(routing_segment(header).map(|note| (5, note)));
     segments.extend(rate_card_segment(header).map(|note| (6, note)));
     segments.extend(parallel_segment(header));
+    segments.extend(serial_drain_segments(header, glyphs));
     segments.push(execution_host_segment(header, glyphs));
     segments.extend(wind_down_segment(header));
     segments.extend(diagnostic_segment(diagnostics).map(|note| (0, note)));
@@ -936,6 +937,54 @@ fn parallel_segment(header: &Header) -> Option<(u8, String)> {
         7
     };
     Some((rank, parts.join(" · ")))
+}
+
+/// The latched **Serial drain** (ADR-0074): how long the serial Iteration has
+/// waited, the oldest open contribution's age, and the cohort it waits for.
+///
+/// Two segments, so a narrow Header keeps the durations and the cohort size
+/// after the per-phase breakdown yields. Neither is a forecast: nothing here
+/// says how long remains, and an unobserved start renders unknown. An empty
+/// cohort has no oldest Lane, which is not the same as an unknown one.
+fn serial_drain_segments(header: &Header, glyphs: &Glyphs) -> Vec<(u8, String)> {
+    let parallel = &header.parallel;
+    let Some(drain) = parallel.serial_drain.as_ref() else {
+        return Vec::new();
+    };
+    if parallel.availability != "available" || parallel.degraded || parallel.refill_turn.is_some() {
+        return Vec::new();
+    }
+    let known = |seconds: Option<f64>| seconds.map_or_else(|| glyphs.unknown.to_string(), duration);
+    let cohort = &drain.cohort;
+    let oldest = if cohort.open == 0 {
+        "none".to_string()
+    } else {
+        known(drain.oldest_lane_age_seconds)
+    };
+    let summary = format!(
+        "serial drain {} · oldest lane {} · {} open",
+        known(drain.elapsed_seconds),
+        oldest,
+        cohort.open
+    );
+    let integration = cohort.admitted + cohort.integrating + cohort.recovering;
+    let mut phases = vec![
+        format!("{} live", cohort.live_sessions),
+        format!("{} setup", cohort.setup),
+    ];
+    if cohort.finishing > 0 {
+        phases.push(format!("{} finishing", cohort.finishing));
+    }
+    phases.push(format!("{} parked", cohort.parked));
+    let mut integration_text = format!("{integration} integration");
+    if cohort.admitted > 0 || cohort.recovering > 0 {
+        integration_text.push_str(&format!(
+            " ({} admitted, {} recovering)",
+            cohort.admitted, cohort.recovering
+        ));
+    }
+    phases.push(integration_text);
+    vec![(2, summary), (5, format!("drain: {}", phases.join(", ")))]
 }
 
 /// Integration WIP against the fixed high-water, the parked count, and the

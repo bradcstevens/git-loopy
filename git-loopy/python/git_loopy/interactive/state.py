@@ -421,6 +421,156 @@ class ParallelPosture:
     refill_turn: dict[str, int] | None = None
 
 
+#: ``contribution_identity.stamped_types`` an Agent session produces; the first
+#: one observed for a contribution moves it out of setup (ADR-0074).
+_SESSION_EVIDENCE_TYPES = frozenset({
+    "agent.output",
+    "assistant.message",
+    "assistant.reasoning",
+    "tool.call",
+    "tool.result",
+    "usage.context_window",
+    "usage.tokens",
+    "subagent.started",
+    "subagent.completed",
+    "subagent.failed",
+    "wrapper.checkpoint.recorded",
+    "wrapper.commit.recorded",
+})
+
+_DRAIN_SETUP = "setup"
+_DRAIN_SESSION = "live_sessions"
+_DRAIN_PHASES = (
+    "live_sessions", "setup", "finishing", "parked", "admitted", "integrating",
+    "recovering",
+)
+_DRAIN_LIFECYCLE = {
+    _CONTRIBUTION_WORK_FINISHED: "finishing",
+    _INTEGRATION_PARKED: "parked",
+    _INTEGRATION_ADMITTED: "admitted",
+    _INTEGRATION_STARTED: "integrating",
+    _INTEGRATION_RECOVERY_STARTED: "recovering",
+}
+
+
+@dataclass
+class _DrainMember:
+    issue: int | str
+    started_at: float | None
+    phase: str
+
+
+@dataclass
+class SerialDrainTracker:
+    """The **Serial drain** derived from Events already on the wire (ADR-0074).
+
+    The replay oracle of the Rust core's ``drain`` module: the latch runs from
+    ``wrapper.serial.requested`` to the next ``wrapper.iteration.start``, and
+    the cohort is every open contribution keyed by ``contribution_id``, so a
+    retry or a refilled Lane never inherits another contribution's timer.
+    """
+
+    open: dict[str, _DrainMember] = field(default_factory=dict)
+    ended: set[str] = field(default_factory=set)
+    latched: bool = False
+    latched_at: float | None = None
+
+    def apply(
+        self,
+        etype: Any,
+        event: Mapping[str, Any],
+        now: float | None,
+        normalize: Callable[[Any], int | str],
+    ) -> None:
+        if etype == _SERIAL_REQUESTED and event.get("refill_stopped") is not False:
+            if not self.latched:
+                self.latched = True
+                self.latched_at = now
+        elif etype in {_ITERATION_START, _RUN_END} or (
+            etype == _ROLLING_REFILL_TURN and _refill_turn_counts(event) is not None
+        ):
+            # The grant ends the span. A spent refill turn can only follow a
+            # granted serial Iteration, and an ended Run drains nothing more.
+            self.latched = False
+            self.latched_at = None
+        elif etype == _ISSUE_ACTIVATED and event.get("issue") is not None and (
+            event.get("lane_issue") is not None or has_contribution_identity(event)
+        ):
+            issue = normalize(event["issue"])
+            named = (
+                event["contribution_id"] if has_contribution_identity(event) else None
+            )
+            for contribution_id, member in self.open.items():
+                if (
+                    member.phase == _DRAIN_SETUP
+                    and member.issue == issue
+                    and named in {None, contribution_id}
+                ):
+                    member.phase = _DRAIN_SESSION
+        if not has_contribution_identity(event):
+            return
+        contribution_id = event["contribution_id"]
+        if etype == _CONTRIBUTION_START:
+            if contribution_id not in self.ended and contribution_id not in self.open:
+                self.open[contribution_id] = _DrainMember(
+                    normalize(event["issue"]), now, _DRAIN_SETUP
+                )
+            return
+        if etype == _CONTRIBUTION_END:
+            self.open.pop(contribution_id, None)
+            self.ended.add(contribution_id)
+            return
+        phase = _DRAIN_LIFECYCLE.get(etype)
+        if etype == _INTEGRATION_RECOVERY_STARTED and _recovery_pair(event)[0] is None:
+            phase = None
+        if phase is None:
+            member = self.open.get(contribution_id)
+            if (
+                etype in _SESSION_EVIDENCE_TYPES
+                and member is not None
+                and member.phase == _DRAIN_SETUP
+            ):
+                member.phase = _DRAIN_SESSION
+            return
+        if contribution_id in self.ended:
+            return
+        member = self.open.setdefault(
+            contribution_id, _DrainMember(normalize(event["issue"]), None, phase)
+        )
+        # Parking never takes back an admission (ADR-0020).
+        if phase == "parked" and member.phase in {
+            "admitted", "integrating", "recovering",
+        }:
+            return
+        member.phase = phase
+
+    def reading(self, now: float | None) -> dict[str, Any] | None:
+        """The drain at ``now``, or ``None`` while no serial demand is latched."""
+        if not self.latched:
+            return None
+
+        def since(at: float | None) -> float | None:
+            if at is None or now is None:
+                return None
+            return max(0.0, now - at)
+
+        cohort = {"open": len(self.open), **{phase: 0 for phase in _DRAIN_PHASES}}
+        for member in self.open.values():
+            cohort[member.phase] += 1
+        ages = [since(member.started_at) for member in self.open.values()]
+        # One unobserved start makes the oldest unknowable, not the oldest seen.
+        oldest = (
+            None
+            if not ages or any(age is None for age in ages)
+            else max(age for age in ages if age is not None)
+        )
+        return {
+            "elapsed_seconds": since(self.latched_at),
+            "oldest_lane_age_seconds": oldest,
+            "cohort": cohort,
+        }
+
+
 @dataclass(frozen=True)
 class ResolvedRoute:
     """The **Routing resolution** one **Pickup** reached (contract 1.21).
@@ -643,6 +793,7 @@ class LiveRunState:
         self.wind_down: WindDownSnapshot | None = None
         self.wind_down_observed = False
         self.parallel = ParallelPosture()
+        self.serial_drain = SerialDrainTracker()
         self._lane_work_finished: set[int | str] = set()
         self._branch_drift: dict[str, int | None] = {}
         self._contribution_hosts: dict[str, str] = {}
@@ -759,6 +910,7 @@ class LiveRunState:
 
         now = self._monotonic()
         etype = event.get("type")
+        self.serial_drain.apply(etype, event, now, self._normalize_ref)
         # Multi-active dispatch (issue #66, ADR-0008): a runner-stamped
         # ``lane_issue`` routes this Lane's per-iteration output to its own
         # timer / Log / Consumption, bypassing the serial single-active
@@ -1055,13 +1207,10 @@ class LiveRunState:
     ) -> None:
         posture = self.parallel
         if etype == _ROLLING_REFILL_TURN:
-            reservations = _observed_count(event.get("reservations"))
-            limit = _observed_count(event.get("effective_lane_limit"))
-            if (
-                reservations is None or limit is None
-                or reservations > _I64_MAX or limit > _I64_MAX
-            ):
+            counts = _refill_turn_counts(event)
+            if counts is None:
                 return
+            reservations, limit = counts
             posture.observed = True
             posture.refill_turn = {
                 "reservations": reservations, "effective_lane_limit": limit,
@@ -1226,6 +1375,10 @@ class LiveRunState:
         return self._issue_strikes.get(self._strike_focus, 0)
 
     # -- live timers --------------------------------------------------------
+
+    def monotonic_now(self) -> float:
+        """The injected monotonic clock's reading: the render clock."""
+        return self._monotonic()
 
     def elapsed_seconds(self, now: float | None = None) -> float:
         """Seconds since the run started, frozen once the run has ended.
@@ -2687,6 +2840,18 @@ def _log_commit_text(event: Mapping[str, Any]) -> str:
         lines = str(subject).splitlines()
         text += f"  {lines[0] if lines else str(subject)}"
     return text
+
+
+def _refill_turn_counts(event: Mapping[str, Any]) -> tuple[int, int] | None:
+    """A refill turn's two counts, or ``None`` when it is not a typed turn."""
+    reservations = _observed_count(event.get("reservations"))
+    limit = _observed_count(event.get("effective_lane_limit"))
+    if (
+        reservations is None or limit is None
+        or reservations > _I64_MAX or limit > _I64_MAX
+    ):
+        return None
+    return reservations, limit
 
 
 def _recovery_pair(event: Mapping[str, Any]) -> tuple[int | None, int | None]:
