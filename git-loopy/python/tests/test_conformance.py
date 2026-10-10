@@ -2497,6 +2497,8 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
+    # 1.17 pins observed zero wait, Lane activation during setup, and a Queue
+    # phase that agrees with the drain after admission followed by parking.
     # 1.16 derives the Header's Serial drain (ADR-0074, #719): its cohort,
     # oldest Lane age and elapsed wait. 1.15 adds the Run-wide Subagent count. 1.14 initialized Subagent-capable
     # windows at zero and recorded their lifecycle lines (ADR-0022). 1.13 moved
@@ -2505,7 +2507,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.16"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.17"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -3024,6 +3026,9 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     assert any(
         drain and drain["cohort"]["open"] == 0 for drain in drains
     ), "the rolling case must pin a latch that drains no open contribution"
+    assert any(
+        drain and drain["elapsed_seconds"] == 0.0 for drain in drains
+    ), "the rolling case must pin an observed zero wait, distinct from unknown"
     assert any(
         window.get("recovery")
         for case in _DASHBOARD_INSIGHTS["activity_window_cases"]

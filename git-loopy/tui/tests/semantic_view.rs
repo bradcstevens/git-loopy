@@ -2723,3 +2723,33 @@ fn the_integration_backlog_counts_admitted_wip_and_parked_against_two() {
     assert_eq!(empty["integration_high_water"], serde_json::json!(2));
     assert_eq!(empty["parked_count"], serde_json::json!(0));
 }
+
+#[test]
+fn parking_after_admission_preserves_queue_and_drain_phase() {
+    for (phase, status) in [
+        ("wrapper.integration.admitted", "admitted"),
+        ("wrapper.integration.started", "integrating"),
+        ("wrapper.integration.recovery_started", "recovering"),
+    ] {
+        let lines = [
+            r#"{"ts":"2026-05-16T00:00:00.000Z","type":"wrapper.run.start","run_id":"run-1"}"#.to_string(),
+            r#"{"ts":"2026-05-16T00:00:01.000Z","type":"wrapper.serial.requested","run_id":"run-1","iter":null,"issue":45,"refill_stopped":true,"serial_required":1}"#.to_string(),
+            r#"{"ts":"2026-05-16T00:00:02.000Z","type":"wrapper.integration.admitted","run_id":"run-1","iter":null,"issue":42,"contribution_id":"c-42","lane_id":"lane-1"}"#.to_string(),
+            format!(r#"{{"ts":"2026-05-16T00:00:03.000Z","type":"{phase}","run_id":"run-1","iter":null,"issue":42,"contribution_id":"c-42","lane_id":"lane-1","attempt":1,"max_attempts":3}}"#),
+            r#"{"ts":"2026-05-16T00:00:04.000Z","type":"wrapper.integration.parked","run_id":"run-1","iter":null,"issue":42,"contribution_id":"c-42","lane_id":"lane-1"}"#.to_string(),
+        ];
+        let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let before = reduce_jsonl(&borrowed[..4], IssueRef::number(42));
+        let after = reduce_jsonl(&borrowed, IssueRef::number(42));
+        let row = &after["dashboard"]["queue"]["rows"][0];
+        assert_eq!(row["status"], status);
+        assert_eq!(
+            row["phase_age_seconds"],
+            before["dashboard"]["queue"]["rows"][0]["phase_age_seconds"]
+        );
+        let posture = parallel(&after);
+        assert_eq!(posture["serial_drain"]["cohort"][status], 1);
+        assert_eq!(posture["serial_drain"]["cohort"]["parked"], 0);
+        assert_eq!(posture["parked_count"], 0);
+    }
+}

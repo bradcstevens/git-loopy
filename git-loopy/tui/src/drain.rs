@@ -12,12 +12,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::event::{Event, EventPayload, IssueRef};
+use crate::event::{Event, EventPayload};
 
 /// Where one open contribution stands, from its own lifecycle Events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DrainPhase {
-    /// Started, with no sign of its Agent session yet.
+    /// Started, with no contribution-stamped Agent session Event yet. Issue
+    /// activation is not that sign: it is emitted while the Lane is bound,
+    /// before its host session exists.
     Setup,
     /// Its Agent session has been observed and its Lane work is not finished.
     Session,
@@ -31,7 +33,6 @@ enum DrainPhase {
 
 #[derive(Clone, Debug)]
 struct OpenContribution {
-    issue: IssueRef,
     /// The contribution's start on the monotonic axis; `None` when unobserved.
     started_at: Option<f64>,
     phase: DrainPhase,
@@ -82,22 +83,6 @@ impl SerialDrainTracker {
             EventPayload::IterationStart
             | EventPayload::RefillTurn(_)
             | EventPayload::RunEnd(_) => self.latch = None,
-            EventPayload::IssueActivated(activated)
-                if event.lane_issue.is_some() || event.contribution.is_some() =>
-            {
-                let named = event
-                    .contribution
-                    .as_ref()
-                    .map(|identity| identity.contribution_id.as_str());
-                for (id, open) in &mut self.open {
-                    if open.phase == DrainPhase::Setup
-                        && open.issue == activated.issue
-                        && named.map_or(true, |named| named == id)
-                    {
-                        open.phase = DrainPhase::Session;
-                    }
-                }
-            }
             _ => {}
         }
         let Some(identity) = &event.contribution else {
@@ -110,7 +95,6 @@ impl SerialDrainTracker {
                     self.open.insert(
                         id.to_string(),
                         OpenContribution {
-                            issue: identity.issue.clone(),
                             started_at: now,
                             phase: DrainPhase::Setup,
                         },
@@ -146,7 +130,6 @@ impl SerialDrainTracker {
             .open
             .entry(id.to_string())
             .or_insert_with(|| OpenContribution {
-                issue: identity.issue.clone(),
                 started_at: None,
                 phase,
             });
