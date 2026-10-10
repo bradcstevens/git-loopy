@@ -6286,6 +6286,32 @@ def test_refused_priority_serial_pickup_still_refills_deferred_priority_lanes(
     assert refill["reservations"] == 1
 
 
+def test_refused_priority_lane_cannot_suppress_terminal_serial_refusal_forever(
+    tmp_path, monkeypatch
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "priority", "task-type:not-a-route"]),
+            _make_issue(
+                44, labels=[
+                    "ready-for-agent", "priority", "parallel-safe", "task-type:not-a-route"
+                ],
+            ),
+        ],
+    )
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=0), issue_pin=None)
+
+    async def bounded_run():
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=3)
+
+    asyncio.run(bounded_run())
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == []
+    assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 1
+    assert next(e for e in events if e["type"] == "wrapper.run.end")["outcome"] == "all_skipped"
+
+
 @pytest.mark.parametrize(
     "refusal",
     ["blocked", "awaiting_merge", "route", "unread_readiness", "malformed",

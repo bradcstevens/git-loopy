@@ -1403,6 +1403,7 @@ class _Loop:
         self._live_pin: int | None = config.issue_pin
         self._pin_unread = False
         self._priority_lanes_deferred = False
+        self._priority_lane_eligible: Callable[[PoolCandidate], bool] | None = None
         self._pin_lease_unread = False
         #: This Run's **Lease**s, or ``None`` when Leases are not in force —
         #: the PRDs backend has no remote to contend on, and a clone with no
@@ -2129,8 +2130,11 @@ class _Loop:
                 }
                 self._priority_lanes_deferred = any(
                     item.ref in lane_refs
-                    and self._attempts.defeated_by(item.ref) is None
-                    and is_lane_candidate(item)
+                    and self._priority_lane_eligible is not None
+                    and self._priority_lane_eligible(PoolCandidate(
+                        ref=item.ref, title=item.title, labels=tuple(item.labels),
+                        blocked_by=item.blocked_by,
+                    ))
                     for item in pool
                 )
                 if lane_refs:
@@ -5123,6 +5127,7 @@ class _ParallelLoop:
         """
         assert self._scheduler is not None  # guarded by `self._rolling_capable`
         scheduler = self._scheduler
+        self._serial._priority_lane_eligible = self._lane_candidate_eligible
         scheduler.start()
         self._crash = None
         priority_serial_latched = False
