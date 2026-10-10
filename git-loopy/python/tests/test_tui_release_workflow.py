@@ -10,8 +10,10 @@ manifest, and this workflow together or fails.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -352,6 +354,162 @@ def test_the_matrix_provisions_the_toolchain_each_target_needs() -> None:
         "a cross target that is not actually run inside its container builds "
         "against the host toolchain and fails at the linker"
     )
+
+
+SETUP_UV_ACTION = "astral-sh/setup-uv@"
+EXACT_UV_RELEASE = re.compile(r"\d+\.\d+\.\d+")
+PYTHON_MINOR = re.compile(r"3\.\d+")
+
+
+def _setup_uv_steps(job: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        step
+        for step in job.get("steps", [])
+        if isinstance(step, dict)
+        and str(step.get("uses", "")).startswith(SETUP_UV_ACTION)
+    ]
+
+
+def _floating_toolchain(workflow: dict[Any, Any]) -> list[str]:
+    """Every way uv or the Python it runs is left to float, by name (#721).
+
+    uv was installed as "latest" and the project pins no interpreter, so the
+    day uv 0.13.0 shipped, `uv run` in a bare cross container downloaded
+    CPython 3.15.0, for which `pydantic-core` publishes no wheel, and the
+    aarch64-musl build died compiling it. Both inputs are pinned here in the
+    same spirit as cargo-dist: one exact uv release on every install, and one
+    Python minor for the whole workflow that no job or step re-chooses.
+    """
+    problems: list[str] = []
+
+    uv_versions: set[str] = set()
+    for job_name, job in workflow["jobs"].items():
+        for step in _setup_uv_steps(job):
+            version = str(step.get("with", {}).get("version", ""))
+            if not EXACT_UV_RELEASE.fullmatch(version):
+                problems.append(
+                    f"{job_name}: setup-uv installs uv {version or 'latest'!r}, "
+                    "not one exact release"
+                )
+            uv_versions.add(version)
+            if "python-version" in step.get("with", {}):
+                problems.append(
+                    f"{job_name}: setup-uv chooses its own Python instead of "
+                    "the workflow's pinned minor"
+                )
+    if len(uv_versions) > 1:
+        problems.append(f"uv is pinned to more than one release: {sorted(uv_versions)}")
+
+    python = str(workflow.get("env", {}).get("UV_PYTHON", ""))
+    if not PYTHON_MINOR.fullmatch(python):
+        problems.append(
+            f"UV_PYTHON is {python or 'unset'!r}, not one pinned Python minor"
+        )
+    for job_name, job in workflow["jobs"].items():
+        if "UV_PYTHON" in job.get("env", {}):
+            problems.append(f"{job_name}: re-chooses UV_PYTHON for one job")
+        for step in job.get("steps", []):
+            if isinstance(step, dict) and "UV_PYTHON" in step.get("env", {}):
+                problems.append(f"{job_name}: re-chooses UV_PYTHON for one step")
+        include = job.get("strategy", {}).get("matrix", {}).get("include", [])
+        if any("UV_PYTHON" in str(entry) for entry in include):
+            problems.append(f"{job_name}: re-chooses UV_PYTHON per matrix entry")
+    return problems
+
+
+def test_every_build_job_installs_a_pinned_uv_and_runs_a_pinned_python() -> None:
+    """#721: neither uv nor the Python `uv run` picks may float."""
+    workflow = _load_workflow()
+
+    assert _floating_toolchain(workflow) == []
+    assert len(_setup_uv_steps(workflow["jobs"]["build"])) == 1, (
+        "every build job must install uv through the one pinned step"
+    )
+
+
+def test_a_pinned_python_minor_is_one_the_project_accepts() -> None:
+    workflow = _load_workflow()
+    pyproject = tomllib.loads(
+        (REPOSITORY_ROOT / "git-loopy/python/pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    floor = pyproject["project"]["requires-python"]
+    assert floor.startswith(">=")
+    floor_minor = tuple(int(part) for part in floor[2:].split("."))
+    pinned_minor = tuple(int(part) for part in workflow["env"]["UV_PYTHON"].split("."))
+    assert pinned_minor >= floor_minor
+
+
+def _unpin_uv(workflow: dict[Any, Any], value: str | None) -> None:
+    step = _setup_uv_steps(workflow["jobs"]["build"])[0]
+    if value is None:
+        step.get("with", {}).pop("version", None)
+        if not step.get("with"):
+            step.pop("with", None)
+    else:
+        step.setdefault("with", {})["version"] = value
+
+
+def test_removing_or_floating_the_uv_pin_is_refused() -> None:
+    for value in (None, "latest", ">=0.12", "0.12", "0.12.*"):
+        workflow = _load_workflow()
+        _unpin_uv(workflow, value)
+        assert any(
+            problem.startswith("build: setup-uv installs uv")
+            for problem in _floating_toolchain(workflow)
+        ), f"a uv pin of {value!r} must be refused"
+
+
+def test_two_different_uv_pins_are_refused() -> None:
+    workflow = _load_workflow()
+    _unpin_uv(workflow, "0.0.1")
+    assert any(
+        problem.startswith("uv is pinned to more than one release")
+        for problem in _floating_toolchain(workflow)
+    )
+
+
+def test_removing_or_floating_the_python_pin_is_refused() -> None:
+    for value in (None, "", ">=3.11", "3", "3.x", "python3"):
+        workflow = _load_workflow()
+        if value is None:
+            workflow["env"].pop("UV_PYTHON")
+        else:
+            workflow["env"]["UV_PYTHON"] = value
+        assert any(
+            problem.startswith("UV_PYTHON is")
+            for problem in _floating_toolchain(workflow)
+        ), f"a Python pin of {value!r} must be refused"
+
+
+def test_a_job_step_or_matrix_entry_that_re_chooses_python_is_refused() -> None:
+    def job_env(workflow: dict[Any, Any]) -> None:
+        workflow["jobs"]["build"].setdefault("env", {})["UV_PYTHON"] = "3.15"
+
+    def step_env(workflow: dict[Any, Any]) -> None:
+        step = next(
+            candidate
+            for candidate in workflow["jobs"]["build"]["steps"]
+            if candidate.get("id") == "cross-metadata"
+        )
+        step.setdefault("env", {})["UV_PYTHON"] = "3.15"
+
+    def matrix_entry(workflow: dict[Any, Any]) -> None:
+        workflow["jobs"]["build"]["strategy"]["matrix"]["include"][0]["env"] = {
+            "UV_PYTHON": "3.15"
+        }
+
+    def setup_uv_input(workflow: dict[Any, Any]) -> None:
+        step = _setup_uv_steps(workflow["jobs"]["build"])[0]
+        step.setdefault("with", {})["python-version"] = "3.15"
+
+    for mutate in (job_env, step_env, matrix_entry, setup_uv_input):
+        workflow = _load_workflow()
+        mutate(workflow)
+        assert _floating_toolchain(workflow), (
+            f"{mutate.__name__} must not be able to re-choose the pinned Python"
+        )
 
 
 def test_the_plan_is_proven_before_any_target_is_built() -> None:
