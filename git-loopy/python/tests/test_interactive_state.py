@@ -19,10 +19,13 @@ import ast
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from git_loopy import events as events_module
 from git_loopy import sinks as sinks_module
 from git_loopy.interactive import state as state_module
 from git_loopy.interactive.state import LiveRunState, format_header
+from git_loopy.interactive.view_model import project_run_view
 
 
 class _FakeClock:
@@ -84,14 +87,18 @@ def test_iteration_start_updates_current_iteration() -> None:
     assert state.status == "running"
 
 
-def test_contribution_stamped_context_window_sample_leaves_the_header_alone() -> None:
+@pytest.mark.parametrize("available", [None, False, True])
+def test_contribution_stamped_context_window_sample_leaves_the_header_alone(
+    available: bool | None,
+) -> None:
     state = _make_state()
     state.render(
         {
             "type": events_module.WRAPPER_RUN_START,
-            "insight_capabilities": {"context_window": True},
+            "insight_capabilities": {"context_window": available},
         }
     )
+    header = project_run_view(state, None, issue=7)["dashboard"]["header"]
     state.render(
         {
             "type": events_module.USAGE_CONTEXT_WINDOW,
@@ -106,6 +113,143 @@ def test_contribution_stamped_context_window_sample_leaves_the_header_alone() ->
 
     assert state.context_window is None
     assert state.peak_context_window is None
+    assert project_run_view(state, None, issue=7)["dashboard"]["header"] == header
+
+
+def test_contribution_stamped_context_window_sample_updates_only_its_activity() -> None:
+    state = _make_state()
+    state.render({
+        "type": events_module.WRAPPER_RUN_START,
+        "insight_capabilities": {"context_window": True},
+    })
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "issue": 9})
+    state.render({
+        "type": events_module.USAGE_CONTEXT_WINDOW,
+        "current_tokens": 12_000,
+        "token_limit": 32_000,
+    })
+    header = project_run_view(state, None, issue=7)["dashboard"]["header"]
+    identity = {
+        "iter": None, "contribution_id": "c-7", "issue": 7, "lane_id": "lane-1",
+    }
+    sibling = {
+        "iter": None, "contribution_id": "c-8", "issue": 8, "lane_id": "lane-2",
+    }
+    for stamp in (identity, sibling):
+        state.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **stamp})
+        state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, **stamp})
+    state.render({
+        "type": events_module.USAGE_CONTEXT_WINDOW, **identity,
+        "current_tokens": 50_000, "token_limit": 100_000,
+    })
+
+    view = project_run_view(state, None, issue=7)
+    windows = view["dashboard"]["activity"]["windows"]
+    matching = next(window for window in windows if window["issue"] == 7)
+    assert matching["context_fill"] == {
+        "availability": "available",
+        "current_tokens": 50_000,
+        "token_limit": 100_000,
+        "percentage": 50.0,
+        "effective_target_tokens": None,
+        "effective_ceiling_tokens": None,
+    }
+    other = next(window for window in windows if window["issue"] == 8)
+    assert other["context_fill"]["availability"] == "not_observed"
+    serial = next(window for window in windows if window["issue"] == 9)
+    assert serial["context_fill"]["current_tokens"] == 12_000
+    assert view["dashboard"]["header"] == header
+
+
+@pytest.mark.parametrize("activated", [False, True])
+def test_contribution_context_without_live_activity_cannot_update_serial_or_refill(
+    activated: bool,
+) -> None:
+    state = _make_state()
+    state.render({"type": events_module.WRAPPER_RUN_START})
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "issue": 9})
+    identity = {
+        "iter": None, "contribution_id": "c-7", "issue": 7, "lane_id": "lane-1",
+    }
+    state.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **identity})
+    if activated:
+        state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, **identity})
+        state.render({
+            "type": events_module.WRAPPER_CONTRIBUTION_WORK_FINISHED, **identity,
+        })
+    refill = {
+        "iter": None, "contribution_id": "c-8", "issue": 8, "lane_id": "lane-1",
+    }
+    state.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **refill})
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, **refill})
+    before = project_run_view(state, None, issue=7)["dashboard"]
+    state.render({
+        "type": events_module.USAGE_CONTEXT_WINDOW, **identity,
+        "current_tokens": 50_000, "token_limit": 100_000,
+    })
+    after = project_run_view(state, None, issue=7)["dashboard"]
+    assert after == before
+
+
+@pytest.mark.parametrize("activated", [False, True])
+def test_contribution_stamped_subagent_lines_need_no_live_activity(
+    activated: bool,
+) -> None:
+    clock = _FakeClock()
+    state = _make_state(monotonic=clock)
+    state.render({
+        "type": events_module.WRAPPER_RUN_START,
+        "insight_capabilities": {"subagents": True},
+    })
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, "issue": 9})
+    identity = {
+        "iter": None, "contribution_id": "c-7", "issue": 7, "lane_id": "lane-1",
+    }
+    sibling = {
+        "iter": None, "contribution_id": "c-8", "issue": 8, "lane_id": "lane-2",
+    }
+    state.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **sibling})
+    state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, **sibling})
+    state.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **identity})
+    if activated:
+        state.render({"type": events_module.WRAPPER_ISSUE_ACTIVATED, **identity})
+        clock.advance(3)
+        state.render({
+            "type": events_module.WRAPPER_CONTRIBUTION_WORK_FINISHED, **identity,
+        })
+    clock.advance(5)
+    before = project_run_view(state, None, issue=7)["dashboard"]
+    expected = [
+        "Subagent started: Code explorer @ gpt-5-mini",
+        "Subagent completed: Code explorer @ gpt-5-mini (2.50s, 100 tokens, 3 tool calls)",
+        "Subagent failed: Code explorer @ gpt-5-mini: agent crashed",
+    ]
+    for etype, text in zip(
+        (
+            events_module.SUBAGENT_STARTED,
+            events_module.SUBAGENT_COMPLETED,
+            events_module.SUBAGENT_FAILED,
+        ),
+        expected,
+        strict=True,
+    ):
+        state.render({
+            "type": etype, **identity, "tool_call_id": "call-7",
+            "agent_display_name": "Code explorer", "model": "gpt-5-mini",
+            "duration_seconds": 2.5, "total_tokens": 100, "total_tool_calls": 3,
+            "error": "agent crashed",
+        })
+        view = project_run_view(state, None, issue=7)
+        assert view["drill_in"]["log"]["lines"][-1]["text"] == text
+        assert view["dashboard"]["queue"] == before["queue"]
+        windows = view["dashboard"]["activity"]["windows"]
+        assert len(windows) == (3 if activated else 2)
+        assert all(window["subagents"] == 0 for window in windows)
+        assert all(
+            not window["lines"] for window in windows if window["issue"] in {8, 9}
+        )
+    assert [line["text"] for line in view["drill_in"]["log"]["lines"]] == expected
+    assert state.active_ref == 9
 
 
 def test_context_window_samples_are_iteration_scoped_and_retain_peak() -> None:

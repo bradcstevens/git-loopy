@@ -745,6 +745,14 @@ Active time, finalized contribution accounting and drift, backlog counts, Recove
 attempts, and the refill-turn form. The projection-field inventory sweep covers it
 alongside the serial/Wave cases.
 
+Focused Python Event-to-view regressions additionally cover contribution-stamped
+telemetry absent from that rolling stream: `usage.context_window` updates only
+the matching live **Activity window**, never the Header's sample, peak, or
+capability; **Subagent** lifecycle lines still reach the contribution's per-issue
+**Log** before activation and after work finishes. A missing or finished window
+must not redirect those observations into a serial Agent or a refilled Lane.
+These checks leave the shared fixture revision and snapshots unchanged.
+
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
 (ADR-0038) — are deliberately **not** in this fixture set, now that both renderers
 implement them. A drag is not an Event, so nothing about it reaches the Event schema, and

@@ -805,6 +805,8 @@ class LiveRunState:
         ):
             window = self._activity_window_for_contribution(contribution_id)
             if window is None:
+                if has_contribution_identity(event):
+                    self._render_lane_event(str(etype), event["issue"], event, now)
                 return
             if window.kind == "integration":
                 self._record_activity_subagent(str(etype), event)
@@ -1710,6 +1712,10 @@ class LiveRunState:
                     BillingSample.from_event(event),
                 )
                 entry.usage_observed = True
+        elif etype == _USAGE_CONTEXT_WINDOW:
+            snapshot = _context_window_snapshot(event)
+            if snapshot is not None:
+                self._set_activity_context(event, snapshot)
         elif etype in {_SUBAGENT_STARTED, _SUBAGENT_COMPLETED, _SUBAGENT_FAILED}:
             self._record_activity_subagent(etype, event)
             self._emit_event_line(st, provider, _subagent_event_text(etype, event))
@@ -1890,6 +1896,12 @@ class LiveRunState:
                 candidates[-1].context_window = snapshot
                 return True
             return False
+        if has_contribution_identity(event):
+            window = self._activity_window_for_contribution(event["contribution_id"])
+            if window is not None and window.live:
+                window.context_window = snapshot
+                return True
+            return False
         if self._activity_serial is not None and self._activity_serial.live:
             self._activity_serial.context_window = snapshot
             return True
@@ -1908,6 +1920,8 @@ class LiveRunState:
             else None
         )
         issue = event.get("lane_issue")
+        if window is None and has_contribution_identity(event):
+            return
         if window is None:
             if issue is None:
                 window = self._activity_serial
