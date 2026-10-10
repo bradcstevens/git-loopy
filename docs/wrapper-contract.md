@@ -515,7 +515,8 @@ Refusal is **not eviction**. The candidate MUST stay in the scheduler's cache, b
 contract 2.17, a closing pull request that stops being open — makes it
 candidate-eligible on the following refresh, with no Run restarted and no human touching the issue.
 This is what separates readiness from an **Attempt-lifecycle** defeat, which nothing inside the Run
-can undo and which therefore does evict.
+can undo: a defeated candidate remains Pool membership but cannot become candidate-eligible
+again in that Run.
 
 Readiness **composes** with the other candidacy predicates and MUST NOT replace any of them: a
 candidate must still carry `parallel-safe`, must still pass the Attempt-lifecycle skip, and the
