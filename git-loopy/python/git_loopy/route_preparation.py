@@ -97,6 +97,7 @@ class PreparedRoute:
     proposal: RoutingProposal | None = None
     reason: RoutingUnavailableReason | None = None
     detail: str | None = None
+    retryable: bool = False
 
     @property
     def halting(self) -> bool:
@@ -298,6 +299,7 @@ class RoutePreparation:
                 ref=ref,
                 outcome=PreparationOutcome.UNAVAILABLE,
                 detail="preparation cancelled; Pickup must validate its own route",
+                retryable=True,
             )
         )
 
@@ -335,7 +337,9 @@ class RoutePreparation:
         self, candidate: _Candidate, prepare: Callable[[], Awaitable[PreparedRoute]]
     ) -> PreparedRoute:
         """Apply the desk's explicit failure containment to a scheduling read."""
-        outcome = await self._prepare_one(candidate, prepare=prepare)
+        outcome = await self._prepare_one(
+            candidate, prepare=prepare, preserve_proposal_on_failure=True
+        )
         assert outcome is not None
         return outcome
 
@@ -369,6 +373,7 @@ class RoutePreparation:
     async def _prepare_one(
         self, candidate: _Candidate, *,
         prepare: Callable[[], Awaitable[PreparedRoute]] | None = None,
+        preserve_proposal_on_failure: bool = False,
     ) -> PreparedRoute | None:
         ref = candidate.ref
         try:
@@ -391,6 +396,12 @@ class RoutePreparation:
                 reason=RoutingUnavailableReason.SELECTOR_UNAVAILABLE,
                 detail="preparation failed; see Run diagnostics",
             )
-        if self._prepared.get(ref) != outcome:
+        cached = self._prepared.get(ref)
+        preserve = (
+            preserve_proposal_on_failure and cached is not None
+            and cached.proposal is not None
+            and outcome.outcome is PreparationOutcome.UNAVAILABLE
+        )
+        if not preserve and cached != outcome:
             self.remember(outcome)
         return outcome

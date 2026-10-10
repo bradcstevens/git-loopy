@@ -276,6 +276,9 @@ that prefix even when ordinary cached candidates could fill all slots. Repeated
 peeks MUST reuse settled preparation and freshly validate a nonbinding proposal
 without buying another assessment; unexpected preparation failures retain the desk's
 explicit diagnostic and leave the candidate to its own Pickup.
+An unread revalidation MUST preserve the paid proposal for a later fresh check.
+Expired or changed proposals and cancelled speculation may be prepared again under
+the existing routing allowance; they are not permanent admission refusals.
 Started setup, sessions, parked contributions, admitted waiters, Integration and Recovery
 MUST finish unchanged before serial ownership at full quiescence; nothing is cancelled.
 Retries remain subject to finalization, one-Lane ownership and their per-issue Strike budget,

@@ -106,7 +106,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from dataclasses import replace as dataclass_replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -6530,6 +6530,88 @@ def test_priority_dynamic_prefix_wait_revalidates_without_rebuying_assessments(
         assert sum(
             e["type"] == "wrapper.routing.prepared" and e["issue"] == ref for e in events
         ) == 1
+
+
+@pytest.mark.parametrize("change", ["expired", "unread"])
+def test_priority_proposal_recovers_after_expiry_or_transient_revalidation(
+    tmp_path, monkeypatch, change
+) -> None:
+    now = datetime.now(timezone.utc)
+    advanced = False
+    fake_gh = _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            *[
+                _make_issue(ref, labels=[
+                    "ready-for-agent", "priority", "parallel-safe", "task-type:implementation"
+                ])
+                for ref in (41, 42, 43, 45, 46)
+            ],
+            _make_issue(49, labels=["ready-for-agent", "priority", "task-type:implementation"]),
+            _make_issue(50, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]),
+        ],
+    )
+    original_init = dynamic_route.DynamicRouter.__init__
+
+    def router_init(router, **kwargs):
+        original_init(router, **{**kwargs, "clock": lambda: now})
+
+    monkeypatch.setattr(dynamic_route.DynamicRouter, "__init__", router_init)
+    if change == "unread":
+        original_available = dynamic_route.DynamicRouter.proposal_available
+        failed = False
+
+        async def available(router, proposal, request):
+            nonlocal failed
+            if request.issue_ref == 49 and not failed:
+                failed = True
+                return dynamic_route.RoutingUnavailable(
+                    reason=dynamic_route.RoutingUnavailableReason.SOURCE_UNAVAILABLE,
+                    usage=router.usage,
+                )
+            return await original_available(router, proposal, request)
+
+        monkeypatch.setattr(dynamic_route.DynamicRouter, "proposal_available", available)
+
+    class AdvancingSession(_ParallelFakeSession):
+        async def send_and_wait(self, prompt, **kwargs):
+            nonlocal now, advanced
+            if change == "expired" and not advanced:
+                now += timedelta(seconds=301)
+                advanced = True
+            return await super().send_and_wait(prompt, **kwargs)
+
+    client = _ParallelFakeClient(
+        fake_git=loop_module._make_git_client(), scripted_events=[_usage_event("claude-opus-5")],
+        serial_closes=True,
+    )
+    client._session_cls = AdvancingSession
+    monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    cfg = _dynamic_parallel_config(
+        max_iterations=8, routing={"docs": ("gpt-5.6-terra", "high")}
+    )
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    bindings = [
+        (e["issue"], e["iter"] is None)
+        for e in events if e["type"] == "wrapper.pickup.bound" and e["issue"] != 50
+    ]
+    assert set(bindings) == {(ref, ref != 49) for ref in (41, 42, 43, 45, 46, 49)}
+    if change == "expired":
+        assert bindings == [(ref, ref != 49) for ref in (41, 42, 43, 45, 46, 49)]
+    assert sum("#49:" in request.issue for _, request in spied["assessments"]) == (
+        2 if change == "expired" else 1
+    )
+    assert 49 in [ref for ref, _ in fake_gh.issue_close_calls]
+    if change == "expired":
+        latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+        ordinary = next(e for e in events if e["type"] == "wrapper.contribution.start" and e["issue"] == 50)
+        assert events.index(latch) < events.index(ordinary)
 
 
 @pytest.mark.parametrize("unexpected", [False, True])

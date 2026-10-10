@@ -3179,23 +3179,23 @@ class _Loop:
         )
         if cached is not None and cached.outcome is not PreparationOutcome.REUSABLE:
             if cached.proposal is None:
-                return PreparedRoute(
-                    ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
-                    reason=cached.reason,
-                    detail=cached.detail or "preparation already settled; leaving to Pickup",
-                )
-            available = await router.proposal_available(cached.proposal, request)
-            if isinstance(available, RoutingUnavailable):
-                return PreparedRoute(
-                    ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
-                    reason=available.reason, detail=available.reason.value,
-                )
-            if available:
-                return cached
-            return PreparedRoute(
-                ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
-                detail="prepared inputs changed or expired; leaving assessment to Pickup",
-            )
+                if not cached.retryable:
+                    return PreparedRoute(
+                        ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                        reason=cached.reason,
+                        detail=cached.detail or "preparation already settled; leaving to Pickup",
+                    )
+            else:
+                available = await router.proposal_available(cached.proposal, request)
+                if isinstance(available, RoutingUnavailable):
+                    return PreparedRoute(
+                        ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                        reason=available.reason, detail=available.reason.value,
+                    )
+                if available:
+                    return cached
+            assert self._preparation is not None
+            self._preparation.forget((item.ref,))
         reusable = self._reusable_routes_for(item.ref)
         if reusable:
             available = (
@@ -5215,6 +5215,11 @@ class _ParallelLoop:
                     )
                     else self._service_serial_required_work(collection)
                 )
+                if (
+                    scheduler.serial_latched and collection is not None
+                    and any(LABEL_PRIORITY in item.labels for item in _serial_required(collection.items))
+                ):
+                    priority_serial_latched = True
 
                 # `serial_turn()` itself has neither `max_iterations` nor Stop
                 # awareness (it only gates on the serial latch + full
