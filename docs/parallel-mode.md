@@ -82,6 +82,12 @@ dispatch is also not a Strike: its issue stays eligible and repeated refusals
 raise the existing host/setup **Pressure signal**, which can contract the
 effective Lane limit.
 
+The first setup hands the host the Run's `<run_id>`; each later setup of that
+issue uses `<run_id>-attempt-<A>` (A starts at 2). This host-facing identity keeps
+dispatch tokens, artifacts and remote contribution branches distinct, and uses
+hyphens because Actions artifact names cannot contain `/`. It is not a new Run:
+ingested Events always carry the owning Run's original `run_id`.
+
 ## Eligibility is yours to assert: `parallel-safe`
 
 The runner **never infers** that two issues can be worked at the same time. An
@@ -108,11 +114,16 @@ not only in the Event stream — because you are the only one who can fix it. Th
 other two reasons it can give are that every `parallel-safe` issue it found was
 already worked this Run, and that a candidate could not be read.
 
-An issue holds at most one Lane at a time. When its Lane ends without advancing,
-the issue is charged one Strike; while it has fewer than `max_nmt_strikes`
-Strikes it is offered another Lane in the same Run, exactly as a sequential Run
-would retry it. At `max_nmt_strikes` it is skipped for the rest of the Run, and
-the Run ends `all_skipped` when nothing else can be bound.
+An issue holds at most one Lane contribution at a time, including through parking,
+Integration and recovery. Every Session outcome charges it one Strike; advancing
+work charges none unless its session timed out or crashed. After that contribution
+finalizes, a charged issue with fewer than `max_nmt_strikes` Strikes is eligible
+for another Lane in the same Run. Each setup uses a new branch and workspace,
+preserving earlier unlanded work. At `max_nmt_strikes` the issue is skipped for
+the rest of the Run. An authoritative Pool read ends the Run `all_skipped` when
+remaining candidates are refused and nothing else can be bound, or `empty_pool`
+if no candidates remain. Classification itself consumes no extra Iteration;
+Lane starts and serial Iterations share the unchanged `max_iterations` cap.
 
 ## The host capacity is a ceiling, not a target
 
@@ -177,6 +188,13 @@ git directory:
 <repo>/.git/git-loopy/<run_id>/integrate/issue-<N>  ← its Integration stage
 ```
 
+A retry Lane of the same issue (ADR-0070) lives under
+`git-loopy/<run_id>/attempt-<A>/…` instead, with its stage beneath
+`attempt-<A>/integrate/`. A counts setups of that issue, starting at 2 for the
+second setup, not Strikes: a failed setup spends no Strike but still advances
+the namespace. Earlier unlanded branches are preserved; this is fresh work,
+not a resumption of the earlier workspace.
+
 That location is chosen so a live Lane cannot get in the way of the very
 commands the agents in it are running. The git directory is not *content* in any
 working tree, so a workspace never appears in `git status`, cannot be picked up
@@ -192,7 +210,8 @@ down as soon as its contribution finishes.
 
 **`git-loopy/` is a reserved branch namespace.** Every branch the runner cuts
 for itself lives under it — `git-loopy/<run_id>/issue-<N>` for a Lane and
-`git-loopy/<run_id>/integrate/issue-<N>` for its stage — and it is the *only*
+`git-loopy/<run_id>/integrate/issue-<N>` for its stage, with a retry attempt's
+branches under `git-loopy/<run_id>/attempt-<A>/` — and it is the *only*
 thing git-loopy will ever use to decide that a workspace is its own to reclaim.
 Don't put your own branches there.
 
@@ -258,6 +277,21 @@ When the runner finds **Serial-required** work, serial demand latches: refill
 stops, the Lanes already running drain, and one serial Iteration is granted
 exclusive use of the base worktree. Rolling dispatch then gets one full refill
 turn before serial demand can latch again, so neither side starves the other.
+
+That span is the **Serial drain**, and it is a real wait. It ends only when every
+started Lane contribution has finished — its session, any parked branch, Integration
+and any recovery — so a serial-required issue waits for the slowest Lane in flight
+and for the serialized Integration of all of them. Nothing is cancelled, and the wait
+is set by the cohort in flight when the latch landed: Lanes the Run never opened add
+nothing. While it lasts the Dashboard header reads `lane refill
+stopped: N serial-required`. Serial work that meets an empty pipeline is granted at
+once, and a **Serial-required** pin never drains, because it latches before any Lane
+is reserved.
+
+The lever is the label. If you can assert that an issue is independent of the work in
+flight, label it `parallel-safe` and it runs as a Lane instead of waiting for one.
+There is no other way for a plain issue to run beside live Lanes
+([ADR-0074](adr/0074-the-serial-drain-waits-for-the-whole-lane-cohort.md)).
 
 A serial Iteration granted *alongside* remaining eligible Lane work is
 interleaving, not a fallback, and is reported as neither.

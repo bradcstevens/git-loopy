@@ -1566,7 +1566,8 @@ outcome history, CLI/Dashboard readback and tracker publication. It covers
 reselection, justified and refused repeats, infrastructure failure, advances,
 attempt/allowance exhaustion and explicit Static escalation. Refusal leaves
 later eligible Static work usable and spends no task attempt or Strike. A Lane's
-retry uses existing serial fallback, not a second Lane; Config stays unchanged.
+retry is admitted by the scheduler, including a new Lane after a charged attempt
+finalizes below the Strike budget (ADR-0070); Config stays unchanged.
 Shared `pool_revalidation` cases also carry recorded migration through a prepared
 proposal into real serial Pickup or Lane refill. A proposal takes no Lease and
 publishes no final route. Unchanged inputs avoid another selector call; changed
@@ -1909,10 +1910,11 @@ advances still count toward the session ordinal and invalidate reuse.
 Progress neither spends nor refunds lifecycle attempts. An explicitly configured
 Static escalation rung wins even when it equals the Run default.
 
-Rolling dispatch retains its existing one-Lane-per-issue collision guard. A
-permitted retry of Lane work is reassessed when a later serial Pickup admits
-it; dynamic routing does not create another Lane or guarantee a retry that the
-scheduler has not admitted.
+Rolling dispatch retains one Lane contribution per issue at a time, including
+through parking, Integration and recovery. A charged attempt releases ownership
+when it finalizes; Pickup independently excludes issues at their Strike budget.
+A permitted retry is reassessed at its next Lane or serial Pickup. Dynamic
+routing does not create a Lane or guarantee a retry the scheduler has not admitted.
 
 The same remote-placement refusal applies: `route_policy = "dynamic"` with a
 non-`local` `execution_host` is refused before any work, for the reason above.

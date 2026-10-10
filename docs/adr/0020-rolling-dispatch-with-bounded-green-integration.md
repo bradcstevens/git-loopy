@@ -24,7 +24,10 @@ contribution's disposition: a terminal unpublished contribution is no longer a S
 its `strike_reaction` is `+1` only when that ending charged its issue against the issue's own
 `max_nmt_strikes`, and publication resets nothing. There is no
 Run-wide Strike limit, so reaching one no longer stops refill or latches a drain-confirmed
-abort, and no publication lifts one.
+abort, and no publication lifts one. For the Python Runner, #703 also supersedes
+the one-Lane-per-issue-per-Run rule below with one Lane at a time: ownership survives
+parking, Integration, recovery and closure, then a finalized charged attempt releases
+it. Pickup independently admits only issues with fewer than `max_nmt_strikes` Strikes.
 
 **Amended by [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md):**
 "published" also requires base to be as durable as the tracker closure
@@ -32,6 +35,13 @@ attesting to it wherever an upstream exists. Green gating and verified
 closure remain necessary, but are not sufficient if the base commit exists
 only locally. This adds a durability condition to publication, not a
 reversal of green-before-publication ordering.
+
+**Amended by [ADR-0074](0074-the-serial-drain-waits-for-the-whole-lane-cohort.md):**
+the Serial interleave below stands as written — a serial turn waits for full quiescence and
+Lane work keeps default precedence — and the wait is now named the **Serial drain**. No plain
+issue runs beside live Lanes; overlap is obtained by asserting `parallel-safe`. A human-asserted
+`priority` serial-required issue will latch serial demand before new Lane reservations, as the
+Pin does (accepted design, not yet shipped).
 
 **Partially superseded by:** [ADR-0065](0065-a-declared-rolling-event-is-seen-emitted-or-retired.md)
 only for the Parallel lifecycle list below, from which `wrapper.pipeline.quiescent` is retired, and
@@ -93,8 +103,9 @@ Parallel mode uses **Rolling dispatch**, not Waves or replacement rounds.
   exists, the Run cap permits another reservation, serial ownership is not requested, and
   Integration backpressure permits refill. A single eligible Parallel-safe issue may use
   one Lane; the old "at least two or run serially" rule was a Wave rule and is retired.
-- One issue may be dispatched to at most one Lane in a Run. The Run-scoped guard survives
-  parking, Integration, recovery, and serial fallback.
+- One issue may hold at most one Lane contribution at a time. The ownership guard survives
+  parking, Integration, recovery and closure. After a charged attempt finalizes, an issue
+  still `retrying` may take another Lane in the same Run; a `skipped` issue may not.
 
 The serial path described here remains an Iteration driver; the Python Runner
 no longer exposes a mode switch (ADR-0067).
@@ -148,7 +159,7 @@ One long-lived Integrator drains a bounded **Integration backlog**:
   Recovery usage still contributes to 429, AI-credit, and host-pressure signals.
 - Green publication is followed by the existing runner-driven verified issue closure.
   Both must complete before the contribution is finalized as published and resets Strike.
-  A closure failure must preserve recoverable contribution state and the one-Lane-per-Run
+  A closure failure must preserve recoverable contribution state and the one-Lane-at-a-time
   guard; it must not publish the code twice or dispatch the issue to another Lane.
 - On recovery exhaustion, retain the failed Lane branch, leave one breadcrumb, finalize the
   contribution as terminal unpublished, and request the existing serial fallback.

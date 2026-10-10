@@ -2358,10 +2358,11 @@ from startup and earlier Pickups. Its cases
 cover changed and repeated elections, required repeat justification, infrastructure
 failure, advancing work, attempt/allowance exhaustion and explicit Static
 escalation. A refused retry spends no task attempt or Strike, while later
-eligible Static work still runs. Saved Config remains unchanged. The existing
-one-Lane-per-issue rule is preserved; this matrix does not grant a second Lane, is not
-itself the Dynamic-default activation, and does not extend routing to another Runner
-member or placement.
+eligible Static work still runs. Saved Config remains unchanged. This
+matrix does not grant a second Lane, is not itself the Dynamic-default activation,
+and does not extend routing to another Runner member or placement. How the Python
+Runner admits a Lane retry is its own implementation, documented in
+[`docs/parallel-mode.md`](parallel-mode.md), not a requirement this matrix pins.
 
 The `in_flight_consumption` matrix carries recorded init/update authorization
 through the real unattended CLI in serial and local Lane modes. Its eight cases,

@@ -136,8 +136,18 @@ stream, Subagent or Integration behavior.
 The `retry_lifecycle` matrix carries a recorded `update --routing migrate`
 choice through actual CLI work in
 `python/tests/test_routing_retry_conformance.py`. Seven cases run in serial and
-Lane modes; the latter's retry is serial fallback, not a second Lane for the
-same issue. Independent expected settings and outcome histories cover
+Lane modes; the Lane fixtures include serial fallback. ADR-0070 also permits
+another Lane for a finalized charged attempt below its Strike budget; Rolling
+dispatch owns that admission, not routing.
+The production-loop tests in `python/tests/test_loop_parallel.py` pin repeated
+Lane attempts through the per-issue Strike budget and terminal `all_skipped`,
+with distinct setup namespaces and preservation of earlier unlanded branches.
+Focused host-identity and Event-ingest seam tests in the same module pin the
+host-facing `<run_id>-attempt-<A>` formatter and normalization of ingested
+Events to the owning Run's original `run_id`; A counts setups, not Strikes.
+These are Python-specific proofs, not new family-wide fixture fields or a
+capability claim for the serial-only members.
+Independent expected settings and outcome histories cover
 reselection, explicit Static escalation, advances, infrastructure failure,
 justified repeats through attempt exhaustion, unjustified-repeat refusal and
 allowance exhaustion. Refused retries admit no replacement Dynamic session or

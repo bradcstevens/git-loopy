@@ -14,6 +14,14 @@ name: Release the TUI helper
 # matrix, the archive names, and the deferred targets are pinned against
 # `git-loopy/conformance/tui-artifacts.json` by
 # `git-loopy/python/tests/test_tui_release_workflow.py`.
+#
+# uv and the Python it runs are pinned in the same spirit (#721). Installed as
+# "latest" with no interpreter pinned, uv 0.13.0 made `uv run` in a bare cross
+# container download CPython 3.15.0, for which `pydantic-core` publishes no
+# wheel, and the aarch64-musl build died compiling it from source. Every
+# `setup-uv` step installs the one exact uv below, and `UV_PYTHON` holds every
+# job to one Python minor the locked dependencies publish wheels for on every
+# target. The same test refuses either pin being removed or left to float.
 
 on:
   push:
@@ -24,6 +32,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  UV_PYTHON: "3.14"
 
 jobs:
   identity:
@@ -43,6 +54,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.12.24"
 
       # One Release version, proven before anything is built: the root VERSION,
       # the helper's own Cargo.toml — which is what `--version` and the
@@ -69,6 +82,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.12.24"
 
       - name: Install the pinned release toolchain
         shell: bash
@@ -150,6 +165,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.12.24"
 
       # Three of the seven targets cannot link on a bare runner: both arm64
       # Linux builds go through cargo-zigbuild inside their cross container, and
@@ -439,6 +456,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.12.24"
 
       - name: Collect every built artifact
         uses: actions/download-artifact@v4
@@ -558,6 +577,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.12.24"
 
       # The completed Release is the source. Only the checksum manifests are
       # downloaded: the tap needs the digests, and pulling the archives to
@@ -669,6 +690,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.12.24"
 
       - name: Read the completed Release's checksums, receipts, and marking
         id: release
@@ -785,6 +808,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.12.24"
 
       - name: Read the completed Release's checksums, receipts, and marking
         id: release
