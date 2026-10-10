@@ -271,6 +271,11 @@ The peek MUST establish current Pickup admission — executable/open/ready membe
 Readiness, route availability, Lease policy and the Run's remaining attempt budget —
 without binding an Active issue or taking a Lease. A refused or unread candidate MUST
 NOT gain the Priority exception. Pickup still revalidates admission when granted.
+Waiting for an earlier Priority Lane prefix MUST preserve unmet-demand refresh for
+that prefix even when ordinary cached candidates could fill all slots. Repeated
+peeks MUST reuse settled preparation and freshly validate a nonbinding proposal
+without buying another assessment; unexpected preparation failures retain the desk's
+explicit diagnostic and leave the candidate to its own Pickup.
 Started setup, sessions, parked contributions, admitted waiters, Integration and Recovery
 MUST finish unchanged before serial ownership at full quiescence; nothing is cancelled.
 Retries remain subject to finalization, one-Lane ownership and their per-issue Strike budget,

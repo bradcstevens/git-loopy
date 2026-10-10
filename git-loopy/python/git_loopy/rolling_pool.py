@@ -309,7 +309,9 @@ class RollingPool:
         """Perform the one unconditional refresh at Run startup (#219 §2.1)."""
         self._refresh()
 
-    def service(self, *, refillable: int) -> None:
+    def service(
+        self, *, refillable: int, only: frozenset[int | str] | None = None
+    ) -> None:
         """Refresh membership if unmet demand and the backoff window allow it.
 
         Args:
@@ -319,7 +321,14 @@ class RollingPool:
                 demand, and no demand means no refresh — that single number is
                 how #219 §2.6-2.7 are enforced.
         """
-        unmet = refillable > self.available_count
+        available = (
+            self.available_count if only is None else sum(
+                1 for entry in self._entries
+                if entry.candidate.ref in only
+                and not entry.quarantined and self.eligible(entry.candidate)
+            )
+        )
+        unmet = refillable > available
         if not unmet:
             # Demand met (or absent). Forget the wait: if demand reappears it is
             # new evidence, not a continuation of the old unanswered question.

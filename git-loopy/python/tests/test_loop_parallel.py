@@ -157,7 +157,7 @@ from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy import dynamic_route
 from git_loopy import static_route
 from git_loopy.static_route import RoutePolicy
-from git_loopy.sources import PoolCandidate
+from git_loopy.sources import Pickup, PoolCandidate
 from git_loopy.staircase import Candidate, PriceStaircase
 from git_loopy.wrapper import (
     CHECKPOINT_TRAILER_KEY,
@@ -6159,6 +6159,74 @@ def test_priority_lane_prefix_larger_than_capacity_preserves_selection_order(
     )
 
 
+@pytest.mark.parametrize("cached", ["absent", "blocked", "quarantined"])
+def test_priority_lane_prefix_refreshes_even_with_an_ordinary_cache_surplus(
+    tmp_path, monkeypatch, cached
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "priority", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent", "priority"]),
+            *[
+                _make_issue(ref, labels=["ready-for-agent", "parallel-safe"])
+                for ref in (46, 47, 48, 49)
+            ],
+        ],
+    )
+    original = loop_module.GitHubIssueSource.shallow_membership
+    reads = 0
+
+    def membership(source):
+        nonlocal reads
+        reads += 1
+        snapshot = original(source)
+        if reads != 1:
+            return snapshot
+        if cached == "absent":
+            return dataclass_replace(
+                snapshot, candidates=tuple(c for c in snapshot.candidates if c.ref != 41)
+            )
+        if cached == "blocked":
+            return dataclass_replace(
+                snapshot, candidates=tuple(
+                    dataclass_replace(c, blocked_by=BlockedByRead(
+                        total_count=1, nodes=(BlockerNode(ref="x/y#99", state="open"),)
+                    )) if c.ref == 41 else c
+                    for c in snapshot.candidates
+                ),
+            )
+        return snapshot
+
+    monkeypatch.setattr(loop_module.GitHubIssueSource, "shallow_membership", membership)
+    pickup = loop_module.GitHubIssueSource.pickup
+    unread = cached == "quarantined"
+
+    def transient_pickup(source, ref):
+        nonlocal unread
+        if ref == 41 and unread:
+            unread = False
+            return Pickup(outcome=loop_module.PICKUP_UNAVAILABLE)
+        return pickup(source, ref)
+
+    monkeypatch.setattr(loop_module.GitHubIssueSource, "pickup", transient_pickup)
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=2), issue_pin=None)
+
+    async def bounded_run():
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=5)
+
+    asyncio.run(bounded_run())
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(41, "priority"), (44, "priority")]
+    assert reads >= 2
+    latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
+    grant = next(e for e in events if e["type"] == "wrapper.iteration.start")
+    assert events.index(latch) < events.index(grant)
+    assert not any(
+        e["type"] == "wrapper.contribution.start" and e["issue"] >= 46 for e in events
+    )
+
+
 def test_refused_priority_serial_pickup_still_refills_deferred_priority_lanes(
     tmp_path, monkeypatch
 ) -> None:
@@ -6428,6 +6496,81 @@ def test_mixed_priority_dynamic_routes_keep_proposals_for_their_own_pickups(
     latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
     lane_end = next(e for e in events if e["type"] == "wrapper.contribution.end")
     assert events.index(latch) < events.index(lane_end) < events.index(bindings[1])
+
+
+def test_priority_dynamic_prefix_wait_revalidates_without_rebuying_assessments(
+    tmp_path, monkeypatch
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            *[
+                _make_issue(ref, labels=[
+                    "ready-for-agent", "priority", "parallel-safe", "task-type:implementation"
+                ])
+                for ref in (41, 42, 43)
+            ],
+            _make_issue(44, labels=["ready-for-agent", "priority", "task-type:implementation"]),
+            _make_issue(46, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]),
+        ],
+    )
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    cfg = _dynamic_parallel_config(
+        max_iterations=4, routing={"docs": ("gpt-5.6-terra", "high")}
+    )
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(ref, "priority") for ref in (41, 42, 43, 44)]
+    for ref in (41, 42, 43, 44):
+        assert sum(f"#{ref}:" in request.issue for _, request in spied["assessments"]) == 1
+        assert sum(
+            e["type"] == "wrapper.routing.prepared" and e["issue"] == ref for e in events
+        ) == 1
+
+
+@pytest.mark.parametrize("unexpected", [False, True])
+def test_refused_priority_preparation_is_not_rebought_or_allowed_to_crash_lanes(
+    tmp_path, monkeypatch, unexpected
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            *[
+                _make_issue(ref, labels=["ready-for-agent", "parallel-safe", "task-type:docs"])
+                for ref in (41, 42, 43, 45)
+            ],
+            _make_issue(44, labels=["ready-for-agent", "priority", "task-type:implementation"]),
+        ],
+    )
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=lambda _request: None)
+    if unexpected:
+        async def broken_prepare(_router, _request):
+            raise RuntimeError("injected preparation failure")
+        monkeypatch.setattr(dynamic_route.DynamicRouter, "prepare", broken_prepare)
+    cfg = _dynamic_parallel_config(
+        max_iterations=2, routing={"docs": ("gpt-5.6-terra", "high")}
+    )
+    assert asyncio.run(loop_module.run(cfg)) == 0
+    events = _logged_events(tmp_path)
+    assert {e["issue"] for e in events if e["type"] == "wrapper.pickup.bound"} == {
+        41, 42,
+    }
+    assert len(spied["assessments"]) == (0 if unexpected else 1)
+    prepared = [
+        e for e in events if e["type"] == "wrapper.routing.prepared" and e["issue"] == 44
+    ]
+    assert len(prepared) == 1
+    assert prepared[0]["state"] == "unavailable"
+    if unexpected:
+        assert "injected preparation failure" in _diag_log(tmp_path)
 
 
 def test_priority_reusable_route_needs_no_new_selector_credit(

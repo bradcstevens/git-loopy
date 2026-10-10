@@ -293,15 +293,13 @@ class RoutePreparation:
     def _cancelled(self, ref: int | str) -> None:
         if ref in self._settled:
             return
-        self._settled.add(ref)
-        if self._on_prepared is not None:
-            self._on_prepared(
-                PreparedRoute(
-                    ref=ref,
-                    outcome=PreparationOutcome.UNAVAILABLE,
-                    detail="preparation cancelled; Pickup must validate its own route",
-                )
+        self.remember(
+            PreparedRoute(
+                ref=ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                detail="preparation cancelled; Pickup must validate its own route",
             )
+        )
 
     def take(self, ref: int | str) -> RoutingProposal | None:
         """Hand this issue's proposal to its **Pickup**, once and only if live.
@@ -329,6 +327,18 @@ class RoutePreparation:
             return None
         return entry.proposal
 
+    def peek(self, ref: int | str) -> PreparedRoute | None:
+        """Read a settled preparation without consuming its proposal or re-assessing."""
+        return self._prepared.get(ref)
+
+    async def prepare_for_peek(
+        self, candidate: _Candidate, prepare: Callable[[], Awaitable[PreparedRoute]]
+    ) -> PreparedRoute:
+        """Apply the desk's explicit failure containment to a scheduling read."""
+        outcome = await self._prepare_one(candidate, prepare=prepare)
+        assert outcome is not None
+        return outcome
+
     def forget(self, refs: Iterable[int | str]) -> None:
         """Drop what this Run knows about ``refs`` so they may be prepared again.
 
@@ -345,8 +355,7 @@ class RoutePreparation:
     def remember(self, outcome: PreparedRoute) -> None:
         """Keep a scheduling peek's proposal for authoritative Pickup to revalidate."""
         self._settled.add(outcome.ref)
-        if outcome.outcome is PreparationOutcome.PROPOSED:
-            self._prepared[outcome.ref] = outcome
+        self._prepared[outcome.ref] = outcome
         if outcome.halting:
             self._halted = True
             if self._diag is not None:
@@ -357,10 +366,13 @@ class RoutePreparation:
         if self._on_prepared is not None:
             self._on_prepared(outcome)
 
-    async def _prepare_one(self, candidate: _Candidate) -> PreparedRoute | None:
+    async def _prepare_one(
+        self, candidate: _Candidate, *,
+        prepare: Callable[[], Awaitable[PreparedRoute]] | None = None,
+    ) -> PreparedRoute | None:
         ref = candidate.ref
         try:
-            outcome = await self._prepare(candidate)
+            outcome = await (prepare() if prepare is not None else self._prepare(candidate))
         except Exception as exc:  # noqa: BLE001 - preparation never fails a Run
             # Preparing ahead is an optimisation on top of a **Pickup** that
             # still works without it, so no way of failing to prepare may
@@ -379,5 +391,6 @@ class RoutePreparation:
                 reason=RoutingUnavailableReason.SELECTOR_UNAVAILABLE,
                 detail="preparation failed; see Run diagnostics",
             )
-        self.remember(outcome)
+        if self._prepared.get(ref) != outcome:
+            self.remember(outcome)
         return outcome

@@ -597,7 +597,7 @@ class RollingScheduler:
         self, *, only: frozenset[int | str] | None = None
     ) -> tuple[Reservation, ...]:
         """Reserve refillable Lanes, optionally only a Priority prefix (#720)."""
-        self.pool.service(refillable=self.refillable)
+        self.pool.service(refillable=self.refillable, only=only)
         reservations: list[Reservation] = []
         while self.refillable > 0 and not self.lane_first_in_setup:
             take = self.pool.take(only=only)

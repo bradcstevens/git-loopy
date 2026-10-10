@@ -3172,6 +3172,30 @@ class _Loop:
         if static_route_applies(resolution):
             return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.STATIC)
         request = self._routing_request(labelled, resolution)
+        cached = (
+            self._preparation.peek(item.ref)
+            if priority_parallel_safe is not None and self._preparation is not None
+            else None
+        )
+        if cached is not None and cached.outcome is not PreparationOutcome.REUSABLE:
+            if cached.proposal is None:
+                return PreparedRoute(
+                    ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                    reason=cached.reason,
+                    detail=cached.detail or "preparation already settled; leaving to Pickup",
+                )
+            available = await router.proposal_available(cached.proposal, request)
+            if isinstance(available, RoutingUnavailable):
+                return PreparedRoute(
+                    ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                    reason=available.reason, detail=available.reason.value,
+                )
+            if available:
+                return cached
+            return PreparedRoute(
+                ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                detail="prepared inputs changed or expired; leaving assessment to Pickup",
+            )
         reusable = self._reusable_routes_for(item.ref)
         if reusable:
             available = (
@@ -5685,16 +5709,22 @@ class _ParallelLoop:
             router = self._serial._dynamic_router
             if router is not None and not static_route_applies(resolution):
                 desk = self._serial._preparation
-                if desk is not None:
+                prioritizing = desk is not None and desk.peek(item.ref) is None
+                if prioritizing:
+                    assert desk is not None
                     await desk.prioritize(item.ref)
                 try:
-                    prepared = await self._serial._prepare_route(
-                        item, priority_parallel_safe=parallel_safe
+                    async def prepare() -> PreparedRoute:
+                        return await self._serial._prepare_route(
+                            item, priority_parallel_safe=parallel_safe
+                        )
+                    prepared = (
+                        await desk.prepare_for_peek(item, prepare)
+                        if desk is not None else await prepare()
                     )
-                    if desk is not None:
-                        desk.remember(prepared)
                 finally:
-                    if desk is not None:
+                    if prioritizing:
+                        assert desk is not None
                         await desk.finish_pickup(item.ref)
                 if prepared.outcome not in (
                     PreparationOutcome.STATIC, PreparationOutcome.PROPOSED,

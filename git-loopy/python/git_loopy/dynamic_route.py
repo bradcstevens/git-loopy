@@ -1817,6 +1817,24 @@ class DynamicRouter:
             return inputs
         return await self._assess(request, inputs)
 
+    async def proposal_available(
+        self, proposal: RoutingProposal, request: RoutingRequest
+    ) -> bool | RoutingUnavailable:
+        """Revalidate a nonbinding proposal without consuming it or buying a selector."""
+        if (
+            self._proposals.get(proposal.proposal_id) != proposal
+            or self._aware_now() > proposal.valid_until
+        ):
+            return False
+        inputs = await self._live.read(
+            request.bounded_input_tokens, work_context_tier=request.work_context_tier
+        )
+        if isinstance(inputs, RoutingUnavailable):
+            return inputs
+        return proposal.relevant_input_identity == _relevant_input_identity(
+            request, inputs.evidence, inputs.capabilities
+        )
+
     async def bind(
         self, proposal: RoutingProposal, request: RoutingRequest
     ) -> DynamicRouteDecision | RoutingUnavailable:
