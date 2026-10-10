@@ -2127,7 +2127,12 @@ class _Loop:
                     item.ref for item in pool
                     if LABEL_PRIORITY in item.labels and LABEL_PARALLEL_SAFE in item.labels
                 }
-                self._priority_lanes_deferred = bool(lane_refs)
+                self._priority_lanes_deferred = any(
+                    item.ref in lane_refs
+                    and self._attempts.defeated_by(item.ref) is None
+                    and is_lane_candidate(item)
+                    for item in pool
+                )
                 if lane_refs:
                     self._diag.info(
                         "serial Priority turn leaves Parallel-safe Priority issues "
@@ -3134,6 +3139,7 @@ class _Loop:
                 ref=item.ref,
                 outcome=PreparationOutcome.UNAVAILABLE,
                 detail=f"current candidate eligibility {current.outcome}; no routing call",
+                retryable=current.outcome == PICKUP_UNAVAILABLE,
             )
         assert current.item is not None
         item = current.item
@@ -3157,6 +3163,7 @@ class _Loop:
                 outcome=PreparationOutcome.UNAVAILABLE,
                 reason=labelled.reason,
                 detail=labelled.reason.value,
+                retryable=True,
             )
         try:
             resolution = self._resolve_route(labelled, warn=lambda _message: None)
@@ -5208,6 +5215,11 @@ class _ParallelLoop:
                 # it (#645), so the serial peek waits too: latching serial
                 # demand now would stop the refill the Pin's binding releases,
                 # or, with the Pin's Lane freed, take the turn it is owed.
+                if (
+                    collection is None and not scheduler.serial_latched
+                    and not scheduler.lane_first_awaited
+                ):
+                    collection = self._collect_pool_safely()
                 serial_pool_seen = (
                     False
                     if scheduler.lane_first_awaited or (

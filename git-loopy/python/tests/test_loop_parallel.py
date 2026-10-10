@@ -6050,6 +6050,30 @@ def test_priority_serial_iterations_still_earn_a_full_lane_refill_turn(
     assert [n for n, _comment in fake_gh.issue_close_calls] == [41, 42, 44]
 
 
+def test_refill_tail_priority_serial_latch_never_binds_over_capacity_priority_lanes(
+    tmp_path, monkeypatch
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(40, labels=["ready-for-agent", "priority"]),
+            *[
+                _make_issue(ref, labels=["ready-for-agent", "priority", "parallel-safe"])
+                for ref in (41, 42, 43)
+            ],
+            _make_issue(44, labels=["ready-for-agent", "priority"]),
+        ],
+    )
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=5), issue_pin=None)
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    bindings = [e for e in events if e["type"] == "wrapper.pickup.bound"]
+    assert [(e["issue"], e["iter"] is None) for e in bindings] == [
+        (40, False), (41, True), (42, True), (44, False), (43, True),
+    ]
+    assert len([e for e in events if e["type"] == "wrapper.rolling.refill_turn"]) == 2
+
+
 @pytest.mark.parametrize("lane_first", [False, True])
 @pytest.mark.parametrize("progress", [False, True])
 def test_mixed_priority_keeps_parallel_safe_work_in_lanes_and_preserves_order(
@@ -6612,6 +6636,53 @@ def test_priority_proposal_recovers_after_expiry_or_transient_revalidation(
         latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
         ordinary = next(e for e in events if e["type"] == "wrapper.contribution.start" and e["issue"] == 50)
         assert events.index(latch) < events.index(ordinary)
+
+
+def test_dynamic_priority_peek_recovers_its_second_unread_candidate_read(
+    tmp_path, monkeypatch
+) -> None:
+    original = loop_module.GitHubIssueSource.refresh_for_preparation
+    unread = False
+    reads = 0
+
+    def refresh(source, item):
+        nonlocal unread, reads
+        if item.ref == 49:
+            reads += 1
+        if item.ref == 49 and reads == 2:
+            unread = True
+            return Pickup(outcome=loop_module.PICKUP_UNAVAILABLE)
+        return original(source, item)
+
+    monkeypatch.setattr(loop_module.GitHubIssueSource, "refresh_for_preparation", refresh)
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            *[
+                _make_issue(ref, labels=["ready-for-agent", "parallel-safe", "task-type:docs"])
+                for ref in (41, 42, 43, 45)
+            ],
+            _make_issue(49, labels=["ready-for-agent", "priority", "task-type:implementation"]),
+            _make_issue(50, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]),
+        ],
+    )
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    cfg = _dynamic_parallel_config(
+        max_iterations=5, routing={"docs": ("gpt-5.6-terra", "high")}
+    )
+    asyncio.run(loop_module.run(cfg))
+    events = _logged_events(tmp_path)
+    assert unread
+    assert (49, "priority") in _bindings(events)
+    assert sum("#49:" in request.issue for _, request in spied["assessments"]) == 1
+    assert any(
+        e["type"] == "wrapper.routing.prepared" and e["issue"] == 49
+        and e["state"] == "unavailable" for e in events
+    )
 
 
 @pytest.mark.parametrize("unexpected", [False, True])
