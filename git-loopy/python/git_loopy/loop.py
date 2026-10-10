@@ -5127,7 +5127,7 @@ class _ParallelLoop:
         """
         assert self._scheduler is not None  # guarded by `self._rolling_capable`
         scheduler = self._scheduler
-        self._serial._priority_lane_eligible = self._lane_candidate_eligible
+        self._serial._priority_lane_eligible = scheduler.pool.eligible
         scheduler.start()
         self._crash = None
         priority_serial_latched = False

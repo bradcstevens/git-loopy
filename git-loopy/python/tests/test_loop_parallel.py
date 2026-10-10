@@ -6312,6 +6312,59 @@ def test_refused_priority_lane_cannot_suppress_terminal_serial_refusal_forever(
     assert next(e for e in events if e["type"] == "wrapper.run.end")["outcome"] == "all_skipped"
 
 
+def test_retained_priority_lane_ownership_cannot_suppress_terminal_forever(
+    tmp_path, monkeypatch
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            dataclass_replace(
+                _make_issue(41, labels=["ready-for-agent", "priority"]),
+                blocked_by=BlockedByRead(
+                    total_count=1, nodes=(BlockerNode(ref="x/y#99", state="open"),)
+                ),
+            ),
+            _make_issue(44, labels=["ready-for-agent", "priority", "parallel-safe"]),
+        ],
+    )
+    fake_git = loop_module._make_git_client()
+
+    class Uncheckpointable(_ParallelFakeClient):
+        async def create_session(self, **kwargs):
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is None:
+                return session
+            real_send = session.send_and_wait
+
+            async def send(prompt, **options):
+                result = await real_send(prompt, **options)
+                lane_git = fake_git.worktree_client(Path(working_directory))
+                assert lane_git is not None
+                lane_git.dirty = True
+                lane_git.commit_error = git_module.GitError(
+                    ["git", "commit"], 1, "checkpoint cannot commit"
+                )
+                return result
+
+            session.send_and_wait = send
+            return session
+
+    client = Uncheckpointable(
+        fake_git=fake_git, scripted_events=[_usage_event("claude-opus-4.8-max")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+    cfg = dataclass_replace(_pinned_config(44, max_iterations=0), issue_pin=None)
+
+    async def bounded_run():
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=3)
+
+    asyncio.run(bounded_run())
+    events = _logged_events(tmp_path)
+    assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 1
+    assert next(e for e in events if e["type"] == "wrapper.contribution.end")["reason"] == "checkpoint_failed"
+
+
 @pytest.mark.parametrize(
     "refusal",
     ["blocked", "awaiting_merge", "route", "unread_readiness", "malformed",
