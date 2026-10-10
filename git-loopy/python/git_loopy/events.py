@@ -148,6 +148,9 @@ __all__ = [
     "USAGE_TOKENS",
     "AGENT_OUTPUT",
     "USAGE_CONTEXT_WINDOW",
+    "SUBAGENT_STARTED",
+    "SUBAGENT_COMPLETED",
+    "SUBAGENT_FAILED",
     "SESSION_ERROR",
     "MODEL_CALL_FAILURE",
     # Functions
@@ -178,6 +181,7 @@ INSIGHT_CAPABILITY_NAMES: tuple[str, ...] = (
     "skill_consultation",
     "cost",
     "routing",
+    "subagents",
 )
 PYTHON_INSIGHT_CAPABILITIES: dict[str, bool] = {
     "agent_output": True,
@@ -187,6 +191,7 @@ PYTHON_INSIGHT_CAPABILITIES: dict[str, bool] = {
     "skill_consultation": True,
     "cost": True,
     "routing": True,
+    "subagents": True,
 }
 
 # Insight capabilities whose answer is a fact about **this Run** rather than
@@ -532,6 +537,9 @@ TOOL_PERMISSION_DENIED = "tool.permission_denied"
 USAGE_TOKENS = "usage.tokens"
 AGENT_OUTPUT = "agent.output"
 USAGE_CONTEXT_WINDOW = "usage.context_window"
+SUBAGENT_STARTED = "subagent.started"
+SUBAGENT_COMPLETED = "subagent.completed"
+SUBAGENT_FAILED = "subagent.failed"
 #: The two failure records the harness sends and the mapper used to drop (#403).
 #: A session that ended because the account was out of quota, was rate-limited or
 #: presented a credential the service refused produced no line at all, so the
@@ -1041,7 +1049,41 @@ def map_sdk_event(sdk_event: SessionEvent) -> dict[str, Any] | None:
         }
         usage_payload.update(_billed_usage(data))
         usage_payload.update(_call_verdict(data))
+        usage_payload.update(
+            _present(
+                initiator=data.initiator,
+                parent_tool_call_id=data.parent_tool_call_id,
+            )
+        )
         return usage_payload
+    subagent_type = {
+        SessionEventType.SUBAGENT_STARTED: SUBAGENT_STARTED,
+        SessionEventType.SUBAGENT_COMPLETED: SUBAGENT_COMPLETED,
+        SessionEventType.SUBAGENT_FAILED: SUBAGENT_FAILED,
+    }.get(et)
+    if subagent_type is not None:
+        payload = {
+            "type": subagent_type,
+            "tool_call_id": data.tool_call_id,
+            "agent_name": data.agent_name,
+            "agent_display_name": data.agent_display_name,
+            "model": data.model,
+        }
+        if et is not SessionEventType.SUBAGENT_STARTED:
+            payload.update(
+                _present(
+                    duration_seconds=(
+                        data.duration.total_seconds()
+                        if data.duration is not None
+                        else None
+                    ),
+                    total_tokens=data.total_tokens,
+                    total_tool_calls=data.total_tool_calls,
+                )
+            )
+        if et is SessionEventType.SUBAGENT_FAILED:
+            payload["error"] = data.error
+        return payload
     if et is SessionEventType.SESSION_USAGE_INFO:
         raw_limit = data.token_limit
         token_limit = int(raw_limit) if raw_limit is not None and raw_limit > 0 else None
@@ -1093,6 +1135,8 @@ def map_sdk_event(sdk_event: SessionEvent) -> dict[str, Any] | None:
         )
         return failure_payload
     if et in (
+        SessionEventType.SUBAGENT_SELECTED,
+        SessionEventType.SUBAGENT_DESELECTED,
         SessionEventType.PERMISSION_REQUESTED,
         SessionEventType.PERMISSION_COMPLETED,
         SessionEventType.USER_INPUT_REQUESTED,

@@ -20,8 +20,8 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, and the abort ceiling — forked at fixture schema `2` (#413) by a per-case `distributions` selector. Since fixture schema `3` (ADR-0070) a member *with* an **Attempt lifecycle** charges a Strike to the issue a Session worked, never to an Iteration, so it runs only the family-wide cases and asserts only each step's `progress` — one input to the Session outcome that charges it, not the Strike itself — reading none of the `max_strikes`, `strikes` or `outcome` those cases carry for the members below (the per-issue accounting is `attempt-lifecycle.json`'s); a member without one keeps counting consecutive no-progress Iterations and aborting at the limit, which is the accounting it actually implements. A case naming no distribution is family-wide; an adapter runs the cases naming its own and no others |
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits — including the `all_skipped` abort (§10, #413) a Pickup owes when the Pool is non-empty and it could bind none of it — plus `pool_emptiness_cases`, the one rule every member asks before claiming the exit-`0` empty Pool (§2.2, #541): only a *complete* read that found nothing establishes emptiness, so a failed or truncated read that found nothing is unknown rather than empty. plus `unbound_pool_cases`, its refusal-side companion (§3.3.1, #542): a Pool that bound nothing and holds one refusal nobody could read ends under `preflight_failed`, because `all_skipped` and `all_blocked` are claims about the *work* and an unprovable readiness verdict is a report about the *read*. Both rules ride this fixture rather than ones of their own because they decide which of these exits a Run is entitled to |
-| `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.5): exact type literals, exact Run-start Release identity, per-Orchestrator Insight and **Parallel mode** capability manifests, production-seam normalized rollup cases, payload contracts, the rolling-dispatch **Lane contribution** identity and lifecycle vocabulary, whole ordered rolling Event streams every member serializes through its own seam, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
-| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.13): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory — including the Header's **Parallel** posture composite and its Integration backlog — and per-column field mapping, Queue and Iteration-breakdown columns and scopes, optional Queue phase age on parked, admitted, integrating, and recovering, drill-in drift, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and the Rust Dashboard core |
+| `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.5): exact type literals, exact Run-start Release identity, per-Orchestrator Insight and **Parallel mode** capability manifests, production-seam normalized rollup cases, payload contracts including Subagent lifecycle and usage-attribution fields, the rolling-dispatch **Lane contribution** identity and lifecycle vocabulary, whole ordered rolling Event streams every member serializes through its own seam, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
+| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.14): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory — including the Header's **Parallel** posture composite and its Integration backlog — and per-column field mapping, Queue and Iteration-breakdown columns and scopes, optional Queue phase age on parked, admitted, integrating, and recovering, Subagent lifecycle lines and per-Agent/run-wide counts, drill-in drift, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and the Rust Dashboard core |
 | `unbound-run-notice.json` | The **Unbound-Run notice** (#642, #643, #694). Only a Run that ended `empty_pool`, `all_blocked` or `all_skipped` without binding, activating or contributing to an issue earns one; `unbound_run_outcomes` is that set, and each adapter asserts its own constant against it. The fixture pins the exact lines: the exclusions that emptied a Pool; the blockers outside the Pool, which the Run's `repository` input separates from members; the pull requests to merge, named beside those blockers and grouped by the pull request each **Awaiting merge** candidate waits on, with the inside-the-Pool test applied to blockers only; and each refusal kind, counted once per member. Contract 2.12 adds Run-end `refusals` as the Pool and skip record when present, ahead of any collection; a Membership read remains insufficient. The Rust Dashboard draws the notice over a held Dashboard, and the Python attach client prints it after the Dashboard returns |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `skill-policy.json` | Closed-world **Skill policy** (§17): base-scope selection, explicit empty policy, exact environment replacement, Run overlays with disable-wins, deprecated legacy subtraction, Minimal fallback and its reason, the four validation failures, startup classification, and the redacted `wrapper.skill_policy.resolved` projection |
@@ -49,7 +49,8 @@ PowerShell serialize the same stream through their event seams but declare nativ
 Lane publication out of scope (`parallel_mode: false`); Rust folds it through
 `DashboardSession::ingest` as an additive record. Successful Integration pushes
 reuse `wrapper.push.recorded` with contribution identity. Dashboard fixture revision
-1.13 updates its contract/Event provenance only. Routing fixture revision 3 updates
+1.13 updated its contract/Event provenance only; revision 1.14 adds the Subagent
+lifecycle lines and counts. Routing fixture revision 3 updates
 the same provenance note without changing routing decisions or its 2.22 contract pin.
 
 `repository-identity.json` is exercised by all three Orchestrators: Python's
@@ -133,8 +134,18 @@ stream, Subagent or Integration behavior.
 The `retry_lifecycle` matrix carries a recorded `update --routing migrate`
 choice through actual CLI work in
 `python/tests/test_routing_retry_conformance.py`. Seven cases run in serial and
-Lane modes; the latter's retry is serial fallback, not a second Lane for the
-same issue. Independent expected settings and outcome histories cover
+Lane modes; the Lane fixtures include serial fallback. ADR-0070 also permits
+another Lane for a finalized charged attempt below its Strike budget; Rolling
+dispatch owns that admission, not routing.
+The production-loop tests in `python/tests/test_loop_parallel.py` pin repeated
+Lane attempts through the per-issue Strike budget and terminal `all_skipped`,
+with distinct setup namespaces and preservation of earlier unlanded branches.
+Focused host-identity and Event-ingest seam tests in the same module pin the
+host-facing `<run_id>-attempt-<A>` formatter and normalization of ingested
+Events to the owning Run's original `run_id`; A counts setups, not Strikes.
+These are Python-specific proofs, not new family-wide fixture fields or a
+capability claim for the serial-only members.
+Independent expected settings and outcome histories cover
 reselection, explicit Static escalation, advances, infrastructure failure,
 justified repeats through attempt exhaustion, unjustified-repeat refusal and
 allowance exhaustion. Refused retries admit no replacement Dynamic session or

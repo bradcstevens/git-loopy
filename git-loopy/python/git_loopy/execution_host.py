@@ -161,7 +161,8 @@ class ContributionRequest:
             runs the contribution on no tier at all (#560).
         skill_policy: The Effective Skill policy in force for this
             contribution.
-        run_id: The Run's ``run_id`` — handed to the host, never minted by
+        run_id: The Run identity the host sees — the Run's ``run_id``, suffixed
+            ``-attempt-N`` for a retry Lane — handed to the host, never minted by
             it (one of the seam's six refusals).
     """
 

@@ -359,6 +359,14 @@ fn activity_effort_readback_preserves_dynamic_null_static_null_and_absence() {
 #[test]
 fn subagent_counts_follow_observed_lifecycles_not_agent_names_or_billing() {
     let mut session = session();
+    ingest(
+        &mut session,
+        json!({
+            "type": "wrapper.run.start",
+            "insight_capabilities": {"subagents": true}
+        }),
+    );
+    assert!(render(&session).contains("0 subagents"));
     lane(&mut session, "lane-1", 605, "implementation", "gpt-5.6-sol");
     lane(&mut session, "lane-2", 606, "docs", "gpt-5-mini");
     for id in ["call-1", "call-2", "call-2"] {
@@ -366,24 +374,34 @@ fn subagent_counts_follow_observed_lifecycles_not_agent_names_or_billing() {
             &mut session,
             json!({
                 "type": "subagent.started", "lane_issue": 605,
-                "tool_call_id": id, "agent_name": "research"
+                "tool_call_id": id, "agent_name": "research",
+                "agent_display_name": "Research agent", "model": "gpt-5.6-sol"
             }),
         );
     }
     assert!(render(&session).contains("sub 2"));
+    assert!(render(&session).contains("2 subagents"));
     ingest(
         &mut session,
         json!({
             "type": "subagent.completed", "lane_issue": 605,
-            "tool_call_id": "call-1", "total_tokens": 99999
+            "tool_call_id": "call-1",
+            "agent_name": "research",
+            "agent_display_name": "Research agent",
+            "model": "gpt-5.6-sol",
+            "duration_seconds": 12.5,
+            "total_tokens": 99999,
+            "total_tool_calls": 6
         }),
     );
     let view = serde_json::to_value(session.view()).unwrap();
     assert_eq!(view["dashboard"]["activity"]["windows"][0]["subagents"], 1);
-    assert_eq!(
-        view["dashboard"]["activity"]["windows"][1]["subagents"],
-        Value::Null
-    );
+    assert!(view["dashboard"]["activity"]["windows"][0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line["text"].as_str().unwrap().contains("99999 tokens")));
+    assert_eq!(view["dashboard"]["activity"]["windows"][1]["subagents"], 0);
     assert_eq!(
         view["dashboard"]["queue"]["rows"][0]["tokens_in"],
         Value::Null
@@ -391,10 +409,23 @@ fn subagent_counts_follow_observed_lifecycles_not_agent_names_or_billing() {
     ingest(
         &mut session,
         json!({
-            "type": "subagent.failed", "lane_issue": 605, "tool_call_id": "call-2"
+            "type": "subagent.failed",
+            "lane_issue": 605,
+            "tool_call_id": "call-2",
+            "agent_name": "research",
+            "agent_display_name": "Research agent",
+            "model": "gpt-5.6-sol",
+            "error": "timed out"
         }),
     );
     assert!(render(&session).contains("sub 0"));
+    assert!(render(&session).contains("0 subagents"));
+    let view = serde_json::to_value(session.view()).unwrap();
+    assert!(view["dashboard"]["activity"]["windows"][0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line["text"].as_str().unwrap().contains("timed out")));
 }
 
 #[test]
@@ -453,6 +484,60 @@ fn collapsed_parallel_activity_keeps_both_active_pairs_when_they_fit() {
         .unwrap();
     assert!(handle.contains("#605 gpt-5.6-sol @ high"), "{handle}");
     assert!(handle.contains("#606 gpt-5-mini @ high"), "{handle}");
+}
+
+#[test]
+fn collapsed_activity_preserves_the_run_subagent_total_when_pairs_are_long() {
+    let mut session = session();
+    ingest(
+        &mut session,
+        json!({
+            "type": "wrapper.run.start",
+            "insight_capabilities": {"subagents": true}
+        }),
+    );
+    lane(
+        &mut session,
+        "lane-1",
+        1_234_567_890,
+        "implementation",
+        "claude-opus-4.8-long-model-name",
+    );
+    lane(
+        &mut session,
+        "lane-2",
+        9_876_543_210,
+        "docs",
+        "claude-sonnet-4.6-long-model-name",
+    );
+    for (issue, tool_call_id) in [
+        (1_234_567_890, "call-lane-1"),
+        (9_876_543_210, "call-lane-2"),
+    ] as [(i64, &str); 2]
+    {
+        ingest(
+            &mut session,
+            json!({
+                "type": "subagent.started",
+                "lane_issue": issue,
+                "tool_call_id": tool_call_id
+            }),
+        );
+    }
+    let expanded_handle = render(&session)
+        .lines()
+        .find(|line| line.contains(" Activity "))
+        .unwrap()
+        .to_string();
+    assert!(expanded_handle.contains("2 subagents"), "{expanded_handle}");
+    session.handle_key(Key::ToggleActivity);
+    let handle = render(&session)
+        .lines()
+        .find(|line| line.contains(" Activity "))
+        .unwrap()
+        .to_string();
+    assert!(handle.contains("2 subagents"), "{handle}");
+    assert!(handle.contains("+2 more"), "{handle}");
 }
 
 #[test]

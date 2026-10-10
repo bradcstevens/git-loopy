@@ -525,6 +525,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         # `defaulted_explicit_override` rather than silencing it -- so unlike
         # the card, the answer cannot differ between two Runs of it.
         "routing": True,
+        "subagents": True,
     }
     # #311 AC3: a serial Run declares its scheduling capabilities too. The
     # manifest describes the distribution, not the Run: an operator reading a

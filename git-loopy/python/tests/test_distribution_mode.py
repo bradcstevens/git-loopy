@@ -68,17 +68,19 @@ def _opposing_mode() -> str:
 class TestDistributionModeAuthority:
     """The repository/release declaration is the single authority."""
 
-    def test_trust_fixture_declares_the_artifact_bearing_promise(self) -> None:
+    def test_trust_fixture_declares_the_source_only_promise(self) -> None:
         """The committed promise is pinned, so a mode flip is a conscious edit.
 
-        This repository publishes a downloadable helper baseline (#592), so the
-        declaration is ``artifact-bearing``. The surrounding authority cases
-        deliberately read the declaration instead of restating it: their subject
-        is that nothing *else* can move the mode, which must stay true whichever
-        mode is declared.
+        No signing, notarization, attestation or channel credential is
+        configured, so a stable artifact-bearing Release cannot be proved, and
+        the source-only Promotion refuses an artifact-bearing policy. The
+        declaration is therefore ``source-only`` until those credentials exist.
+        The surrounding authority cases deliberately read the declaration
+        instead of restating it: their subject is that nothing *else* can move
+        the mode, which must stay true whichever mode is declared.
         """
         policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
-        assert policy.distribution_mode == DISTRIBUTION_MODE_ARTIFACT_BEARING
+        assert policy.distribution_mode == DISTRIBUTION_MODE_SOURCE_ONLY
         assert policy.distribution_modes == (
             DISTRIBUTION_MODE_SOURCE_ONLY,
             DISTRIBUTION_MODE_ARTIFACT_BEARING,

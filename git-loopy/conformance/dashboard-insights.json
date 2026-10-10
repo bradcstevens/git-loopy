@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.13",
+  "fixture_schema_version": "1.14",
   "wrapper_contract_version": "2.23",
   "event_schema_version": "1.5",
   "semantic_contract": {
@@ -735,7 +735,8 @@
             "context_window": true,
             "skill_consultation": true,
             "cost": true,
-            "routing": true
+            "routing": true,
+            "subagents": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -962,7 +963,7 @@
                       "effective_target_tokens": 20000,
                       "effective_ceiling_tokens": 28000
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": true,
                     "lines": [
                       {
@@ -1118,7 +1119,7 @@
                       "effective_target_tokens": 20000,
                       "effective_ceiling_tokens": 28000
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -1242,7 +1243,8 @@
             "skill_consultation": false,
             "cost": false,
             "rate_card": false,
-            "routing": false
+            "routing": false,
+            "subagents": false
           },
           "parallel_capabilities": {
             "parallel_mode": false,
@@ -1902,7 +1904,8 @@
             "context_window": true,
             "skill_consultation": true,
             "cost": true,
-            "routing": true
+            "routing": true,
+            "subagents": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -2199,7 +2202,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": true,
                     "lines": [
                       {
@@ -2388,7 +2391,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -2532,7 +2535,8 @@
             "skill_consultation": true,
             "cost": true,
             "rate_card": true,
-            "routing": true
+            "routing": true,
+            "subagents": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -3063,7 +3067,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": true,
                     "lines": [
                       {
@@ -3092,7 +3096,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": true,
                     "lines": [
                       {
@@ -3266,7 +3270,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -3295,7 +3299,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -3527,7 +3531,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -3551,7 +3555,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -3580,7 +3584,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -3859,7 +3863,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -3888,7 +3892,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -3917,7 +3921,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -4100,7 +4104,8 @@
             "skill_consultation": false,
             "cost": false,
             "rate_card": false,
-            "routing": false
+            "routing": false,
+            "subagents": false
           },
           "parallel_capabilities": {
             "parallel_mode": false,
@@ -4652,7 +4657,8 @@
             "skill_consultation": true,
             "cost": true,
             "rate_card": false,
-            "routing": true
+            "routing": true,
+            "subagents": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -4949,7 +4955,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": true,
                     "lines": [
                       {
@@ -4973,7 +4979,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": true,
                     "lines": [
                       {
@@ -5142,7 +5148,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -5171,7 +5177,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -5289,7 +5295,8 @@
             "context_window": true,
             "skill_consultation": true,
             "cost": true,
-            "routing": true
+            "routing": true,
+            "subagents": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -5516,7 +5523,7 @@
                       "effective_target_tokens": 20000,
                       "effective_ceiling_tokens": 28000
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": true,
                     "lines": [
                       {
@@ -5672,7 +5679,7 @@
                       "effective_target_tokens": 20000,
                       "effective_ceiling_tokens": 28000
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -5795,7 +5802,8 @@
             "context_window": true,
             "skill_consultation": true,
             "cost": true,
-            "routing": true
+            "routing": true,
+            "subagents": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -6078,7 +6086,7 @@
                       "effective_target_tokens": 20000,
                       "effective_ceiling_tokens": 28000
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": true,
                     "lines": [
                       {
@@ -6262,7 +6270,7 @@
                       "effective_target_tokens": 20000,
                       "effective_ceiling_tokens": 28000
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -6362,7 +6370,8 @@
             "context_window": true,
             "skill_consultation": true,
             "cost": true,
-            "routing": true
+            "routing": true,
+            "subagents": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -6703,7 +6712,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": true,
                     "lines": [
                       {
@@ -6881,7 +6890,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -7109,7 +7118,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -7347,7 +7356,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -7543,7 +7552,8 @@
             "context_window": true,
             "skill_consultation": true,
             "cost": true,
-            "routing": true
+            "routing": true,
+            "subagents": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -7812,7 +7822,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -8023,7 +8033,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -8185,7 +8195,8 @@
             "context_window": true,
             "skill_consultation": true,
             "cost": true,
-            "routing": true
+            "routing": true,
+            "subagents": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -8647,7 +8658,10 @@
           "ts": "2026-09-20T10:00:00Z",
           "type": "subagent.started",
           "lane_issue": 602,
-          "tool_call_id": "call-602"
+          "tool_call_id": "call-602",
+          "agent_name": "docs",
+          "agent_display_name": "Documentation agent",
+          "model": "gpt-5-mini"
         },
         {
           "ts": "2026-09-20T10:00:00Z",
@@ -8685,31 +8699,50 @@
           "ts": "2026-09-20T10:00:00Z",
           "type": "subagent.started",
           "lane_issue": 601,
-          "tool_call_id": "call-601"
+          "tool_call_id": "call-601",
+          "agent_name": "research",
+          "agent_display_name": "Research agent",
+          "model": "gpt-5.6-terra"
         },
         {
           "ts": "2026-09-20T10:00:00Z",
           "type": "subagent.started",
           "lane_issue": 601,
-          "tool_call_id": "call-601"
+          "tool_call_id": "call-601",
+          "agent_name": "research",
+          "agent_display_name": "Research agent",
+          "model": "gpt-5.6-terra"
         },
         {
           "ts": "2026-09-20T10:00:00Z",
           "type": "subagent.started",
           "lane_issue": 601,
-          "tool_call_id": "call-601-secondary"
+          "tool_call_id": "call-601-secondary",
+          "agent_name": "reviewer",
+          "agent_display_name": "Review agent",
+          "model": "gpt-5.5"
         },
         {
           "ts": "2026-09-20T10:00:00Z",
           "type": "subagent.completed",
           "lane_issue": 601,
-          "tool_call_id": "call-601"
+          "tool_call_id": "call-601",
+          "agent_name": "research",
+          "agent_display_name": "Research agent",
+          "model": "gpt-5.6-terra",
+          "duration_seconds": 12.5,
+          "total_tokens": 2345,
+          "total_tool_calls": 6
         },
         {
           "ts": "2026-09-20T10:00:00Z",
           "type": "subagent.failed",
           "lane_issue": 601,
-          "tool_call_id": "call-601-secondary"
+          "tool_call_id": "call-601-secondary",
+          "agent_name": "reviewer",
+          "agent_display_name": "Review agent",
+          "model": "gpt-5.5",
+          "error": "agent failed"
         },
         {
           "ts": "2026-09-20T10:00:00Z",
@@ -8785,6 +8818,16 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #601"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Research agent @ gpt-5.6-terra"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Research agent @ gpt-5.6-terra"
                 }
               ]
             },
@@ -8815,6 +8858,11 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #602"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Documentation agent @ gpt-5-mini"
                 }
               ]
             }
@@ -8849,6 +8897,21 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #601"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Research agent @ gpt-5.6-terra"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Research agent @ gpt-5.6-terra"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Review agent @ gpt-5.5"
                 }
               ]
             },
@@ -8879,6 +8942,11 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #602"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Documentation agent @ gpt-5-mini"
                 }
               ]
             }
@@ -8913,6 +8981,26 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #601"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Research agent @ gpt-5.6-terra"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Research agent @ gpt-5.6-terra"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Review agent @ gpt-5.5"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent completed: Research agent @ gpt-5.6-terra (12.50s, 2345 tokens, 6 tool calls)"
                 }
               ]
             },
@@ -8943,6 +9031,11 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #602"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Documentation agent @ gpt-5-mini"
                 }
               ]
             }
@@ -8977,6 +9070,31 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #601"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Research agent @ gpt-5.6-terra"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Research agent @ gpt-5.6-terra"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Review agent @ gpt-5.5"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent completed: Research agent @ gpt-5.6-terra (12.50s, 2345 tokens, 6 tool calls)"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent failed: Review agent @ gpt-5.5: agent failed"
                 }
               ]
             },
@@ -9007,6 +9125,11 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #602"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Documentation agent @ gpt-5-mini"
                 }
               ]
             }
@@ -9073,6 +9196,11 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #602"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Documentation agent @ gpt-5-mini"
                 }
               ]
             }
@@ -9504,7 +9632,10 @@
           "ts": "2026-09-20T10:00:00Z",
           "type": "subagent.started",
           "lane_issue": 605,
-          "tool_call_id": "call-605"
+          "tool_call_id": "call-605",
+          "agent_name": "helper",
+          "agent_display_name": "Helper agent",
+          "model": "gpt-5.6-terra"
         },
         {
           "ts": "2026-09-20T10:00:00Z",
@@ -9582,6 +9713,11 @@
                   "at": "2026-09-20T10:00:00+00:00",
                   "kind": "event",
                   "text": "Pickup: bound #605"
+                },
+                {
+                  "at": "2026-09-20T10:00:00+00:00",
+                  "kind": "event",
+                  "text": "Subagent started: Helper agent @ gpt-5.6-terra"
                 }
               ]
             }
@@ -9653,7 +9789,8 @@
             "skill_consultation": true,
             "cost": true,
             "rate_card": true,
-            "routing": true
+            "routing": true,
+            "subagents": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -10970,7 +11107,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": true,
                     "lines": [
                       {
@@ -11229,7 +11366,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -11586,7 +11723,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {
@@ -11972,7 +12109,7 @@
                       "effective_target_tokens": null,
                       "effective_ceiling_tokens": null
                     },
-                    "subagents": null,
+                    "subagents": 0,
                     "live": false,
                     "lines": [
                       {

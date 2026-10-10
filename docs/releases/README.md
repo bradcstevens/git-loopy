@@ -46,11 +46,19 @@ as the single authority:
   It dispatches all helper builds; artifact trust gates refuse publication
   rather than silently downgrading to source-only.
 
-This repository currently declares **`artifact-bearing`**. The artifact-bearing
-`v0.11.0-dev.7` and `-dev.8` prereleases were removed with the retired `-dev.N`
-line (ADR-0066), so no published Release carries the helper baseline described
-below until an artifact-bearing prerelease is tagged again. Every earlier tag was
-source-only and is left exactly as published.
+This repository currently declares **`source-only`**, so a stable patch Release
+can be published with what this repository can actually prove. A stable
+artifact-bearing Release needs the signing, notarization, attestation and channel
+credentials listed below, and none are configured: `v0.11.0` was tagged under an
+artifact-bearing policy, its source Release published, and its helper pipeline
+failed at macOS notarization, leaving that promise unmet. The source-only
+Promotion also refuses a committed artifact-bearing policy, so that declaration
+blocked every stable Release. Returning to `artifact-bearing` is a reviewed edit
+of `release-trust.json`, made once the `release` environment holds those
+credentials. The artifact-bearing `v0.11.0-dev.7` and `-dev.8` prereleases were
+removed with the retired `-dev.N` line (ADR-0066), so no published Release
+carries the helper baseline described below. Earlier tags are left exactly as
+published.
 
 The contract is strictly enforced:
 - **Single authority**: Neither secret presence nor runner presence alters the contract.
