@@ -143,6 +143,14 @@ fn activity_window_facts_replay_the_shared_serial_parallel_and_refill_cases() {
                 &context,
                 &IssueRef::from_value(&inputs["drill_in_issue"]).unwrap(),
             );
+            if let Some(expected) = snapshot.get("expected_subagents") {
+                assert_eq!(
+                    serde_json::to_value(view.dashboard.activity.subagents).unwrap(),
+                    *expected,
+                    "{} Run-wide total after {upto} Events",
+                    case["id"]
+                );
+            }
             assert_eq!(
                 serde_json::to_value(view.dashboard.activity.windows).unwrap(),
                 snapshot["expected"],

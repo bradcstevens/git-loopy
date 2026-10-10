@@ -1,7 +1,7 @@
 {
-  "fixture_schema_version": "1.14",
-  "wrapper_contract_version": "2.23",
-  "event_schema_version": "1.5",
+  "fixture_schema_version": "1.15",
+  "wrapper_contract_version": "2.24",
+  "event_schema_version": "1.6",
   "semantic_contract": {
     "dashboard_band_order": [
       "header",
@@ -297,6 +297,7 @@
       "activity": [
         "issue",
         "lines",
+        "subagents",
         "windows"
       ],
       "log_line": [
@@ -453,7 +454,8 @@
       "activity": "current_active_issue",
       "log": "issue_across_contributions",
       "route": "issue_latest_routing_resolution",
-      "activity_windows": "per_agent_slot"
+      "activity_windows": "per_agent_slot",
+      "subagents": "run_total_across_agent_windows"
     },
     "presentation_exclusions": [
       "glyphs",
@@ -948,6 +950,7 @@
                     "text": "Working on #42"
                   }
                 ],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -1104,6 +1107,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -1516,6 +1520,7 @@
                     "text": "Advancing #7"
                   }
                 ],
+                "subagents": null,
                 "windows": [
                   {
                     "kind": "serial",
@@ -1686,6 +1691,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": null,
                 "windows": [
                   {
                     "kind": "serial",
@@ -2187,6 +2193,7 @@
                     "text": "\u2713 commit a1b2c3d4e5  fix(dashboard): pin the seam"
                   }
                 ],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -2376,6 +2383,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -3052,6 +3060,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "lane",
@@ -3255,6 +3264,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "lane",
@@ -3516,6 +3526,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -3848,6 +3859,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -4351,6 +4363,7 @@
                     "text": "Host clock stepped backwards"
                   }
                 ],
+                "subagents": null,
                 "windows": [
                   {
                     "kind": "serial",
@@ -4518,6 +4531,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": null,
                 "windows": [
                   {
                     "kind": "serial",
@@ -4940,6 +4954,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "lane",
@@ -5133,6 +5148,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "lane",
@@ -5508,6 +5524,7 @@
                     "text": "Working on #42"
                   }
                 ],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -5664,6 +5681,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -6066,6 +6084,7 @@
                     "text": "Working on #42"
                   }
                 ],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -6250,6 +6269,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -6690,6 +6710,7 @@
                     "text": "Reading the failing test"
                   }
                 ],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -6868,6 +6889,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -7096,6 +7118,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -7334,6 +7357,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -7800,6 +7824,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -8018,6 +8043,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "serial",
@@ -8320,6 +8346,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": []
               },
               "summary": {
@@ -8432,6 +8459,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": []
               },
               "summary": {
@@ -8792,6 +8820,7 @@
         {
           "after_event_count": 13,
           "render_at_utc": "2026-09-20T10:00:00Z",
+          "expected_subagents": 2,
           "expected": [
             {
               "kind": "lane",
@@ -8871,6 +8900,7 @@
         {
           "after_event_count": 14,
           "render_at_utc": "2026-09-20T10:00:00Z",
+          "expected_subagents": 3,
           "expected": [
             {
               "kind": "lane",
@@ -8955,6 +8985,7 @@
         {
           "after_event_count": 15,
           "render_at_utc": "2026-09-20T10:00:00Z",
+          "expected_subagents": 2,
           "expected": [
             {
               "kind": "lane",
@@ -9044,6 +9075,7 @@
         {
           "after_event_count": 16,
           "render_at_utc": "2026-09-20T10:00:00Z",
+          "expected_subagents": 1,
           "expected": [
             {
               "kind": "lane",
@@ -9138,6 +9170,7 @@
         {
           "after_event_count": 21,
           "render_at_utc": "2026-09-20T10:00:00Z",
+          "expected_subagents": 1,
           "expected": [
             {
               "kind": "lane",
@@ -10461,6 +10494,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": []
               },
               "summary": {
@@ -10638,6 +10672,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": []
               },
               "summary": {
@@ -10865,6 +10900,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": []
               },
               "summary": {
@@ -11092,6 +11128,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "integration",
@@ -11351,6 +11388,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "integration",
@@ -11708,6 +11746,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "integration",
@@ -12094,6 +12133,7 @@
               "activity": {
                 "issue": null,
                 "lines": [],
+                "subagents": 0,
                 "windows": [
                   {
                     "kind": "integration",

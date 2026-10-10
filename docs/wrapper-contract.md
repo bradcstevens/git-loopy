@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.23 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.24 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -983,8 +983,9 @@ Every `wrapper.run.start` MUST carry the exact distribution `release_version`, n
 The values above are the Python Orchestrator's current manifest. The shell and PowerShell
 Orchestrators declare `agent_output` and no other capability available. Later work may change a
 value to `true` only when that Orchestrator emits the signal truthfully. `false` means unavailable.
-`true` with no sample yet is still unknown. Unknown scalar values are JSON `null`; an observed count
-of none is `0`, and an observed collection with no members is `[]`.
+`true` with no sample yet is still unknown, except that `subagents: true` establishes a live count
+of zero for an Agent before its first Subagent starts. Unknown scalar values are JSON `null`; an
+observed count of none is `0`, and an observed collection with no members is `[]`.
 
 `routing` is the contract-1.25 addition (#411) and declares whether this Orchestrator reports the
 **Routed pair** a unit of work runs on — the **Routing resolution** §14 obliges on a Pickup, and the
@@ -1000,10 +1001,11 @@ cannot tell them apart reads as pending forever.
 declares it `true`; shell and PowerShell declare it `false`. A `true` capability makes a newly
 opened Agent window's live count `0`; the count rises on each distinct `subagent.started` tool-call
 id and falls on its `subagent.completed` or `subagent.failed` record. Run-wide totals count the live
-Subagents across Agent windows. Subagent lifecycle records carry `tool_call_id`, `agent_name`,
-`agent_display_name`, and `model`; completion may additionally carry `duration_seconds`,
-`total_tokens`, and `total_tool_calls`, while failure carries `error` and may carry those totals.
-Their self-reported totals are display detail only and MUST NOT be added to Consumption or Cost.
+Subagents across Agent windows and appear in the Activity projection's `subagents` field. Lifecycle
+records carry `tool_call_id`, `agent_name`, `agent_display_name`, and `model`; `model` is nullable
+when the SDK withholds it. Completion may additionally carry `duration_seconds`, `total_tokens`,
+and `total_tool_calls`, while failure carries `error` and may carry those totals. Their
+self-reported totals are display detail only and MUST NOT be added to Consumption or Cost.
 The `initiator` and `parent_tool_call_id` on `usage.tokens` preserve the harness's attribution
 handles without changing its billing totals. `subagent.selected` and `subagent.deselected` are
 configuration events and MUST NOT be mapped.
@@ -1230,7 +1232,7 @@ Orchestrator rollout tickets own enabling those producers.
   data.
 - `usage.context_window`: `current_tokens`, nullable `token_limit`, nullable
   `effective_target_tokens`, and nullable `effective_ceiling_tokens`.
-- `subagent.started`: `tool_call_id`, `agent_name`, `agent_display_name`, and `model`.
+- `subagent.started`: `tool_call_id`, `agent_name`, `agent_display_name`, and nullable `model`.
 - `subagent.completed`: the start fields and optional `duration_seconds`, `total_tokens`, and
   `total_tool_calls`.
 - `subagent.failed`: the start fields and `error`, with optional duration and totals.
@@ -1439,8 +1441,9 @@ and never emit them.
 
 - **No Run, and the record says so.** Every Calibration record — the lifecycle pair *and* the
   ordinary records a Trial's session writes (`assistant.*`, `tool.*`, `usage.tokens`,
-  `usage.context_window`, `agent.output`) — MUST carry `run_id: null`, a null `iter`, and the
-  identity pair `calibration_id` / `trial_id`. `run_id: null` is what keeps a Trial's
+  `usage.context_window`, `subagent.started`, `subagent.completed`, `subagent.failed`,
+  `agent.output`) — MUST carry `run_id: null`, a null `iter`, and the identity pair
+  `calibration_id` / `trial_id`. `run_id: null` is what keeps a Trial's
   **Consumption** out of a Run's Cost totals and stops a consumer rendering a phantom Run.
 - **`trial_id` is per Trial, not per Proving task.** A Calibration legitimately runs the same
   **Proving task** at several rungs, which the task pin alone could not separate.
@@ -2182,13 +2185,13 @@ carried 2.17 (Awaiting merge, §3.3.1), and both have since advanced to 2.18
 with parking and admission (§12, #682), 2.19 with Integration start and
 branch drift (§12, #684), 2.20 with Recovery attempts (§12, #685), 2.21 with
 the refill turn (§12, #686), 2.22 with the per-issue Strike record (§6,
-ADR-0070) and 2.23 with upstream-durable Integration publication (§12, #418).
+ADR-0070), 2.23 with upstream-durable Integration publication (§12, #418),
+and 2.24 with Subagent lifecycle telemetry and Activity totals (ADR-0022).
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
-(§3.1). The Event fixture revision is 1.5, advanced with the additive
-Integration push-failure record (§12); the Subagent lifecycle types, the
-`subagents` capability key and the `usage.tokens` attribution fields ride the
-same revision without one of their own. Compatibility schema remains 1 and
-historical streams' interpretation is unchanged.
+(§3.1). The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
+types, the `subagents` capability key and the `usage.tokens` attribution fields;
+the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility
+schema remains 1 and historical streams' interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
