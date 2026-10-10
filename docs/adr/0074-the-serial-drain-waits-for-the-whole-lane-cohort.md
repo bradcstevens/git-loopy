@@ -50,8 +50,9 @@ stopped being one.
    The shipped [ADR-0032 amendment](0032-the-runner-picks-the-oldest-eligible-issue.md#amendment-priority-crosses-the-lane-boundary-for-new-reservations-428-720)
    preserves the total order within Priority: an earlier admissible Parallel-safe prefix can
    reserve before the latch; its still-open issues and retries stay Lane work for the refill.
-4. **The drain is made legible by derivation**, as a separate increment. The header shows the
-   cohort (live sessions, parked, integrating), the oldest live Lane's age and the elapsed drain,
+4. **The drain is made legible by derivation**, shipped separately in #719. The header shows the
+   cohort (live sessions, setup, parked, integrating), the age of the oldest open Lane contribution
+   and the elapsed drain,
    derived from contribution events and **Queue** statuses already on the wire
    ([ADR-0063](0063-the-headers-parallel-posture-reports-the-run-not-the-orchestrator.md)): no
    event-schema or Wrapper-contract change. It shows no estimate of the time remaining, because a
@@ -112,9 +113,9 @@ workload was overloaded and nonstationary, so it supports no conclusion about st
 ## Consequences
 
 - The Python `priority` crossing (3) ships with #720, including ADR-0032's amendment and the
-  **Priority** and **Pin** glossary entries. The derive-only legibility (4) remains a separate
-  increment, which edits the Dashboard renderers in both languages and the shared
-  `dashboard-insights` fixture.
+  **Priority** and **Pin** glossary entries. The derive-only legibility (4) ships separately with
+  [#719](https://github.com/bradcstevens/git-loopy/issues/719): it edits the Rust Dashboard and the
+  Python replay oracle and extends the shared `dashboard-insights` fixture (revision 1.17).
 - `docs/parallel-mode.md` states the cost and the lever. The exposure grows with the number of
   issues carrying `parallel-safe`, not with the host's capacity alone.
 - A retry from [#703](https://github.com/bradcstevens/git-loopy/issues/703) re-enters the Lane
