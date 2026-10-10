@@ -95,6 +95,14 @@ def project_run_view(
             "activity": {
                 "issue": state.active_ref,
                 "lines": [_log_line(line) for line in state.log()],
+                "subagents": (
+                    sum(
+                        len(window.subagent_ids)
+                        for window in state.activity_windows()
+                    )
+                    if state.subagents_available is True
+                    else None
+                ),
                 "windows": [
                     {
                         "kind": window.kind,

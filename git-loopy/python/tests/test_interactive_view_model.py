@@ -50,6 +50,32 @@ def test_observing_one_agents_subagent_does_not_fabricate_a_siblings_zero() -> N
     assert [window["subagents"] for window in windows] == [1, None]
 
 
+def test_run_wide_subagent_total_is_projected_from_agent_windows() -> None:
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+
+    state = LiveRunState()
+    state.render({
+        "type": "wrapper.run.start",
+        "insight_capabilities": {"subagents": True},
+    })
+    for issue in [605, 606]:
+        state.render({
+            "type": "wrapper.issue.activated",
+            "issue": issue,
+            "lane_issue": issue,
+        })
+    state.render({
+        "type": "subagent.started",
+        "lane_issue": 605,
+        "tool_call_id": "call-605",
+    })
+
+    activity = project_run_view(state, None, issue=605)["dashboard"]["activity"]
+    assert activity["subagents"] == 1
+    assert [window["subagents"] for window in activity["windows"]] == [1, 0]
+
+
 def test_subagent_lifecycle_lines_reach_the_activity_and_issue_log() -> None:
     from git_loopy.interactive.state import LiveRunState
     from git_loopy.interactive.view_model import project_run_view
@@ -101,6 +127,7 @@ def test_subagent_lifecycle_lines_reach_the_activity_and_issue_log() -> None:
         "Subagent failed: Code reviewer @ gpt-5.5: agent crashed",
     ]
     assert view["dashboard"]["activity"]["windows"][0]["subagents"] == 0
+    assert view["dashboard"]["activity"]["subagents"] == 0
     assert [
         line["text"] for line in view["drill_in"]["log"]["lines"]
     ] == lines
@@ -222,6 +249,66 @@ def test_recovery_subagent_lifecycle_updates_the_live_integration_window() -> No
     assert any(
         "Subagent started: Recovery explorer @ gpt-5.6-terra" in line["text"]
         for line in integration["lines"]
+    )
+
+
+def test_late_subagent_completion_after_work_finished_stays_in_the_issue_log() -> None:
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+
+    state = LiveRunState()
+    for event in (
+        {
+            "type": "wrapper.run.start",
+            "insight_capabilities": {"subagents": True},
+        },
+        {
+            "type": "wrapper.contribution.start",
+            "issue": 605,
+            "lane_id": "lane-1",
+            "contribution_id": "c-605",
+        },
+        {"type": "wrapper.issue.activated", "issue": 605, "lane_issue": 605},
+        {
+            "type": "subagent.started",
+            "lane_issue": 605,
+            "contribution_id": "c-605",
+            "tool_call_id": "call-late",
+            "agent_name": "explorer",
+            "model": "gpt-5.6-terra",
+        },
+        {
+            "type": "wrapper.contribution.work_finished",
+            "issue": 605,
+            "lane_id": "lane-1",
+            "contribution_id": "c-605",
+        },
+        {
+            "type": "subagent.completed",
+            "issue": 605,
+            "lane_id": "lane-1",
+            "contribution_id": "c-605",
+            "tool_call_id": "call-late",
+            "agent_name": "explorer",
+            "model": "gpt-5.6-terra",
+            "duration_seconds": 4.0,
+            "total_tokens": 321,
+            "total_tool_calls": 2,
+        },
+    ):
+        state.render(event)
+
+    view = project_run_view(state, None, issue=605)
+    activity = view["dashboard"]["activity"]["windows"][0]
+    assert activity["live"] is False
+    assert activity["subagents"] == 0
+    assert any(
+        "Subagent completed: explorer @ gpt-5.6-terra" in line["text"]
+        for line in activity["lines"]
+    )
+    assert any(
+        "321 tokens" in line["text"]
+        for line in view["drill_in"]["log"]["lines"]
     )
 
 

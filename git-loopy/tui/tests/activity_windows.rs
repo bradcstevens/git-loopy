@@ -395,6 +395,7 @@ fn subagent_counts_follow_observed_lifecycles_not_agent_names_or_billing() {
         }),
     );
     let view = serde_json::to_value(session.view()).unwrap();
+    assert_eq!(view["dashboard"]["activity"]["subagents"], 1);
     assert_eq!(view["dashboard"]["activity"]["windows"][0]["subagents"], 1);
     assert!(view["dashboard"]["activity"]["windows"][0]["lines"]
         .as_array()

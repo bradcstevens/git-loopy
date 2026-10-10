@@ -432,9 +432,8 @@ impl PreparationView {
 pub struct Activity {
     pub issue: Option<IssueRef>,
     pub lines: Vec<LogLineView>,
+    pub subagents: Option<usize>,
     pub windows: Vec<ActivityWindow>,
-    #[serde(skip)]
-    pub(crate) subagents: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize)]

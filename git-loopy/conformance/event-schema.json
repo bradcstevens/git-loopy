@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "contract_version": "2.23",
-  "event_schema_version": "1.5",
+  "contract_version": "2.24",
+  "event_schema_version": "1.6",
   "insight_capabilities": {
     "names": [
       "agent_output",
@@ -200,7 +200,8 @@
         "agent_name",
         "agent_display_name",
         "model"
-      ]
+      ],
+      "nullable": ["model"]
     },
     "subagent.completed": {
       "required_when_present": [
@@ -209,6 +210,7 @@
         "agent_display_name",
         "model"
       ],
+      "nullable": ["model"],
       "optional": ["duration_seconds", "total_tokens", "total_tool_calls"]
     },
     "subagent.failed": {
@@ -219,6 +221,7 @@
         "model",
         "error"
       ],
+      "nullable": ["model"],
       "optional": ["duration_seconds", "total_tokens", "total_tool_calls"]
     },
     "usage.tokens": {
@@ -2350,6 +2353,20 @@
         "model": "gpt-5.6-terra"
       },
       "jsonl": "{\"ts\": \"2026-05-16T00:00:02.100Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": 1, \"type\": \"subagent.started\", \"agent_display_name\": \"Code explorer\", \"agent_name\": \"explorer\", \"model\": \"gpt-5.6-terra\", \"tool_call_id\": \"call-subagent-1\"}\n"
+    },
+    {
+      "id": "subagent-started-model-unavailable",
+      "event": {
+        "ts": "2026-05-16T00:00:02.150Z",
+        "run_id": "01HXR0000000000000000000CC",
+        "iter": 1,
+        "type": "subagent.started",
+        "tool_call_id": "call-subagent-3",
+        "agent_name": "reviewer",
+        "agent_display_name": "Code reviewer",
+        "model": null
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:02.150Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": 1, \"type\": \"subagent.started\", \"agent_display_name\": \"Code reviewer\", \"agent_name\": \"reviewer\", \"model\": null, \"tool_call_id\": \"call-subagent-3\"}\n"
     },
     {
       "id": "subagent-completed",
