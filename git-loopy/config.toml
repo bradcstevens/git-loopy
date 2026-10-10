@@ -2,30 +2,31 @@
 # Precedence: CLI flag > env > project > global > built-in default.
 # Edit freely, or manage with `git-loopy init` / `git-loopy config`.
 
-model = "gpt-6.1-sol"
-reasoning_effort = "max"
+model = "claude-opus-5.5"
+reasoning_effort = "high"
 context_tier = "long_context"
 route_policy = "static"
 
-# Quality-first static preset, live-verified against the pinned harness (ADR-0048).
-# Every route inherits long_context. Review/tests use Anthropic; implementation
-# and docs use OpenAI. The built-in legacy retry rung is GPT-6.1 Sol/max;
-# static routing only changes a retry's pair with an explicit [escalation] block.
+# Static preset mirroring the maintainer's global Config. Every route inherits
+# long_context. Planning/review use Claude Opus; implementation, tests, docs and
+# bugfix use GPT-6.1 Sol; chores use Claude Haiku. The built-in legacy retry rung
+# is GPT-6.1 Sol/max; static routing only changes a retry's pair with an explicit
+# [escalation] block.
 
 [routing.planning]
-model = "gpt-6.1-sol"
+model = "claude-opus-5.5"
 effort = "xhigh"
 
 [routing.review]
-model = "claude-sonnet-5.5"
-effort = "xhigh"
+model = "claude-opus-5.5"
+effort = "high"
 
 [routing.implementation]
 model = "gpt-6.1-sol"
 effort = "high"
 
 [routing.test]
-model = "claude-sonnet-5.5"
+model = "gpt-6.1-sol"
 effort = "high"
 
 [routing.docs]
@@ -33,7 +34,7 @@ model = "gpt-6.1-sol"
 effort = "low"
 
 [routing.chore]
-model = "gpt-6-luna"
+model = "claude-haiku-5.5"
 effort = "medium"
 
 [routing.bugfix]

@@ -104,8 +104,11 @@ the tracked `git-loopy/config.toml` moved with them and `tests/test_config.py` b
 the built-in. The later maintainer-approved project overrides in
 [#594](https://github.com/bradcstevens/git-loopy/issues/594) are now checked as explicit
 Config choices, independently of the unchanged cross-Orchestrator built-in default.
-The project's review route already selects the escalation rung; that does not retune
-the recommended table or extend its no-`max` rule to operator-authored Config.
+Since the maintainer's 2026-10-10 override, the tracked Config's own run-level pair is
+`claude-opus-5.5 @ high` and no project route selects `max`
+([ADR-0048](0048-the-recommended-routing-table-is-retuned.md#consequences)). That is an
+operator's choice: it neither changes the built-in `gpt-6.1-sol @ max` default nor retunes
+the recommended table, and the no-`max` rule still does not bind operator-authored Config.
 
 ## Consequences
 

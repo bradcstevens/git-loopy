@@ -66,7 +66,8 @@ Opus and Astra were absent from this account's listing, so neither is a
 default. Models with a pending-deprecation notice in the supplied catalog are
 also excluded from the preset. Existing saved Config elsewhere is not
 rewritten: `config routing use-recommended` adopts the new pairs, while the
-tracked project Config records this preset explicitly. The static recipe
+tracked project Config recorded this preset explicitly until the maintainer's
+2026-10-10 override (see Consequences). The static recipe
 does not rank or constrain Dynamic routing's live elections.
 
 ## Historical table: 2026-08-22
@@ -154,6 +155,12 @@ touching Sonnet 5 no longer reaches this table.
   retained the project's subsequently customized routes and replaced that equality check
   with checks of the intentional overrides. The built-in recommendation remains independently
   pinned; its no-`max` rule does not prohibit an operator-authored project route using `max`.
+- On 2026-10-10 the maintainer aligned the tracked project Config with their global Config:
+  run-level `claude-opus-5.5 @ high`; `planning` `claude-opus-5.5 @ xhigh`, `review`
+  `claude-opus-5.5 @ high`, `test` `gpt-6.1-sol @ high` and `chore` `claude-haiku-5.5 @ medium`,
+  with `implementation`, `docs` and `bugfix` unchanged. `test_config.py` checks these as
+  explicit project overrides. This is an operator's edit, not a retune: the table above, the
+  built-in default pair and `RECOMMENDED_ROUTING` are unchanged.
 - Escalation is live for every Task type, including `planning`.
 - `gemini-3.6-flash` enters the routed set as the first Google model on it, so the roster's
   `minimal` floor and `high` ceiling are now load-bearing for a shipped route rather than

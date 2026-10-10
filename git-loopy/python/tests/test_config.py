@@ -424,10 +424,10 @@ def _pin_built_in_roster(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_the_tracked_project_config_uses_the_quality_first_default(
+def test_the_tracked_project_config_selects_its_run_level_triple(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The tracked static preset explicitly selects the verified default triple."""
+    """The tracked static preset explicitly selects its run-level triple."""
     from git_loopy import cli
     from git_loopy.static_route import RoutePolicy
 
@@ -442,7 +442,7 @@ def test_the_tracked_project_config_uses_the_quality_first_default(
     ).run
 
     assert (run.model, run.reasoning_effort, run.context_tier) == (
-        "gpt-6.1-sol", "max", "long_context",
+        "claude-opus-5.5", "high", "long_context",
     )
     assert run.route_policy is RoutePolicy.STATIC
     assert warnings == []
@@ -474,12 +474,12 @@ def test_the_tracked_project_config_preserves_all_task_type_routes(
     ).run
 
     assert dict(run.routing) == {
-        "planning": ("gpt-6.1-sol", "xhigh"),
-        "review": ("claude-sonnet-5.5", "xhigh"),
+        "planning": ("claude-opus-5.5", "xhigh"),
+        "review": ("claude-opus-5.5", "high"),
         "implementation": ("gpt-6.1-sol", "high"),
-        "test": ("claude-sonnet-5.5", "high"),
+        "test": ("gpt-6.1-sol", "high"),
         "docs": ("gpt-6.1-sol", "low"),
-        "chore": ("gpt-6-luna", "medium"),
+        "chore": ("claude-haiku-5.5", "medium"),
         "bugfix": ("gpt-6.1-sol", "xhigh"),
     }
     assert warnings == []

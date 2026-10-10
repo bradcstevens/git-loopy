@@ -1352,8 +1352,9 @@ verified through the SDK-pinned harness on 2026-10-09:
 
 `init` offers this optional static recipe; `config routing use-recommended`
 adopts its pairs without silently rewriting existing Config. Static entries
-inherit the run-level `context_tier`. The tracked project Config explicitly
-selects this recipe, `long_context` and the Static policy. To adopt long
+inherit the run-level `context_tier`. The tracked project Config selects its
+own static table (Claude Opus for planning/review, Claude Haiku for chores),
+`long_context` and the Static policy. To adopt long
 context in another scope, use `config set context_tier long_context`; adopting
 the recommended pairs alone does not change that scope's tier. The built-in
 fallback stays `default` where neither Config scope supplies a tier. A global
