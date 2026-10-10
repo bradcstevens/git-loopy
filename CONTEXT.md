@@ -1906,6 +1906,20 @@ and exhausted delivery retries, so the canonical local resolution and delivery s
 describe the current assignment, never the label as authority to choose, override, or pin a route.
 _Avoid_: model pin, routing input.
 
+### Status endings (accepted design)
+
+This term completes the vocabulary of
+[ADR-0075](docs/adr/0075-a-status-says-what-happened-its-ending-says-why.md). The existing
+**Status** and **Session outcome** entries above describe current behavior; this decision
+record does not establish delivery acceptance.
+
+**Ending**:
+The **Session outcome** one attempt on an issue reached, carried beside that issue's
+**Status** rather than inside it. An issue has one Status and one Ending per attempt. It is
+absent when the attempt reached none or the member could not observe it, and never defaulted.
+Distinct from a **Strike**, which is the Run's accounting of the same ending.
+_Avoid_: status reason, failure reason, sub-status.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
