@@ -1,0 +1,7 @@
+{"sdk": "1.0.17rc3", "cli": "1.0.92-3"}
+{"case": "G_gitloopy_shaped_no_custom_agents", "non_builtin": [], "builtin": []}
+{"case": "H_with_sdk_agents", "non_builtin": [["collide", null, "SDK-DEFINED collide", null], ["sdk-only", null, "SDK-DEFINED only", null]], "builtin": []}
+{"case": "I_sdk_agents_local_only", "non_builtin": [["collide", null, "SDK-DEFINED collide", null], ["sdk-only", null, "SDK-DEFINED only", null]], "builtin": []}
+{"case": "J_sdk_agents_no_config_discovery", "non_builtin": [["collide", null, "SDK-DEFINED collide", null], ["sdk-only", null, "SDK-DEFINED only", null]], "builtin": []}
+{"case": "K_dispatch_file_agent_no_sdk_agents", "reply": "Unknown agent_type: repo-probe. Valid types are: explore, task, general-purpose, rubber-duck, code-review, research, security-review", "subagent_started": [], "tools": [["task", "{'name': 'repo-probe', 'prompt': 'say hello', 'agent_type': 'repo-probe', 'description': 'say hello'}"]], "results": ["{'message': 'Unknown agent_type: repo-probe. Valid types are: explore, task, general-purpose, rubber-duck, code-review, research, security-review', 'code': 'failure'}"]}
+{"case": "L_dispatch_collide_with_sdk_agent", "reply": "SDK-AGENT-REACHED-collide", "subagent_started": ["collide"], "tools": [["task", "{'agent_type': 'collide', 'name': 'hello-test', 'prompt': 'say hello', 'description': 'Say hello greeting'}"]], "results": ["{'content': 'SDK-AGENT-REACHED-collide', 'detailedContent': 'SDK-AGENT-REACHED-collide'}"]}

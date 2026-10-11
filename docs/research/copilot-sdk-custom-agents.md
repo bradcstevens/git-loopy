@@ -75,7 +75,8 @@ on-disk bundle and documentation reading. No live Copilot session was run.
   (`git-loopy/python/git_loopy/skill_exposure.py:40-75`), but bundled Skills and the
   interaction between `disabled_skills` and agent preload are not established by the
   SDK docs. A profile must be validated against the Run's effective Skill policy before
-  its preloads can be treated as closed-world.
+  its preloads can be treated as closed-world. *Settled by the [live probe](#live-probe-on-the-current-pin-2026-10-11):
+  `disabled_skills` blocks the preload; an unexposed name is a silent no-op.*
 - **Selection works three ways on the pin.** A session can start with an agent selected
   (`create_session(agent="name")`, `SDK:client.py:2301`, `:2763-2765`). An agent can be
   switched mid-session with `session.rpc.agent.select/deselect/get_current/list/reload`
@@ -104,7 +105,9 @@ on-disk bundle and documentation reading. No live Copilot session was run.
   git-loopy creates sessions in the SDK's default `mode="copilot-cli"` (`SDK:client.py:826`)
   without passing `custom_agents`. The session is therefore very likely **open-world for
   agents**, the same way ADR-0015 found it open-world for Skills. This is inferred, not
-  live-verified. `~/.copilot/agents/wayfinder.agent.md` exists on this host today.
+  live-verified. `~/.copilot/agents/wayfinder.agent.md` exists on this host today. *Refuted by the
+  [live probe](#live-probe-on-the-current-pin-2026-10-11): file agents are not offered;
+  built-in agents are.*
 - **Nothing in the question needs an SDK newer than 1.0.14.** 1.0.14 is the newest **stable**
   upstream tag (released 2026-09-16). The only newer upstream tags are `v1.0.15-preview.0`
   through `.3`. In those tags `CustomAgentConfig`, its wire conversion, `_mode.py` and
@@ -117,6 +120,61 @@ on-disk bundle and documentation reading. No live Copilot session was run.
   inherited, and that built-in prompts cannot be replaced without shadowing (1.0.14 adds
   `session.agent.setPrompt`). Its table of built-in models is stale for CLI 1.0.85. See
   [Corrections](#corrections-to-subagent-model-overridemd).
+
+## Live probe on the current pin (2026-10-11)
+
+**Runtime.** Between capture and this probe the manifest pin moved to
+`github-copilot-sdk==1.0.17rc3` (`git-loopy/python/pyproject.toml:29` at origin/main
+`67346915`), which pins **CLI `1.0.92-3`** (`copilot/_cli_version.py`,
+`CLI_VERSION: str | None = "1.0.92-3"`). `CustomAgentConfig` on that pin carries the same ten
+fields (`copilot/session.py:1294-1312`). Every probe ran real `CopilotClient` sessions on that
+runtime, shaped the way git-loopy opens one (`git-loopy/python/git_loopy/session.py:730-745`):
+default client construction, `enable_skills=True`, an isolated `skill_directories` root, an
+explicit `disabled_skills` list, model `claude-haiku-4.5`. Scripts and raw JSONL output are in
+[`copilot-sdk-custom-agents-probe/`](copilot-sdk-custom-agents-probe/).
+
+**Skill preload versus `disabled_skills` (Open question 1).** A canary Skill (`canary-skill`,
+body holding a unique token) sat in the exposure root; a custom agent `probe` named it in
+`skills`. The question asked for the token from context only.
+
+| Case | Preload | In `disabled_skills` | Path | `skills_loaded` `enabled` | `skill.invoked` (`trigger: context-load`) | Reply |
+|---|---|---|---|---|---|---|
+| A | yes | no | `agent="probe"` | true | yes | token |
+| B | yes | **yes** | `agent="probe"` | **false** | **none** | `NONE` |
+| C | no | no | `agent="probe"` | true | none | `NONE` |
+| D | yes | no | parent dispatches `probe` via `task` | true | yes | token |
+| E | yes | **yes** | parent dispatches `probe` via `task` | **false** | **none** | `NONE` |
+| F | `canary-skill` + `grilling` | no | `agent="probe"` | only `canary-skill` listed | `canary-skill` only | token |
+
+- **`disabled_skills` blocks the eager preload**, for a preselected agent and for a subagent
+  dispatch alike (B, E). The runtime emits no `skill.invoked` for the disabled Skill and the
+  agent cannot see its content.
+- **The preload bypasses the permission handler.** In A and D the Skill was injected with
+  **no** permission request reaching `on_permission_request`. `disabled_skills` and the
+  exposure root are therefore the only runtime gates on a preload; the Skill-tool deny in
+  `build_permission_handler` never sees it.
+- **A preload outside the exposure root does nothing, silently** (F). `grilling` exists in
+  `~/.copilot/skills/`, but the session listed only the exposure root's Skill, did not inject
+  `grilling`, and raised no error. No bundled Skill was listed either. A misspelt or
+  unexposed preload is a silent no-op, not a failure.
+
+**Which agents a git-loopy-shaped session can reach (Open questions 2 and 3).** The working
+directory was a fresh Git repository with `.github/agents/repo-probe.agent.md` and
+`.github/agents/collide.agent.md`; `~/.copilot/agents/wayfinder.agent.md` exists on this host.
+
+- **File agents are not offered.** With no `custom_agents`, `session.rpc.agent.list()`
+  returned no agents, and asking the parent to dispatch `repo-probe` failed in the `task`
+  tool: `Unknown agent_type: repo-probe. Valid types are: explore, task, general-purpose,
+  rubber-duck, code-review, research, security-review`. Neither the project file nor the user
+  file is reachable; the built-in agents are. This **refutes** the inference above that the
+  session is "very likely open-world for agents".
+- **SDK-supplied agents are the only custom agents, and they win their name.** With
+  `custom_agents=[collide, sdk-only]`, `agent.list()` returned exactly those two (with
+  `source` and `path` both `null` — the enum has no SDK value), and dispatching `collide`
+  ran the SDK prompt (`SDK-AGENT-REACHED-collide`), not the same-named file agent. Adding
+  `custom_agents_local_only=True` or `enable_config_discovery=False` changed nothing.
+- **Built-in agents stay dispatchable** even though `agent.list()` omits them. Closing that
+  door is `excluded_builtin_agents` (`copilot/client.py:2348`), not a discovery switch.
 
 ## Findings
 
@@ -523,7 +581,9 @@ against 1.0.14 and 1.0.85:
 ## Open questions
 
 These need a live probe or an upstream answer. Each would be settled by one throwaway SDK
-session on the pinned runtime.
+session on the pinned runtime. Questions 1, 2 and 3 are answered by the
+[live probe](#live-probe-on-the-current-pin-2026-10-11): `disabled_skills` blocks preloads;
+file agents are not offered in a git-loopy-shaped session; an SDK agent takes its name.
 
 1. **Does session `disabled_skills` filter `CustomAgentConfig.skills` preloads, including
    bundled Skills?** If it does not, an unvalidated profile can bypass ADR-0015's allowlist.
