@@ -1920,6 +1920,21 @@ absent when the attempt reached none or the member could not observe it, and nev
 Distinct from a **Strike**, which is the Run's accounting of the same ending.
 _Avoid_: status reason, failure reason, sub-status.
 
+### Agent memory (accepted design)
+
+This constraint completes the vocabulary of
+[ADR-0076](docs/adr/0076-in-run-agents-carry-no-memory-across-issues.md). The existing
+**Agent** entry above describes current behavior; this decision record does not
+establish delivery acceptance.
+
+**Agent memory**:
+Anything an **Agent** could recall from an earlier issue other than what the issue
+tracker and the repository's history record. No in-Run **Agent profile** has any: every
+**Agent** starts fresh. A lesson that goes beyond its issue leaves the **Run** as a
+Follow-up on the tracker. The **Planner**, which works outside a Run, is not bound by
+this rule, but its approved graph must not depend on its memory.
+_Avoid_: profile memory, learnings, scratchpad.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
