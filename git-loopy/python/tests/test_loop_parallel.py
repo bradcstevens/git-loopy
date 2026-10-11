@@ -155,6 +155,7 @@ from git_loopy.session_outcome import (
 )
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy import dynamic_route
+from git_loopy import sources as sources_module
 from git_loopy import static_route
 from git_loopy.static_route import RoutePolicy
 from git_loopy.sources import Pickup, PoolCandidate
@@ -6563,9 +6564,23 @@ def test_priority_dynamic_admission_prepares_without_binding_and_pickup_revalida
         assert _first_work(events)["type"] == "wrapper.contribution.start"
 
 
+@pytest.mark.parametrize("slower_refill_lane", [41, 46])
 def test_mixed_priority_dynamic_routes_keep_proposals_for_their_own_pickups(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, slower_refill_lane
 ) -> None:
+    # One refill turn starts #41's retry and #46 as two Lanes whose setups
+    # interleave on thread hops, so either may bind first (#741). Holding one
+    # Lane's pre-Pickup refresh drives each order deterministically.
+    refresh = sources_module.GitHubIssueSource.refresh_for_preparation
+
+    def held_refresh(self, item):
+        if item.ref == slower_refill_lane:
+            time.sleep(0.2)
+        return refresh(self, item)
+
+    monkeypatch.setattr(
+        sources_module.GitHubIssueSource, "refresh_for_preparation", held_refresh
+    )
     _wire_rolling_run(
         tmp_path, monkeypatch,
         [
@@ -6591,10 +6606,11 @@ def test_mixed_priority_dynamic_routes_keep_proposals_for_their_own_pickups(
     asyncio.run(loop_module.run(cfg))
     events = _logged_events(tmp_path)
     bindings = [e for e in events if e["type"] == "wrapper.pickup.bound"]
-    assert [(e["issue"], e["iter"] is None) for e in bindings] == [
-        (41, True), (44, False), (46, True), (41, True),
-    ]
+    pickups = [(e["issue"], e["iter"] is None) for e in bindings]
+    assert pickups[:2] == [(41, True), (44, False)]
+    assert sorted(pickups[2:]) == [(41, True), (46, True)]
     assert all(e["model"] == "claude-opus-5" for e in bindings if e["issue"] != 46)
+    assert [e["model"] for e in bindings if e["issue"] == 46] == ["gpt-5.6-terra"]
     assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
     latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
     lane_end = next(e for e in events if e["type"] == "wrapper.contribution.end")
