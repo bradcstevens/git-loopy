@@ -483,8 +483,8 @@ class _WatchOutcome:
 
     #: Whether the trace carried a single decodable record.
     traced: bool
-    #: Whether the trace said the Run itself ended, as opposed to this client
-    #: merely stopping watching.
+    #: Whether the Run itself ended -- its trace said so, or its owner released
+    #: the control lock -- as opposed to this client merely stopping watching.
     run_ended: bool
 
 
@@ -551,6 +551,32 @@ def _follow_trace_with_renderer(
         time.sleep(poll_interval)
 
 
+def _dashboard_watch_outcome(trace_path: Path, control_path: Path) -> _WatchOutcome:
+    """What a Dashboard that left of its own accord leaves this client to report.
+
+    The helper exits ``0`` both when an operator detaches and when the Run's
+    owner releases its control lock, so its status says nothing about the Run.
+    The trace and the lock do. A trace with no decodable record means the worker
+    ended before it could announce itself, so its blocker was never rendered;
+    a released lock means the worker is past its working life, so waiting for it
+    spans only its teardown. A Detach holds the lock and is never waited on.
+    """
+    try:
+        text = trace_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    traced = False
+    for line in text.splitlines():
+        try:
+            json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        traced = True
+        break
+    run_ended = _trace_has_run_end(trace_path) or is_run_alive(control_path) is False
+    return _WatchOutcome(traced=traced, run_ended=run_ended)
+
+
 def _helper_args(
     helper: Path, trace_path: Path, control_path: Path, config: RunConfig
 ) -> list[str]:
@@ -604,9 +630,10 @@ def _report_worker_result(
 
     * **A worker still running is not this client's failure.** Detaching, or
       quitting a Dashboard, ends the watching and nothing else, so it returns
-      ``0``. The client waits for a worker only when the trace said the *Run*
-      ended, which bounds the wait to that worker's own teardown; waiting on a
-      working Run would make disconnecting look like stopping work.
+      ``0``. The client waits for a worker only when the *Run* ended -- its
+      trace said so, or its owner released the control lock -- which bounds
+      the wait to that worker's own teardown; waiting on a working Run would
+      make disconnecting look like stopping work.
     * **A worker that ended owns the result.** Returning the client's own
       success instead is how a blocked startup used to reach an operator as
       exit ``0``: Run preflight refuses *before* the first Event, so the trace
@@ -695,14 +722,15 @@ def run_terminal_client(
                 )
             else:
                 if result.returncode == 0:
-                    # The Dashboard left of its own accord. A Detach leaves the
-                    # Run working, so this client claims no knowledge that it
-                    # ended and never waits; a worker already gone by now is
-                    # still the Run's own result and is reported as such.
+                    # The Dashboard left of its own accord: a Detach, which
+                    # leaves the Run working and is never waited on, or the
+                    # Run's own ending. Only the trace and the control lock can
+                    # tell those apart, so they, not this exit, decide what is
+                    # reported (#583).
                     status = _report_worker_result(
                         child,
                         diagnostics_path=diagnostics_path,
-                        watched=_WatchOutcome(traced=True, run_ended=False),
+                        watched=_dashboard_watch_outcome(trace_path, control_path),
                         warn=warn,
                     )
                     _print_unbound_run_notice(trace_path, repository)

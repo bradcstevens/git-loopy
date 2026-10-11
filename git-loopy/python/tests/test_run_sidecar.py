@@ -536,6 +536,100 @@ def test_the_client_reports_a_worker_that_failed_after_it_traced_work(
     assert "internal detail" not in capsys.readouterr().err
 
 
+@pytest.mark.skipif(
+    not advisory_locking_available(),
+    reason="this platform has no flock advisory locks",
+)
+def test_the_dashboard_client_reports_a_worker_blocked_before_it_traced_anything(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reported defect: the Dashboard opened, closed, and the shell came back silent.
+
+    Run preflight refused inside the worker before the first Event, so the
+    blocker existed only in its diagnostics. The real Dashboard leaves with 0
+    as soon as the worker releases its control lock, and the client then
+    reported the Run as traced and still working: nothing was echoed, and the
+    exit status was 0 or 1 depending on whether the worker had finished tearing
+    down. The line printer never had that defect; this pins the Dashboard to it.
+    Only the Dashboard is a double, and it keeps the real one's contract.
+    """
+    from git_loopy import run_sidecar, tui_release
+
+    trace_path = tmp_path / "run.trace.jsonl"  # never created: nothing ran
+    control_path = run_sidecar.control_path_for_trace(trace_path)
+    diagnostics_path = tmp_path / "run.log"
+    attached = tmp_path / "dashboard-attached"
+    helper = tmp_path / "fake-dashboard.py"
+    helper.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys, time\n"
+        "from git_loopy.run_control import is_run_alive\n"
+        "control = pathlib.Path(sys.argv[sys.argv.index('--control') + 1])\n"
+        f"pathlib.Path({str(attached)!r}).touch()\n"
+        # The real Dashboard's rule: a released control lock ends attach mode cleanly.
+        "deadline = time.monotonic() + 30\n"
+        "while is_run_alive(control) and time.monotonic() < deadline:\n"
+        "    time.sleep(0.02)\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    worker_script = tmp_path / "worker.py"
+    worker_script.write_text(
+        "import pathlib, sys, time\n"
+        "from git_loopy.run_control import RunControlArtifact\n"
+        "trace, diagnostics, attached = map(pathlib.Path, sys.argv[1:4])\n"
+        "artifact = RunControlArtifact.acquire(trace)\n"
+        "deadline = time.monotonic() + 30\n"
+        "while not attached.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.02)\n"
+        "diagnostics.write_text(\n"
+        "    'ERROR AGENTS.md declares no runnable feedback loop.\\n', encoding='utf-8'\n"
+        ")\n"
+        "artifact.close()\n"
+        # Teardown outlives the lock, so the Dashboard leaves before the worker exits.
+        "time.sleep(1)\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    worker = subprocess.Popen(
+        [
+            sys.executable,
+            str(worker_script),
+            str(trace_path),
+            str(diagnostics_path),
+            str(attached),
+        ]
+    )
+    monkeypatch.setattr(
+        tui_release, "resolve_runtime_helper", lambda *_args, **_kwargs: helper
+    )
+    warnings: list[str] = []
+    try:
+        rc = run_sidecar.run_terminal_client(
+            repository_root=tmp_path,
+            config=_config(),
+            trace_path=trace_path,
+            control_path=control_path,
+            child=worker,
+            release_version="0.11.1",
+            warn=warnings.append,
+            diagnostics_path=diagnostics_path,
+        )
+    finally:
+        worker.kill()
+        worker.wait()
+
+    assert attached.exists(), "the client never attached the Dashboard"
+    assert not any("line printer" in message for message in warnings), warnings
+    assert rc == 1
+    reported = capsys.readouterr().err + "\n".join(warnings)
+    assert "declares no runnable feedback loop" in reported
+    assert str(diagnostics_path) in reported
+
+
 def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
