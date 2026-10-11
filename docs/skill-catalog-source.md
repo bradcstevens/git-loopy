@@ -235,12 +235,12 @@ the addition of `/jev-ultrafast`. The previous pin,
 `618960344a00fc0af1ffd8a99406f1dd6f16cc20`, carried the `/skill-router` merge
 into `/next`.
 
-The current catalog includes 42 Skills. `/next` now handles both workflow
-routing and skill selection, replacing `/skill-router`; its skill-selection
-and phase-boundary references travel with a standalone installation.
-The upgrade also adopts the upstream retirement of `/loose-ends` and the
-addition of `/sync-model-roster`, alongside the newer chain and merge-gate
-guidance. `writing-great-skills` remains retired in favor of
+The current catalog includes 42 Skills. Since the previous pin, `/next` handles
+both workflow routing and skill selection, replacing `/skill-router`; its
+skill-selection and phase-boundary references travel with a standalone
+installation. That earlier upgrade also adopted the upstream retirement of
+`/loose-ends` and the addition of `/sync-model-roster`, alongside the newer
+chain and merge-gate guidance. `writing-great-skills` remains retired in favor of
 `writing-for-agents`.
 
 The installed catalog is replaced wholesale, but saved Skill policies are not
@@ -258,10 +258,8 @@ operator action rather than an automatic rewrite.
 Remove `build-iterated-agentic-loop` from saved policies and custom prompts
 too; use `/design-control-loop`, which absorbed its scaffolding.
 
-New catalog members do not automatically enter an existing allowlist. The
-packaged Required Skills remain unchanged, and the packaged prompt keeps
-`release`, `model-fit`, `sync-model-roster`, and `jev-ultrafast` out of
-autonomous Iterations. `jev-ultrafast` is not added to existing allowlists
-automatically. Install
-the catalog into your agent client separately to invoke these yourself; doing
+New catalog members, including `jev-ultrafast`, do not automatically enter an
+existing allowlist. The packaged Required Skills remain unchanged, and the
+packaged prompt keeps `release`, `model-fit`, `sync-model-roster`, and
+`jev-ultrafast` out of autonomous Iterations. Install the catalog into your agent client separately to invoke these yourself; doing
 so neither changes git-loopy's saved policy nor authorizes a release.

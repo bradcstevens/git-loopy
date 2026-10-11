@@ -266,7 +266,7 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/create-readme`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/create-readme) | Write a project README from what the repository actually contains. |
 | [`/writing-for-agents`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/writing-for-agents) | Write documents agents read — skills, `AGENTS.md`, and their siblings. |
 | [`/playwright-cli`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/playwright-cli) | Exercise browser behavior, capture screenshots, and automate web interactions. |
-| [`/jev-ultrafast`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/jev-ultrafast) | Run fast goal-driven browser automation for navigating, searching, and interacting with visible web pages, when a user requests it. |
+| [`/jev-ultrafast`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/jev-ultrafast) | On explicit request, run fast goal-driven browser automation on visible web pages. |
 | [`/microsoft-docs`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-docs) | Ground Microsoft technology questions in official documentation. |
 | [`/microsoft-code-reference`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-code-reference) | Look up Microsoft API references and verify SDK code against working samples. |
 | [`/microsoft-foundry`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-foundry) | Deploy, evaluate, optimize, and operate Microsoft Foundry agents. |
