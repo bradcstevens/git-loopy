@@ -1918,6 +1918,40 @@ and exhausted delivery retries, so the canonical local resolution and delivery s
 describe the current assignment, never the label as authority to choose, override, or pin a route.
 _Avoid_: model pin, routing input.
 
+### Agent memory (accepted design)
+
+This constraint completes the vocabulary of
+[ADR-0076](docs/adr/0076-in-run-agents-carry-no-memory-across-issues.md). The existing
+**Agent** entry above describes current behavior; this decision record does not
+establish delivery acceptance.
+
+**Agent memory**:
+Anything an **Agent** could recall from an earlier issue other than what the issue
+tracker and the repository's history record. No in-Run **Agent profile** has any: every
+**Agent** starts fresh. A lesson that goes beyond its issue leaves the **Run** as a
+Follow-up on the tracker. The **Planner**, which works outside a Run, is not bound by
+this rule, but its approved graph must not depend on its memory.
+_Avoid_: profile memory, learnings, scratchpad.
+
+### Agent profiles (accepted design)
+
+This term completes the vocabulary of
+[ADR-0078](docs/adr/0078-one-agent-profile-per-task-type.md). The existing **Required
+Skill**, **Skill policy** and **Task type** entries above describe current behavior; this
+decision record does not establish delivery acceptance. The ADR's Permitted Skills
+enter this glossary when they ship.
+
+**Agent profile**:
+A reusable definition that an **Agent** starts from: role instructions layered on the Run
+instructions, preloaded **Required Skills**, the further Skills it may invoke on demand,
+and tools. There is one per **Task type**: the **Planner** is `planning`, the **Reviewer**
+is `review`, and the other five are execution profiles. An issue's Task type selects its
+profile, and an issue whose Task type does not resolve runs as `implementation`. An
+**Agent** can reach only its profile's Skills, and only those the **Effective Skill
+policy** also enables. A profile carries no model or reasoning effort, because
+**Routing** alone decides those.
+_Avoid_: custom agent (the harness mechanism), persona, role, worker.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not

@@ -1,0 +1,46 @@
+# Runs: 110 JSONL Run logs; 81 with at least one Pickup
+Run outcomes: {'empty_pool': 11, 'iteration_cap': 30, 'stuck': 25, None: 29, 'operator_stop': 1, 'interrupted': 1, 'all_skipped': 7, 'all_blocked': 6}
+Parallel-mode Runs: 43
+Span: 2026-07-18 -> 2026-10-02
+
+# Pickups: 479 (Run, issue) Pickups over 327 distinct issues; 1 close-calls on issues the Run never picked up excluded
+  closed: 345 (72.0%)
+  no-progress: 53 (11.1%)
+  gone (activated, no end record): 26 (5.4%)
+  advanced: 25 (5.2%)
+  no-close (early schema): 15 (3.1%)
+  aborted: 15 (3.1%)
+  serial: 200/245 closed (81.6%)
+  parallel: 145/234 closed (62.0%)
+  early schema: 74/107 closed (69.2%)
+  current schema: 271/372 closed (72.8%)
+  of the closed: 291 with work evidence (advanced status, Checkpoint or agent close call); 54 closed in the Run window with only no-progress/aborted/no record (already-done closures or a concurrent closer)
+Closer of in-Run closes: {'none (gh issue close)': 228, 'Commit': 114, 'PullRequest': 3}
+stateReason of in-Run closes: {'COMPLETED': 345}
+Close actor: {'bradcstevens': 345}
+
+# Distinct issues: 327 picked up; 311 closed by a Run (95.1%); 16 never closed by a Run
+Fate of the never-closed-by-a-Run issues: {'closed outside a Run by manual (COMPLETED)': 7, 'closed outside a Run by Commit (COMPLETED)': 2, 'closed outside a Run by PullRequest (COMPLETED)': 4, 'closed outside a Run by manual (NOT_PLANNED)': 1, 'still open': 2}
+Pickups per closed issue: n=311 median=1.0 p90=2.0 mean=1.3 total=407.0
+  closing Pickup carried work evidence: 264/311
+  first-Pickup close rate: 252/327
+Iterations per closed issue: n=311 median=1.0 p90=3.0 mean=1.8 total=554.0
+Active minutes per closed issue (all Pickups up to close): n=226 median=55.5 p90=148.7 mean=81.8 total=18,492.6
+AI Credits per closed issue (only where every Pickup recorded credits): n=171 median=1,415.4 p90=4,770.0 mean=2,517.5 total=430,497.7
+Tokens (M) per closed issue: n=287 median=17.7 p90=60.2 mean=29.2 total=8,371.3
+Credits recorded on 266/479 Pickups; total 493,876; share spent on Pickups that did not close: 43.8%
+Active hours recorded: 361.9; share on Pickups that did not close: 33.3%
+
+# Strikes / Skips / NMT
+Strikes warn: 123 abort: 25 Runs ended stuck: 25
+Pickup skips by reason: {'already attempted this Run (no_progress)': 103, 'already attempted this Run (timeout)': 41, 'blocked_by_open_dependency': 1772, 'already attempted this Run (no_more_tasks)': 65, 'already attempted this Run (crash)': 18}
+Iterations emitting NO MORE TASKS: 34 of 644 Iterations; Pickups with NMT: 28
+Iteration outcomes: {'null': 128, 'no_progress': 181, 'advanced': 303, 'aborted': 19, 'all_skipped': 7, 'all_blocked': 6}
+
+# Parallel mode
+Contribution ends: {'published/advanced': 26, 'unchanged_branch/no_progress': 7, 'serial_fallback/no_progress': 5} Integration published: 12 serial fallbacks: 327
+
+# Quality proxies over issues closed by a Run
+Reopened after the Run closed it: 6/311 (1.9%) [251, 252, 603, 604, 607, 608]
+Referenced by a later-created issue: 53/311 (17.0%)
+  ...where that issue is bug-labelled or titled fix/regress/follow-up/broken/revert: 11/311 (3.5%) [72, 205, 219, 251, 252, 304, 316, 356, 396, 412, 456]
