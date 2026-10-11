@@ -229,8 +229,11 @@ names this pin rather than repeating a revision that could drift away from it.
 ### Upgrading existing policies
 
 The catalog is pinned to
-`618960344a00fc0af1ffd8a99406f1dd6f16cc20`, published and proved for the
-`/skill-router` merge into `/next`.
+`89ba57c41f9959699e2267f794d200b57b229c02`, published and proved for the
+retirement of `/build-iterated-agentic-loop` into `/design-control-loop` and
+the addition of `/jev-ultrafast`. The previous pin,
+`618960344a00fc0af1ffd8a99406f1dd6f16cc20`, carried the `/skill-router` merge
+into `/next`.
 
 The current catalog includes 42 Skills. `/next` now handles both workflow
 routing and skill selection, replacing `/skill-router`; its skill-selection
@@ -252,8 +255,13 @@ Remove `skill-router` and `loose-ends` from saved policies and custom prompts
 as well; use `/next` for skill selection. The policy repair remains an explicit
 operator action rather than an automatic rewrite.
 
+Remove `build-iterated-agentic-loop` from saved policies and custom prompts
+too; use `/design-control-loop`, which absorbed its scaffolding.
+
 New catalog members do not automatically enter an existing allowlist. The
 packaged Required Skills remain unchanged, and the packaged prompt keeps
-`release`, `model-fit`, and `sync-model-roster` out of autonomous Iterations. Install
+`release`, `model-fit`, `sync-model-roster`, and `jev-ultrafast` out of
+autonomous Iterations. `jev-ultrafast` is not added to existing allowlists
+automatically. Install
 the catalog into your agent client separately to invoke these yourself; doing
 so neither changes git-loopy's saved policy nor authorizes a release.
