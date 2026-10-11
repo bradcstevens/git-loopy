@@ -17,7 +17,8 @@ A Hermes card can pin extra Skills and a model. A git-loopy issue can do
 neither.
 
 - **Skills** reach an **Agent** only through the **Agent profile** it runs
-  under. Tracker text that could add a Skill would widen the closed-world
+  under, which its **Task type** selects (ADR-0078). Tracker text that could
+  add a Skill would widen the closed-world
   **Skill policy** (ADR-0015, ADR-0025) from outside it.
 - **Model and effort** come from **Routing** (ADR-0035) and, once delivered, the
   evidence behind **Dynamic routing** (ADR-0057). The per-issue lever stays the
