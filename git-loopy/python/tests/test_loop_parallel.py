@@ -155,7 +155,6 @@ from git_loopy.session_outcome import (
 )
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy import dynamic_route
-from git_loopy import sources as sources_module
 from git_loopy import static_route
 from git_loopy.static_route import RoutePolicy
 from git_loopy.sources import Pickup, PoolCandidate
@@ -6570,16 +6569,27 @@ def test_mixed_priority_dynamic_routes_keep_proposals_for_their_own_pickups(
 ) -> None:
     # One refill turn starts #41's retry and #46 as two Lanes whose setups
     # interleave on thread hops, so either may bind first (#741). Holding one
-    # Lane's pre-Pickup refresh drives each order deterministically.
-    refresh = sources_module.GitHubIssueSource.refresh_for_preparation
+    # refill Lane's pre-Pickup refresh until the other has bound drives each
+    # order deterministically.
+    other_lane, other_bindings = (46, 1) if slower_refill_lane == 41 else (41, 2)
+    refresh = loop_module.GitHubIssueSource.refresh_for_preparation
+
+    def bound(ref):
+        return sum(
+            e["type"] == "wrapper.pickup.bound" and e["issue"] == ref
+            for e in _logged_events(tmp_path)
+        )
 
     def held_refresh(self, item):
-        if item.ref == slower_refill_lane:
-            time.sleep(0.2)
+        if item.ref == slower_refill_lane and bound(44):
+            deadline = time.monotonic() + 10
+            while bound(other_lane) < other_bindings:
+                assert time.monotonic() < deadline, "the other refill Lane never bound"
+                time.sleep(0.005)
         return refresh(self, item)
 
     monkeypatch.setattr(
-        sources_module.GitHubIssueSource, "refresh_for_preparation", held_refresh
+        loop_module.GitHubIssueSource, "refresh_for_preparation", held_refresh
     )
     _wire_rolling_run(
         tmp_path, monkeypatch,
@@ -6609,6 +6619,7 @@ def test_mixed_priority_dynamic_routes_keep_proposals_for_their_own_pickups(
     pickups = [(e["issue"], e["iter"] is None) for e in bindings]
     assert pickups[:2] == [(41, True), (44, False)]
     assert sorted(pickups[2:]) == [(41, True), (46, True)]
+    assert pickups[3][0] == slower_refill_lane
     assert all(e["model"] == "claude-opus-5" for e in bindings if e["issue"] != 46)
     assert [e["model"] for e in bindings if e["issue"] == 46] == ["gpt-5.6-terra"]
     assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
