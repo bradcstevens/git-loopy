@@ -307,8 +307,14 @@ contribution measured from its `wrapper.contribution.start`, and the cohort stil
 open. That summary takes the place of `lane refill stopped`, at the same Header
 precedence, because it explains the same stopped refill; an interrupted dispatch's
 `serial fallback` still wins over it. Where it fits, a second segment splits that
-cohort by phase — `2 live, 1 setup, 1 parked, 2 integration` — and a narrow Header
-drops that split first. `integration` counts admitted, integrating and recovering
+cohort by phase — `2 live, 1 setup, 1 parked, 2 integration`. The Integration
+headline remains a separate segment after the split at the same rank-4 Header
+precedence: `integration 1/2 · 1 parked · narrowed by API rate limiting`.
+Wider terminals show both; fitting at 160 columns drops the headline before the
+split, and narrower Headers then drop the split before the drain summary. The
+cohort split takes precedence by human decision; it does not replace Integration
+WIP against the high-water, parked count or narrowing pressure when those fit.
+`integration` in the split counts admitted, integrating and recovering
 contributions, and a park after admission is ignored by the drain, Integration
 backlog and Queue alike. `setup` is a started contribution with no contribution-stamped Agent
 session Event yet; issue activation is not that sign, because it is emitted while

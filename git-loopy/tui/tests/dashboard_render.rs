@@ -1368,6 +1368,57 @@ fn draining(drain: SerialDrainView) -> ParallelDeclaration {
 }
 
 #[test]
+fn a_serial_drain_keeps_integration_pressure_after_the_cohort_when_width_allows() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.header.parallel = draining(SerialDrainView {
+        elapsed_seconds: Some(83.0),
+        oldest_lane_age_seconds: Some(754.0),
+        cohort: DrainCohortView {
+            open: 6,
+            live_sessions: 2,
+            setup: 1,
+            parked: 1,
+            admitted: 1,
+            recovering: 1,
+            ..DrainCohortView::default()
+        },
+    });
+    view.dashboard.header.parallel.pressure = Some("rate_limit".to_string());
+
+    let header_at = |columns| {
+        band(
+            &render_lines(&view, columns, 36, TerminalCapabilities::default()),
+            "git-loopy",
+        )
+        .join("\n")
+    };
+    let wide = header_at(240);
+    assert!(
+        wide.contains(
+            "serial drain 0:01:23 · oldest lane 0:12:34 · 6 open  •  \
+             2 live, 1 setup, 1 parked, 2 integration  •  \
+             integration 1/2 · 1 parked · narrowed by API rate limiting"
+        ),
+        "a wide Header keeps the drain, cohort split and Integration headline in order, in:\n{wide}"
+    );
+    let fitted = header_at(160);
+    assert!(
+        fitted.contains("2 live, 1 setup, 1 parked, 2 integration")
+            && !fitted.contains("integration 1/2")
+            && !fitted.contains("narrowed by"),
+        "at 160 columns the Integration headline yields before the cohort split, in:\n{fitted}"
+    );
+    let narrow = header_at(110);
+    assert!(
+        narrow.contains("serial drain 0:01:23 · oldest lane 0:12:34 · 6 open")
+            && !narrow.contains("2 live")
+            && !narrow.contains("integration 1/2")
+            && !narrow.contains("narrowed by"),
+        "a narrow Header drops both later segments before the drain summary, in:\n{narrow}"
+    );
+}
+
+#[test]
 fn the_header_shows_a_serial_drain_cohort_oldest_lane_and_wait() {
     let mixed = SerialDrainView {
         elapsed_seconds: Some(83.0),

@@ -903,7 +903,12 @@ fn parallel_segments(header: &Header, glyphs: &Glyphs) -> Vec<(u8, String)> {
     // same rank; an interrupted dispatch's cause still takes precedence.
     if parallel.serial_fallback_reason.is_none() {
         if let Some(drain) = parallel.serial_drain.as_ref() {
-            return serial_drain_segments(drain, glyphs);
+            let mut segments = serial_drain_segments(drain, glyphs);
+            let headline = integration_headline(header);
+            if !headline.is_empty() {
+                segments.push((4, headline.join(" · ")));
+            }
+            return segments;
         }
     }
 
@@ -949,10 +954,11 @@ fn parallel_segments(header: &Header, glyphs: &Glyphs) -> Vec<(u8, String)> {
 /// The latched **Serial drain** (ADR-0074): how long the serial Iteration has
 /// waited, the oldest open contribution's age, and the cohort it waits for.
 ///
-/// Both hold the posture's own rank, and the per-phase split, placed last,
-/// yields first on a narrow Header. Neither is a forecast: nothing here says how long
-/// remains, and an unobserved start renders unknown. An empty cohort has no
-/// oldest Lane, which is not the same as an unknown one.
+/// Both hold the posture's own rank. The caller places the Integration headline
+/// after the per-phase split at that same rank, so narrowing drops the headline
+/// before the split, then the summary. Neither is a forecast: nothing here says
+/// how long remains, and an unobserved start renders unknown. An empty cohort
+/// has no oldest Lane, which is not the same as an unknown one.
 fn serial_drain_segments(drain: &SerialDrainView, glyphs: &Glyphs) -> Vec<(u8, String)> {
     let known = |seconds: Option<f64>| seconds.map_or_else(|| glyphs.unknown.to_string(), duration);
     let cohort = &drain.cohort;
