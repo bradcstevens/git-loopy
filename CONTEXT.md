@@ -1935,6 +1935,25 @@ Follow-up on the tracker. The **Planner**, which works outside a Run, is not bou
 this rule, but its approved graph must not depend on its memory.
 _Avoid_: profile memory, learnings, scratchpad.
 
+### Agent profiles (accepted design)
+
+This term completes the vocabulary of
+[ADR-0078](docs/adr/0078-one-agent-profile-per-task-type.md). The existing **Required
+Skill**, **Skill policy** and **Task type** entries above describe current behavior; this
+decision record does not establish delivery acceptance. The ADR's Permitted Skills
+enter this glossary when they ship.
+
+**Agent profile**:
+A reusable definition that an **Agent** starts from: role instructions layered on the Run
+instructions, preloaded **Required Skills**, the further Skills it may invoke on demand,
+and tools. There is one per **Task type**: the **Planner** is `planning`, the **Reviewer**
+is `review`, and the other five are execution profiles. An issue's Task type selects its
+profile, and an issue whose Task type does not resolve runs as `implementation`. An
+**Agent** can reach only its profile's Skills, and only those the **Effective Skill
+policy** also enables. A profile carries no model or reasoning effort, because
+**Routing** alone decides those.
+_Avoid_: custom agent (the harness mechanism), persona, role, worker.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
