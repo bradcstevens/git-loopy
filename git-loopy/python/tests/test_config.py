@@ -474,12 +474,12 @@ def test_the_tracked_project_config_preserves_all_task_type_routes(
     ).run
 
     assert dict(run.routing) == {
-        "planning": ("claude-opus-5.5", "xhigh"),
-        "review": ("claude-opus-5.5", "high"),
-        "implementation": ("gpt-6.1-sol", "high"),
-        "test": ("gpt-6.1-sol", "high"),
-        "docs": ("gpt-6.1-sol", "low"),
-        "chore": ("claude-haiku-5.5", "medium"),
-        "bugfix": ("gpt-6.1-sol", "xhigh"),
+        "planning": ("claude-opus-5.5", "medium"),
+        "review": ("claude-opus-5.5", "medium"),
+        "implementation": ("gpt-6.1-sol", "medium"),
+        "test": ("gpt-6.1-sol", "medium"),
+        "docs": ("claude-sonnet-5.5", "medium"),
+        "chore": ("claude-sonnet-5.5", "low"),
+        "bugfix": ("claude-opus-5.5", "medium"),
     }
     assert warnings == []
