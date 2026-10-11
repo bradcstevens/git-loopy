@@ -178,7 +178,7 @@ def test_packaged_prompt_makes_genuine_issue_blockers_native_dependencies() -> N
 #: The external Skill catalog revision the name set below was read at. Asserted
 #: against ``git_loopy/skill_source.json`` so that moving the pin has to walk
 #: *through* this list rather than around it.
-_PINNED_CATALOG_REVISION = "89ba57c41f9959699e2267f794d200b57b229c02"
+_PINNED_CATALOG_REVISION = "d4b73153f654b9f8251d4ee28bcd49aeb34d6fae"
 
 #: Every canonical Skill name in the **installed catalog** at that revision.
 #:
@@ -208,7 +208,7 @@ _PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
         "microsoft-code-reference",
         "microsoft-docs",
         "microsoft-foundry",
-        "model-fit",
+        "model-scorecard",
         "narrow-react-prop-types",
         "next",
         "playwright-cli",
@@ -217,6 +217,7 @@ _PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
         "release",
         "research",
         "resolving-merge-conflicts",
+        "set-task-models",
         "setup-git-loopy-skills",
         "show-me",
         "sync-model-roster",
@@ -255,7 +256,8 @@ _EXPECTED_EXCLUSIONS: frozenset[str] = frozenset(
         "next",
         "loop-me",
         "setup-git-loopy-skills",
-        "model-fit",
+        "set-task-models",
+        "model-scorecard",
         "sync-model-roster",
         "jev-ultrafast",
         "release",
@@ -353,7 +355,7 @@ def test_the_prompt_excludes_the_orchestrators_that_would_nest() -> None:
         )
 
 
-@pytest.mark.parametrize("name", ["model-fit", "release", "sync-model-roster"])
+@pytest.mark.parametrize("name", ["set-task-models", "release", "sync-model-roster"])
 def test_the_prompt_excludes_user_invoked_batch_operations(name: str) -> None:
     """A catalog upgrade cannot authorize work beyond the bound issue."""
     assert name in _excluded_skills()

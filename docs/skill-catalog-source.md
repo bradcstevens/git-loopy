@@ -229,19 +229,19 @@ names this pin rather than repeating a revision that could drift away from it.
 ### Upgrading existing policies
 
 The catalog is pinned to
-`89ba57c41f9959699e2267f794d200b57b229c02`, published and proved for the
-retirement of `/build-iterated-agentic-loop` into `/design-control-loop` and
-the addition of `/jev-ultrafast`. The previous pin,
-`618960344a00fc0af1ffd8a99406f1dd6f16cc20`, carried the `/skill-router` merge
-into `/next`.
+`d4b73153f654b9f8251d4ee28bcd49aeb34d6fae`, published and proved for the
+rename of `/model-fit` to `/set-task-models` and the addition of
+`/model-scorecard`. The previous pin,
+`89ba57c41f9959699e2267f794d200b57b229c02`, carried the retirement of
+`/build-iterated-agentic-loop` into `/design-control-loop` and the addition of
+`/jev-ultrafast`.
 
-The current catalog includes 42 Skills. Since the previous pin, `/next` handles
-both workflow routing and skill selection, replacing `/skill-router`; its
-skill-selection and phase-boundary references travel with a standalone
-installation. That earlier upgrade also adopted the upstream retirement of
-`/loose-ends` and the addition of `/sync-model-roster`, alongside the newer
-chain and merge-gate guidance. `writing-great-skills` remains retired in favor of
-`writing-for-agents`.
+The current catalog includes 43 Skills. `/next` handles both workflow routing
+and skill selection, replacing `/skill-router`; its skill-selection and
+phase-boundary references travel with a standalone installation. An earlier
+upgrade also adopted the upstream retirement of `/loose-ends` and the addition
+of `/sync-model-roster`, alongside the newer chain and merge-gate guidance.
+`writing-great-skills` remains retired in favor of `writing-for-agents`.
 
 The installed catalog is replaced wholesale, but saved Skill policies are not
 rewritten. If a policy still enables `writing-great-skills`, use
@@ -258,8 +258,12 @@ operator action rather than an automatic rewrite.
 Remove `build-iterated-agentic-loop` from saved policies and custom prompts
 too; use `/design-control-loop`, which absorbed its scaffolding.
 
-New catalog members, including `jev-ultrafast`, do not automatically enter an
-existing allowlist. The packaged Required Skills remain unchanged, and the
-packaged prompt keeps `release`, `model-fit`, `sync-model-roster`, and
-`jev-ultrafast` out of autonomous Iterations. Install the catalog into your agent client separately to invoke these yourself; doing
+Replace `model-fit` with `set-task-models` in saved policies and custom
+prompts; the Skill was renamed, not changed.
+
+New catalog members, including `jev-ultrafast` and `model-scorecard`, do not
+automatically enter an existing allowlist. The packaged Required Skills remain
+unchanged, and the packaged prompt keeps `release`, `set-task-models`,
+`model-scorecard`, `sync-model-roster`, and `jev-ultrafast` out of autonomous
+Iterations. Install the catalog into your agent client separately to invoke these yourself; doing
 so neither changes git-loopy's saved policy nor authorizes a release.
