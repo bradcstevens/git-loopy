@@ -178,7 +178,7 @@ def test_packaged_prompt_makes_genuine_issue_blockers_native_dependencies() -> N
 #: The external Skill catalog revision the name set below was read at. Asserted
 #: against ``git_loopy/skill_source.json`` so that moving the pin has to walk
 #: *through* this list rather than around it.
-_PINNED_CATALOG_REVISION = "618960344a00fc0af1ffd8a99406f1dd6f16cc20"
+_PINNED_CATALOG_REVISION = "89ba57c41f9959699e2267f794d200b57b229c02"
 
 #: Every canonical Skill name in the **installed catalog** at that revision.
 #:
@@ -189,7 +189,6 @@ _PINNED_CATALOG_REVISION = "618960344a00fc0af1ffd8a99406f1dd6f16cc20"
 _PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
     {
         "batch-grill-me",
-        "build-iterated-agentic-loop",
         "code-review",
         "codebase-audit",
         "codebase-design",
@@ -203,6 +202,7 @@ _PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
         "handoff",
         "implement",
         "improve-codebase-architecture",
+        "jev-ultrafast",
         "loop-me",
         "mermaid-diagrams",
         "microsoft-code-reference",
@@ -255,9 +255,9 @@ _EXPECTED_EXCLUSIONS: frozenset[str] = frozenset(
         "next",
         "loop-me",
         "setup-git-loopy-skills",
-        "build-iterated-agentic-loop",
         "model-fit",
         "sync-model-roster",
+        "jev-ultrafast",
         "release",
         "writing-for-agents",
     }

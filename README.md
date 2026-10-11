@@ -258,7 +258,6 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | Skill | Purpose |
 | --- | --- |
 | [`/setup-git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/setup-git-loopy-skills) | Configure the repository's issue tracker, triage labels, and domain-document layout. |
-| [`/build-iterated-agentic-loop`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/build-iterated-agentic-loop) | Build a repository-local skill and matching iterative coding-agent workflow, prompt, memory, and reference templates. |
 | [`/design-control-loop`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/design-control-loop) | Interview an operator, design a codebase control loop, and build its local commands and scheduled workflow. |
 | [`/model-fit`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/model-fit) | On explicit invocation, research available Copilot models and align model, effort, context, and enforcement settings with git-loopy routing. |
 | [`/wizard`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wizard) | Generate an interactive bash wizard for a manual procedure only a human can carry out. |
@@ -267,6 +266,7 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/create-readme`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/create-readme) | Write a project README from what the repository actually contains. |
 | [`/writing-for-agents`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/writing-for-agents) | Write documents agents read — skills, `AGENTS.md`, and their siblings. |
 | [`/playwright-cli`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/playwright-cli) | Exercise browser behavior, capture screenshots, and automate web interactions. |
+| [`/jev-ultrafast`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/jev-ultrafast) | On explicit request, run fast goal-driven browser automation on visible web pages. |
 | [`/microsoft-docs`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-docs) | Ground Microsoft technology questions in official documentation. |
 | [`/microsoft-code-reference`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-code-reference) | Look up Microsoft API references and verify SDK code against working samples. |
 | [`/microsoft-foundry`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-foundry) | Deploy, evaluate, optimize, and operate Microsoft Foundry agents. |

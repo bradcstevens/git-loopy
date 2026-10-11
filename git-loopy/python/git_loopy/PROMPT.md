@@ -65,6 +65,7 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 - `/release` — publishes a completed batch only when the user requests a release, never as a side effect of completing one issue.
 - `/model-fit` — recalibrates models and updates operator configuration only on explicit user invocation.
 - `/sync-model-roster` — repairs the pinned model roster and changes operator configuration only on explicit user invocation.
+- `/jev-ultrafast` — runs fast browser automation only when a user requests it or explicitly asks to use Jev.
 
 **Session-management, setup & authoring** — irrelevant to a fresh one-shot `copilot -p` iteration:
 
@@ -72,7 +73,7 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 - `/implement` — a human-driven "implement this spec end-to-end" orchestrator; this loop already *is* that orchestration (it picks one task, drives `/tdd`, and commits), so invoking it would just nest a second driver.
 - `/next` — a router whose route table hands work straight to `/implement`, so it nests that same second driver; and the runner has already bound your issue, so its selection role contradicts the binding rather than merely duplicating it.
 - `/loop-me` — starts a loop of its own, which inside a loop iteration is the nesting above one level worse.
-- `/setup-git-loopy-skills`, `/writing-for-agents`, `/build-iterated-agentic-loop` — install skills, author the documents agents read, or scaffold another agent workflow, not loop work.
+- `/setup-git-loopy-skills`, `/writing-for-agents` — install skills or author the documents agents read, not loop work.
 
 The guidance the excluded and now-removed skills used to carry still holds and is already inlined above: favour reviewable output over token compression while running unattended, go up a layer to map an unfamiliar area before drilling in, stress-test plans against the domain docs, and reach for deep-module design via `/codebase-design`.
 
