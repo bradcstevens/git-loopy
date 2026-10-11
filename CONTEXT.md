@@ -1938,7 +1938,7 @@ _Avoid_: profile memory, learnings, scratchpad.
 ### Agent profiles (accepted design)
 
 This term completes the vocabulary of
-[ADR-0077](docs/adr/0077-one-agent-profile-per-task-type.md). The existing **Required
+[ADR-0078](docs/adr/0078-one-agent-profile-per-task-type.md). The existing **Required
 Skill**, **Skill policy** and **Task type** entries above describe current behavior; this
 decision record does not establish delivery acceptance. The ADR's Permitted Skills
 enter this glossary when they ship.
