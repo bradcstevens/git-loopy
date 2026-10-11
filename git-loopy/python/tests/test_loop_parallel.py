@@ -6563,9 +6563,34 @@ def test_priority_dynamic_admission_prepares_without_binding_and_pickup_revalida
         assert _first_work(events)["type"] == "wrapper.contribution.start"
 
 
+@pytest.mark.parametrize("slower_refill_lane", [41, 46])
 def test_mixed_priority_dynamic_routes_keep_proposals_for_their_own_pickups(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, slower_refill_lane
 ) -> None:
+    # One refill turn starts #41's retry and #46 as two Lanes whose setups
+    # interleave on thread hops, so either may bind first (#741). Holding one
+    # refill Lane's pre-Pickup refresh until the other has bound drives each
+    # order deterministically.
+    other_lane, other_bindings = (46, 1) if slower_refill_lane == 41 else (41, 2)
+    refresh = loop_module.GitHubIssueSource.refresh_for_preparation
+
+    def bound(ref):
+        return sum(
+            e["type"] == "wrapper.pickup.bound" and e["issue"] == ref
+            for e in _logged_events(tmp_path)
+        )
+
+    def held_refresh(self, item):
+        if item.ref == slower_refill_lane and bound(44):
+            deadline = time.monotonic() + 10
+            while bound(other_lane) < other_bindings:
+                assert time.monotonic() < deadline, "the other refill Lane never bound"
+                time.sleep(0.005)
+        return refresh(self, item)
+
+    monkeypatch.setattr(
+        loop_module.GitHubIssueSource, "refresh_for_preparation", held_refresh
+    )
     _wire_rolling_run(
         tmp_path, monkeypatch,
         [
@@ -6591,10 +6616,12 @@ def test_mixed_priority_dynamic_routes_keep_proposals_for_their_own_pickups(
     asyncio.run(loop_module.run(cfg))
     events = _logged_events(tmp_path)
     bindings = [e for e in events if e["type"] == "wrapper.pickup.bound"]
-    assert [(e["issue"], e["iter"] is None) for e in bindings] == [
-        (41, True), (44, False), (46, True), (41, True),
-    ]
+    pickups = [(e["issue"], e["iter"] is None) for e in bindings]
+    assert pickups[:2] == [(41, True), (44, False)]
+    assert sorted(pickups[2:]) == [(41, True), (46, True)]
+    assert pickups[3][0] == slower_refill_lane
     assert all(e["model"] == "claude-opus-5" for e in bindings if e["issue"] != 46)
+    assert [e["model"] for e in bindings if e["issue"] == 46] == ["gpt-5.6-terra"]
     assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
     latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
     lane_end = next(e for e in events if e["type"] == "wrapper.contribution.end")
