@@ -23,6 +23,8 @@ import sys
 import textwrap
 import threading
 import time
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -221,10 +223,7 @@ def _stop(process: subprocess.Popen[str] | None) -> None:
     process.wait(timeout=30)
 
 
-def _cleanup(
-    *processes: subprocess.Popen[str] | None,
-    fds: tuple[int | None, ...] = (),
-) -> None:
+def _cleanup_actions(*actions: Callable[[], object]) -> None:
     """Finish every teardown action without replacing the test's first failure."""
     original = sys.exception()
     error = original
@@ -236,40 +235,46 @@ def _cleanup(
         elif failure is not error:
             error.add_note(f"Additional Attach teardown failure: {failure!r}")
 
-    # Signal helpers before revoking the pty can strand a macOS process group.
-    if os.name != "nt":
-        for process in processes:
-            if process is not None:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                except PermissionError as failure:
-                    if process.poll() is None:
-                        record(failure)
-                except BaseException as failure:
-                    record(failure)
-    # Revoking the pty also releases a session leader blocked on its terminal.
-    for fd in fds:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except BaseException as failure:
-                record(failure)
-    for process in processes:
+    for action in actions:
         try:
-            _stop(process)
+            action()
         except BaseException as failure:
             record(failure)
-            if process is not None:
-                try:
-                    if process.poll() is None:
-                        process.kill()
-                    process.wait(timeout=30)
-                except BaseException as failure:
-                    record(failure)
     if error is not None and original is None:
         raise error
+
+
+def _cleanup(
+    *processes: subprocess.Popen[str] | None,
+    fds: tuple[int | None, ...] = (),
+) -> None:
+    def stop_group(process: subprocess.Popen[str]) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            if process.poll() is None:
+                raise
+
+    def stop_and_reap(process: subprocess.Popen[str] | None) -> None:
+        try:
+            _stop(process)
+        except BaseException as original:
+            try:
+                _stop(process)
+            except BaseException as failure:
+                original.add_note(f"Additional Attach stop failure: {failure!r}")
+            raise
+
+    actions: list[Callable[[], object]] = []
+    # Signal helpers before revoking the pty can strand a macOS process group.
+    if os.name != "nt":
+        actions.extend(partial(stop_group, process) for process in processes if process)
+    # Revoking the pty also releases a session leader blocked on its terminal.
+    actions.extend(partial(os.close, fd) for fd in fds if fd is not None)
+    actions.extend(partial(stop_and_reap, process) for process in processes)
+    _cleanup_actions(*actions)
 
 
 def _tell(inbox: Path, command: str) -> None:
@@ -511,6 +516,14 @@ def test_a_stand_in_run_exits_when_its_test_process_disappears(
         start_new_session=True,
     )
     worker_exited = False
+
+    def stop_orphan() -> None:
+        if not worker_exited and pid_record.exists():
+            try:
+                os.kill(int(pid_record.read_text(encoding="utf-8")), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
     try:
         _read_run_id(owner)
         deadline = time.monotonic() + 5
@@ -524,13 +537,11 @@ def test_a_stand_in_run_exits_when_its_test_process_disappears(
         owner.communicate(timeout=5)
         worker_exited = True
     finally:
-        if not worker_exited and pid_record.exists():
-            try:
-                os.kill(int(pid_record.read_text(encoding="utf-8")), signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        _stop(owner)
-        owner.communicate(timeout=10)
+        _cleanup_actions(
+            stop_orphan,
+            partial(_cleanup, owner),
+            partial(owner.communicate, timeout=10),
+        )
 
 
 # ---------------------------------------------------------------------------
