@@ -21,6 +21,16 @@ git-loopy
 root [`README.md`](../../README.md) for positioning, and
 [`docs/runners.md`](../../docs/runners.md) for the full runner reference.
 
+Each finished attempt carries its observed **Ending** beside the unchanged issue
+**Status**: on the issue's `wrapper.iteration.end` row for serial work, or on
+`wrapper.contribution.end` for its Lane. The Queue explains it inline (for example,
+`no-progress · timed out`) and names observed commits or PR advances beside
+`advanced`. Ordinary advancement has no Ending; timeout and crash survive progress
+or closure. Missing Endings stay absent, and `wrapper.strike` remains accounting,
+not the Queue's explanation source (ADR-0075). The retained Python replay
+projection and the live external Rust Dashboard share this semantic contract;
+there is no separate Python live Dashboard widget since #459.
+
 `git-loopy` is the canonical command for the Python member. Shell, PowerShell,
 and Rust Orchestrators are planned around the same contract
 ([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md)). Model,

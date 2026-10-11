@@ -276,6 +276,8 @@ pub enum EventPayload {
     UsageTokens(UsageTokens),
     /// `wrapper.commit.recorded`
     CommitRecorded(CommitRecorded),
+    /// `wrapper.pr.advanced`
+    PrAdvanced(PrAdvanced),
     /// `wrapper.auto_close`, also retained in a finished Activity tail.
     AutoClosed(AutoClosed),
     /// `wrapper.strike`
@@ -883,6 +885,9 @@ pub struct IterationIssue {
     /// Its lifecycle status at Iteration end.
     #[serde(default)]
     pub status: Option<String>,
+    /// How this issue's session ended, when explicitly observed (ADR-0075).
+    #[serde(default)]
+    pub ending: Option<String>,
     /// When it first became the Active issue in this Run.
     #[serde(default, deserialize_with = "lenient_timestamp")]
     pub first_started_at: Option<Timestamp>,
@@ -984,6 +989,14 @@ pub struct AutoClosed {
     pub sha: Option<String>,
 }
 
+/// One observed pull-request advance.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PrAdvanced {
+    pub pr: IssueRef,
+    #[serde(default)]
+    pub sha: Option<String>,
+}
+
 /// One Strike.
 ///
 /// The Python Runner charges a Strike to the issue a Session worked, once per
@@ -1057,6 +1070,10 @@ pub struct StopLifted {
 /// the row `wrapper.contribution.end` publishes once, never re-reported.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ContributionEnd {
+    /// How this contribution's session ended. The top-level record is the
+    /// authority for rolling work, not a Strike or a normalized issue row.
+    #[serde(default)]
+    pub ending: Option<String>,
     /// Whether this contribution reached publication.
     #[serde(default)]
     pub published: Option<bool>,
@@ -1327,6 +1344,10 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         }
         "usage.tokens" => EventPayload::UsageTokens(decode_or_default(value)),
         "wrapper.commit.recorded" => EventPayload::CommitRecorded(decode_or_default(value)),
+        "wrapper.pr.advanced" => match serde_json::from_value(value.clone()) {
+            Ok(advance) => EventPayload::PrAdvanced(advance),
+            Err(_) => EventPayload::Other,
+        },
         "wrapper.auto_close" => match serde_json::from_value(value.clone()) {
             Ok(closure) => EventPayload::AutoClosed(closure),
             Err(_) => EventPayload::Other,

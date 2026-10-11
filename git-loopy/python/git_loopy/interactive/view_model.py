@@ -284,7 +284,7 @@ def _route(route: ResolvedRoute | None) -> dict[str, Any] | None:
     """
     if route is None:
         return None
-    projected = {
+    projected: dict[str, Any] = {
         "model": route.model,
         "effort": route.effort,
         "source": route.source,
@@ -331,6 +331,9 @@ def _queue_row(row: QueueRow, *, denomination: CostDenomination) -> dict[str, An
     return {
         "issue": row.ref,
         "status": row.status,
+        **({"ending": row.ending} if row.ending is not None else {}),
+        **({"commits": row.commits} if row.commits is not None else {}),
+        **({"pr_advances": row.pr_advances} if row.pr_advances is not None else {}),
         "started_at": _timestamp(row.started_wall),
         "active_seconds": row.active_seconds,
         "closed_at": _timestamp(row.closed_wall),

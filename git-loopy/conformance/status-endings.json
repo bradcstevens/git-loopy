@@ -1,0 +1,20 @@
+{
+  "fixture_schema_version": "1.0",
+  "wrapper_contract_version": "2.26",
+  "note": "Producer obligations from real session terminations (ADR-0075). Python drives serial and Lane sessions; shell and PowerShell emission is owed by #732. Wire serialization and Dashboard replay are pinned separately in event-schema.json and dashboard-insights.json.",
+  "cases": [
+    {"id": "silent", "termination": "completed", "signal": null, "progress": null, "status": "no-progress", "ending": "no_progress"},
+    {"id": "timeout", "termination": "timeout", "signal": null, "progress": null, "status": "no-progress", "ending": "timeout"},
+    {"id": "crash", "termination": "crash", "signal": null, "progress": null, "status": "no-progress", "ending": "crash"},
+    {"id": "no-more-tasks", "termination": "completed", "signal": "no_more_tasks", "progress": null, "status": "no-progress", "ending": "no_more_tasks"},
+    {"id": "content-filtered", "termination": "completed", "signal": "content_filtered", "progress": null, "status": "no-progress", "ending": "content_filtered"},
+    {"id": "advanced", "termination": "completed", "signal": null, "progress": "commit", "status": "advanced", "ending": null},
+    {"id": "advanced-refutes-declaration", "termination": "completed", "signal": "no_more_tasks", "progress": "commit", "status": "advanced", "ending": null},
+    {"id": "advanced-refutes-filter", "termination": "completed", "signal": "content_filtered", "progress": "commit", "status": "advanced", "ending": null},
+    {"id": "advanced-timeout", "termination": "timeout", "signal": null, "progress": "commit", "status": "advanced", "ending": "timeout"},
+    {"id": "advanced-crash", "termination": "crash", "signal": null, "progress": "commit", "status": "advanced", "ending": "crash"},
+    {"id": "closed", "termination": "completed", "signal": null, "progress": "closure", "status": "closed", "ending": null},
+    {"id": "closed-timeout", "termination": "timeout", "signal": null, "progress": "closure", "status": "closed", "ending": "timeout"},
+    {"id": "closed-crash", "termination": "crash", "signal": null, "progress": "closure", "status": "closed", "ending": "crash"}
+  ]
+}

@@ -132,6 +132,39 @@ def test_empty_ledger_yields_no_rows() -> None:
     assert queue_rows(state) == []
 
 
+def test_queue_reads_outcomes_not_strikes_and_clears_an_ending_on_retry() -> None:
+    state = _make_state(_FakeClock())
+    state.render({"type": "wrapper.iteration.start", "iter": 1})
+    _collect(state, 42, 43)
+    state.render({
+        "type": "wrapper.issue.activated", "issue": 42,
+        "activated_at": "2026-06-21T12:00:00Z", "binding_source": "serial_pickup",
+    })
+    state.render({
+        "type": "wrapper.strike", "issue": 42, "ending": "timeout",
+        "strikes": 1, "max_strikes": 3,
+    })
+    assert all(row.ending is None for row in queue_rows(state))
+    state.render({
+        "type": "wrapper.iteration.end", "iter": 1, "outcome": "no_progress",
+        "issues": [{"issue": 42, "status": "no-progress", "ending": "crash"}],
+    })
+    rows = {row.ref: row for row in queue_rows(state)}
+    assert rows[42].ending == "crash"
+    assert rows[43].ending is None
+    state.render({"type": "wrapper.iteration.start", "iter": 2})
+    state.render({
+        "type": "wrapper.issue.activated", "issue": 42,
+        "activated_at": "2026-06-21T12:00:10Z", "binding_source": "serial_pickup",
+    })
+    assert next(row for row in queue_rows(state) if row.ref == 42).ending is None
+    state.render({
+        "type": "wrapper.iteration.end", "iter": 2, "outcome": "advanced",
+        "issues": [{"issue": 42, "status": "advanced"}],
+    })
+    assert all(row.ending is None for row in queue_rows(state))
+
+
 def test_collected_pool_lists_every_issue_as_queued() -> None:
     clock = _FakeClock()
     state = _make_state(clock)

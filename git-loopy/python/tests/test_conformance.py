@@ -1307,8 +1307,8 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     schema stays 1.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.6"
-    assert _EVENT_SCHEMA["contract_version"] == "2.24"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.7"
+    assert _EVENT_SCHEMA["contract_version"] == "2.26"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1622,6 +1622,11 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "peak_context_window",
             ],
             "consumption_required": ["model", "tokens_in", "tokens_out"],
+            "issue_optional": ["ending"],
+            "ending_values": [outcome.value for outcome in SessionOutcome],
+            "ending_note": _EVENT_SCHEMA["payload_contracts"]["wrapper.iteration.end"][
+                "ending_note"
+            ],
             # #329: the harness's reported billing, declared optional rather
             # than required. An Orchestrator that cannot observe it omits the
             # keys or reports them null; making them required would oblige the
@@ -1774,6 +1779,25 @@ def test_event_fixture_pins_the_strike_vocabulary_to_the_runner() -> None:
     assert "STRIKE_OUTCOME_ABORT" not in Path(loop_module.__file__).read_text(
         encoding="utf-8"
     )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [case for case in _EVENT_SCHEMA["serialization_cases"]
+     if case["id"].startswith("iteration-ending-")],
+    ids=lambda case: case["id"],
+)
+def test_an_ending_is_additive_for_a_consumer_that_ignores_it(case) -> None:
+    event = json.loads(case["jsonl"])
+    legacy = json.loads(case["jsonl"])
+    for row in legacy["issues"]:
+        row.pop("ending")
+    current_summary = RunSummary(denomination=BilledCreditsDenomination())
+    legacy_summary = RunSummary(denomination=BilledCreditsDenomination())
+    assert current_summary.on_iteration_end(event) == legacy_summary.on_iteration_end(legacy)
+    assert [row["status"] for row in event["issues"]] == [
+        row["status"] for row in legacy["issues"]
+    ]
 
 
 def test_event_fixture_pins_the_parallel_serial_fallback_contract() -> None:
@@ -2505,7 +2529,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.16"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.18"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -3031,7 +3055,7 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
         for window in snapshot["expected"]
     ), "an Integration-window case must pin the Recovery attempt"
 
-    sample_queue = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
+    sample_queue = _dashboard_case("ending-advanced-timeout")["snapshots"][-1][
         "expected"
     ]["dashboard"]["queue"]["rows"][0]
     sample_breakdown = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
@@ -3039,7 +3063,13 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     ]["drill_in"]["iteration_breakdown"]["rows"][0]
     for column in contract["queue_columns"]:
         for path in column["fields"]:
-            _resolve_field(sample_queue, path)
+            sample = (
+                _dashboard_case("advanced-explains-a-pr-without-inventing-a-commit")[
+                    "snapshots"
+                ][-1]["expected"]["dashboard"]["queue"]["rows"][0]
+                if path == "pr_advances" else sample_queue
+            )
+            _resolve_field(sample, path)
     for column in contract["iteration_breakdown_columns"]:
         for path in column["fields"]:
             _resolve_field(sample_breakdown, path)
@@ -3049,7 +3079,7 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     # cache-read/cache-write split reaches columns of its own (#333).
     assert sorted(
         path for column in contract["queue_columns"] for path in column["fields"]
-    ) == sorted(fields["queue_row"])
+    ) == sorted([*fields["queue_row"], "ending", "commits", "pr_advances"])
     breakdown_paths = {
         path
         for column in contract["iteration_breakdown_columns"]

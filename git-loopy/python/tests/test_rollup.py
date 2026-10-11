@@ -5,7 +5,8 @@ import pytest
 from operator import itemgetter
 
 from git_loopy.denomination import BilledCreditsDenomination
-from git_loopy.rollup import IterationRollupAccumulator
+from git_loopy.rollup import IterationRollupAccumulator, contribution_end_payload
+from git_loopy.session_outcome import SessionOutcome
 
 
 class _Clock:
@@ -19,6 +20,66 @@ class _Clock:
 def _denomination() -> BilledCreditsDenomination:
     """The one Cost seam: what the harness billed, never a price table."""
     return BilledCreditsDenomination()
+
+
+@pytest.mark.parametrize("ending", list(SessionOutcome))
+@pytest.mark.parametrize("status", ["no-progress", "advanced", "closed"])
+def test_endings_belong_to_an_issue_not_to_the_scope(ending, status) -> None:
+    rollup = IterationRollupAccumulator(denomination=_denomination())
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+    for ref in (42, 43):
+        rollup.observe({
+            "type": "wrapper.issue.activated", "iter": 1, "issue": ref,
+            "lane_issue": ref, "activated_at": "2026-05-16T00:00:00.000Z",
+            "binding_source": "lane_pickup",
+        })
+    if status == "closed":
+        rollup.observe({
+            "type": "wrapper.auto_close", "issue": 42, "lane_issue": 42,
+            "ts": "2026-05-16T00:00:01.000Z",
+        })
+    payload = rollup.finish(
+        iter_num=1, strikes=0, endings={42: ending},
+        advanced_issues=(42,) if status == "advanced" else (),
+    )
+    first, sibling = payload["issues"]
+    assert first["status"] == status
+    if status == "no-progress" or ending in {SessionOutcome.TIMEOUT, SessionOutcome.CRASH}:
+        assert first["ending"] == ending.value
+    else:
+        assert "ending" not in first
+    assert "ending" not in sibling
+    assert "ending" not in payload
+
+
+def test_lane_scopes_and_a_retry_never_share_an_ending() -> None:
+    rollup = IterationRollupAccumulator(denomination=_denomination())
+
+    def start(ref):
+        rollup.observe({"type": "wrapper.contribution.start", "issue": ref})
+        rollup.observe({
+            "type": "wrapper.issue.activated", "issue": ref, "lane_issue": ref,
+            "activated_at": "2026-05-16T00:00:00.000Z", "binding_source": "lane_pickup",
+        })
+
+    start(42)
+    start(43)
+    first = rollup.finish(iter_num=0, strikes=1, lane_issue=42, endings={42: SessionOutcome.CRASH})
+    other = rollup.finish(iter_num=0, strikes=0, lane_issue=43)
+    start(42)
+    retry = rollup.finish(iter_num=0, strikes=1, lane_issue=42, advanced_issues=(42,))
+    for result, expected in ((first, "crash"), (other, None), (retry, None)):
+        payload = contribution_end_payload(
+            result, published=expected is None, reason="published",
+            strike_reaction="+1" if expected else "none", reasoning_effort=None,
+            recovery_attempts=0, agent_seconds=1,
+        )
+        if expected is not None:
+            assert payload["ending"] == expected
+            assert payload["issues"][0]["ending"] == expected
+        else:
+            assert "ending" not in payload
+            assert "ending" not in payload["issues"][0]
 
 
 def test_closed_serial_iteration_produces_one_normalized_contribution() -> None:

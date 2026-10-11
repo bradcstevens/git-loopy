@@ -117,6 +117,11 @@ _NEW_SETUP_DEFAULT = _ROUTING_CONFORMANCE["new_setup_default"]
 _NO_CONFIG_DYNAMIC_REFUSAL = _ROUTING_CONFORMANCE["no_config_dynamic_refusal"]
 _PREFLIGHT_DEADLINE = _ROUTING_CONFORMANCE["preflight_deadline"]
 _PUBLICATION_RECOVERY = _ROUTING_CONFORMANCE["publication_recovery"]
+_STATUS_ENDINGS = json.loads(
+    (Path(__file__).parents[2] / "conformance" / "status-endings.json").read_text(
+        encoding="utf-8"
+    )
+)["cases"]
 
 
 # ---------------------------------------------------------------------------
@@ -727,6 +732,48 @@ def _write_runnable_feedback_loop(repo_root: Path) -> None:
         "| Tests | `uv run pytest` |\n",
         encoding="utf-8",
     )
+
+
+@pytest.mark.parametrize("case", _STATUS_ENDINGS, ids=lambda case: case["id"])
+def test_a_real_serial_session_carries_its_ending_on_its_issue_outcome(
+    tmp_path, monkeypatch, case
+) -> None:
+    client, git = _wire_single_issue_github(tmp_path, monkeypatch)
+    if case["signal"] == "no_more_tasks":
+        client._scripted_events = [_sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE,
+            AssistantMessageData(content="<promise>NO MORE TASKS</promise>", message_id="m"),
+        )]
+    elif case["signal"] == "content_filtered":
+        client._scripted_events = [_sdk_event(
+            SessionEventType.ASSISTANT_USAGE,
+            AssistantUsageData(
+                model="gpt-5.6-sol", content_filter_triggered=True,
+                finish_reason="content_filter",
+            ),
+        )]
+
+    def work() -> None:
+        if case["progress"] is not None:
+            git.simulate_agent_commit(
+                subject="Closes #42" if case["progress"] == "closure" else "Advance #42"
+            )
+        if case["termination"] == "timeout":
+            raise TimeoutError("lost session")
+        if case["termination"] == "crash":
+            raise ConnectionError("lost transport")
+
+    client.on_send = work
+    assert asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1))) == 0
+    (end,) = [e for e in _read_events(tmp_path) if e["type"] == "wrapper.iteration.end"]
+    (issue,) = end["issues"]
+    assert issue["issue"] == 42
+    assert issue["status"] == case["status"]
+    assert "ending" not in end
+    if case["ending"] is None:
+        assert "ending" not in issue
+    else:
+        assert issue["ending"] == case["ending"]
 
 
 def test_loop_reports_pool_exclusions_as_events(tmp_path, monkeypatch) -> None:

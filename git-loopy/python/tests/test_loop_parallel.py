@@ -8470,6 +8470,9 @@ def test_a_parallel_safe_issue_is_retried_in_lanes_until_n_strikes_then_skipped(
         (42, 3, "skip"),
     ][:attempts]
     assert [s["ending"] for s in strikes] == [ending] * attempts
+    ends = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert [(e["issue"], e["ending"]) for e in ends] == [(42, ending)] * attempts
+    assert [e["issues"][0]["ending"] for e in ends] == [ending] * attempts
     starts = [e for e in events if e["type"] == "wrapper.contribution.start"]
     assert len(starts) == attempts
     assert not [e for e in events if e["type"] == "wrapper.iteration.start"]
@@ -8478,6 +8481,42 @@ def test_a_parallel_safe_issue_is_retried_in_lanes_until_n_strikes_then_skipped(
     assert run_end["outcome"] == expected
     assert run_end["iterations_run"] == attempts
     assert exit_code == loop_module.exit_code_for(expected)
+
+
+@pytest.mark.parametrize("ending", [None, "timeout", "crash"])
+@pytest.mark.parametrize("closes", [False, True])
+def test_a_real_lane_keeps_a_lost_session_beside_its_published_progress(
+    tmp_path, monkeypatch, ending, closes
+) -> None:
+    class Session(_ParallelFakeSession):
+        async def send_and_wait(self, prompt, *, timeout=60.0, **extra):
+            target = self._fake_git.worktree_client(Path(self._working_directory))
+            assert target is not None
+            target.simulate_agent_commit(
+                subject="advance issue", body="Closes #42" if closes else "",
+            )
+            if ending == "timeout":
+                raise TimeoutError("lost advancing session")
+            if ending == "crash":
+                raise ConnectionError("lost advancing transport")
+
+    class Client(_ParallelFakeClient):
+        _session_cls = Session
+
+    _wire_rolling_run(
+        tmp_path, monkeypatch, [_make_issue(42, labels=_PARALLEL_SAFE)],
+        client_cls=Client,
+    )
+    asyncio.run(loop_module.run(_pinned_config(42, max_iterations=1)))
+    (end,) = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.contribution.end"]
+    assert end["published"] is True
+    assert end["issues"][0]["status"] == ("closed" if closes else "advanced")
+    if ending is None:
+        assert "ending" not in end
+        assert "ending" not in end["issues"][0]
+    else:
+        assert end["ending"] == ending
+        assert end["issues"][0]["ending"] == ending
 
 
 @pytest.mark.parametrize("residue", ["clean", "dirty", "committed_timeout", "committed_crash"])

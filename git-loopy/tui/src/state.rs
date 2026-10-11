@@ -13,9 +13,9 @@ use crate::drain::SerialDrainTracker;
 use crate::event::{
     AutoClosed, CommitRecorded, ContextWindowSample, ContributionEnd, ContributionIdentity, Event,
     EventPayload, ExecutionHostDeclaration, InsightCapabilities, IssueRef, IterationEnd,
-    IterationIssue, IterationSummary, LaneSlot, Pickup, ReleaseAdvanced, RoutingDelivery,
-    RoutingDeliveryStatus, RoutingPrepared, RoutingResolved, StopRequested, SubagentLifecycle,
-    ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE,
+    IterationIssue, IterationSummary, LaneSlot, Pickup, PrAdvanced, ReleaseAdvanced,
+    RoutingDelivery, RoutingDeliveryStatus, RoutingPrepared, RoutingResolved, StopRequested,
+    SubagentLifecycle, ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE,
     ROUTE_PREPARATION_STATIC, ROUTE_PREPARATION_UNAVAILABLE, ROUTE_REVALIDATED,
 };
 use crate::timestamp::Timestamp;
@@ -328,6 +328,9 @@ pub(crate) struct IssueContribution {
     pub(crate) outcome: Option<String>,
     pub(crate) duration_seconds: Option<f64>,
     pub(crate) status: String,
+    pub(crate) ending: Option<String>,
+    pub(crate) commits: Option<i64>,
+    pub(crate) pr_advances: Option<i64>,
     pub(crate) active_seconds: f64,
     /// The pair this contribution's own Pickup resolved, never a later one:
     /// an escalated issue is a *change between rows*, so a row that inherited
@@ -421,6 +424,11 @@ impl DashboardState {
 #[derive(Clone, Debug)]
 pub(crate) struct IssueLedgerEntry {
     pub(crate) status: String,
+    pub(crate) ending: Option<String>,
+    pub(crate) commits: Option<i64>,
+    pub(crate) pr_advances: Option<i64>,
+    attempt_commit_shas: BTreeSet<String>,
+    attempt_pr_advances: i64,
     pub(crate) started_at: Option<Timestamp>,
     /// The open Active stint's start on the monotonic axis.
     pub(crate) active_since: Option<f64>,
@@ -452,6 +460,11 @@ impl IssueLedgerEntry {
     fn queued() -> Self {
         Self {
             status: STATUS_QUEUED.to_string(),
+            ending: None,
+            commits: None,
+            pr_advances: None,
+            attempt_commit_shas: BTreeSet::new(),
+            attempt_pr_advances: 0,
             started_at: None,
             active_since: None,
             phase_since: None,
@@ -604,6 +617,8 @@ pub struct DashboardState {
     iteration_pool: Vec<IssueRef>,
     /// Output produced before this Iteration named its Active issue.
     pending_log: Vec<LogLine>,
+    /// Commits awaiting the serial Iteration's authoritative issue binding.
+    pending_commits: BTreeSet<String>,
     /// Consumption observed before this Iteration named its Active issue.
     pending_usage: (i64, i64),
     /// Whether any pre-marker Consumption was truthfully observed.
@@ -664,6 +679,7 @@ impl DashboardState {
             summary_order: Vec::new(),
             iteration_pool: Vec::new(),
             pending_log: Vec::new(),
+            pending_commits: BTreeSet::new(),
             pending_usage: (0, 0),
             pending_usage_observed: false,
             pending_credits: BilledTotal::default(),
@@ -770,6 +786,7 @@ impl DashboardState {
             match &event.payload {
                 EventPayload::ContributionStart(_) => {
                     self.lane_work_finished.remove(&contribution.issue);
+                    self.begin_lane_attempt(&contribution.issue);
                     self.lane_touch(&contribution.issue, now_monotonic, now);
                     return;
                 }
@@ -935,7 +952,12 @@ impl DashboardState {
                 now,
             ),
             EventPayload::CommitRecorded(commit) => {
+                self.record_commit(self.active_ref.clone().as_ref(), commit);
                 self.append_log_block(LOG_EVENT, &commit_log_text(commit), now)
+            }
+            EventPayload::PrAdvanced(advance) => {
+                self.record_pr_advance(&advance.pr);
+                self.append_log_block(LOG_EVENT, &pr_advance_log_text(advance), now);
             }
             EventPayload::AutoClosed(closure) => {
                 self.append_log_block(LOG_EVENT, &auto_close_log_text(closure), now)
@@ -1117,7 +1139,12 @@ impl DashboardState {
                 now,
             ),
             EventPayload::CommitRecorded(commit) => {
+                self.record_commit(Some(lane), commit);
                 self.append_lane_log(lane, LOG_EVENT, &commit_log_text(commit), now)
+            }
+            EventPayload::PrAdvanced(advance) => {
+                self.record_pr_advance(lane);
+                self.append_lane_log(lane, LOG_EVENT, &pr_advance_log_text(advance), now);
             }
             EventPayload::AutoClosed(closure) => {
                 self.append_lane_log(lane, LOG_EVENT, &auto_close_log_text(closure), now)
@@ -1133,6 +1160,17 @@ impl DashboardState {
             }
             _ => {}
         }
+    }
+
+    fn begin_lane_attempt(&mut self, issue: &IssueRef) {
+        self.insert_entry(issue.clone());
+        let entry = self.ledger.get_mut(issue).expect("just inserted");
+        entry.status = STATUS_QUEUED.to_string();
+        entry.ending = None;
+        entry.commits = None;
+        entry.pr_advances = None;
+        entry.attempt_commit_shas.clear();
+        entry.attempt_pr_advances = 0;
     }
 
     /// Activate a Lane's ledger entry **without** disturbing sibling Lanes.
@@ -1194,6 +1232,7 @@ impl DashboardState {
         self.iteration_started_monotonic = now_monotonic;
         self.iteration_pool.clear();
         self.pending_log.clear();
+        self.pending_commits.clear();
         self.pending_usage = (0, 0);
         self.pending_usage_observed = false;
         self.pending_credits = BilledTotal::default();
@@ -1325,6 +1364,7 @@ impl DashboardState {
     fn activate(&mut self, issue: &IssueRef, since: Option<f64>, started_wall: Option<Timestamp>) {
         self.insert_entry(issue.clone());
         let pending = std::mem::take(&mut self.pending_log);
+        let pending_commits = std::mem::take(&mut self.pending_commits);
         let (pending_in, pending_out) = std::mem::take(&mut self.pending_usage);
         let pending_observed = std::mem::take(&mut self.pending_usage_observed);
         let pending_credits = std::mem::take(&mut self.pending_credits);
@@ -1340,6 +1380,10 @@ impl DashboardState {
             entry.active_since = since;
         }
         entry.status = STATUS_ACTIVE.to_string();
+        entry.ending = None;
+        entry.attempt_commit_shas = pending_commits;
+        entry.commits = positive_commit_count(entry.attempt_commit_shas.len() as i64);
+        entry.pr_advances = positive_commit_count(entry.attempt_pr_advances);
         entry.phase_since = None;
         for line in pending {
             push_bounded(&mut entry.log, line);
@@ -1353,6 +1397,30 @@ impl DashboardState {
         entry.premium_requests.merge(pending_premium);
         self.active_ref = Some(issue.clone());
         self.strike_focus = Some(issue.clone());
+    }
+
+    fn record_commit(&mut self, issue: Option<&IssueRef>, commit: &CommitRecorded) {
+        let Some(sha) = non_empty(commit.sha.as_deref()) else {
+            return;
+        };
+        match issue {
+            Some(issue) => {
+                self.insert_entry(issue.clone());
+                let entry = self.ledger.get_mut(issue).expect("just inserted");
+                entry.attempt_commit_shas.insert(sha);
+                entry.commits = positive_commit_count(entry.attempt_commit_shas.len() as i64);
+            }
+            None => {
+                self.pending_commits.insert(sha);
+            }
+        }
+    }
+
+    fn record_pr_advance(&mut self, issue: &IssueRef) {
+        self.insert_entry(issue.clone());
+        let entry = self.ledger.get_mut(issue).expect("just inserted");
+        entry.attempt_pr_advances = entry.attempt_pr_advances.saturating_add(1);
+        entry.pr_advances = Some(entry.attempt_pr_advances);
     }
 
     /// The Strike count the Header shows: the focused issue's when Strikes are
@@ -1469,18 +1537,44 @@ impl DashboardState {
             self.insert_entry(row.issue.clone());
             let is_lane = self.iteration_lane_refs.contains(&row.issue);
             let route = self.iteration_routes.get(&row.issue).cloned();
-            let contribution = contribution_from(iteration, rollup, row, is_lane, route);
+            let raw_commits = self
+                .ledger
+                .get(&row.issue)
+                .and_then(|entry| positive_commit_count(entry.attempt_commit_shas.len() as i64));
+            let commits = (rollup.issues.len() == 1)
+                .then(|| rollup.summary.as_ref().and_then(|summary| summary.commits))
+                .flatten()
+                .filter(|count| *count >= 0)
+                .or(raw_commits)
+                .and_then(positive_commit_count);
+            let raw_pr_advances = self
+                .ledger
+                .get(&row.issue)
+                .and_then(|entry| positive_commit_count(entry.attempt_pr_advances));
+            let pr_advances = (rollup.issues.len() == 1)
+                .then(|| {
+                    rollup
+                        .summary
+                        .as_ref()
+                        .and_then(|summary| summary.pr_advances)
+                })
+                .flatten()
+                .filter(|count| *count >= 0)
+                .or(raw_pr_advances)
+                .and_then(positive_commit_count);
+            let contribution =
+                contribution_from(iteration, rollup, row, is_lane, route, commits, pr_advances);
             let entry = self
                 .ledger
                 .get_mut(&row.issue)
                 .expect("entry inserted immediately above");
+            entry.status = contribution.status.clone();
+            entry.ending = contribution.ending.clone();
+            entry.commits = contribution.commits;
+            entry.pr_advances = contribution.pr_advances;
             entry.contributions.push(contribution);
-            entry.status = entry
-                .contributions
-                .last()
-                .expect("just pushed")
-                .status
-                .clone();
+            entry.attempt_commit_shas.clear();
+            entry.attempt_pr_advances = 0;
             if let Some(cumulative) = row.cumulative_active_seconds {
                 entry.active_duration = cumulative.max(0.0);
             }
@@ -1545,7 +1639,22 @@ impl DashboardState {
             .get(&contribution.contribution_id)
             .copied()
             .flatten();
-        let row = contribution_from_rolling(contribution, end, route, drift);
+        let raw_commits = self
+            .ledger
+            .get(issue)
+            .and_then(|entry| positive_commit_count(entry.attempt_commit_shas.len() as i64));
+        let commits = end
+            .summary
+            .as_ref()
+            .and_then(|summary| summary.commits)
+            .filter(|count| *count >= 0)
+            .or(raw_commits)
+            .and_then(positive_commit_count);
+        let pr_advances = self
+            .ledger
+            .get(issue)
+            .and_then(|entry| positive_commit_count(entry.attempt_pr_advances));
+        let row = contribution_from_rolling(contribution, end, route, drift, commits, pr_advances);
         let summary_row = contribution_summary_entry(contribution, end, &row);
         let status = row.status.clone();
         self.deactivate(issue, now_monotonic, Some(status.as_str()));
@@ -1553,8 +1662,13 @@ impl DashboardState {
             .ledger
             .get_mut(issue)
             .expect("entry inserted immediately above");
-        entry.contributions.push(row);
         entry.status = status.clone();
+        entry.ending = row.ending.clone();
+        entry.commits = row.commits;
+        entry.pr_advances = row.pr_advances;
+        entry.contributions.push(row);
+        entry.attempt_commit_shas.clear();
+        entry.attempt_pr_advances = 0;
         entry.phase_since = None;
         if status == STATUS_CLOSED {
             entry.closed_at = now;
@@ -1683,6 +1797,7 @@ fn is_contribution_stamped_event(kind: &str) -> bool {
             | "subagent.completed"
             | "subagent.failed"
             | "wrapper.auto_close"
+            | "wrapper.pr.advanced"
             | "wrapper.checkpoint.recorded"
             | "wrapper.commit.recorded"
     )
@@ -1746,6 +1861,15 @@ fn subagent_lifecycle_text(kind: &str, lifecycle: &SubagentLifecycle) -> String 
 fn auto_close_log_text(closure: &AutoClosed) -> String {
     let mut text = format!("✓ auto-closed {}", pickup_issue_label(&closure.issue));
     if let Some(sha) = closure.sha.as_deref().filter(|sha| !sha.is_empty()) {
+        let short: String = sha.chars().take(SHORT_SHA_LENGTH).collect();
+        text.push_str(&format!("  ({short})"));
+    }
+    text
+}
+
+fn pr_advance_log_text(advance: &PrAdvanced) -> String {
+    let mut text = format!("↑ advanced PR {}", pickup_issue_label(&advance.pr));
+    if let Some(sha) = advance.sha.as_deref().filter(|sha| !sha.is_empty()) {
         let short: String = sha.chars().take(SHORT_SHA_LENGTH).collect();
         text.push_str(&format!("  ({short})"));
     }
@@ -1965,6 +2089,8 @@ fn contribution_from(
     row: &IterationIssue,
     is_lane: bool,
     route: Option<ResolvedRoute>,
+    commits: Option<i64>,
+    pr_advances: Option<i64>,
 ) -> IssueContribution {
     // An Orchestrator without token telemetry sends a `consumption` record
     // whose counters are null. The Wrapper contract forbids re-reporting that
@@ -1985,6 +2111,9 @@ fn contribution_from(
             .status
             .clone()
             .unwrap_or_else(|| STATUS_NO_PROGRESS.to_string()),
+        ending: row.ending.clone(),
+        commits,
+        pr_advances,
         active_seconds: row.active_seconds.unwrap_or(0.0).max(0.0),
         route,
         model: usage_observed
@@ -2025,6 +2154,8 @@ fn contribution_from_rolling(
     end: &ContributionEnd,
     route: Option<ResolvedRoute>,
     drift: Option<i64>,
+    commits: Option<i64>,
+    pr_advances: Option<i64>,
 ) -> IssueContribution {
     let summary = end.summary.clone().unwrap_or_default();
     let issue_row = end
@@ -2049,6 +2180,9 @@ fn contribution_from_rolling(
         outcome: end.reason.clone(),
         duration_seconds: summary.lifecycle_seconds.map(|value| value.max(0.0)),
         status,
+        ending: end.ending.clone(),
+        commits,
+        pr_advances,
         active_seconds: summary.agent_seconds.unwrap_or(0.0).max(0.0),
         route,
         model: usage_observed
@@ -2077,6 +2211,10 @@ fn contribution_from_rolling(
         peak_context_window: summary.peak_context_window,
         drift,
     }
+}
+
+fn positive_commit_count(count: i64) -> Option<i64> {
+    (count > 0).then_some(count)
 }
 
 /// Project one finalized **Lane contribution**'s Summary row (ADR-0044).
@@ -2145,4 +2283,66 @@ fn push_bounded(buffer: &mut Vec<LogLine>, mut line: LogLine) {
         buffer.remove(0);
     }
     buffer.push(line);
+}
+
+#[cfg(test)]
+mod ending_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn finished_attempts_keep_their_own_facts_after_serial_and_rolling_reactivation() {
+        for rolling in [false, true] {
+            let mut state = DashboardState::new(RunInputs::default());
+            let mut record = |kind: &str, attempt: i64, mut fields: serde_json::Value| {
+                fields["type"] = json!(kind);
+                fields["iter"] = if rolling { json!(null) } else { json!(attempt) };
+                if rolling {
+                    fields["issue"] = json!(42);
+                    fields["contribution_id"] = json!(format!("c-{attempt}"));
+                    fields["lane_id"] = json!("lane-1");
+                }
+                state.apply(&Event::from_json(&fields).unwrap());
+            };
+            for attempt in [1, 2] {
+                if rolling {
+                    record("wrapper.contribution.start", attempt, json!({}));
+                } else {
+                    record("wrapper.iteration.start", attempt, json!({}));
+                    record("wrapper.issue.activated", attempt, json!({"issue": 42}));
+                }
+                if attempt == 1 {
+                    record("wrapper.commit.recorded", attempt, json!({"sha": "first"}));
+                    record("wrapper.pr.advanced", attempt, json!({"pr": 42}));
+                }
+                let mut outcome = json!({"issues": [{"issue": 42, "status": "no-progress"}]});
+                if attempt == 1 {
+                    if rolling {
+                        outcome["ending"] = json!("crash");
+                    } else {
+                        outcome["issues"][0]["ending"] = json!("crash");
+                    }
+                }
+                record(
+                    if rolling {
+                        "wrapper.contribution.end"
+                    } else {
+                        "wrapper.iteration.end"
+                    },
+                    attempt,
+                    outcome,
+                );
+            }
+            let entry = &state.ledger[&IssueRef::number(42)];
+            assert_eq!(entry.ending, None);
+            assert_eq!(entry.commits, None);
+            assert_eq!(entry.pr_advances, None);
+            assert_eq!(entry.contributions[0].ending.as_deref(), Some("crash"));
+            assert_eq!(entry.contributions[0].commits, Some(1));
+            assert_eq!(entry.contributions[0].pr_advances, Some(1));
+            assert_eq!(entry.contributions[1].ending, None);
+            assert_eq!(entry.contributions[1].commits, None);
+            assert_eq!(entry.contributions[1].pr_advances, None);
+        }
+    }
 }

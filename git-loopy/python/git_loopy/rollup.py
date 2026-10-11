@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator, Mapping
 
 from git_loopy.denomination import CostDenomination
+from git_loopy.session_outcome import SessionOutcome
 from git_loopy.usage import BillingSample, UsageTally, is_run_scoped_usage
 
 __all__ = [
@@ -237,6 +238,7 @@ class IterationRollupAccumulator:
         outcome: str | None = None,
         advanced_issues: Iterable[int | str] = (),
         lane_issue: int | str | None = None,
+        endings: Mapping[int | str, SessionOutcome] | None = None,
     ) -> dict[str, Any]:
         """Close one accounting scope and return its normalized payload.
 
@@ -245,6 +247,9 @@ class IterationRollupAccumulator:
         carries no Iteration number (``iter`` is ``null`` on every
         contribution-scoped Event), so only the serial scope is checked
         against ``iter_num``.
+
+        ``endings`` contains only observed session outcomes, keyed by the issue
+        that session worked. It never supplies an Iteration-wide default.
         """
         current = self._open.get(lane_issue)
         if current is None or (lane_issue is None and current.iter_num != iter_num):
@@ -260,6 +265,7 @@ class IterationRollupAccumulator:
                 contribution,
                 now,
                 status_override=status_override,
+                ending=(endings or {}).get(contribution.issue),
             )
             for contribution in current.contributions.values()
         ]
@@ -325,6 +331,7 @@ class IterationRollupAccumulator:
         finished_monotonic: float,
         *,
         status_override: str | None,
+        ending: SessionOutcome | None,
     ) -> dict[str, Any]:
         ended = (
             contribution.closed_monotonic
@@ -336,7 +343,7 @@ class IterationRollupAccumulator:
         cumulative += active_seconds
         self._cumulative_active[contribution.issue] = cumulative
         closed = contribution.closed_at is not None
-        return {
+        payload = {
             "issue": contribution.issue,
             "status": (
                 status_override
@@ -368,6 +375,12 @@ class IterationRollupAccumulator:
             },
             "peak_context_window": contribution.peak_context_window,
         }
+        if ending is not None and (
+            payload["status"] not in {"advanced", "closed"}
+            or ending in {SessionOutcome.TIMEOUT, SessionOutcome.CRASH}
+        ):
+            payload["ending"] = ending.value
+        return payload
 
 
 def contribution_end_payload(
@@ -396,7 +409,9 @@ def contribution_end_payload(
     """
     summary = rollup.get("summary")
     summary = summary if isinstance(summary, Mapping) else {}
+    issues = [dict(row) for row in (rollup.get("issues") or ())]
     return {
+        **({"ending": issues[0]["ending"]} if issues and "ending" in issues[0] else {}),
         "published": published,
         "reason": reason,
         "summary": {
@@ -430,7 +445,7 @@ def contribution_end_payload(
         # contribution cost, ``issues`` says what happened to the issue it
         # owns — when it was first started, whether and when it closed, and
         # how much active time it has accumulated across the whole Run.
-        "issues": [dict(row) for row in (rollup.get("issues") or ())],
+        "issues": issues,
     }
 
 
