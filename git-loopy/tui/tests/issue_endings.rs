@@ -16,6 +16,55 @@ const ENDINGS: [(&str, &str); 5] = [
     ("content_filtered", "content filtered"),
 ];
 
+#[test]
+fn event_fixture_pins_field_unaware_compatibility_for_both_carriers() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../conformance/event-schema.json")).unwrap();
+    for case in fixture["consumer_compatibility_cases"].as_array().unwrap() {
+        for case_id in case["serialization_case_ids"].as_array().unwrap() {
+            let serialization = fixture["serialization_cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| &row["id"] == case_id)
+                .unwrap();
+            let current: Value =
+                serde_json::from_str(serialization["jsonl"].as_str().unwrap()).unwrap();
+            let mut legacy = current.clone();
+            for field in case["ignored_wire_fields"].as_array().unwrap() {
+                if field == "issues[].ending" {
+                    for row in legacy["issues"].as_array_mut().unwrap() {
+                        row.as_object_mut().unwrap().remove("ending");
+                    }
+                } else {
+                    legacy
+                        .as_object_mut()
+                        .unwrap()
+                        .remove(field.as_str().unwrap());
+                }
+            }
+            let projections: Vec<Value> = [current, legacy]
+                .iter()
+                .map(|record| {
+                    let mut state = DashboardState::new(RunInputs::new("work-model", "high"));
+                    state.apply(&Event::from_json(record).unwrap());
+                    let mut projection = serde_json::to_value(view(&state, 42)).unwrap();
+                    for row in projection["dashboard"]["queue"]["rows"]
+                        .as_array_mut()
+                        .unwrap()
+                    {
+                        for field in case["ignored_queue_fields"].as_array().unwrap() {
+                            row.as_object_mut().unwrap().remove(field.as_str().unwrap());
+                        }
+                    }
+                    projection
+                })
+                .collect();
+            assert_eq!(projections[0], projections[1], "{case_id}");
+        }
+    }
+}
+
 fn event(kind: &str, fields: Value) -> Value {
     let mut record = fields.as_object().unwrap().clone();
     record.insert("type".into(), json!(kind));
@@ -368,10 +417,10 @@ fn rolling_outcome_top_level_is_authoritative_and_each_lane_and_retry_stays_isol
         "lane-2",
         json!({}),
     );
-    let active = queue_row(&view(&state, 42), 42);
-    assert_eq!(active["status"], "active");
-    assert!(active.get("ending").is_none());
-    assert!(active.get("commits").is_none());
+    let retried = queue_row(&view(&state, 42), 42);
+    assert_eq!(retried["status"], "advanced");
+    assert!(retried.get("ending").is_none());
+    assert!(retried.get("commits").is_none());
     apply_rolling(
         &mut state,
         "wrapper.contribution.end",
@@ -388,6 +437,46 @@ fn rolling_outcome_top_level_is_authoritative_and_each_lane_and_retry_stays_isol
     assert_eq!(attempts[1].status, "no-progress");
     assert!(queue_row(&projected, 42).get("ending").is_none());
     assert!(queue_row(&projected, 42).get("commits").is_none());
+}
+
+#[test]
+fn contribution_retry_clears_facts_without_reopening_terminal_status() {
+    for status in ["closed", "advanced", "no-progress"] {
+        let mut state = DashboardState::new(RunInputs::default());
+        apply_rolling(
+            &mut state,
+            "wrapper.contribution.start",
+            42,
+            "first",
+            "lane-1",
+            json!({}),
+        );
+        apply_rolling(
+            &mut state,
+            "wrapper.contribution.end",
+            42,
+            "first",
+            "lane-1",
+            json!({"ending": "timeout", "issues": [{"issue": 42, "status": status}]}),
+        );
+        let completed = queue_row(&view(&state, 42), 42);
+        assert_eq!(completed["status"], status);
+        assert_eq!(completed["ending"], "timeout");
+        apply_rolling(
+            &mut state,
+            "wrapper.contribution.start",
+            42,
+            "retry",
+            "lane-2",
+            json!({}),
+        );
+        let retried = queue_row(&view(&state, 42), 42);
+        assert_eq!(retried["status"], status);
+        assert_eq!(retried["active_seconds"], completed["active_seconds"]);
+        assert!(retried.get("ending").is_none());
+        assert!(retried.get("commits").is_none());
+        assert!(retried.get("pr_advances").is_none());
+    }
 }
 
 #[test]

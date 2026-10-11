@@ -2089,6 +2089,34 @@
       ]
     }
   ],
+  "consumer_compatibility_cases": [
+    {
+      "id": "serial-ending-is-additive",
+      "serialization_case_ids": [
+        "iteration-ending-no_progress",
+        "iteration-ending-timeout",
+        "iteration-ending-crash",
+        "iteration-ending-no_more_tasks",
+        "iteration-ending-content_filtered"
+      ],
+      "ignored_wire_fields": ["issues[].ending"],
+      "ignored_queue_fields": ["ending"],
+      "expected": "Complete Run view and Summary accounting are identical after omitting only the optional Queue Ending."
+    },
+    {
+      "id": "contribution-ending-is-additive",
+      "serialization_case_ids": [
+        "contribution-ending-no_progress",
+        "contribution-ending-timeout",
+        "contribution-ending-crash",
+        "contribution-ending-no_more_tasks",
+        "contribution-ending-content_filtered"
+      ],
+      "ignored_wire_fields": ["ending", "issues[].ending"],
+      "ignored_queue_fields": ["ending"],
+      "expected": "Complete Run view and Summary accounting are identical after omitting only the optional Queue Ending."
+    }
+  ],
   "serialization_cases": [
     {
       "id": "contribution-stamped-upstream-push",

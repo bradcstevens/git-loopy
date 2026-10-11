@@ -56,9 +56,15 @@ lifecycle lines and per-Agent counts; revision 1.15 adds the Run-wide Activity c
 Header's derived **Serial drain** (ADR-0074, #719) without any Event or contract change.
 Event fixture revision 1.7 and Dashboard revision 1.18 carry ADR-0075's optional
 per-issue Ending beside Status, with inline progress detail and no new column.
+Dashboard revision 1.17 is reserved for the concurrent #735 Serial-drain
+remediation. Clearing latest-attempt facts leaves terminal Status and Active
+time unchanged; starting another contribution never bypasses the terminal guard.
 The native producer debt lives separately in `status-endings.json`, so generic
 serialization coverage never claims native session emission. Older consumers
 that ignore Ending keep the same Status, accounting, and Header.
+The Event fixture's `consumer_compatibility_cases` references every Ending
+on both carriers; Python and Rust compare complete views with and without
+the unknown wire field, and Python also compares Summary accounting.
 Event fixture revision 1.6 and Wrapper contract 2.24 pin the Subagent types and
 capability. Routing fixture revision 3 updates the provenance note to contract
 2.24 without changing routing decisions.

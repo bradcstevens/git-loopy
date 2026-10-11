@@ -1783,21 +1783,41 @@ def test_event_fixture_pins_the_strike_vocabulary_to_the_runner() -> None:
 
 @pytest.mark.parametrize(
     "case",
-    [case for case in _EVENT_SCHEMA["serialization_cases"]
-     if case["id"].startswith("iteration-ending-")],
+    _EVENT_SCHEMA["consumer_compatibility_cases"],
     ids=lambda case: case["id"],
 )
 def test_an_ending_is_additive_for_a_consumer_that_ignores_it(case) -> None:
-    event = json.loads(case["jsonl"])
-    legacy = json.loads(case["jsonl"])
-    for row in legacy["issues"]:
-        row.pop("ending")
-    current_summary = RunSummary(denomination=BilledCreditsDenomination())
-    legacy_summary = RunSummary(denomination=BilledCreditsDenomination())
-    assert current_summary.on_iteration_end(event) == legacy_summary.on_iteration_end(legacy)
-    assert [row["status"] for row in event["issues"]] == [
-        row["status"] for row in legacy["issues"]
-    ]
+    serialization_cases = {row["id"]: row for row in _EVENT_SCHEMA["serialization_cases"]}
+    for case_id in case["serialization_case_ids"]:
+        event = json.loads(serialization_cases[case_id]["jsonl"])
+        legacy = json.loads(serialization_cases[case_id]["jsonl"])
+        for field in case["ignored_wire_fields"]:
+            if field == "issues[].ending":
+                for row in legacy["issues"]:
+                    row.pop("ending")
+            else:
+                legacy.pop(field)
+        projections = []
+        summaries = []
+        for record in (event, legacy):
+            state = LiveRunState(
+                run_id=record["run_id"], model="work-model", reasoning_effort="high",
+                monotonic=lambda: 5.0,
+                wall_clock=lambda: datetime(2026, 5, 16, 0, 0, 5, tzinfo=timezone.utc),
+            )
+            state.render(record)
+            summary = RunSummary(denomination=BilledCreditsDenomination())
+            if record["type"] == "wrapper.contribution.end":
+                summaries.append(summary.on_contribution_end(record))
+            else:
+                summaries.append(summary.on_iteration_end(record))
+            projection = project_run_view(state, summary, issue=42)
+            for row in projection["dashboard"]["queue"]["rows"]:
+                for field in case["ignored_queue_fields"]:
+                    row.pop(field, None)
+            projections.append(projection)
+        assert projections[0] == projections[1], case_id
+        assert summaries[0] == summaries[1], case_id
 
 
 def test_event_fixture_pins_the_parallel_serial_fallback_contract() -> None:
@@ -2521,6 +2541,8 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
+    # 1.18 adds optional Ending/progress to Status (ADR-0075); 1.17 is
+    # reserved for the concurrent #735 Serial-drain remediation.
     # 1.16 derives the Header's Serial drain (ADR-0074, #719): its cohort,
     # oldest Lane age and elapsed wait. 1.15 adds the Run-wide Subagent count. 1.14 initialized Subagent-capable
     # windows at zero and recorded their lifecycle lines (ADR-0022). 1.13 moved

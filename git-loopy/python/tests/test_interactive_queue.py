@@ -165,6 +165,39 @@ def test_queue_reads_outcomes_not_strikes_and_clears_an_ending_on_retry() -> Non
     assert all(row.ending is None for row in queue_rows(state))
 
 
+def test_contribution_retry_clears_facts_without_reopening_terminal_status() -> None:
+    for status in (STATUS_CLOSED, STATUS_ADVANCED, STATUS_NO_PROGRESS):
+        clock = _FakeClock()
+        state = _make_state(clock)
+        state.render({
+            "type": "wrapper.contribution.start", "issue": 42,
+            "contribution_id": "first", "lane_id": "lane-1", "run_id": "01QUEUE",
+            "iter": None,
+        })
+        clock.advance(3)
+        state.render({
+            "type": "wrapper.contribution.end", "issue": 42,
+            "contribution_id": "first", "lane_id": "lane-1", "run_id": "01QUEUE",
+            "iter": None,
+            "ending": "timeout", "issues": [{"issue": 42, "status": status}],
+        })
+        completed = next(row for row in queue_rows(state) if row.ref == 42)
+        assert completed.status == status
+        assert completed.ending == "timeout"
+        state.render({
+            "type": "wrapper.contribution.start", "issue": 42,
+            "contribution_id": "retry", "lane_id": "lane-2", "run_id": "01QUEUE",
+            "iter": None,
+        })
+        clock.advance(10)
+        retried = next(row for row in queue_rows(state) if row.ref == 42)
+        assert retried.status == status
+        assert retried.active_seconds == completed.active_seconds
+        assert retried.ending is None
+        assert retried.commits is None
+        assert retried.pr_advances is None
+
+
 def test_collected_pool_lists_every_issue_as_queued() -> None:
     clock = _FakeClock()
     state = _make_state(clock)

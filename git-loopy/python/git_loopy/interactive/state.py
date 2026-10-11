@@ -2258,7 +2258,6 @@ class LiveRunState:
         self._lane_commits.pop(key, None)
         entry = self.ledger.get(key)
         if entry is not None:
-            entry.status = STATUS_QUEUED
             entry.ending = None
             entry.commits = None
             entry.pr_advances = None

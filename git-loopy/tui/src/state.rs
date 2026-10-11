@@ -1165,7 +1165,6 @@ impl DashboardState {
     fn begin_lane_attempt(&mut self, issue: &IssueRef) {
         self.insert_entry(issue.clone());
         let entry = self.ledger.get_mut(issue).expect("just inserted");
-        entry.status = STATUS_QUEUED.to_string();
         entry.ending = None;
         entry.commits = None;
         entry.pr_advances = None;

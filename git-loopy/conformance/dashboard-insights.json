@@ -15610,7 +15610,7 @@
                     "issue": 42,
                     "status": "closed",
                     "started_at": "2026-05-15T18:00:03-06:00",
-                    "active_seconds": 4.0,
+                    "active_seconds": 3.0,
                     "closed_at": "2026-05-15T18:00:32-06:00",
                     "iteration_count": 2,
                     "route": null,
@@ -15786,7 +15786,7 @@
                 "started_at": "2026-05-15T18:00:03-06:00",
                 "closed_at": "2026-05-15T18:00:32-06:00",
                 "issue_elapsed_seconds": null,
-                "active_seconds": 4.0,
+                "active_seconds": 3.0,
                 "iteration_count": 2
               },
               "iteration_breakdown": {
@@ -15972,7 +15972,7 @@
                     "issue": 42,
                     "status": "closed",
                     "started_at": "2026-05-15T18:00:03-06:00",
-                    "active_seconds": 4.0,
+                    "active_seconds": 3.0,
                     "closed_at": "2026-05-15T18:00:32-06:00",
                     "iteration_count": 2,
                     "route": null,
@@ -16188,7 +16188,7 @@
                 "started_at": "2026-05-15T18:00:03-06:00",
                 "closed_at": "2026-05-15T18:00:32-06:00",
                 "issue_elapsed_seconds": null,
-                "active_seconds": 4.0,
+                "active_seconds": 3.0,
                 "iteration_count": 2
               },
               "iteration_breakdown": {
@@ -16364,7 +16364,7 @@
                     "issue": 42,
                     "status": "closed",
                     "started_at": "2026-05-15T18:00:03-06:00",
-                    "active_seconds": 4.0,
+                    "active_seconds": 3.0,
                     "closed_at": "2026-05-15T18:00:32-06:00",
                     "iteration_count": 2,
                     "route": null,
@@ -16580,7 +16580,7 @@
                 "started_at": "2026-05-15T18:00:03-06:00",
                 "closed_at": "2026-05-15T18:00:32-06:00",
                 "issue_elapsed_seconds": null,
-                "active_seconds": 4.0,
+                "active_seconds": 3.0,
                 "iteration_count": 2
               },
               "iteration_breakdown": {
@@ -21630,7 +21630,7 @@
                     "issue": 42,
                     "status": "closed",
                     "started_at": "2026-05-15T18:00:03-06:00",
-                    "active_seconds": 4.0,
+                    "active_seconds": 3.0,
                     "closed_at": "2026-05-15T18:00:32-06:00",
                     "iteration_count": 2,
                     "route": null,
@@ -21809,7 +21809,7 @@
                 "started_at": "2026-05-15T18:00:03-06:00",
                 "closed_at": "2026-05-15T18:00:32-06:00",
                 "issue_elapsed_seconds": null,
-                "active_seconds": 4.0,
+                "active_seconds": 3.0,
                 "iteration_count": 2
               },
               "iteration_breakdown": {
@@ -21995,7 +21995,7 @@
                     "issue": 42,
                     "status": "closed",
                     "started_at": "2026-05-15T18:00:03-06:00",
-                    "active_seconds": 4.0,
+                    "active_seconds": 3.0,
                     "closed_at": "2026-05-15T18:00:32-06:00",
                     "iteration_count": 2,
                     "route": null,
@@ -22215,7 +22215,7 @@
                 "started_at": "2026-05-15T18:00:03-06:00",
                 "closed_at": "2026-05-15T18:00:32-06:00",
                 "issue_elapsed_seconds": null,
-                "active_seconds": 4.0,
+                "active_seconds": 3.0,
                 "iteration_count": 2
               },
               "iteration_breakdown": {
@@ -22391,7 +22391,7 @@
                     "issue": 42,
                     "status": "closed",
                     "started_at": "2026-05-15T18:00:03-06:00",
-                    "active_seconds": 4.0,
+                    "active_seconds": 3.0,
                     "closed_at": "2026-05-15T18:00:32-06:00",
                     "iteration_count": 2,
                     "route": null,
@@ -22611,7 +22611,7 @@
                 "started_at": "2026-05-15T18:00:03-06:00",
                 "closed_at": "2026-05-15T18:00:32-06:00",
                 "issue_elapsed_seconds": null,
-                "active_seconds": 4.0,
+                "active_seconds": 3.0,
                 "iteration_count": 2
               },
               "iteration_breakdown": {
