@@ -5,10 +5,15 @@ locks, and real client processes. Attachment observes. It does not start a
 worker, resume one, or write a Stop. A mocked lifecycle would not show that
 a second terminal can follow a Run it did not start, or that killing that
 terminal leaves the worker running.
+
+Teardown closes every pty and reaps every child even when another stop fails,
+preserving the original failure. Stand-in Runs watch an owner-held stdin pipe
+and release their control artifact within one polling interval after owner loss.
 """
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
@@ -18,6 +23,8 @@ import sys
 import textwrap
 import threading
 import time
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -51,7 +58,9 @@ def _stub_run_skill_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 _WORKER = r"""
+import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -62,6 +71,14 @@ worktree = Path(sys.argv[1])
 ready = Path(sys.argv[2])
 inbox = Path(sys.argv[3])
 host = sys.argv[4]
+owner_gone = threading.Event()
+
+def watch_owner():
+    while os.read(sys.stdin.fileno(), 1):
+        pass
+    owner_gone.set()
+
+threading.Thread(target=watch_owner, daemon=True).start()
 writers = create_writers(worktree, mirror_diagnostics_to_stderr=False)
 control = RunControlArtifact.acquire(writers.event_log.path)
 writers.event_log.write(
@@ -74,7 +91,7 @@ writers.event_log.write(
 print(writers.run_id, flush=True)
 ready.write_text("ready\n", encoding="utf-8")
 try:
-    while True:
+    while not owner_gone.is_set():
         if not inbox.exists():
             time.sleep(0.05)
             continue
@@ -180,10 +197,11 @@ def _spawn_worker(
             str(inbox),
             host,
         ],
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
 
 
@@ -203,6 +221,60 @@ def _stop(process: subprocess.Popen[str] | None) -> None:
     if process.poll() is None:
         process.kill()
     process.wait(timeout=30)
+
+
+def _cleanup_actions(*actions: Callable[[], object]) -> None:
+    """Finish every teardown action without replacing the test's first failure."""
+    original = sys.exception()
+    error = original
+
+    def record(failure: BaseException) -> None:
+        nonlocal error
+        if error is None:
+            error = failure
+        elif failure is not error:
+            error.add_note(f"Additional Attach teardown failure: {failure!r}")
+
+    for action in actions:
+        try:
+            action()
+        except BaseException as failure:
+            record(failure)
+    if error is not None and original is None:
+        raise error
+
+
+def _cleanup(
+    *processes: subprocess.Popen[str] | None,
+    fds: tuple[int | None, ...] = (),
+) -> None:
+    def stop_group(process: subprocess.Popen[str]) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            if process.poll() is None:
+                raise
+
+    def stop_and_reap(process: subprocess.Popen[str] | None) -> None:
+        try:
+            _stop(process)
+        except BaseException as original:
+            try:
+                _stop(process)
+            except BaseException as failure:
+                original.add_note(f"Additional Attach stop failure: {failure!r}")
+            raise
+
+    actions: list[Callable[[], object]] = []
+    # Signal helpers before revoking the pty can strand a macOS process group.
+    if os.name != "nt":
+        actions.extend(partial(stop_group, process) for process in processes if process)
+    # Revoking the pty also releases a session leader blocked on its terminal.
+    actions.extend(partial(os.close, fd) for fd in fds if fd is not None)
+    actions.extend(partial(stop_and_reap, process) for process in processes)
+    _cleanup_actions(*actions)
 
 
 def _tell(inbox: Path, command: str) -> None:
@@ -298,6 +370,178 @@ def _helper(path: Path, *, attach_body: str) -> None:
         encoding="utf-8",
     )
     path.chmod(0o755)
+
+
+# ---------------------------------------------------------------------------
+# Test process ownership
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("failure_in_body", [False, True])
+def test_a_stop_failure_still_reaps_every_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_in_body: bool
+) -> None:
+    repo = _clone(tmp_path / "clone")
+    worker = _spawn_worker(repo, tmp_path / "ready", tmp_path / "inbox")
+    client = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+        text=True,
+    )
+    stop_failure = subprocess.TimeoutExpired(client.args, 30)
+    original = AssertionError("original test failure") if failure_in_body else stop_failure
+    wait = client.wait
+    failed = False
+
+    def fail_first_wait(timeout: float | None = None) -> int:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise stop_failure
+        return wait(timeout=timeout)
+
+    monkeypatch.setattr(client, "wait", fail_first_wait)
+    try:
+        _read_run_id(worker)
+        with pytest.raises(type(original)) as raised:
+            try:
+                if failure_in_body:
+                    raise original
+            finally:
+                _cleanup(client, worker)
+        assert raised.value is original
+        assert client.returncode is not None
+        assert worker.returncode is not None
+        if failure_in_body:
+            assert any("TimeoutExpired" in note for note in original.__notes__)
+    finally:
+        monkeypatch.setattr(client, "wait", wait)
+        _cleanup(client, worker)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pty cleanup is a POSIX proof")
+def test_a_stop_failure_closes_every_pty_and_preserves_the_first_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pty
+
+    repo = _clone(tmp_path / "clone")
+    worker = _spawn_worker(repo, tmp_path / "ready", tmp_path / "inbox")
+    other = _spawn_worker(repo, tmp_path / "other-ready", tmp_path / "other-inbox")
+    master, slave = pty.openpty()
+    probe = os.dup(slave)
+    first_error = subprocess.TimeoutExpired(worker.args, 30)
+    later_error = RuntimeError("later stop failure")
+    worker_wait, other_wait = worker.wait, other.wait
+    failed: set[int] = set()
+
+    def failing_wait(
+        process: subprocess.Popen[str], error: Exception, timeout: float | None,
+    ) -> int:
+        if process.pid not in failed:
+            failed.add(process.pid)
+            raise error
+        wait = worker_wait if process is worker else other_wait
+        return wait(timeout=timeout)
+
+    monkeypatch.setattr(
+        worker, "wait", lambda timeout=None: failing_wait(worker, first_error, timeout)
+    )
+    monkeypatch.setattr(
+        other, "wait", lambda timeout=None: failing_wait(other, later_error, timeout)
+    )
+    try:
+        _read_run_id(worker)
+        _read_run_id(other)
+        with pytest.raises(subprocess.TimeoutExpired) as raised:
+            _cleanup(worker, other, fds=(slave, probe, master))
+        assert raised.value is first_error
+        assert worker.returncode is not None
+        assert other.returncode is not None
+        assert any("later stop failure" in note for note in first_error.__notes__)
+        for fd in (slave, probe, master):
+            with pytest.raises(OSError):
+                os.fstat(fd)
+    finally:
+        monkeypatch.setattr(worker, "wait", worker_wait)
+        monkeypatch.setattr(other, "wait", other_wait)
+        try:
+            _cleanup(worker, other)
+        finally:
+            for fd in (slave, probe, master):
+                try:
+                    os.close(fd)
+                except OSError as error:
+                    if error.errno != errno.EBADF:
+                        raise
+
+
+def test_a_stand_in_run_exits_when_its_test_process_disappears(
+    tmp_path: Path,
+) -> None:
+    repo = _clone(tmp_path / "clone")
+    ready = tmp_path / "ready"
+    inbox = tmp_path / "inbox"
+    pid_record = tmp_path / "worker-pid"
+    owner = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                """
+                import subprocess
+                import sys
+                from pathlib import Path
+                from tests.test_attach_command import _WORKER
+
+                worker = subprocess.Popen(
+                    [sys.executable, "-c", _WORKER, *sys.argv[1:5]],
+                    stdin=subprocess.PIPE,
+                    start_new_session=True,
+                )
+                Path(sys.argv[5]).write_text(str(worker.pid), encoding="utf-8")
+                worker.wait()
+                """
+            ),
+            str(repo),
+            str(ready),
+            str(inbox),
+            "local",
+            str(pid_record),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    worker_exited = False
+
+    def stop_orphan() -> None:
+        if not worker_exited and pid_record.exists():
+            try:
+                os.kill(int(pid_record.read_text(encoding="utf-8")), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    try:
+        _read_run_id(owner)
+        deadline = time.monotonic() + 5
+        while not ready.exists() or not pid_record.exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        assert owner.poll() is None
+        owner.kill()
+        owner.wait(timeout=5)
+        # The worker inherited these pipes: EOF proves it too has exited.
+        owner.communicate(timeout=5)
+        worker_exited = True
+    finally:
+        _cleanup_actions(
+            stop_orphan,
+            partial(_cleanup, owner),
+            partial(owner.communicate, timeout=10),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -504,8 +748,7 @@ def test_a_second_terminal_follows_past_temporary_eof_and_starts_nothing(
             )
         )
     finally:
-        _stop(client)
-        _stop(worker)
+        _cleanup(client, worker)
 
 
 def test_two_observers_see_the_same_run_and_killing_one_changes_nothing(
@@ -542,9 +785,7 @@ def test_two_observers_see_the_same_run_and_killing_one_changes_nothing(
         assert "Iteration 4" not in "".join(first_out)
         assert not list((repo / ".git-loopy" / "logs").glob("*.stops"))
     finally:
-        _stop(first)
-        _stop(second)
-        _stop(worker)
+        _cleanup(first, second, worker)
 
 
 def test_detach_and_reattach_use_the_same_command_and_leave_the_worker(
@@ -579,9 +820,7 @@ def test_detach_and_reattach_use_the_same_command_and_leave_the_worker(
         assert worker.poll() is None
         assert not list((repo / ".git-loopy" / "logs").glob("*.stops"))
     finally:
-        _stop(client)
-        _stop(again)
-        _stop(worker)
+        _cleanup(client, again, worker)
 
 
 def test_a_lost_worker_is_not_presented_as_resumed(tmp_path: Path) -> None:
@@ -608,8 +847,7 @@ def test_a_lost_worker_is_not_presented_as_resumed(tmp_path: Path) -> None:
         assert "did not resume" in text
         assert len(list((repo / ".git-loopy" / "logs").glob("*.jsonl"))) == 1
     finally:
-        _stop(client)
-        _stop(worker)
+        _cleanup(client, worker)
 
 
 def test_attach_from_the_main_worktree_observes_a_linked_worktree_run(
@@ -639,8 +877,7 @@ def test_attach_from_the_main_worktree_observes_a_linked_worktree_run(
         assert found[0].scope == lane.resolve()
         assert worker.poll() is None
     finally:
-        _stop(client)
-        _stop(worker)
+        _cleanup(client, worker)
 
 
 def test_a_missing_helper_is_diagnosed_and_detach_is_deliberate(
@@ -670,8 +907,7 @@ def test_a_missing_helper_is_diagnosed_and_detach_is_deliberate(
         assert worker.poll() is None
         assert not list((repo / ".git-loopy" / "logs").glob("*.stops"))
     finally:
-        _stop(client)
-        _stop(worker)
+        _cleanup(client, worker)
 
 
 def test_a_dashboard_fault_falls_back_once_and_does_not_restart(
@@ -713,8 +949,7 @@ def test_a_dashboard_fault_falls_back_once_and_does_not_restart(
         assert record.read_text(encoding="utf-8").count("attach") == 1
         assert worker.poll() is None
     finally:
-        _stop(client)
-        _stop(worker)
+        _cleanup(client, worker)
 
 
 def test_dashboard_detach_leaves_the_worker_and_another_client(
@@ -783,9 +1018,7 @@ def test_dashboard_detach_leaves_the_worker_and_another_client(
         assert after.startswith(before)
         assert "local-navigation" not in after
     finally:
-        _stop(dashboard)
-        _stop(printer)
-        _stop(worker)
+        _cleanup(dashboard, printer, worker)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="pty restoration is a POSIX proof")
@@ -830,6 +1063,7 @@ def test_a_dashboard_fault_restores_the_terminal(tmp_path: Path) -> None:
 
         def _take_tty() -> None:
             os.setsid()
+            assert slave is not None
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
         client = subprocess.Popen(
@@ -840,6 +1074,7 @@ def test_a_dashboard_fault_restores_the_terminal(tmp_path: Path) -> None:
             stdout=slave,
             stderr=slave,
             preexec_fn=_take_tty,
+            text=True,
         )
         os.close(slave)
         slave = None
@@ -867,14 +1102,7 @@ def test_a_dashboard_fault_restores_the_terminal(tmp_path: Path) -> None:
         assert b"\x1b[?25h" in seen
         assert worker.poll() is None
     finally:
-        _stop(client)
-        _stop(worker)
-        if slave is not None:
-            os.close(slave)
-        if probe is not None:
-            os.close(probe)
-        if master is not None:
-            os.close(master)
+        _cleanup(client, worker, fds=(slave, probe, master))
 
 
 @pytest.mark.skipif(os.name == "nt", reason="pty restoration is a POSIX proof")
@@ -918,6 +1146,7 @@ def test_detaching_a_dashboard_releases_the_screen_the_helper_took(
 
         def _take_tty() -> None:
             os.setsid()
+            assert slave is not None
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
         client = subprocess.Popen(
@@ -928,6 +1157,7 @@ def test_detaching_a_dashboard_releases_the_screen_the_helper_took(
             stdout=slave,
             stderr=slave,
             preexec_fn=_take_tty,
+            text=True,
         )
         os.close(slave)
         slave = None
@@ -965,22 +1195,7 @@ def test_detaching_a_dashboard_releases_the_screen_the_helper_took(
         assert worker.poll() is None
         assert not list((repo / ".git-loopy" / "logs").glob("*.stops"))
     finally:
-        if master is not None:
-            os.set_blocking(master, False)
-            deadline = time.monotonic() + 2
-            while client is not None and client.poll() is None and time.monotonic() < deadline:
-                readable, _, _ = select.select([master], [], [], 0.1)
-                if readable:
-                    try:
-                        os.read(master, 4096)
-                    except OSError:
-                        break
-        _stop(client)
-        _stop(worker)
-        if slave is not None:
-            os.close(slave)
-        if master is not None:
-            os.close(master)
+        _cleanup(client, worker, fds=(slave, master))
 
 
 # ---------------------------------------------------------------------------
@@ -1136,12 +1351,14 @@ def _assert_attach_does_not_drive_the_host(
             assert not run_task.done()
         finally:
             release.set()
-            _stop(client)
-            if not run_task.done():
-                run_task.cancel()
             try:
-                await asyncio.wait_for(run_task, timeout=5)
-            except (asyncio.CancelledError, Exception):
-                pass
+                _cleanup(client)
+            finally:
+                if not run_task.done():
+                    run_task.cancel()
+                try:
+                    await asyncio.wait_for(run_task, timeout=5)
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     asyncio.run(scenario())

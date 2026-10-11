@@ -799,6 +799,13 @@ impl DashboardState {
                 }
                 EventPayload::IntegrationParked(_) => {
                     self.note_integration_parked(&contribution.contribution_id);
+                    if self
+                        .parallel
+                        .admitted_open
+                        .contains(&contribution.contribution_id)
+                    {
+                        return;
+                    }
                     self.enter_integration_status(
                         &contribution.issue,
                         STATUS_PARKED,

@@ -1368,6 +1368,57 @@ fn draining(drain: SerialDrainView) -> ParallelDeclaration {
 }
 
 #[test]
+fn a_serial_drain_keeps_integration_pressure_after_the_cohort_when_width_allows() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.header.parallel = draining(SerialDrainView {
+        elapsed_seconds: Some(83.0),
+        oldest_lane_age_seconds: Some(754.0),
+        cohort: DrainCohortView {
+            open: 6,
+            live_sessions: 2,
+            setup: 1,
+            parked: 1,
+            admitted: 1,
+            recovering: 1,
+            ..DrainCohortView::default()
+        },
+    });
+    view.dashboard.header.parallel.pressure = Some("rate_limit".to_string());
+
+    let header_at = |columns| {
+        band(
+            &render_lines(&view, columns, 36, TerminalCapabilities::default()),
+            "git-loopy",
+        )
+        .join("\n")
+    };
+    let wide = header_at(240);
+    assert!(
+        wide.contains(
+            "serial drain 0:01:23 · oldest lane 0:12:34 · 6 open  •  \
+             2 live, 1 setup, 1 parked, 2 integration  •  \
+             integration 1/2 · 1 parked · narrowed by API rate limiting"
+        ),
+        "a wide Header keeps the drain, cohort split and Integration headline in order, in:\n{wide}"
+    );
+    let fitted = header_at(160);
+    assert!(
+        fitted.contains("2 live, 1 setup, 1 parked, 2 integration")
+            && !fitted.contains("integration 1/2")
+            && !fitted.contains("narrowed by"),
+        "at 160 columns the Integration headline yields before the cohort split, in:\n{fitted}"
+    );
+    let narrow = header_at(110);
+    assert!(
+        narrow.contains("serial drain 0:01:23 · oldest lane 0:12:34 · 6 open")
+            && !narrow.contains("2 live")
+            && !narrow.contains("integration 1/2")
+            && !narrow.contains("narrowed by"),
+        "a narrow Header drops both later segments before the drain summary, in:\n{narrow}"
+    );
+}
+
+#[test]
 fn the_header_shows_a_serial_drain_cohort_oldest_lane_and_wait() {
     let mixed = SerialDrainView {
         elapsed_seconds: Some(83.0),
@@ -1385,16 +1436,18 @@ fn the_header_shows_a_serial_drain_cohort_oldest_lane_and_wait() {
     };
     let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
     view.dashboard.header.parallel = draining(mixed);
-    let lines = render_lines(&view, 320, 36, TerminalCapabilities::default());
+    let lines = render_lines(&view, 160, 36, TerminalCapabilities::default());
     let header = band(&lines, "git-loopy").join("\n");
     assert!(
-        header.contains("serial drain 0:01:23 · oldest lane 0:12:34 · 6 open"),
-        "the drain names its wait, its oldest Lane and its cohort, in:\n{header}"
+        header.contains(
+            "serial drain 0:01:23 · oldest lane 0:12:34 · 6 open  •  \
+             2 live, 1 setup, 1 parked, 2 integration"
+        ),
+        "a wide Header names the wait, the oldest Lane and the cohort by phase, in:\n{header}"
     );
     assert!(
-        header
-            .contains("drain: 2 live, 1 setup, 1 parked, 2 integration (1 admitted, 1 recovering)"),
-        "the cohort is split by phase, in:\n{header}"
+        !header.contains("lane refill stopped"),
+        "the drain explains the stopped refill in its place, in:\n{header}"
     );
     assert_snapshot(
         "serial-drain-wide",
@@ -1403,7 +1456,7 @@ fn the_header_shows_a_serial_drain_cohort_oldest_lane_and_wait() {
     // Narrow, the phase split yields before the wait and the oldest Lane do.
     assert_snapshot(
         "serial-drain-narrow",
-        frame_text(&view, 100, 16, TerminalCapabilities::default()),
+        frame_text(&view, 110, 16, TerminalCapabilities::default()),
     );
 
     let unknown = SerialDrainView {
@@ -1427,7 +1480,7 @@ fn the_header_shows_a_serial_drain_cohort_oldest_lane_and_wait() {
     );
 
     let empty = SerialDrainView {
-        elapsed_seconds: Some(4.0),
+        elapsed_seconds: Some(0.0),
         oldest_lane_age_seconds: None,
         cohort: DrainCohortView::default(),
     };
@@ -1438,8 +1491,8 @@ fn the_header_shows_a_serial_drain_cohort_oldest_lane_and_wait() {
     )
     .join("\n");
     assert!(
-        header.contains("serial drain 0:00:04 · oldest lane none · 0 open"),
-        "an empty cohort has no oldest Lane, in:\n{header}"
+        header.contains("serial drain 0:00:00 · oldest lane none · 0 open"),
+        "an observed zero wait is zero and an empty cohort has no oldest Lane, in:\n{header}"
     );
 
     let mut refilling = draining(SerialDrainView {
@@ -1460,6 +1513,23 @@ fn the_header_shows_a_serial_drain_cohort_oldest_lane_and_wait() {
     assert!(
         !header.contains("serial drain"),
         "a refill turn ends the drain, in:\n{header}"
+    );
+
+    let mut fallback = draining(SerialDrainView {
+        elapsed_seconds: Some(4.0),
+        oldest_lane_age_seconds: None,
+        cohort: DrainCohortView::default(),
+    });
+    fallback.serial_fallback_reason = Some("parallel-safe pool drained".to_string());
+    view.dashboard.header.parallel = fallback;
+    let header = band(
+        &render_lines(&view, 200, 36, TerminalCapabilities::default()),
+        "git-loopy",
+    )
+    .join("\n");
+    assert!(
+        header.contains("serial fallback: parallel-safe pool drained"),
+        "an interrupted dispatch keeps its precedence over the drain, in:\n{header}"
     );
 }
 

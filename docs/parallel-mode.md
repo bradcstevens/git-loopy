@@ -304,15 +304,27 @@ is set by the cohort in flight when the latch landed: Lanes the Run never opened
 nothing. While it lasts the Dashboard header reads `serial drain 0:01:23 · oldest
 lane 0:12:34 · 6 open`: the time since the latch, the age of the oldest open Lane
 contribution measured from its `wrapper.contribution.start`, and the cohort still
-open. Where it fits, a second segment splits that cohort by phase — `drain: 2 live,
-1 setup, 1 parked, 2 integration (1 admitted, 1 recovering)` — and a narrow Header
-drops that split first. `setup` is a started contribution whose Agent session has
-not been observed yet; worktree preparation before `wrapper.contribution.start`
-emits no contribution Event, so it is not counted. The Dashboard derives all of this
+open. That summary takes the place of `lane refill stopped`, at the same Header
+precedence, because it explains the same stopped refill; an interrupted dispatch's
+`serial fallback` still wins over it. Where it fits, a second segment splits that
+cohort by phase — `2 live, 1 setup, 1 parked, 2 integration`. The Integration
+headline remains a separate segment after the split at the same rank-4 Header
+precedence: `integration 1/2 · 1 parked · narrowed by API rate limiting`.
+Wider terminals show both; fitting at 160 columns drops the headline before the
+split, and narrower Headers then drop the split before the drain summary. The
+cohort split takes precedence by human decision; it does not replace Integration
+WIP against the high-water, parked count or narrowing pressure when those fit.
+`integration` in the split counts admitted, integrating and recovering
+contributions, and a park after admission is ignored by the drain, Integration
+backlog and Queue alike. `setup` is a started contribution with no contribution-stamped Agent
+session Event yet; issue activation is not that sign, because it is emitted while
+the Lane is bound, before its session exists. Worktree preparation before
+`wrapper.contribution.start` emits no contribution Event, so it is not counted. The Dashboard derives all of this
 from Events already on the wire and estimates nothing: an unobserved start shows
 unknown (`—`), an empty cohort shows `oldest lane none`, and no time remaining is
 ever shown. The drain clears at the grant — the serial Iteration's
-`wrapper.iteration.start` — and a later latch starts a fresh one. Serial work that
+`wrapper.iteration.start`, or the spent refill turn that can only follow it — or at
+the end of the Run, and a later latch starts a fresh one. Serial work that
 meets an empty pipeline is granted at once, and a **Serial-required** pin never
 drains, because it latches before any Lane is reserved.
 

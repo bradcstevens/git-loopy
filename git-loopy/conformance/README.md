@@ -54,10 +54,11 @@ reuse `wrapper.push.recorded` with contribution identity. Dashboard fixture revi
 1.13 updated its contract/Event provenance only; revision 1.14 adds the Subagent
 lifecycle lines and per-Agent counts; revision 1.15 adds the Run-wide Activity count; revision 1.16 adds the
 Header's derived **Serial drain** (ADR-0074, #719) without any Event or contract change.
+Revision 1.17 pins observed zero drain wait, Lane activation that remains setup,
+and agreement between Queue and drain phases after admission followed by parking.
 Event fixture revision 1.7 and Dashboard revision 1.18 carry ADR-0075's optional
 per-issue Ending beside Status, with inline progress detail and no new column.
-Dashboard revision 1.17 is reserved for the concurrent #735 Serial-drain
-remediation. Clearing latest-attempt facts leaves terminal Status and Active
+Clearing latest-attempt facts leaves terminal Status and Active
 time unchanged; starting another contribution never bypasses the terminal guard.
 The native producer debt lives separately in `status-endings.json`, so generic
 serialization coverage never claims native session emission. Older consumers
@@ -764,7 +765,10 @@ attempts, and the refill-turn form. A second rolling case pins the **Serial drai
 second latch reads a mixed cohort keyed by `contribution_id` — setup, live session,
 finishing, parked, admitted, Integration and Recovery — with the oldest Lane measured
 from its own start, never inherited by a retry on the same issue and `lane_id`, and
-unknown once a start was unobserved. The projection-field inventory sweep covers both
+unknown once a start was unobserved. Its latch-instant snapshot distinguishes observed
+zero wait from unknown; a Lane activation before session evidence stays setup, and
+parking after admission changes neither the drain phase nor Queue Status or phase age.
+The projection-field inventory sweep covers both
 alongside the serial/Wave cases.
 
 Focused Python Event-to-view regressions additionally cover contribution-stamped

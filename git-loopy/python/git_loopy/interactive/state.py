@@ -441,24 +441,33 @@ _SESSION_EVIDENCE_TYPES = frozenset({
     "wrapper.commit.recorded",
 })
 
-_DRAIN_SETUP = "setup"
 _DRAIN_SESSION = "live_sessions"
+_DRAIN_SETUP = "setup"
+_DRAIN_FINISHING = "finishing"
+_DRAIN_PARKED = "parked"
+_DRAIN_ADMITTED = "admitted"
+_DRAIN_INTEGRATING = "integrating"
+_DRAIN_RECOVERING = "recovering"
+# Each phase doubles as its cohort count's key, in the order the view reads.
 _DRAIN_PHASES = (
-    "live_sessions", "setup", "finishing", "parked", "admitted", "integrating",
-    "recovering",
+    _DRAIN_SESSION, _DRAIN_SETUP, _DRAIN_FINISHING, _DRAIN_PARKED,
+    _DRAIN_ADMITTED, _DRAIN_INTEGRATING, _DRAIN_RECOVERING,
 )
 _DRAIN_LIFECYCLE = {
-    _CONTRIBUTION_WORK_FINISHED: "finishing",
-    _INTEGRATION_PARKED: "parked",
-    _INTEGRATION_ADMITTED: "admitted",
-    _INTEGRATION_STARTED: "integrating",
-    _INTEGRATION_RECOVERY_STARTED: "recovering",
+    _CONTRIBUTION_WORK_FINISHED: _DRAIN_FINISHING,
+    _INTEGRATION_PARKED: _DRAIN_PARKED,
+    _INTEGRATION_ADMITTED: _DRAIN_ADMITTED,
+    _INTEGRATION_STARTED: _DRAIN_INTEGRATING,
+    _INTEGRATION_RECOVERY_STARTED: _DRAIN_RECOVERING,
 }
+# Parking never takes back an admission (ADR-0020).
+_DRAIN_ADMITTED_PHASES = frozenset(
+    {_DRAIN_ADMITTED, _DRAIN_INTEGRATING, _DRAIN_RECOVERING}
+)
 
 
 @dataclass
 class _DrainMember:
-    issue: int | str
     started_at: float | None
     phase: str
 
@@ -470,7 +479,10 @@ class SerialDrainTracker:
     The replay oracle of the Rust core's ``drain`` module: the latch runs from
     ``wrapper.serial.requested`` to the next ``wrapper.iteration.start``, and
     the cohort is every open contribution keyed by ``contribution_id``, so a
-    retry or a refilled Lane never inherits another contribution's timer.
+    retry or a refilled Lane never inherits another contribution's timer. A
+    contribution leaves setup on its first contribution-stamped Agent session
+    Event; issue activation is not that sign, because it is emitted while the
+    Lane is bound, before its host session exists.
     """
 
     open: dict[str, _DrainMember] = field(default_factory=dict)
@@ -478,13 +490,7 @@ class SerialDrainTracker:
     latched: bool = False
     latched_at: float | None = None
 
-    def apply(
-        self,
-        etype: Any,
-        event: Mapping[str, Any],
-        now: float | None,
-        normalize: Callable[[Any], int | str],
-    ) -> None:
+    def apply(self, etype: Any, event: Mapping[str, Any], now: float | None) -> None:
         if etype == _SERIAL_REQUESTED and event.get("refill_stopped") is not False:
             if not self.latched:
                 self.latched = True
@@ -496,28 +502,12 @@ class SerialDrainTracker:
             # granted serial Iteration, and an ended Run drains nothing more.
             self.latched = False
             self.latched_at = None
-        elif etype == _ISSUE_ACTIVATED and event.get("issue") is not None and (
-            event.get("lane_issue") is not None or has_contribution_identity(event)
-        ):
-            issue = normalize(event["issue"])
-            named = (
-                event["contribution_id"] if has_contribution_identity(event) else None
-            )
-            for contribution_id, member in self.open.items():
-                if (
-                    member.phase == _DRAIN_SETUP
-                    and member.issue == issue
-                    and named in {None, contribution_id}
-                ):
-                    member.phase = _DRAIN_SESSION
         if not has_contribution_identity(event):
             return
         contribution_id = event["contribution_id"]
         if etype == _CONTRIBUTION_START:
             if contribution_id not in self.ended and contribution_id not in self.open:
-                self.open[contribution_id] = _DrainMember(
-                    normalize(event["issue"]), now, _DRAIN_SETUP
-                )
+                self.open[contribution_id] = _DrainMember(now, _DRAIN_SETUP)
             return
         if etype == _CONTRIBUTION_END:
             self.open.pop(contribution_id, None)
@@ -537,13 +527,8 @@ class SerialDrainTracker:
             return
         if contribution_id in self.ended:
             return
-        member = self.open.setdefault(
-            contribution_id, _DrainMember(normalize(event["issue"]), None, phase)
-        )
-        # Parking never takes back an admission (ADR-0020).
-        if phase == "parked" and member.phase in {
-            "admitted", "integrating", "recovering",
-        }:
+        member = self.open.setdefault(contribution_id, _DrainMember(None, phase))
+        if phase == _DRAIN_PARKED and member.phase in _DRAIN_ADMITTED_PHASES:
             return
         member.phase = phase
 
@@ -913,7 +898,7 @@ class LiveRunState:
 
         now = self._monotonic()
         etype = event.get("type")
-        self.serial_drain.apply(etype, event, now, self._normalize_ref)
+        self.serial_drain.apply(etype, event, now)
         # Multi-active dispatch (issue #66, ADR-0008): a runner-stamped
         # ``lane_issue`` routes this Lane's per-iteration output to its own
         # timer / Log / Consumption, bypassing the serial single-active
@@ -1271,8 +1256,9 @@ class LiveRunState:
         posture = self.parallel
         if etype == _INTEGRATION_PARKED:
             posture.integration_observed = True
-            if contribution_id not in posture.admitted_open:
-                posture.parked_open.add(contribution_id)
+            if contribution_id in posture.admitted_open:
+                return
+            posture.parked_open.add(contribution_id)
             status = STATUS_PARKED
         elif etype == _INTEGRATION_ADMITTED:
             posture.integration_observed = True

@@ -2541,8 +2541,9 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.18 adds optional Ending/progress to Status (ADR-0075); 1.17 is
-    # reserved for the concurrent #735 Serial-drain remediation.
+    # 1.18 adds optional Ending/progress to Status (ADR-0075). 1.17 pins
+    # observed zero wait, Lane activation during setup, and a Queue phase
+    # that agrees with the drain after admission followed by parking.
     # 1.16 derives the Header's Serial drain (ADR-0074, #719): its cohort,
     # oldest Lane age and elapsed wait. 1.15 adds the Run-wide Subagent count. 1.14 initialized Subagent-capable
     # windows at zero and recorded their lifecycle lines (ADR-0022). 1.13 moved
@@ -3070,6 +3071,9 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     assert any(
         drain and drain["cohort"]["open"] == 0 for drain in drains
     ), "the rolling case must pin a latch that drains no open contribution"
+    assert any(
+        drain and drain["elapsed_seconds"] == 0.0 for drain in drains
+    ), "the rolling case must pin an observed zero wait, distinct from unknown"
     assert any(
         window.get("recovery")
         for case in _DASHBOARD_INSIGHTS["activity_window_cases"]

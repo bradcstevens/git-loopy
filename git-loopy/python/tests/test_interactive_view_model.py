@@ -251,7 +251,7 @@ def test_only_a_spent_refill_turn_or_the_grant_ends_a_serial_drain() -> None:
     state.render({"type": "wrapper.serial.requested", "issue": 45,
                   "serial_required": 1, "refill_stopped": True})
     assert drain(state) is not None
-    # Rust decodes an incomplete turn as an unmodelled Event (ADR-0074).
+    # The Rust core decodes a turn missing either count as an unmodelled Event.
     state.render({"type": "wrapper.rolling.refill_turn", "reservations": 1})
     assert drain(state) is not None, "a malformed turn spent nothing"
     state.render({"type": "wrapper.rolling.refill_turn", "reservations": 0,
@@ -261,6 +261,38 @@ def test_only_a_spent_refill_turn_or_the_grant_ends_a_serial_drain() -> None:
                   "serial_required": 1, "refill_stopped": True})
     state.render({"type": "wrapper.iteration.start", "iter": 1})
     assert drain(state) is None, "the grant ends the drain"
+
+
+@pytest.mark.parametrize(
+    ("phase", "status", "cohort_key"),
+    [
+        ("wrapper.integration.admitted", "admitted", "admitted"),
+        ("wrapper.integration.started", "integrating", "integrating"),
+        ("wrapper.integration.recovery_started", "recovering", "recovering"),
+    ],
+)
+def test_parking_after_admission_preserves_queue_and_drain_phase(
+    phase: str, status: str, cohort_key: str,
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+
+    now = 0.0
+    state = LiveRunState(monotonic=lambda: now)
+    identity = {"iter": None, "issue": 42, "contribution_id": "c-42", "lane_id": "lane-1"}
+    state.render({"type": "wrapper.serial.requested", "issue": 45,
+                  "serial_required": 1, "refill_stopped": True})
+    state.render({"type": "wrapper.integration.admitted", **identity})
+    state.render({"type": phase, **identity, "attempt": 1, "max_attempts": 3})
+    now = 5.0
+    state.render({"type": "wrapper.integration.parked", **identity})
+    dashboard = view_model.project_run_view(state, None, issue=42)["dashboard"]
+    row = next(row for row in dashboard["queue"]["rows"] if row["issue"] == 42)
+    assert row["status"] == status
+    assert row["phase_age_seconds"] == 5.0
+    posture = dashboard["header"]["parallel"]
+    assert posture["serial_drain"]["cohort"][cohort_key] == 1
+    assert posture["serial_drain"]["cohort"]["parked"] == 0
+    assert posture["parked_count"] == 0
 
 
 def test_backlog_counts_contributions_once_until_they_end_not_until_publication() -> None:
