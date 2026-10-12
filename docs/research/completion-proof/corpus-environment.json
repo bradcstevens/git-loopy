@@ -1,0 +1,1321 @@
+{
+  "installed_cli": "1.0.92-3",
+  "counts": {
+    "shared_sdk_stamp_blocks_python_oracle": 35,
+    "not_pin_blocked": 70
+  },
+  "candidates": [
+    {
+      "issue": 753,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.17rc4",
+      "fixed_tree_cli_stamp": "1.0.92-4",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 751,
+      "task_type": "chore",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.17rc4",
+      "fixed_tree_cli_stamp": "1.0.92-4",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 719,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.17rc3",
+      "fixed_tree_cli_stamp": "1.0.92-3",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 698,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 695,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 694,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": false,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 686,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 685,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 684,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 683,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 682,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 681,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 679,
+      "task_type": "chore",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 645,
+      "task_type": "bugfix",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 644,
+      "task_type": "bugfix",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 643,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 639,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14rc1",
+      "fixed_tree_cli_stamp": "1.0.84-5",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 634,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14rc1",
+      "fixed_tree_cli_stamp": "1.0.84-5",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 633,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14rc1",
+      "fixed_tree_cli_stamp": "1.0.84-5",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 630,
+      "task_type": "test",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14rc1",
+      "fixed_tree_cli_stamp": "1.0.84-5",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 628,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14rc1",
+      "fixed_tree_cli_stamp": "1.0.84-5",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 627,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.13",
+      "fixed_tree_cli_stamp": "1.0.83",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 616,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14rc1",
+      "fixed_tree_cli_stamp": "1.0.84-5",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 615,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14rc1",
+      "fixed_tree_cli_stamp": "1.0.84-5",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 614,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14rc1",
+      "fixed_tree_cli_stamp": "1.0.84-5",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 591,
+      "task_type": "bugfix",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 590,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 588,
+      "task_type": "test",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 587,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 586,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 585,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 584,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 583,
+      "task_type": "bugfix",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 582,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 567,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14rc1",
+      "fixed_tree_cli_stamp": "1.0.84-5",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 566,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 565,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 563,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 562,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 560,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 544,
+      "task_type": "chore",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 543,
+      "task_type": "docs",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 542,
+      "task_type": "bugfix",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 541,
+      "task_type": "bugfix",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 530,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 529,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 528,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 527,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 526,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 524,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 523,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 522,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 519,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 518,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 517,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 516,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 508,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 507,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 506,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 504,
+      "task_type": "chore",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 500,
+      "task_type": "docs",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 499,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": false,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 498,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 497,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 496,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 495,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 493,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 491,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 489,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 487,
+      "task_type": "test",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 484,
+      "task_type": "docs",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 483,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 482,
+      "task_type": "test",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 481,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 480,
+      "task_type": "docs",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 464,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.13",
+      "fixed_tree_cli_stamp": "1.0.83",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 462,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 461,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 459,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 458,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.14",
+      "fixed_tree_cli_stamp": "1.0.85",
+      "python_selected": true,
+      "stamp_assertion_present": true,
+      "shared_sdk_stamp_blocks_python_oracle": true
+    },
+    {
+      "issue": 457,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": false,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 456,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 455,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 454,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 453,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 452,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 451,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 450,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 449,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 447,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 446,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 443,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 442,
+      "task_type": "docs",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 441,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": false,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 440,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": false,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 439,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 438,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 414,
+      "task_type": "bugfix",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 413,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 412,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 411,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "PowerShell Orchestrator suites",
+        "Python suite",
+        "Shell syntax",
+        "Shell Orchestrator suites",
+        "Rust Dashboard core"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 410,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 409,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 408,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    },
+    {
+      "issue": 407,
+      "task_type": "implementation",
+      "oracle_loops": [
+        "Python suite"
+      ],
+      "fixed_tree_sdk_pin": "1.0.5",
+      "fixed_tree_cli_stamp": "1.0.75",
+      "python_selected": true,
+      "stamp_assertion_present": false,
+      "shared_sdk_stamp_blocks_python_oracle": false
+    }
+  ]
+}

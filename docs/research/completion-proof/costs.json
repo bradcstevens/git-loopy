@@ -1,0 +1,91 @@
+{
+  "logs": 110,
+  "span": [
+    "2026-07-18T07:29:33.952Z",
+    "2026-10-02T03:30:35.556Z"
+  ],
+  "baseline_extract_matches": true,
+  "pickup_credits": {
+    "n": 266,
+    "median": 1183.426795,
+    "p90": 3988.84129,
+    "mean": 1856.67798768797,
+    "total": 493876.344725
+  },
+  "single_session_scope_credits": {
+    "n": 432,
+    "median": 826.4591125,
+    "p90": 2623.839100000001,
+    "mean": 1180.0685329131945,
+    "total": 509789.6062185
+  },
+  "single_session_scopes_by_model": {
+    "claude-opus-5": {
+      "n": 150,
+      "median": 1275.3971999999999,
+      "p90": 2982.354574999997,
+      "mean": 1518.26074436,
+      "total": 227739.11165399998
+    },
+    "gpt-5.6-terra": {
+      "n": 113,
+      "median": 498.8781624999999,
+      "p90": 1701.5697940000005,
+      "mean": 829.6002254646019,
+      "total": 93744.82547750001
+    },
+    "gpt-5.6-luna": {
+      "n": 9,
+      "median": 3.82519,
+      "p90": 7.509949,
+      "mean": 3.7053046666666667,
+      "total": 33.347742
+    },
+    "claude-sonnet-5": {
+      "n": 11,
+      "median": 191.71194000000006,
+      "p90": 250.56981000000002,
+      "mean": 164.39412636363636,
+      "total": 1808.3353900000002
+    },
+    "gemini-3.8-flash": {
+      "n": 81,
+      "median": 1324.0648,
+      "p90": 3229.1728500000004,
+      "mean": 1586.7027759259258,
+      "total": 128522.92485
+    },
+    "grok-4.7": {
+      "n": 51,
+      "median": 999.1085999999999,
+      "p90": 1656.0696000000003,
+      "mean": 930.6103914705883,
+      "total": 47461.12996500001
+    },
+    "claude-opus-5.5": {
+      "n": 12,
+      "median": 279.5138400000001,
+      "p90": 3023.5141000000012,
+      "mean": 864.5523200000001,
+      "total": 10374.627840000001
+    },
+    "gpt-6-sol": {
+      "n": 5,
+      "median": 10.50348,
+      "p90": 64.59643,
+      "mean": 21.06066,
+      "total": 105.3033
+    }
+  },
+  "credit_scopes_with_multiple_sessions": 0,
+  "usage_identity_shapes": {
+    "iter": 74707
+  },
+  "session_and_review_event_counts": {
+    "session.created": 720,
+    "session.idle": 642,
+    "session.error": 4,
+    "session.deleted": 161
+  },
+  "single_session_scope_baseline_summary": "n=432 median=826.5 p90=2,623.8 mean=1,180.1 total=509,789.6"
+}
