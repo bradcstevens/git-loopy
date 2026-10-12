@@ -132,6 +132,72 @@ def test_empty_ledger_yields_no_rows() -> None:
     assert queue_rows(state) == []
 
 
+def test_queue_reads_outcomes_not_strikes_and_clears_an_ending_on_retry() -> None:
+    state = _make_state(_FakeClock())
+    state.render({"type": "wrapper.iteration.start", "iter": 1})
+    _collect(state, 42, 43)
+    state.render({
+        "type": "wrapper.issue.activated", "issue": 42,
+        "activated_at": "2026-06-21T12:00:00Z", "binding_source": "serial_pickup",
+    })
+    state.render({
+        "type": "wrapper.strike", "issue": 42, "ending": "timeout",
+        "strikes": 1, "max_strikes": 3,
+    })
+    assert all(row.ending is None for row in queue_rows(state))
+    state.render({
+        "type": "wrapper.iteration.end", "iter": 1, "outcome": "no_progress",
+        "issues": [{"issue": 42, "status": "no-progress", "ending": "crash"}],
+    })
+    rows = {row.ref: row for row in queue_rows(state)}
+    assert rows[42].ending == "crash"
+    assert rows[43].ending is None
+    state.render({"type": "wrapper.iteration.start", "iter": 2})
+    state.render({
+        "type": "wrapper.issue.activated", "issue": 42,
+        "activated_at": "2026-06-21T12:00:10Z", "binding_source": "serial_pickup",
+    })
+    assert next(row for row in queue_rows(state) if row.ref == 42).ending is None
+    state.render({
+        "type": "wrapper.iteration.end", "iter": 2, "outcome": "advanced",
+        "issues": [{"issue": 42, "status": "advanced"}],
+    })
+    assert all(row.ending is None for row in queue_rows(state))
+
+
+def test_contribution_retry_clears_facts_without_reopening_terminal_status() -> None:
+    for status in (STATUS_CLOSED, STATUS_ADVANCED, STATUS_NO_PROGRESS):
+        clock = _FakeClock()
+        state = _make_state(clock)
+        state.render({
+            "type": "wrapper.contribution.start", "issue": 42,
+            "contribution_id": "first", "lane_id": "lane-1", "run_id": "01QUEUE",
+            "iter": None,
+        })
+        clock.advance(3)
+        state.render({
+            "type": "wrapper.contribution.end", "issue": 42,
+            "contribution_id": "first", "lane_id": "lane-1", "run_id": "01QUEUE",
+            "iter": None,
+            "ending": "timeout", "issues": [{"issue": 42, "status": status}],
+        })
+        completed = next(row for row in queue_rows(state) if row.ref == 42)
+        assert completed.status == status
+        assert completed.ending == "timeout"
+        state.render({
+            "type": "wrapper.contribution.start", "issue": 42,
+            "contribution_id": "retry", "lane_id": "lane-2", "run_id": "01QUEUE",
+            "iter": None,
+        })
+        clock.advance(10)
+        retried = next(row for row in queue_rows(state) if row.ref == 42)
+        assert retried.status == status
+        assert retried.active_seconds == completed.active_seconds
+        assert retried.ending is None
+        assert retried.commits is None
+        assert retried.pr_advances is None
+
+
 def test_collected_pool_lists_every_issue_as_queued() -> None:
     clock = _FakeClock()
     state = _make_state(clock)

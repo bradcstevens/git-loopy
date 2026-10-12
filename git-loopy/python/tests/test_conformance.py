@@ -1307,8 +1307,8 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     schema stays 1.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.6"
-    assert _EVENT_SCHEMA["contract_version"] == "2.24"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.7"
+    assert _EVENT_SCHEMA["contract_version"] == "2.26"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1622,6 +1622,11 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "peak_context_window",
             ],
             "consumption_required": ["model", "tokens_in", "tokens_out"],
+            "issue_optional": ["ending"],
+            "ending_values": [outcome.value for outcome in SessionOutcome],
+            "ending_note": _EVENT_SCHEMA["payload_contracts"]["wrapper.iteration.end"][
+                "ending_note"
+            ],
             # #329: the harness's reported billing, declared optional rather
             # than required. An Orchestrator that cannot observe it omits the
             # keys or reports them null; making them required would oblige the
@@ -1774,6 +1779,45 @@ def test_event_fixture_pins_the_strike_vocabulary_to_the_runner() -> None:
     assert "STRIKE_OUTCOME_ABORT" not in Path(loop_module.__file__).read_text(
         encoding="utf-8"
     )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _EVENT_SCHEMA["consumer_compatibility_cases"],
+    ids=lambda case: case["id"],
+)
+def test_an_ending_is_additive_for_a_consumer_that_ignores_it(case) -> None:
+    serialization_cases = {row["id"]: row for row in _EVENT_SCHEMA["serialization_cases"]}
+    for case_id in case["serialization_case_ids"]:
+        event = json.loads(serialization_cases[case_id]["jsonl"])
+        legacy = json.loads(serialization_cases[case_id]["jsonl"])
+        for field in case["ignored_wire_fields"]:
+            if field == "issues[].ending":
+                for row in legacy["issues"]:
+                    row.pop("ending")
+            else:
+                legacy.pop(field)
+        projections = []
+        summaries = []
+        for record in (event, legacy):
+            state = LiveRunState(
+                run_id=record["run_id"], model="work-model", reasoning_effort="high",
+                monotonic=lambda: 5.0,
+                wall_clock=lambda: datetime(2026, 5, 16, 0, 0, 5, tzinfo=timezone.utc),
+            )
+            state.render(record)
+            summary = RunSummary(denomination=BilledCreditsDenomination())
+            if record["type"] == "wrapper.contribution.end":
+                summaries.append(summary.on_contribution_end(record))
+            else:
+                summaries.append(summary.on_iteration_end(record))
+            projection = project_run_view(state, summary, issue=42)
+            for row in projection["dashboard"]["queue"]["rows"]:
+                for field in case["ignored_queue_fields"]:
+                    row.pop(field, None)
+            projections.append(projection)
+        assert projections[0] == projections[1], case_id
+        assert summaries[0] == summaries[1], case_id
 
 
 def test_event_fixture_pins_the_parallel_serial_fallback_contract() -> None:
@@ -2497,8 +2541,9 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.17 pins observed zero wait, Lane activation during setup, and a Queue
-    # phase that agrees with the drain after admission followed by parking.
+    # 1.18 adds optional Ending/progress to Status (ADR-0075). 1.17 pins
+    # observed zero wait, Lane activation during setup, and a Queue phase
+    # that agrees with the drain after admission followed by parking.
     # 1.16 derives the Header's Serial drain (ADR-0074, #719): its cohort,
     # oldest Lane age and elapsed wait. 1.15 adds the Run-wide Subagent count. 1.14 initialized Subagent-capable
     # windows at zero and recorded their lifecycle lines (ADR-0022). 1.13 moved
@@ -2507,7 +2552,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.17"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.18"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -3036,7 +3081,7 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
         for window in snapshot["expected"]
     ), "an Integration-window case must pin the Recovery attempt"
 
-    sample_queue = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
+    sample_queue = _dashboard_case("ending-advanced-timeout")["snapshots"][-1][
         "expected"
     ]["dashboard"]["queue"]["rows"][0]
     sample_breakdown = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
@@ -3044,7 +3089,13 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     ]["drill_in"]["iteration_breakdown"]["rows"][0]
     for column in contract["queue_columns"]:
         for path in column["fields"]:
-            _resolve_field(sample_queue, path)
+            sample = (
+                _dashboard_case("advanced-explains-a-pr-without-inventing-a-commit")[
+                    "snapshots"
+                ][-1]["expected"]["dashboard"]["queue"]["rows"][0]
+                if path == "pr_advances" else sample_queue
+            )
+            _resolve_field(sample, path)
     for column in contract["iteration_breakdown_columns"]:
         for path in column["fields"]:
             _resolve_field(sample_breakdown, path)
@@ -3054,7 +3105,7 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     # cache-read/cache-write split reaches columns of its own (#333).
     assert sorted(
         path for column in contract["queue_columns"] for path in column["fields"]
-    ) == sorted(fields["queue_row"])
+    ) == sorted([*fields["queue_row"], "ending", "commits", "pr_advances"])
     breakdown_paths = {
         path
         for column in contract["iteration_breakdown_columns"]

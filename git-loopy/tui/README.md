@@ -113,6 +113,25 @@ That is what keeps a backlog deeper than the started **Lanes** visible. A read
 that could only partly be named is simply a smaller read — it adds the refs it
 did name rather than reporting nothing.
 
+The Status vocabulary is unchanged. An explicit session `ending` on an issue
+outcome adds an inline explanation, such as **no-progress · timed out**;
+`wrapper.strike` is accounting, never a source for that explanation. Rolling
+Lanes read the ending from `wrapper.contribution.end` itself. An **advanced**
+row names its observed commits, and a timeout or crash remains visible beside
+progress or closure. Missing endings remain absent. A retry clears the Queue's
+latest ending and progress counts, while the drill-in retains each finished
+attempt's existing accounting, oldest first. Per-attempt ending presentation
+belongs to the separate drill-in extension.
+Commit counts come from existing issue-attributed commit records while work is
+live. A sole-issue outcome's reported summary count is authoritative when
+present; a modern contribution owns one issue even without normalized
+`issues[]` rows, while a multi-issue Wave uses only each issue's own records.
+The Queue omits unknown and zero counts rather than adding a measurement or
+a wire field.
+Observed PR advances likewise appear beside **advanced**, from the issue's
+`wrapper.pr.advanced` records or a sole-issue serial summary. An unknown commit
+count never implies that a PR advanced.
+
 ### Navigation
 
 `DashboardSession` owns selection, pointer hit-testing, and view positions.

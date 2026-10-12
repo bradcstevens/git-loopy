@@ -2455,7 +2455,15 @@ class _Loop:
                 )
 
             # 11) Close the iteration snapshot, persist counters.
-            self._finish_iteration(iter_num, strike_ref=active.ref)
+            self._finish_iteration(
+                iter_num,
+                strike_ref=active.ref,
+                endings=(
+                    {active.ref: session_ending.outcome}
+                    if not operator_cancelled and session_ending.outcome is not None
+                    else None
+                ),
+            )
 
             return ("continue", len(new_commits), completion_count)
 
@@ -4132,6 +4140,7 @@ class _Loop:
         outcome: str | None = None,
         advanced_issues: Iterable[int | str] = (),
         strike_ref: int | str | None = None,
+        endings: Mapping[int | str, session_outcome_module.SessionOutcome] | None = None,
     ) -> dict[str, Any]:
         """Emit and persist one Orchestrator-owned normalized Iteration rollup.
 
@@ -4146,6 +4155,7 @@ class _Loop:
             ),
             outcome=outcome,
             advanced_issues=advanced_issues,
+            endings=endings,
         )
         event = self._emit(
             events_module.WRAPPER_ITERATION_END,
@@ -4363,6 +4373,7 @@ class _ContributionAccounting:
     agent_seconds: float = 0.0
     recovery_attempts: int = 0
     strikes_at_open: int = 0
+    ending: session_outcome_module.SessionOutcome | None = None
 
 
 @dataclass
@@ -6427,6 +6438,9 @@ class _ParallelLoop:
         lane_work.branch = outcome.branch
         lane_outcome = outcome.ending
         assert lane_outcome is not None
+        scope = self._contribution_iter.get(contribution.contribution_id)
+        if scope is not None:
+            scope.ending = lane_outcome.outcome
         # Offered to the **Escalation rung**'s ledger before it is said out
         # loud (#408): a Lane that stalled silently is evidence about the
         # *issue*, and the Pickup that acts on it may well be a serial one.
@@ -6587,6 +6601,9 @@ class _ParallelLoop:
             self._host_setup_pressure.record_successful_dispatch()
             ending = outcome.ending
             assert ending is not None
+            scope = self._contribution_iter.get(contribution.contribution_id)
+            if scope is not None:
+                scope.ending = ending.outcome
             self._serial._observe_session_ending(lane_work.item.ref, ending)
             _report_session_outcome(
                 self._diag, ref=lane_work.item.ref, record=ending
@@ -7335,6 +7352,10 @@ class _ParallelLoop:
                 strikes=strikes,
                 advanced_issues=(contribution.ref,) if published else (),
                 lane_issue=contribution.ref,
+                endings=(
+                    {contribution.ref: scope.ending}
+                    if scope.ending is not None else None
+                ),
             )
         except Exception as exc:  # pragma: no cover - defensive
             self._diag.warning(

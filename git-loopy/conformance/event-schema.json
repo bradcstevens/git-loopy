@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "contract_version": "2.24",
-  "event_schema_version": "1.6",
+  "contract_version": "2.26",
+  "event_schema_version": "1.7",
   "insight_capabilities": {
     "names": [
       "agent_output",
@@ -269,7 +269,10 @@
       "consumption_optional": ["credits", "premium_requests", "cache_read", "cache_write"],
       "billing": "The harness's reported billing, added additively. An Orchestrator that observes it reports it; one that cannot omits the keys entirely or reports them null. Null is unknown, never a zero that would read as free work, and never an estimate recomputed from tokens. cache_read and cache_write are components of tokens_in, not figures beside it: summing them into a token total double-counts.",
       "retired": ["cost_usd"],
-      "retirement": "cost_usd was the list-price estimate, computed by git-loopy from a price table it hand-maintained. The table is deleted (#330) and Cost is the AI Credits the harness reported billing (ADR-0026), so no producer derives the field any more. It is retired rather than repurposed: a consumer must never read Credits out of a key whose name says dollars. Still accepted, not forbidden, because a port that has not yet dropped it is emitting a null it can honestly report; a consumer must ignore it."
+      "retirement": "cost_usd was the list-price estimate, computed by git-loopy from a price table it hand-maintained. The table is deleted (#330) and Cost is the AI Credits the harness reported billing (ADR-0026), so no producer derives the field any more. It is retired rather than repurposed: a consumer must never read Credits out of a key whose name says dollars. Still accepted, not forbidden, because a port that has not yet dropped it is emitting a null it can honestly report; a consumer must ignore it.",
+                               "issue_optional": ["ending"],
+                               "ending_values": ["no_progress", "timeout", "crash", "no_more_tasks", "content_filtered"],
+                               "ending_note": "ADR-0075: per issue per attempt, never per Iteration. Absent stays absent. Advanced or closed carries only timeout or crash. Strike accounting is unchanged."
     },
     "wrapper.skill_policy.resolved": {
       "required_when_present": [
@@ -481,7 +484,10 @@
       "emitted": "The authoritative finalized Parallel row and Strike transition. A publication that has not yet verified its closure is not a contribution end.",
       "counted_once": "Lane-work and recovery Consumption and commits appear exactly once, in the originating contribution. Runner Checkpoint commits are excluded from the commit total.",
       "retired": ["cost_usd"],
-      "retirement": "Retired on the same terms as wrapper.iteration.end's: the list-price estimate is deleted (#330), and Credits are never read out of a dollar-named key."
+      "retirement": "Retired on the same terms as wrapper.iteration.end's: the list-price estimate is deleted (#330), and Credits are never read out of a dollar-named key.",
+                                  "optional": ["ending"],
+                                  "ending_values": ["no_progress", "timeout", "crash", "no_more_tasks", "content_filtered"],
+                                  "ending_note": "ADR-0075: this Lane's issue and attempt only; the top-level ending is authoritative for consumers. Normalized issues[] repeats the same fact."
     },
     "wrapper.concurrency.changed": {
       "required_when_present": [
@@ -2083,6 +2089,34 @@
       ]
     }
   ],
+  "consumer_compatibility_cases": [
+    {
+      "id": "serial-ending-is-additive",
+      "serialization_case_ids": [
+        "iteration-ending-no_progress",
+        "iteration-ending-timeout",
+        "iteration-ending-crash",
+        "iteration-ending-no_more_tasks",
+        "iteration-ending-content_filtered"
+      ],
+      "ignored_wire_fields": ["issues[].ending"],
+      "ignored_queue_fields": ["ending"],
+      "expected": "Complete Run view and Summary accounting are identical after omitting only the optional Queue Ending."
+    },
+    {
+      "id": "contribution-ending-is-additive",
+      "serialization_case_ids": [
+        "contribution-ending-no_progress",
+        "contribution-ending-timeout",
+        "contribution-ending-crash",
+        "contribution-ending-no_more_tasks",
+        "contribution-ending-content_filtered"
+      ],
+      "ignored_wire_fields": ["ending", "issues[].ending"],
+      "ignored_queue_fields": ["ending"],
+      "expected": "Complete Run view and Summary accounting are identical after omitting only the optional Queue Ending."
+    }
+  ],
   "serialization_cases": [
     {
       "id": "contribution-stamped-upstream-push",
@@ -2623,6 +2657,581 @@
         "issue_source": "prds"
       },
       "jsonl": "{\"ts\": \"2026-05-16T00:00:26.000Z\", \"run_id\": \"01HXR0000000000000000000DE\", \"iter\": null, \"type\": \"wrapper.parallel.degraded\", \"issue_source\": \"prds\", \"lane_cap\": 4, \"reason\": \"source_not_rolling_capable\"}\n"
+    },
+    {
+      "id": "iteration-ending-no_progress",
+      "note": "Additive field: every member serializes these bytes; native session emission is owed in status-endings.json.",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000DD",
+        "iter": 1,
+        "type": "wrapper.iteration.end",
+        "outcome": "no_progress",
+        "duration_seconds": 4.0,
+        "summary": {
+          "model": "gpt-5.6-sol",
+          "tokens_in": 100,
+          "tokens_out": 50,
+          "observed_tokens": 150,
+          "tool_count": 0,
+          "skill_call_count": 0,
+          "skills_consulted": [],
+          "commits": 0,
+          "auto_closures": 0,
+          "pr_advances": 0,
+          "strikes": 0,
+          "peak_context_window": {
+            "current_tokens": 12000,
+            "token_limit": 32000,
+            "effective_target_tokens": 20000,
+            "effective_ceiling_tokens": 28000
+          }
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4.0,
+            "cumulative_active_seconds": 4.0,
+            "consumption": {
+              "model": "gpt-5.6-sol",
+              "tokens_in": 100,
+              "tokens_out": 50
+            },
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            },
+            "ending": "no_progress"
+          }
+        ]
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": 1, \"type\": \"wrapper.iteration.end\", \"duration_seconds\": 4.0, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 4.0, \"cumulative_active_seconds\": 4.0, \"consumption\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50}, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"ending\": \"no_progress\"}], \"outcome\": \"no_progress\", \"summary\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50, \"observed_tokens\": 150, \"tool_count\": 0, \"skill_call_count\": 0, \"skills_consulted\": [], \"commits\": 0, \"auto_closures\": 0, \"pr_advances\": 0, \"strikes\": 0, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}}}\n"
+    },
+    {
+      "id": "contribution-ending-no_progress",
+      "note": "Additive field: every member serializes these bytes; native session emission is owed in status-endings.json.",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000DD",
+        "iter": null,
+        "type": "wrapper.contribution.end",
+        "summary": {
+          "model": "gpt-5.6-sol",
+          "effort": "high",
+          "tokens_in": 100,
+          "tokens_out": 50,
+          "observed_tokens": 150,
+          "commits": 0,
+          "closures": 0,
+          "closure_outcome": "no_progress",
+          "recovery_attempts": 0,
+          "agent_seconds": 4.0,
+          "lifecycle_seconds": 4.0,
+          "peak_context_window": {
+            "current_tokens": 12000,
+            "token_limit": 32000,
+            "effective_target_tokens": 20000,
+            "effective_ceiling_tokens": 28000
+          },
+          "strike_reaction": "+1"
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4.0,
+            "cumulative_active_seconds": 4.0,
+            "consumption": {
+              "model": "gpt-5.6-sol",
+              "tokens_in": 100,
+              "tokens_out": 50
+            },
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            },
+            "ending": "no_progress"
+          }
+        ],
+        "issue": 42,
+        "lane_id": 1,
+        "contribution_id": "ending-42",
+        "ending": "no_progress",
+        "published": false,
+        "reason": "unchanged_branch"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"ending-42\", \"ending\": \"no_progress\", \"issue\": 42, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 4.0, \"cumulative_active_seconds\": 4.0, \"consumption\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50}, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"ending\": \"no_progress\"}], \"lane_id\": 1, \"published\": false, \"reason\": \"unchanged_branch\", \"summary\": {\"model\": \"gpt-5.6-sol\", \"effort\": \"high\", \"tokens_in\": 100, \"tokens_out\": 50, \"observed_tokens\": 150, \"commits\": 0, \"closures\": 0, \"closure_outcome\": \"no_progress\", \"recovery_attempts\": 0, \"agent_seconds\": 4.0, \"lifecycle_seconds\": 4.0, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"strike_reaction\": \"+1\"}}\n"
+    },
+    {
+      "id": "iteration-ending-timeout",
+      "note": "Additive field: every member serializes these bytes; native session emission is owed in status-endings.json.",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000DD",
+        "iter": 1,
+        "type": "wrapper.iteration.end",
+        "outcome": "no_progress",
+        "duration_seconds": 4.0,
+        "summary": {
+          "model": "gpt-5.6-sol",
+          "tokens_in": 100,
+          "tokens_out": 50,
+          "observed_tokens": 150,
+          "tool_count": 0,
+          "skill_call_count": 0,
+          "skills_consulted": [],
+          "commits": 0,
+          "auto_closures": 0,
+          "pr_advances": 0,
+          "strikes": 0,
+          "peak_context_window": {
+            "current_tokens": 12000,
+            "token_limit": 32000,
+            "effective_target_tokens": 20000,
+            "effective_ceiling_tokens": 28000
+          }
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4.0,
+            "cumulative_active_seconds": 4.0,
+            "consumption": {
+              "model": "gpt-5.6-sol",
+              "tokens_in": 100,
+              "tokens_out": 50
+            },
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            },
+            "ending": "timeout"
+          }
+        ]
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": 1, \"type\": \"wrapper.iteration.end\", \"duration_seconds\": 4.0, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 4.0, \"cumulative_active_seconds\": 4.0, \"consumption\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50}, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"ending\": \"timeout\"}], \"outcome\": \"no_progress\", \"summary\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50, \"observed_tokens\": 150, \"tool_count\": 0, \"skill_call_count\": 0, \"skills_consulted\": [], \"commits\": 0, \"auto_closures\": 0, \"pr_advances\": 0, \"strikes\": 0, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}}}\n"
+    },
+    {
+      "id": "contribution-ending-timeout",
+      "note": "Additive field: every member serializes these bytes; native session emission is owed in status-endings.json.",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000DD",
+        "iter": null,
+        "type": "wrapper.contribution.end",
+        "summary": {
+          "model": "gpt-5.6-sol",
+          "effort": "high",
+          "tokens_in": 100,
+          "tokens_out": 50,
+          "observed_tokens": 150,
+          "commits": 0,
+          "closures": 0,
+          "closure_outcome": "no_progress",
+          "recovery_attempts": 0,
+          "agent_seconds": 4.0,
+          "lifecycle_seconds": 4.0,
+          "peak_context_window": {
+            "current_tokens": 12000,
+            "token_limit": 32000,
+            "effective_target_tokens": 20000,
+            "effective_ceiling_tokens": 28000
+          },
+          "strike_reaction": "+1"
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4.0,
+            "cumulative_active_seconds": 4.0,
+            "consumption": {
+              "model": "gpt-5.6-sol",
+              "tokens_in": 100,
+              "tokens_out": 50
+            },
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            },
+            "ending": "timeout"
+          }
+        ],
+        "issue": 42,
+        "lane_id": 1,
+        "contribution_id": "ending-42",
+        "ending": "timeout",
+        "published": false,
+        "reason": "unchanged_branch"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"ending-42\", \"ending\": \"timeout\", \"issue\": 42, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 4.0, \"cumulative_active_seconds\": 4.0, \"consumption\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50}, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"ending\": \"timeout\"}], \"lane_id\": 1, \"published\": false, \"reason\": \"unchanged_branch\", \"summary\": {\"model\": \"gpt-5.6-sol\", \"effort\": \"high\", \"tokens_in\": 100, \"tokens_out\": 50, \"observed_tokens\": 150, \"commits\": 0, \"closures\": 0, \"closure_outcome\": \"no_progress\", \"recovery_attempts\": 0, \"agent_seconds\": 4.0, \"lifecycle_seconds\": 4.0, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"strike_reaction\": \"+1\"}}\n"
+    },
+    {
+      "id": "iteration-ending-crash",
+      "note": "Additive field: every member serializes these bytes; native session emission is owed in status-endings.json.",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000DD",
+        "iter": 1,
+        "type": "wrapper.iteration.end",
+        "outcome": "no_progress",
+        "duration_seconds": 4.0,
+        "summary": {
+          "model": "gpt-5.6-sol",
+          "tokens_in": 100,
+          "tokens_out": 50,
+          "observed_tokens": 150,
+          "tool_count": 0,
+          "skill_call_count": 0,
+          "skills_consulted": [],
+          "commits": 0,
+          "auto_closures": 0,
+          "pr_advances": 0,
+          "strikes": 0,
+          "peak_context_window": {
+            "current_tokens": 12000,
+            "token_limit": 32000,
+            "effective_target_tokens": 20000,
+            "effective_ceiling_tokens": 28000
+          }
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4.0,
+            "cumulative_active_seconds": 4.0,
+            "consumption": {
+              "model": "gpt-5.6-sol",
+              "tokens_in": 100,
+              "tokens_out": 50
+            },
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            },
+            "ending": "crash"
+          }
+        ]
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": 1, \"type\": \"wrapper.iteration.end\", \"duration_seconds\": 4.0, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 4.0, \"cumulative_active_seconds\": 4.0, \"consumption\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50}, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"ending\": \"crash\"}], \"outcome\": \"no_progress\", \"summary\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50, \"observed_tokens\": 150, \"tool_count\": 0, \"skill_call_count\": 0, \"skills_consulted\": [], \"commits\": 0, \"auto_closures\": 0, \"pr_advances\": 0, \"strikes\": 0, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}}}\n"
+    },
+    {
+      "id": "contribution-ending-crash",
+      "note": "Additive field: every member serializes these bytes; native session emission is owed in status-endings.json.",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000DD",
+        "iter": null,
+        "type": "wrapper.contribution.end",
+        "summary": {
+          "model": "gpt-5.6-sol",
+          "effort": "high",
+          "tokens_in": 100,
+          "tokens_out": 50,
+          "observed_tokens": 150,
+          "commits": 0,
+          "closures": 0,
+          "closure_outcome": "no_progress",
+          "recovery_attempts": 0,
+          "agent_seconds": 4.0,
+          "lifecycle_seconds": 4.0,
+          "peak_context_window": {
+            "current_tokens": 12000,
+            "token_limit": 32000,
+            "effective_target_tokens": 20000,
+            "effective_ceiling_tokens": 28000
+          },
+          "strike_reaction": "+1"
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4.0,
+            "cumulative_active_seconds": 4.0,
+            "consumption": {
+              "model": "gpt-5.6-sol",
+              "tokens_in": 100,
+              "tokens_out": 50
+            },
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            },
+            "ending": "crash"
+          }
+        ],
+        "issue": 42,
+        "lane_id": 1,
+        "contribution_id": "ending-42",
+        "ending": "crash",
+        "published": false,
+        "reason": "unchanged_branch"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"ending-42\", \"ending\": \"crash\", \"issue\": 42, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 4.0, \"cumulative_active_seconds\": 4.0, \"consumption\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50}, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"ending\": \"crash\"}], \"lane_id\": 1, \"published\": false, \"reason\": \"unchanged_branch\", \"summary\": {\"model\": \"gpt-5.6-sol\", \"effort\": \"high\", \"tokens_in\": 100, \"tokens_out\": 50, \"observed_tokens\": 150, \"commits\": 0, \"closures\": 0, \"closure_outcome\": \"no_progress\", \"recovery_attempts\": 0, \"agent_seconds\": 4.0, \"lifecycle_seconds\": 4.0, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"strike_reaction\": \"+1\"}}\n"
+    },
+    {
+      "id": "iteration-ending-no_more_tasks",
+      "note": "Additive field: every member serializes these bytes; native session emission is owed in status-endings.json.",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000DD",
+        "iter": 1,
+        "type": "wrapper.iteration.end",
+        "outcome": "no_progress",
+        "duration_seconds": 4.0,
+        "summary": {
+          "model": "gpt-5.6-sol",
+          "tokens_in": 100,
+          "tokens_out": 50,
+          "observed_tokens": 150,
+          "tool_count": 0,
+          "skill_call_count": 0,
+          "skills_consulted": [],
+          "commits": 0,
+          "auto_closures": 0,
+          "pr_advances": 0,
+          "strikes": 0,
+          "peak_context_window": {
+            "current_tokens": 12000,
+            "token_limit": 32000,
+            "effective_target_tokens": 20000,
+            "effective_ceiling_tokens": 28000
+          }
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4.0,
+            "cumulative_active_seconds": 4.0,
+            "consumption": {
+              "model": "gpt-5.6-sol",
+              "tokens_in": 100,
+              "tokens_out": 50
+            },
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            },
+            "ending": "no_more_tasks"
+          }
+        ]
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": 1, \"type\": \"wrapper.iteration.end\", \"duration_seconds\": 4.0, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 4.0, \"cumulative_active_seconds\": 4.0, \"consumption\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50}, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"ending\": \"no_more_tasks\"}], \"outcome\": \"no_progress\", \"summary\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50, \"observed_tokens\": 150, \"tool_count\": 0, \"skill_call_count\": 0, \"skills_consulted\": [], \"commits\": 0, \"auto_closures\": 0, \"pr_advances\": 0, \"strikes\": 0, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}}}\n"
+    },
+    {
+      "id": "contribution-ending-no_more_tasks",
+      "note": "Additive field: every member serializes these bytes; native session emission is owed in status-endings.json.",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000DD",
+        "iter": null,
+        "type": "wrapper.contribution.end",
+        "summary": {
+          "model": "gpt-5.6-sol",
+          "effort": "high",
+          "tokens_in": 100,
+          "tokens_out": 50,
+          "observed_tokens": 150,
+          "commits": 0,
+          "closures": 0,
+          "closure_outcome": "no_progress",
+          "recovery_attempts": 0,
+          "agent_seconds": 4.0,
+          "lifecycle_seconds": 4.0,
+          "peak_context_window": {
+            "current_tokens": 12000,
+            "token_limit": 32000,
+            "effective_target_tokens": 20000,
+            "effective_ceiling_tokens": 28000
+          },
+          "strike_reaction": "+1"
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4.0,
+            "cumulative_active_seconds": 4.0,
+            "consumption": {
+              "model": "gpt-5.6-sol",
+              "tokens_in": 100,
+              "tokens_out": 50
+            },
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            },
+            "ending": "no_more_tasks"
+          }
+        ],
+        "issue": 42,
+        "lane_id": 1,
+        "contribution_id": "ending-42",
+        "ending": "no_more_tasks",
+        "published": false,
+        "reason": "unchanged_branch"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"ending-42\", \"ending\": \"no_more_tasks\", \"issue\": 42, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 4.0, \"cumulative_active_seconds\": 4.0, \"consumption\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50}, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"ending\": \"no_more_tasks\"}], \"lane_id\": 1, \"published\": false, \"reason\": \"unchanged_branch\", \"summary\": {\"model\": \"gpt-5.6-sol\", \"effort\": \"high\", \"tokens_in\": 100, \"tokens_out\": 50, \"observed_tokens\": 150, \"commits\": 0, \"closures\": 0, \"closure_outcome\": \"no_progress\", \"recovery_attempts\": 0, \"agent_seconds\": 4.0, \"lifecycle_seconds\": 4.0, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"strike_reaction\": \"+1\"}}\n"
+    },
+    {
+      "id": "iteration-ending-content_filtered",
+      "note": "Additive field: every member serializes these bytes; native session emission is owed in status-endings.json.",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000DD",
+        "iter": 1,
+        "type": "wrapper.iteration.end",
+        "outcome": "no_progress",
+        "duration_seconds": 4.0,
+        "summary": {
+          "model": "gpt-5.6-sol",
+          "tokens_in": 100,
+          "tokens_out": 50,
+          "observed_tokens": 150,
+          "tool_count": 0,
+          "skill_call_count": 0,
+          "skills_consulted": [],
+          "commits": 0,
+          "auto_closures": 0,
+          "pr_advances": 0,
+          "strikes": 0,
+          "peak_context_window": {
+            "current_tokens": 12000,
+            "token_limit": 32000,
+            "effective_target_tokens": 20000,
+            "effective_ceiling_tokens": 28000
+          }
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4.0,
+            "cumulative_active_seconds": 4.0,
+            "consumption": {
+              "model": "gpt-5.6-sol",
+              "tokens_in": 100,
+              "tokens_out": 50
+            },
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            },
+            "ending": "content_filtered"
+          }
+        ]
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": 1, \"type\": \"wrapper.iteration.end\", \"duration_seconds\": 4.0, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 4.0, \"cumulative_active_seconds\": 4.0, \"consumption\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50}, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"ending\": \"content_filtered\"}], \"outcome\": \"no_progress\", \"summary\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50, \"observed_tokens\": 150, \"tool_count\": 0, \"skill_call_count\": 0, \"skills_consulted\": [], \"commits\": 0, \"auto_closures\": 0, \"pr_advances\": 0, \"strikes\": 0, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}}}\n"
+    },
+    {
+      "id": "contribution-ending-content_filtered",
+      "note": "Additive field: every member serializes these bytes; native session emission is owed in status-endings.json.",
+      "event": {
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "01HXR0000000000000000000DD",
+        "iter": null,
+        "type": "wrapper.contribution.end",
+        "summary": {
+          "model": "gpt-5.6-sol",
+          "effort": "high",
+          "tokens_in": 100,
+          "tokens_out": 50,
+          "observed_tokens": 150,
+          "commits": 0,
+          "closures": 0,
+          "closure_outcome": "no_progress",
+          "recovery_attempts": 0,
+          "agent_seconds": 4.0,
+          "lifecycle_seconds": 4.0,
+          "peak_context_window": {
+            "current_tokens": 12000,
+            "token_limit": 32000,
+            "effective_target_tokens": 20000,
+            "effective_ceiling_tokens": 28000
+          },
+          "strike_reaction": "+1"
+        },
+        "issues": [
+          {
+            "issue": 42,
+            "status": "no-progress",
+            "first_started_at": "2026-05-16T00:00:01.000Z",
+            "closed_at": null,
+            "issue_elapsed_seconds": null,
+            "active_seconds": 4.0,
+            "cumulative_active_seconds": 4.0,
+            "consumption": {
+              "model": "gpt-5.6-sol",
+              "tokens_in": 100,
+              "tokens_out": 50
+            },
+            "peak_context_window": {
+              "current_tokens": 12000,
+              "token_limit": 32000,
+              "effective_target_tokens": 20000,
+              "effective_ceiling_tokens": 28000
+            },
+            "ending": "content_filtered"
+          }
+        ],
+        "issue": 42,
+        "lane_id": 1,
+        "contribution_id": "ending-42",
+        "ending": "content_filtered",
+        "published": false,
+        "reason": "unchanged_branch"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:05.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"ending-42\", \"ending\": \"content_filtered\", \"issue\": 42, \"issues\": [{\"issue\": 42, \"status\": \"no-progress\", \"first_started_at\": \"2026-05-16T00:00:01.000Z\", \"closed_at\": null, \"issue_elapsed_seconds\": null, \"active_seconds\": 4.0, \"cumulative_active_seconds\": 4.0, \"consumption\": {\"model\": \"gpt-5.6-sol\", \"tokens_in\": 100, \"tokens_out\": 50}, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"ending\": \"content_filtered\"}], \"lane_id\": 1, \"published\": false, \"reason\": \"unchanged_branch\", \"summary\": {\"model\": \"gpt-5.6-sol\", \"effort\": \"high\", \"tokens_in\": 100, \"tokens_out\": 50, \"observed_tokens\": 150, \"commits\": 0, \"closures\": 0, \"closure_outcome\": \"no_progress\", \"recovery_attempts\": 0, \"agent_seconds\": 4.0, \"lifecycle_seconds\": 4.0, \"peak_context_window\": {\"current_tokens\": 12000, \"token_limit\": 32000, \"effective_target_tokens\": 20000, \"effective_ceiling_tokens\": 28000}, \"strike_reaction\": \"+1\"}}\n"
     }
   ]
 }

@@ -317,6 +317,9 @@ class IssueLedgerEntry:
     first_seen_at: float
     first_seen_iter: int
     status: str = STATUS_QUEUED
+    ending: str | None = None
+    commits: int | None = None
+    pr_advances: int | None = None
     started_at: float | None = None
     started_wall: datetime | None = None
     waiting_duration: float | None = None
@@ -1097,6 +1100,8 @@ class LiveRunState:
             self._record_event_line(_log_tool_text(event))
         elif etype == _COMMIT_RECORDED:
             self._iter_commits += 1
+            if self.active_ref in self.ledger:
+                self.ledger[self.active_ref].commits = self._iter_commits
             self._record_event_line(_log_commit_text(event))
         elif etype == _CHECKPOINT_RECORDED:
             # A runner Checkpoint: a distinct Log line, but NOT a commit — it
@@ -1818,6 +1823,9 @@ class LiveRunState:
             self._emit_event_line(st, provider, _log_tool_text(event))
         elif etype == _COMMIT_RECORDED:
             self._lane_commits[key] = self._lane_commits.get(key, 0) + 1
+            entry = self.ledger.get(key)
+            if entry is not None:
+                entry.commits = self._lane_commits[key]
             self._emit_event_line(st, provider, _log_commit_text(event))
         elif etype == _CHECKPOINT_RECORDED:
             self._emit_event_line(st, provider, _log_checkpoint_text(event))
@@ -1826,6 +1834,9 @@ class LiveRunState:
                 self._lane_close(key, now, status=STATUS_CLOSED)
             self._emit_event_line(st, provider, _log_auto_close_text(event))
         elif etype == _PR_ADVANCED:
+            entry = self.ledger.get(key)
+            if entry is not None:
+                entry.pr_advances = (entry.pr_advances or 0) + 1
             if not rolling:
                 self._lane_close(key, now, status=STATUS_ADVANCED)
             self._emit_event_line(st, provider, _log_pr_advanced_text(event))
@@ -2231,6 +2242,11 @@ class LiveRunState:
         self._open_contributions.add(key)
         self._lane_streams.pop(key, None)
         self._lane_commits.pop(key, None)
+        entry = self.ledger.get(key)
+        if entry is not None:
+            entry.ending = None
+            entry.commits = None
+            entry.pr_advances = None
         self._lane_touch(key, now)
 
     def contribution_host(self, contribution_id: str) -> str:
@@ -2396,6 +2412,10 @@ class LiveRunState:
             entry.waiting_duration = max(0.0, since - entry.first_seen_at)
         if entry.active_since is None:
             entry.active_since = since
+        if entry.status != STATUS_ACTIVE:
+            entry.ending = None
+            entry.commits = None
+            entry.pr_advances = None
         entry.status = STATUS_ACTIVE
         self.active_ref = ref
         self._strike_focus = ref
@@ -2432,6 +2452,8 @@ class LiveRunState:
             self._activate(ref, since=baseline if baseline is not None else now)
         entry.status = status
         entry.ended_at = now
+        if status == STATUS_ADVANCED:
+            entry.pr_advances = (entry.pr_advances or 0) + 1
 
     def _deactivate(
         self, ref: int | str, *, at: float, status: str | None = None
@@ -2615,6 +2637,25 @@ class LiveRunState:
                 item.usage_observed for item in entry.contributions
             )
             entry.status = contribution.status
+            ending = (
+                contribution_end.get("ending")
+                if contribution_end is not None else payload.get("ending")
+            )
+            entry.ending = ending if isinstance(ending, str) else None
+            summary = (
+                contribution_end.get("summary")
+                if contribution_end is not None else event.get("summary")
+            )
+            commits = _optional_nonnegative_int(summary.get("commits")) if (
+                isinstance(summary, Mapping) and len(issues) == 1
+            ) else None
+            if commits is None:
+                commits = self._lane_commits.get(key) if is_lane else entry.commits
+            entry.commits = commits if commits else None
+            if isinstance(summary, Mapping) and len(issues) == 1:
+                pr_advances = _optional_nonnegative_int(summary.get("pr_advances"))
+                if pr_advances is not None:
+                    entry.pr_advances = pr_advances or None
             entry.phase_since = None
             if contribution_end is not None:
                 if entry.status == STATUS_CLOSED:
@@ -3196,6 +3237,9 @@ class QueueRow:
     #: nothing has resolved one for it.
     route: ResolvedRoute | None = None
     phase_age_seconds: float | None = None
+    ending: str | None = None
+    commits: int | None = None
+    pr_advances: int | None = None
 
     @property
     def label(self) -> str:
@@ -3241,6 +3285,9 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
                 iteration_count=len(entry.contributions),
                 route=entry.route,
                 phase_age_seconds=entry.phase_age_seconds(base),
+                ending=entry.ending,
+                commits=entry.commits,
+                pr_advances=entry.pr_advances,
             )
         )
     rows.sort(key=lambda r: _QUEUE_GROUP_RANK.get(r.status, _QUEUE_GROUP_HISTORY))

@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.25 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.26 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1502,6 +1502,34 @@ and never emit them.
 
 ### Renderer-neutral Dashboard seam
 
+#### Issue Endings (contract 2.26, ADR-0075)
+
+The Python Runner MUST carry an observed **Ending** as the optional additive
+`ending` field on each issue's `wrapper.iteration.end` `issues[]` entry, and on
+`wrapper.contribution.end` itself for that Lane's issue. The normalized Lane
+`issues[]` row repeats the same fact. Values are `no_progress`, `timeout`, `crash`,
+`no_more_tasks`, and `content_filtered`. No Iteration-wide Ending or new Event
+type is introduced. An absent Ending MUST stay absent, never default to
+`no_progress`. A session that advanced or closed its issue reports no Ending
+except `timeout` or `crash`: progress does not hide a lost session.
+
+The **Queue** MUST read that issue-outcome record, never `wrapper.strike`, to
+explain its unchanged **Status** inline, without another column. For example,
+`no-progress · timed out` distinguishes a lost session from an ordinary stall.
+An `advanced` row conveys observed commits or PR advances from existing records;
+unknown progress detail MUST NOT be invented. A retry clears its previous
+Ending when it starts and cannot borrow another issue's Ending. Strike accounting,
+Attempt lifecycle, and the Header remain unchanged.
+
+Event fixture revision **1.7** and Dashboard fixture revision **1.18** pin this
+additive extension independently of compatibility schema **1**. Native
+session-emission cases are staged in `status-endings.json`, with shell and
+PowerShell `waived_owed` by #732; their existing serializer and rollup claims
+are unchanged. Both consumers replay the shared Dashboard cases with full-object
+equality. Python's retained pure replay projection is the semantic oracle; the
+live terminal Dashboard is the external Rust helper since #459, not a second
+Python widget implementation.
+
 The language-neutral
 [`dashboard-insights.json`](../git-loopy/conformance/dashboard-insights.json) fixture is the
 semantic boundary between Orchestrators and live-interface implementations. It supplies normalized
@@ -2230,7 +2258,8 @@ with parking and admission (§12, #682), 2.19 with Integration start and
 branch drift (§12, #684), 2.20 with Recovery attempts (§12, #685), 2.21 with
 the refill turn (§12, #686), 2.22 with the per-issue Strike record (§6,
 ADR-0070), 2.23 with upstream-durable Integration publication (§12, #418),
-and 2.24 with Subagent lifecycle telemetry and Activity totals (ADR-0022).
+and 2.24 with Subagent lifecycle telemetry and Activity totals (ADR-0022),
+and 2.26 with per-issue Endings and inline Queue explanations (ADR-0075).
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;

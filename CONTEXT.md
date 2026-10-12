@@ -508,6 +508,18 @@ closed. It alone has a closure timestamp; **advanced**, **no-progress**, and
 **review-handoff**, and **gone** are not completions.
 _Avoid_: completed, ended (when the source issue remains open).
 
+**Ending**:
+The **Session outcome** one attempt on an issue reached, carried beside that issue's
+**Status** rather than inside it (ADR-0075). The Python Runner reports it per issue
+on `wrapper.iteration.end` and per Lane on `wrapper.contribution.end`; the Queue
+shows it inline in Status. It is absent when the attempt reached none or the
+member could not observe it, and never defaulted. An advance has none unless its
+session timed out or crashed, which progress does not hide. Distinct from a
+**Strike**, which accounts for the same ending without supplying the Queue cell.
+Shell and PowerShell emission remains owed by #732; the per-attempt drill-in
+and inline Skipped marker remain owed by #731.
+_Avoid_: status reason, failure reason, sub-status.
+
 **Issue elapsed**:
 The span from an issue's first activation to its **Closed** instant, including
 inactive gaps between **Iterations**. Distinct from the Queue's Active duration,
@@ -1905,20 +1917,6 @@ It may still represent a previous resolution or be absent after failed replaceme
 and exhausted delivery retries, so the canonical local resolution and delivery status
 describe the current assignment, never the label as authority to choose, override, or pin a route.
 _Avoid_: model pin, routing input.
-
-### Status endings (accepted design)
-
-This term completes the vocabulary of
-[ADR-0075](docs/adr/0075-a-status-says-what-happened-its-ending-says-why.md). The existing
-**Status** and **Session outcome** entries above describe current behavior; this decision
-record does not establish delivery acceptance.
-
-**Ending**:
-The **Session outcome** one attempt on an issue reached, carried beside that issue's
-**Status** rather than inside it. An issue has one Status and one Ending per attempt. It is
-absent when the attempt reached none or the member could not observe it, and never defaulted.
-Distinct from a **Strike**, which is the Run's accounting of the same ending.
-_Avoid_: status reason, failure reason, sub-status.
 
 ### Agent memory (accepted design)
 

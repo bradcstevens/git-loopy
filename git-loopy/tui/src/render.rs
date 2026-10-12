@@ -58,6 +58,7 @@ const UNDECLARED_HOST: &str = "unknown";
 /// narrow to carry every column: rank 0 is never dropped. It is a presentation
 /// decision only — the shared fixture lists `responsive_truncation` among its
 /// presentation exclusions — so no projected value changes with the width.
+#[derive(Clone, Copy)]
 struct Column {
     heading: &'static str,
     width: u16,
@@ -664,14 +665,50 @@ fn draw_queue(
     routing: &str,
     glyphs: &Glyphs,
 ) {
+    let mut columns = QUEUE_COLUMNS;
+    let mut status_cells: Vec<String> = rows
+        .iter()
+        .map(|row| queue_status(row, true, glyphs))
+        .collect();
+    let needed = status_cells
+        .iter()
+        .map(|cell| Line::raw(cell).width())
+        .max()
+        .unwrap_or(0);
+    let available = area
+        .width
+        .saturating_sub(2 + columns[0].width + COLUMN_SPACING);
+    if needed > usize::from(available) {
+        let identity_width = rows
+            .iter()
+            .map(|row| Line::raw(issue_label(&row.issue)).width())
+            .max()
+            .unwrap_or(usize::from(columns[0].width))
+            .max(columns[0].heading.len());
+        columns[0].width = columns[0]
+            .width
+            .min(u16::try_from(identity_width).unwrap_or(u16::MAX));
+    }
+    let available = area
+        .width
+        .saturating_sub(2 + columns[0].width + COLUMN_SPACING);
+    for (row, cell) in rows.iter().zip(&mut status_cells) {
+        // At the floor, a lost-session ending is more important than its
+        // progress detail. Never clip that ending to keep the counts.
+        if Line::raw(&*cell).width() > usize::from(available) && row.ending.is_some() {
+            *cell = queue_status(row, false, glyphs);
+        }
+    }
+    columns[1].width =
+        status_column_width(status_cells.iter().cloned(), columns[1].width, available);
     draw_table(
         frame,
         area,
-        &QUEUE_COLUMNS,
-        rows.iter().map(|row| {
+        &columns,
+        rows.iter().zip(status_cells).map(|(row, status)| {
             vec![
                 issue_label(&row.issue),
-                queue_status(row),
+                status,
                 wall_clock(row.started_at.as_deref(), glyphs),
                 duration(row.active_seconds),
                 wall_clock(row.closed_at.as_deref(), glyphs),
@@ -693,18 +730,68 @@ fn draw_queue(
     );
 }
 
+/// Status, with phase age beside parked, admitted, integrating, and recovering.
+fn queue_status(row: &QueueRow, show_progress: bool, glyphs: &Glyphs) -> String {
+    let status = status_cell(
+        &row.status,
+        row.ending.as_deref(),
+        row.commits.filter(|_| show_progress),
+        row.pr_advances.filter(|_| show_progress),
+        glyphs,
+    );
+    match row.phase_age_seconds {
+        Some(age) => format!("{status} {}", duration(age)),
+        None => status,
+    }
+}
+
+fn status_column_width(cells: impl Iterator<Item = String>, minimum: u16, available: u16) -> u16 {
+    cells
+        .map(|cell| u16::try_from(Line::raw(cell).width()).unwrap_or(u16::MAX))
+        .max()
+        .unwrap_or(minimum)
+        .max(minimum)
+        .min(available)
+}
+
+fn status_cell(
+    status: &str,
+    ending: Option<&str>,
+    commits: Option<i64>,
+    pr_advances: Option<i64>,
+    glyphs: &Glyphs,
+) -> String {
+    let mut cell = status.to_string();
+    if let ("advanced", Some(commits)) = (status, commits) {
+        if commits > 0 {
+            let unit = if commits == 1 { "commit" } else { "commits" };
+            cell.push_str(&format!(" {}{commits} {unit}", glyphs.attribution));
+        }
+    }
+    if let ("advanced", Some(pr_advances)) = (status, pr_advances) {
+        if pr_advances > 0 {
+            let unit = if pr_advances == 1 { "PR" } else { "PRs" };
+            cell.push_str(&format!(" {}{pr_advances} {unit}", glyphs.attribution));
+        }
+    }
+    let ending = match ending {
+        Some("no_progress") => Some("left nothing"),
+        Some("timeout") => Some("timed out"),
+        Some("crash") => Some("crashed"),
+        Some("no_more_tasks") => Some("no work remains"),
+        Some("content_filtered") => Some("content filtered"),
+        _ => None,
+    };
+    if let Some(ending) = ending {
+        cell.push_str(&format!(" {}{ending}", glyphs.attribution));
+    }
+    cell
+}
+
 /// A token counter with thousands separators, or the unknown placeholder.
 ///
 /// An Orchestrator that cannot measure Consumption reports `null`, which is a
 /// different fact from a measured zero and must never render as one.
-/// Status, with phase age beside parked, admitted, integrating, and recovering.
-fn queue_status(row: &QueueRow) -> String {
-    match row.phase_age_seconds {
-        Some(age) => format!("{} {}", row.status, duration(age)),
-        None => row.status.clone(),
-    }
-}
-
 fn tokens(value: Option<i64>, glyphs: &Glyphs) -> String {
     value.map_or_else(|| glyphs.unknown.to_string(), grouped)
 }

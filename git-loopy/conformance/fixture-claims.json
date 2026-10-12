@@ -3,6 +3,12 @@
   "contract_version": "2.0",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
+    "status-endings.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_iteration_end_to_end.py drives every case through a serial session and asserts the emitted issue outcome; python/tests/test_loop_parallel.py covers all five Lane terminations and retries."},
+      "shell": {"kind": "waived_owed", "reason": "Ending emission from native session terminations is not yet implemented; generic Event serialization still covers the additive wire field.", "issue": 732},
+      "powershell": {"kind": "waived_owed", "reason": "Ending emission from native session terminations is not yet implemented; generic Event serialization still covers the additive wire field.", "issue": 732},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Session termination and producer emission belong to Orchestrators; Dashboard Ending consumption is pinned in dashboard-insights.json."}
+    },
     "rolling-priority.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_loop_parallel.py drives every case through the complete Run/Event-log seam, observing actual bindings, first work and verified closures."},
       "shell": {"kind": "waived_out_of_scope", "reason": "Contract 2.25 scopes Priority crossing to Python Rolling dispatch; the shell Orchestrator is serial-only."},
