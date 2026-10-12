@@ -169,6 +169,14 @@ after Integration. The label must be one of the last stable Release's three
 successors — after `0.10.0`, only `v0.10.1`, `v0.11.0` or `v1.0.0` — and an issue
 with no such label changes no version. Pickup infers the **Bump class** and
 writes the label, creating it on the tracker; `git-loopy init` provisions none.
+Pickup never writes a label for an inferred `major`: it writes nothing and
+reports `major_needs_human_label`, because only a human opens a major line
+([ADR-0079](../adr/0079-a-human-opens-a-major-line-and-the-1-0-0-cut-waits-for-the-python-path.md)).
+The target only ratchets upward, so one ordinary issue misread as breaking
+would otherwise move the whole line to the next major's `alpha`. A
+human-applied major-successor label — `v1.0.0` after `0.11.1` — is honoured
+as written and never reclassified. This holds in every repository git-loopy
+runs in.
 The Release target is the ratchet across those labels, while the prerelease
 counter records each advance; see
 [ADR-0052](../adr/0052-the-release-line-advances-per-issue.md) and

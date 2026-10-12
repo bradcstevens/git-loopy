@@ -2,7 +2,9 @@
 
 The classifier answers with one closed Bump-class key; what reaches the tracker
 is the ``vX.Y.Z`` label naming the Release the issue ships in (ADR-0066), and a
-``none`` writes nothing at all (#489).
+``none`` writes nothing at all (#489). An inferred ``major`` writes nothing
+either: only a human opens a major line (ADR-0079), so Pickup reports that the
+issue needs a human-applied label instead.
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ class BumpClassClassificationOutcome(Enum):
     ALREADY_LABELLED = "already_labelled"
     INVALID_EXISTING_LABELS = "invalid_existing_labels"
     CLASSIFIED = "classified"
+    MAJOR_NEEDS_HUMAN_LABEL = "major_needs_human_label"
     REFUSED_KEY = "refused_key"
     NO_CLASSIFIER_PAIR = "no_classifier_pair"
     NO_TRACKER = "no_tracker"
@@ -112,6 +115,15 @@ async def classify_bump_class(
             detail=(
                 f"proposed Bump class {proposal!r} is outside the closed taxonomy; "
                 f"permitted keys: {', '.join(BUMP_CLASS_KEYS)}"
+            ),
+        )
+    if proposal == "major":
+        return BumpClassClassification(
+            BumpClassClassificationOutcome.MAJOR_NEEDS_HUMAN_LABEL,
+            bump_class=proposal,
+            detail=(
+                "an inferred major is never written; only a human-applied "
+                "Release-target label opens a major line (ADR-0079)"
             ),
         )
     return BumpClassClassification(
@@ -240,6 +252,7 @@ class PickupBumpClassifier:
                 in {
                     BumpClassClassificationOutcome.INVALID_EXISTING_LABELS,
                     BumpClassClassificationOutcome.REFUSED_KEY,
+                    BumpClassClassificationOutcome.MAJOR_NEEDS_HUMAN_LABEL,
                     BumpClassClassificationOutcome.FAILED,
                 }
                 else logging.INFO

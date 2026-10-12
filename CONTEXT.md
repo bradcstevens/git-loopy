@@ -799,6 +799,8 @@ last **Promotion**, never assigned; it ratchets upward and never falls
 ([ADR-0052](docs/adr/0052-the-release-line-advances-per-issue.md)). An issue names the
 target it ships in with a `vX.Y.Z` label, which must be one of the last stable Release's
 three successors ([ADR-0066](docs/adr/0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md)).
+Only a human-applied label raises it to the next major; **Pickup** never does
+([ADR-0079](docs/adr/0079-a-human-opens-a-major-line-and-the-1-0-0-cut-waits-for-the-python-path.md)).
 _Avoid_: release label, planned version.
 
 **Release line**:
@@ -815,6 +817,9 @@ How much of the **Release version** one issue moves — `major`, `minor`, `patch
 **Release target** label; the class is then derived from that label against the last
 stable Release. No label is `none`, which advances nothing
 ([ADR-0066](docs/adr/0066-a-version-label-names-the-release-and-prereleases-move-alpha-beta-rc.md)).
+An inferred `major` is never written: **Pickup** writes no label and reports
+`major_needs_human_label`, so only a human opens a major line
+([ADR-0079](docs/adr/0079-a-human-opens-a-major-line-and-the-1-0-0-cut-waits-for-the-python-path.md)).
 _Avoid_: severity, impact, semver level, `semver:` label.
 
 **Promotion**:
