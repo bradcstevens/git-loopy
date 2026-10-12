@@ -2,6 +2,12 @@
 
 **Status:** accepted design; implementation acceptance is tracked by the delivery issues.
 
+**Amended by [ADR-0086](0086-agent-profiles-are-markdown-beside-the-skills-proved-and-installed-with-the-catalog.md):**
+each profile is a `profiles/<task-type>.md` file in the Skills repository, proved and
+installed with the catalog. `/resolving-merge-conflicts` is Permitted on the five
+execution profiles. Required Skills come only from the profiles, and `required-skills`
+in custom Run instructions is retired.
+
 Decided by [Decide the Agent profile set and how skills attach to
 it](https://github.com/bradcstevens/git-loopy/issues/661).
 
