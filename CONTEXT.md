@@ -1940,15 +1940,16 @@ _Avoid_: profile memory, learnings, scratchpad.
 
 ### Agent profiles (accepted design)
 
-This term completes the vocabulary of
+These terms complete the vocabulary of
 [ADR-0078](docs/adr/0078-one-agent-profile-per-task-type.md),
-[ADR-0086](docs/adr/0086-agent-profiles-are-markdown-beside-the-skills-proved-and-installed-with-the-catalog.md)
+[ADR-0086](docs/adr/0086-agent-profiles-are-markdown-beside-the-skills-proved-and-installed-with-the-catalog.md),
+[ADR-0087](docs/adr/0087-the-planner-is-generated-from-the-pin-and-launched-into-the-loop-engineers-harness.md)
 and
-[ADR-0087](docs/adr/0087-the-planner-is-generated-from-the-pin-and-launched-into-the-loop-engineers-harness.md).
+[ADR-0088](docs/adr/0088-only-execution-task-types-run-and-a-planning-or-review-typed-issue-is-a-pool-exclusion.md).
 The existing **Required Skill**, **Skill policy**, **Minimal Skill policy**, **Installed
-catalog** and **Task type** entries above describe current behavior; these decision
-records do not establish delivery acceptance. Permitted Skills enter this glossary when
-they ship.
+catalog**, **Task type**, **Task-type classifier** and **Pool exclusion** entries above
+describe current behavior; these decision records do not establish delivery acceptance.
+Permitted Skills enter this glossary when they ship.
 
 **Agent profile**:
 A reusable definition that an **Agent** starts from: role instructions layered on the Run
@@ -1956,8 +1957,9 @@ instructions (the **Planner**'s stand alone, because it works outside every **Ru
 preloaded **Required Skills**, the further Skills it may invoke on demand,
 and its tool access, which is read-only for the **Reviewer** and full for every other
 profile. There is one per **Task type**: the **Planner** is `planning`, the **Reviewer**
-is `review`, and the other five are execution profiles. An issue's Task type selects its
-profile, and an issue whose Task type does not resolve runs as `implementation`. An
+is `review`, and the other five are execution profiles. A **Run** starts only an execution
+profile as an issue's own **Agent**: the issue's **Execution Task type** selects it, and an
+issue whose Task type does not resolve runs as `implementation`. An
 in-Run **Agent** can reach only its profile's Skills, and only those the **Effective Skill
 policy** also enables. A profile carries no model or reasoning effort, because
 **Routing** alone decides those. The profiles, not the Run instructions, declare a
@@ -1965,6 +1967,17 @@ policy** also enables. A profile carries no model or reasoning effort, because
 Skills and are installed and repaired with the **installed catalog**. No repository or
 personal source overrides them.
 _Avoid_: custom agent (the harness mechanism), persona, role, worker.
+
+**Execution Task type**:
+One of the five **Task types** whose **Agent profile** a **Run** starts as an issue's own
+**Agent**: `implementation`, `bugfix`, `test`, `docs` and `chore`. The other two name work
+a Run never starts for an issue. `planning` is the **Planner**'s, done outside every Run.
+`review` is the **Reviewer**'s, which only judges another Agent's result. A
+`ready-for-agent` issue carrying either of those two labels is a **Pool exclusion**, which
+a human resolves by retyping the issue or by handing it to the Planner. Only a human
+asserts either label. The **Task-type classifier** and the Planner propose only execution
+Task types.
+_Avoid_: non-executable issue (an excluded issue is still on the **Board**), runnable type.
 
 ### Board (accepted design)
 

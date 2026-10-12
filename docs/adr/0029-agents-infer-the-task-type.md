@@ -12,6 +12,11 @@ keeps the separate classifier and closed taxonomy but moves missing-label classi
 eligible proposal preparation, before checking for a static route. Delivery is judged
 against that timing rule; the original Pickup-only reasoning remains below.
 
+**Accepted-design amendment:** [ADR-0088](0088-only-execution-task-types-run-and-a-planning-or-review-typed-issue-is-a-pool-exclusion.md)
+narrows the classifier's choice to the five execution Task types: `implementation`,
+`bugfix`, `test`, `docs` and `chore`. Only a human asserts `planning` or `review`, and the
+taxonomy stays closed at seven.
+
 Accepted at [#409](https://github.com/bradcstevens/git-loopy/issues/409), under the per-issue
 routing spec [#400](https://github.com/bradcstevens/git-loopy/issues/400), which is also where
 the classifier reached its first production call site. Two amendments were made on acceptance

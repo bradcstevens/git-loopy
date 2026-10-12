@@ -13,6 +13,11 @@ the Planner's agent is generated from `profiles/planning.md` into git-loopy's ow
 scope, and `git-loopy plan` launches it into the Loop engineer's harness. No in-Run
 profile is ever written as an `.agent.md` file.
 
+**Amended by [ADR-0088](0088-only-execution-task-types-run-and-a-planning-or-review-typed-issue-is-a-pool-exclusion.md):**
+a Run starts only the five execution profiles as an issue's own Agent. A
+`ready-for-agent` issue typed `planning` or `review` is a Pool exclusion. The Task-type
+classifier and the Planner propose only execution Task types.
+
 Decided by [Decide the Agent profile set and how skills attach to
 it](https://github.com/bradcstevens/git-loopy/issues/661).
 
