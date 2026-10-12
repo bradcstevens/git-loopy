@@ -16,7 +16,7 @@ from typing import Any
 from .assessment_config import (
     MILESTONE_PATTERN, REPOSITORY_PATTERN, AssessmentConfigError, load_policy,
 )
-from .assessment_github import GitHubReads, Transport, Unreadable
+from .assessment_github import GitHubApp, GitHubReads, HTTPTransport, Transport, Unreadable
 from .release_version import (
     parse_release_line, parse_release_version, promote_closed_milestone,
 )
@@ -138,11 +138,9 @@ def create_server(
     from mcp.server import Server
 
     policies = load_policy(os.environ if env is None else env)
-    if transport is None:
-        raise AssessmentConfigError(
-            "no GitHub App credential transport is available in this service version; "
-            "App authentication arrives with #760; ambient credentials are never used"
-        )
+    transport = HTTPTransport() if transport is None else transport
+    apps = {repository: GitHubApp(policy, transport)
+            for repository, policy in policies.items()}
     service_version = installed_version("git-loopy")
     now = clock or (lambda: datetime.now(timezone.utc).isoformat())
     schema: dict[str, Any] = {
@@ -214,13 +212,14 @@ def create_server(
     async def assess(arguments):
         repository, milestone = validate_inputs(arguments, "assess")
         policy = policies[repository]
-        github = GitHubReads(repository, transport)
+        token, identity = await apps[repository].installation(repository)
+        github = GitHubReads(repository, transport, token=token)
         result = {
             "repo": repository, "milestone": milestone, "milestoneState": None,
             "sha": None, "asOf": now(), "version": None, "releaseTarget": None,
             "releaseTargetState": "unreadable",
             "baseline": None, "policy": policy.revision, "service": service_version,
-            "identity": policy.identity, "resultFormat": 1,
+            "identity": identity, "resultFormat": 1,
             "countedWorkflows": list(policy.workflows),
             "checks": [], "holds": [], "incompletes": [], "content": [], "context": [],
             "verdict": "incomplete", "sources": {},

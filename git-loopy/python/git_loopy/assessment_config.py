@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -26,6 +28,30 @@ KEYS = frozenset({
 
 class AssessmentConfigError(ValueError):
     """The service cannot start with this policy."""
+
+
+def read_app_key(path: Path) -> bytes:
+    """Check the opened file, not a separate stat that could race a replacement."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as key:
+            info = os.fstat(key.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise AssessmentConfigError("App key file must be a regular file")
+            if os.name == "posix" and (
+                info.st_uid != os.geteuid() or info.st_mode & 0o077
+            ):
+                raise AssessmentConfigError("App key file must be owner-only")
+            if os.name == "posix" and not info.st_mode & stat.S_IRUSR:
+                raise AssessmentConfigError("App key file is unreadable")
+            material = key.read(65537)
+    except FileNotFoundError:
+        raise AssessmentConfigError("App key file is missing") from None
+    except OSError:
+        raise AssessmentConfigError("App key file is unreadable") from None
+    if not material or len(material) > 65536:
+        raise AssessmentConfigError("App key file is empty or too large")
+    return material
 
 
 @dataclass(frozen=True)

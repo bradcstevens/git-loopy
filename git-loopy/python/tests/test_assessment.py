@@ -8,12 +8,17 @@ import re
 import os
 import subprocess
 import sys
+import time
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from importlib.metadata import version
 from pathlib import Path
 
 import anyio
+import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from mcp import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
 
@@ -26,23 +31,65 @@ REPO = "example/project"
 SHA = "a" * 40
 API = f"/repos/{REPO}"
 FIXTURES = Path(__file__).parent / "fixtures" / "assessment"
+TOKEN = "installation-secret-never-in-output"
+PERMISSIONS = {
+    name: "read" for name in (
+        "metadata", "issues", "pull_requests", "contents", "checks", "statuses", "actions",
+    )
+}
+
+
+@lru_cache
+def signing_key():
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
 class RecordedTransport:
     def __init__(self, responses):
-        self.responses = responses
+        self.responses = {
+            (f"{API}/installation", ()): Response(200, {"id": 456}),
+            ("/app", ()): Response(200, {"id": 123, "name": "release-review-app"}),
+            ("/app/installations/456/access_tokens", ()): Response(
+                201, {"token": TOKEN, "permissions": PERMISSIONS},
+            ),
+            **responses,
+        }
         self.requests = []
+        self.authentications = []
         self.violations = []
 
-    async def request(self, method, path, *, params, headers):
+    async def request(self, method, path, *, params, headers, json=None):
         self.requests.append((method, path, params))
         try:
-            assert method == "GET"
+            app_request = path in {
+                f"{API}/installation", "/app", "/app/installations/456/access_tokens",
+            }
+            assert method == (
+                "POST" if path == "/app/installations/456/access_tokens" else "GET"
+            )
             assert path in {
                 API, f"{API}/commits/main", f"{API}/contents/VERSION",
                 f"{API}/milestones", f"{API}/actions/runs",
+                f"{API}/installation", "/app",
+                "/app/installations/456/access_tokens",
             }
             assert headers["X-GitHub-Api-Version"] == "2022-11-28"
+            auth = headers["Authorization"]
+            self.authentications.append(auth.removeprefix("Bearer "))
+            if app_request:
+                claims = jwt.decode(
+                    auth.removeprefix("Bearer "), signing_key().public_key(),
+                    algorithms=["RS256"], issuer="123",
+                    options={"require": ["iss", "iat", "exp"]},
+                )
+                assert time.time() - 120 <= claims["iat"] <= time.time()
+                assert claims["iat"] < claims["exp"] <= claims["iat"] + 600
+            else:
+                assert auth == f"Bearer {TOKEN}"
+            assert json == (
+                {"repositories": ["project"], "permissions": PERMISSIONS}
+                if method == "POST" else None
+            )
             response = self.responses[(path, tuple(sorted(params.items())))]
         except (AssertionError, KeyError) as exc:
             self.violations.append(str(exc))
@@ -75,10 +122,17 @@ def recorded(version="0.12.0-alpha.2", milestones=None):
 def configuration(home: Path, workflows='["Runner family gate"]', extra=""):
     path = home / "git-loopy" / "assessment" / "config.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
+    key_file = path.parent / "app.pem"
+    key_file.write_bytes(signing_key().private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ))
+    key_file.chmod(0o600)
     path.write_text(
         f'["{REPO}"]\nworkflows = {workflows}\n'
         'app_id = "123"\ninstallation_id = "456"\n'
-        'app_identity = "release-review-app"\nkey_file = "/not/a/credential.pem"\n'
+        'app_identity = "release-review-app"\n'
+        f"key_file = {json.dumps(str(key_file))}\n"
         + extra,
         encoding="utf-8",
     )
@@ -130,7 +184,13 @@ async def test_assess_pins_line_and_returns_fail_closed_packet(tmp_path):
             "url": f"https://github.com/{REPO}/actions/runs/42",
         }]
         assert "- Runner family gate: success — [run]" in reply.content[0].text
-        assert len(transport.requests) == 5
+        assert len(transport.requests) == 8
+        assert [r[:2] for r in transport.requests[:3]] == [
+            ("GET", f"{API}/installation"), ("GET", "/app"),
+            ("POST", "/app/installations/456/access_tokens"),
+        ]
+        assert sum(r[0] == "POST" for r in transport.requests) == 1
+        assert TOKEN not in str(reply)
 
 
 async def test_freshness_confirms_unchanged_head_and_open_title(tmp_path):
@@ -699,7 +759,7 @@ async def test_required_read_failures_remain_unreadable(tmp_path, where, failure
         assert item["source"].startswith(f"https://github.com/{REPO}")
         assert "sensitive credential" not in str(result)
         assert len(result["incompletes"]) == (4 if where == "head" else 3)
-        assert len(transport.requests) == (3 if where == "head" else 5)
+        assert len(transport.requests) == (6 if where == "head" else 8)
         if where in ("head", "runs"):
             assert result["checks"][0]["workflow"] == "Runner family gate"
             assert result["checks"][0]["conclusion"] == "unreadable"
@@ -727,7 +787,7 @@ async def test_partial_milestone_catalog_is_not_a_complete_read(tmp_path, link):
         assert result["incompletes"][0]["reason"] in {
             "pagination did not complete", "rate-limited",
         }
-        assert all(request[1].startswith(API) for request in transport.requests)
+        assert all(request[1].startswith(API) for request in transport.requests[3:])
 
 
 async def test_completed_pagination_includes_later_open_milestones(tmp_path):
@@ -745,7 +805,7 @@ async def test_completed_pagination_includes_later_open_milestones(tmp_path):
         reply = await client.call_tool("assess", {"repository": REPO})
         assert reply.is_error
         assert "v0.13.0 (open)" in reply.content[0].text
-        assert len(transport.requests) == 5
+        assert len(transport.requests) == 8
 
 
 async def test_policy_is_a_startup_snapshot_and_has_full_provenance(tmp_path):
@@ -781,12 +841,45 @@ async def test_unknown_configuration_keys_refuse_start(tmp_path, extra):
             pytest.fail("invalid policy started a service")
 
 
-async def test_stdio_service_without_app_transport_refuses_start(tmp_path, monkeypatch):
-    configuration(tmp_path)
+@pytest.mark.parametrize("problem,reason", [
+    ("missing", "App key file is missing"),
+    ("unreadable", "App key file is unreadable"),
+    ("permissive", "App key file must be owner-only"),
+    ("invalid", "App key file is not a valid RSA private key"),
+    ("directory", "App key file is unreadable"),
+])
+async def test_bad_key_fails_closed_without_ambient_auth(tmp_path, monkeypatch, problem, reason):
+    if os.name != "posix" and problem in {"unreadable", "permissive"}:
+        pytest.skip("POSIX key permissions; Windows ACLs are documented, not enforced")
+    path = configuration(tmp_path)
+    key = path.parent / "app.pem"
+    if problem == "missing":
+        key.unlink()
+    elif problem == "unreadable":
+        key.chmod(0o200)
+    elif problem == "permissive":
+        key.chmod(0o644)
+    elif problem == "invalid":
+        key.write_text("secret-not-a-key")
+    else:
+        key.unlink()
+        key.mkdir()
     monkeypatch.setenv("GH_TOKEN", "never-use-ambient-auth")
     monkeypatch.setenv("GITHUB_TOKEN", "never-use-ambient-auth")
-    with pytest.raises(AssessmentConfigError, match="no GitHub App credential transport"):
+    recording = tmp_path / "gh-called"
+    gh = tmp_path / ("gh.cmd" if os.name == "nt" else "gh")
+    gh.write_text(
+        f'@echo called > "{recording}"\r\n' if os.name == "nt"
+        else f"#!/bin/sh\nprintf called > '{recording}'\n"
+    )
+    gh.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    with pytest.raises(AssessmentConfigError, match=reason):
         create_server(env={"XDG_CONFIG_HOME": str(tmp_path)})
+    transport = RecordedTransport({})
+    with pytest.raises(AssessmentConfigError, match=reason):
+        create_server(env={"XDG_CONFIG_HOME": str(tmp_path)}, transport=transport)
+    assert transport.requests == []
     console = Path(sys.executable).parent / (
         "git-loopy-assessment.exe" if os.name == "nt" else "git-loopy-assessment"
     )
@@ -796,7 +889,70 @@ async def test_stdio_service_without_app_transport_refuses_start(tmp_path, monke
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert "no GitHub App credential transport" in result.stderr
+    assert reason in result.stderr
+    assert "never-use-ambient-auth" not in result.stderr
+    assert not recording.exists()
+
+
+async def test_uninstalled_allowlisted_repository_refuses_before_evidence(tmp_path):
+    configuration(tmp_path)
+    async with session(tmp_path, {
+        (f"{API}/installation", ()): Response(404, {"message": TOKEN}),
+    }) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert reply.is_error
+        assert reply.content[0].text == f"GitHub App is not installed on {REPO}"
+        assert transport.requests == [("GET", f"{API}/installation", {})]
+        assert TOKEN not in str(reply)
+
+
+async def test_read_identity_is_observed_from_app_not_policy(tmp_path, caplog):
+    configuration(tmp_path)
+    async with session(tmp_path, {
+        **recorded(),
+        ("/app", ()): Response(200, {"id": 123, "name": "Actual App"}),
+    }) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert not reply.is_error
+        assert reply.structured_content["identity"] == (
+            "GitHub App Actual App (app 123, installation 456)"
+        )
+        assert "Read identity: GitHub App Actual App" in reply.content[0].text
+        exposed = str(reply) + caplog.text
+        assert all(secret not in exposed for secret in transport.authentications)
+        assert "PRIVATE KEY" not in exposed
+
+
+@pytest.mark.parametrize("path,response,reason", [
+    (f"{API}/installation", Response(200, {"id": 999}), "does not match policy"),
+    (f"{API}/installation", Response(200, {"id": 456, "suspended_at": "today"}),
+     "does not match policy"),
+    ("/app", Response(200, {"id": 999, "name": "wrong app"}), "identity"),
+    ("/app", Response(200, {"id": 123, "name": TOKEN + "\n"}), "identity"),
+    ("/app", OSError(TOKEN), "authentication errored"),
+    ("/app/installations/456/access_tokens", Response(403, {"message": TOKEN}),
+     "authentication failed"),
+    ("/app/installations/456/access_tokens", Response(201, {
+        "token": TOKEN, "permissions": {**PERMISSIONS, "contents": "write"},
+    }), "read-only"),
+    ("/app/installations/456/access_tokens", Response(201, {"token": TOKEN}), "read-only"),
+])
+async def test_authentication_failures_never_read_evidence_or_expose_secrets(
+    tmp_path, caplog, path, response, reason,
+):
+    configuration(tmp_path)
+    async with session(tmp_path, {(path, ()): response}) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert reply.is_error
+        assert reason in reply.content[0].text
+        assert REPO in reply.content[0].text
+        assert all(r[1] in {
+            f"{API}/installation", "/app", "/app/installations/456/access_tokens",
+        } for r in transport.requests)
+        exposed = str(reply) + caplog.text
+        assert TOKEN not in exposed
+        assert all(secret not in exposed for secret in transport.authentications)
+        assert "PRIVATE KEY" not in exposed
 
 
 async def test_exactly_two_tools_expose_only_typed_bounded_inputs(tmp_path):

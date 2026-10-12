@@ -335,6 +335,7 @@ dependencies = [
 [package.optional-dependencies]
 assessment = [
     { name = "mcp" },
+    { name = "pyjwt", extra = ["crypto"] },
 ]
 dev = [
     { name = "httpx" },
@@ -362,6 +363,7 @@ requires-dist = [
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.20,<2" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'otel'", specifier = ">=1.20,<2" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20,<2" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'assessment'", specifier = ">=2.10,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.0.0" },

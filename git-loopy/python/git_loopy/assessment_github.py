@@ -1,6 +1,9 @@
 """Fixed GitHub REST reads. The transport is the only network substitution.
 
 Endpoint-to-App-read-permission matrix for this tracer:
+    GET /repos/{repository}/installation         App JWT (installation lookup)
+    GET /app                                    App JWT (App identity)
+    POST /app/installations/{id}/access_tokens   App JWT (repository/read scope)
     GET /repos/{repository}                       Metadata (default branch)
     GET /repos/{repository}/commits/{ref}         Contents (pinned head)
     GET /repos/{repository}/contents/VERSION     Contents (ref = pinned SHA)
@@ -16,14 +19,30 @@ from __future__ import annotations
 import base64
 import binascii
 import re
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import parse_qs, quote, urlsplit
 
+from .assessment_config import AssessmentConfigError, Policy, read_app_key
+
 
 API_VERSION = "2022-11-28"
 SHA_PATTERN = r"[0-9a-f]{40}"
+READ_PERMISSIONS = {
+    name: "read" for name in (
+        "metadata", "issues", "pull_requests", "contents", "checks", "statuses", "actions",
+    )
+}
+
+
+def _headers(token: str) -> dict[str, str]:
+    return {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": API_VERSION,
+        "Authorization": f"Bearer {token}",
+    }
 
 
 @dataclass(frozen=True)
@@ -37,7 +56,106 @@ class Transport(Protocol):
     async def request(
         self, method: str, path: str, *,
         params: Mapping[str, str | int], headers: Mapping[str, str],
+        json: Mapping[str, Any] | None = None,
     ) -> Response: ...
+
+
+class HTTPTransport:
+    """GitHub.com only; redirects and ambient HTTP credentials are disabled."""
+
+    async def request(self, method, path, *, params, headers, json=None) -> Response:
+        import httpx
+
+        async with httpx.AsyncClient(
+            base_url="https://api.github.com", timeout=30,
+            follow_redirects=False, trust_env=False,
+        ) as client:
+            response = await client.request(
+                method, path, params=params, headers=headers, json=json,
+            )
+            # Error bodies are not evidence and can contain credential material.
+            data = response.json() if response.status_code in (200, 201) else None
+            return Response(response.status_code, data, response.headers)
+
+
+class GitHubApp:
+    def __init__(self, policy: Policy, transport: Transport):
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+        from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+
+        self.policy, self.transport = policy, transport
+        material = read_app_key(policy.key_file)
+        try:
+            key = load_pem_private_key(material, password=None)
+            if not isinstance(key, RSAPrivateKey) or key.key_size < 2048:
+                raise ValueError()
+            self._key = key
+        except (ValueError, TypeError):
+            raise AssessmentConfigError("App key file is not a valid RSA private key") from None
+
+    async def installation(self, repository: str) -> tuple[str, str]:
+        import jwt
+
+        now = int(time.time())
+        try:
+            app_token = jwt.encode(
+                {"iat": now - 60, "exp": now + 540, "iss": self.policy.app_id},
+                self._key, algorithm="RS256",
+            )
+        except Exception:
+            raise ValueError("could not sign the GitHub App credential") from None
+        headers = _headers(app_token)
+
+        async def request(method, path, body=None):
+            try:
+                response = await self.transport.request(
+                    method, path, params={}, headers=headers,
+                    **({"json": body} if body is not None else {}),
+                )
+            except Exception:
+                raise ValueError(
+                    f"GitHub App authentication errored for {repository}"
+                ) from None
+            if response.status != (201 if method == "POST" else 200):
+                if response.status == 404 and path.endswith("/installation"):
+                    raise ValueError(f"GitHub App is not installed on {repository}")
+                raise ValueError(
+                    f"GitHub App authentication failed for {repository} "
+                    f"(HTTP {response.status})"
+                )
+            if not isinstance(response.data, dict):
+                raise ValueError(f"unrecognized GitHub App response for {repository}")
+            return response.data
+
+        installation = await request("GET", f"/repos/{repository}/installation")
+        identifier = installation.get("id")
+        if (
+            not isinstance(identifier, int) or isinstance(identifier, bool)
+            or str(identifier) != self.policy.installation_id
+            or installation.get("suspended_at") is not None
+        ):
+            raise ValueError(f"GitHub App installation does not match policy for {repository}")
+        app = await request("GET", "/app")
+        name = app.get("name")
+        if (
+            not isinstance(app.get("id"), int) or isinstance(app["id"], bool)
+            or str(app["id"]) != self.policy.app_id
+            or not isinstance(name, str) or not 0 < len(name) <= 200
+            or not all(c.isprintable() for c in name)
+        ):
+            raise ValueError(f"unrecognized GitHub App identity for {repository}")
+        data = await request(
+            "POST", f"/app/installations/{identifier}/access_tokens",
+            {"repositories": [repository.split("/")[1]], "permissions": READ_PERMISSIONS},
+        )
+        token = data.get("token")
+        if (
+            not isinstance(token, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,1024}", token) is None
+            or data.get("permissions") != READ_PERMISSIONS
+        ):
+            raise ValueError(f"invalid read-only GitHub App token response for {repository}")
+        identity = f"GitHub App {name} (app {app['id']}, installation {identifier})"
+        return token, identity
 
 
 class Unreadable(ValueError):
@@ -47,10 +165,11 @@ class Unreadable(ValueError):
 
 
 class GitHubReads:
-    def __init__(self, repository: str, transport: Transport):
+    def __init__(self, repository: str, transport: Transport, *, token: str = ""):
         self.api = f"/repos/{repository}"
         self.web = f"https://github.com/{repository}"
         self.transport = transport
+        self._token = token
 
     async def _get(self, suffix, params, read, source) -> Response:
         # No caller-provided URL is ever followed, including pagination links.
@@ -61,14 +180,11 @@ class GitHubReads:
         try:
             response = await self.transport.request(
                 "GET", self.api + suffix, params=params,
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": API_VERSION,
-                },
+                headers=_headers(self._token),
             )
-        except Exception as exc:
+        except Exception:
             # Transport exception text may carry credentials; never echo it.
-            raise Unreadable(read, "read errored", source) from exc
+            raise Unreadable(read, "read errored", source) from None
         if response.status != 200:
             reason = {
                 401: "denied", 403: "denied or rate-limited",
