@@ -25,7 +25,7 @@ corrects the diagnosis recorded in [#282](https://github.com/bradcstevens/git-lo
 
 ## Backend-catalog refresh: 2026-10-09
 
-**Historical:** the SDK 1.0.17rc3 and 1.0.17rc4 records below supersede this refresh. The
+**Historical:** the SDK 1.0.17rc3, 1.0.17rc4 and 1.0.17rc5 records below supersede this refresh. The
 present tense here describes the earlier SDK 1.0.14 / CLI 1.0.85 capture.
 
 The maintainer's authenticated 2026-10-08 catalog, exported through Copilot
@@ -214,6 +214,28 @@ unlisted, leaving eight account-unlisted compatibility rows, none with a tier.
 The fixture's own revision moves to `3` for these tier rows. Defaults and
 recommended routes do not change. The SDK 1.0.17rc3 record above is now
 historical evidence, not the current pin.
+
+## Corporate-compatible upgrade record: SDK 1.0.17rc5
+
+On 2026-10-12 `python -m git_loopy.sdk_feed` reported SDK 1.0.17rc5 as the
+newest release on the Microsoft corporate feed; no stable 1.0.17 was offered.
+This upgrade moves the pin from 1.0.17rc4 to that published prerelease wheel.
+Its dependencies are unchanged, so the lockfile moves only the SDK entry. The
+wheel injects `CLI_VERSION = "1.0.92-5"`, and `spawned_harness_version()`
+reports the same value, so the roster stamp moves with the SDK and lockfile.
+The SDK's interface changes are additive generated RPC types: an account list
+on the login result and a listing of configured MCP servers. git-loopy uses
+neither.
+
+The live listing was captured through CLI 1.0.92-5 itself, installed from the
+corporate npm feed with auto-update disabled and confirmed by the server's
+reported version, rather than through a release download. It returned the same
+25 distinct ids (24 concrete models plus `auto`) as the 1.0.92-4 capture. Every
+listed model's effort set and context tiers equal its committed rows, and the
+same eight compatibility rows remain unlisted. Only the `cli_version` stamp
+changes, so the fixture's own revision stays at `3`. Defaults and recommended
+routes do not change. The SDK 1.0.17rc4 record above is now historical
+evidence, not the current pin.
 
 ## Amendment: the roster follows the harness you are running
 
