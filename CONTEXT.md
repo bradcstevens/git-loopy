@@ -1977,6 +1977,28 @@ from the same rules as Pickup, Ready shows exactly the issues a Run would admit.
 _Avoid_: state label, Status (that is an issue's lifecycle within one Run), Blocked
 unqualified when the column is meant.
 
+### Task-graph closure (accepted design)
+
+These terms complete the vocabulary of
+[ADR-0082](docs/adr/0082-an-acceptance-ticket-closes-a-code-graph-and-the-orchestrator-closes-its-spec.md).
+The existing **Readiness** and **Closed** entries above describe current behavior and keep
+their meanings; this decision record does not establish delivery acceptance.
+
+**Acceptance ticket**:
+The last executable ticket of a Spec's graph of two or more tickets. Every other ticket in
+the graph blocks it, so it becomes Ready only once their work is integrated. Typed `test`,
+it proves each of the Spec's User Stories with an acceptance test on the integrated base,
+and files each story nothing delivered as a `needs-triage` Follow-up that blocks it. To the
+Runner it is an ordinary issue.
+_Avoid_: synthesis card, root finalizer, integrate-and-verify ticket (a wide refactor's
+green point).
+
+**Spec closure**:
+The **Orchestrator** closing a `Spec:` or `PRD:` planning document as completed when one of
+its own closures leaves none of that document's child tickets open. A human's closure never
+triggers it, and it never closes a `wayfinder:map`.
+_Avoid_: cleanup, root finalizer, Spec acceptance.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
