@@ -2092,6 +2092,33 @@ judge both arms. It shows non-regression, never a lift or a confidence level. Th
 passing proof. It is not a **Calibration**, and it works within no **Run**.
 _Avoid_: replay (the event log's word), benchmark, evaluation.
 
+### Stable surface (accepted design)
+
+These terms complete the vocabulary of
+[ADR-0089](docs/adr/0089-1-0-0-promises-an-explicit-stable-surface-and-removes-what-0-x-deprecated.md).
+The existing **Config**, **Skill policy**, **Minimal Skill policy**, **Route policy** and
+**Release version** entries above describe current behavior and keep their meanings. This
+decision record does not establish delivery acceptance.
+
+**Stable surface**:
+What the Python path promises from one major **Release version** until the next, written
+as an explicit allow-list. It lists the commands and their documented flags, the exit
+codes, **Config** and its strict loading, the documented `GIT_LOOPY_*` variables, the
+tracker vocabulary, where custom Run instructions live, the machine-readable outputs, and
+the versioned authorities, through the versions the **Path manifest** declares. Anything
+it does not list may change in any Release. A minor may add or deprecate an item. Only a
+major removes one, and only an item some 1.x minor already deprecated. Semantic Versioning
+calls it the public API.
+_Avoid_: public API unqualified, supported interface, "everything documented".
+
+**Migration aid**:
+A command, flag, repair or refusal whose only job is moving 0.x state forward, such as
+`route-labels migrate`, the keep-or-migrate choice, and `update`'s repairs of retired
+**Config**. None is on the **Stable surface**, so a 1.x minor may drop one once the state
+it moves is gone. The refusal of a removed `GIT_LOOPY_*` variable is the exception, and it
+stays until 2.0.0, because an environment variable nothing refuses is silently ignored.
+_Avoid_: shim, compatibility layer.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not

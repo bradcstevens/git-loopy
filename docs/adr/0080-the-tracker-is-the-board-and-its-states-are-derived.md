@@ -2,6 +2,10 @@
 
 **Status:** accepted design; implementation acceptance is tracked by the delivery issues.
 
+**Amended by [ADR-0089](0089-1-0-0-promises-an-explicit-stable-surface-and-removes-what-0-x-deprecated.md):**
+1.0.0 removes the local-markdown source from the Python path, so what this decision says
+about that source describes 0.x only.
+
 Decided by [Decide the board of record and its states](https://github.com/bradcstevens/git-loopy/issues/659).
 
 git-loopy 1.0.0 keeps the issue tracker as its only board of record: GitHub
