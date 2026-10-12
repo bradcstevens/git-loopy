@@ -54,6 +54,11 @@ it was picked up: a patch picked up while `0.11.0` is under way is labelled `v0.
 - Python distribution metadata spells the stages the PEP 440 way (`0.11.0a1`, `0.11.0b1`,
   `0.11.0rc1`).
 
+**Amended by [ADR-0079](0079-a-human-opens-a-major-line-and-the-1-0-0-cut-waits-for-the-python-path.md):**
+Pickup never writes a label for an inferred `major`, so only a human-applied label opens a major
+line, and the rehearsal refuses a Python stable candidate at `1.0.0` or above until an active
+Python Path manifest owns the unqualified namespace.
+
 **`major` is no longer exempt.** ADR-0052 let a `major` label publish a stable Release
 unattended, and recorded that an agent could therefore ship a breaking change with nobody awake.
 A major now starts an `alpha` line like any other bump, `v2.0.0-alpha.1` through `v2.0.0`, and
