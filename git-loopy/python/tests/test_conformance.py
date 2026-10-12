@@ -3580,7 +3580,7 @@ def test_the_roster_preserves_compatibility_efforts_alongside_pinned_models() ->
     """A pinned-harness refresh does not erase saved Config's compatibility rows.
 
     ADR-0019 recorded that CLI ``1.0.67`` lacked the later Gemini capabilities.
-    CLI ``1.0.92-3`` verified the current observed rows. The upgrade account did
+    CLI ``1.0.92-4`` verified the current observed rows. The upgrade account did
     not list Gemini, so those rows are retained compatibility data, not a live
     capture.
     """
@@ -3596,7 +3596,10 @@ def test_the_roster_fixture_pins_the_context_tier_half_of_the_roster() -> None:
 
     One lockstep point with the live catalog, not two. ADR-0017 requires a
     pinned-harness capture before a tier row is added; the 2026-10-09 refresh
-    records those tiers without guessing at compatibility-only models.
+    records those tiers without guessing at compatibility-only models. The
+    CLI ``1.0.92-4`` capture lists four Opus/Astra models again, each with a
+    long-context price block, so they regain tier rows; ``claude-opus-4.7``
+    stays unlisted and tierless.
     """
     tiers = {
         model: frozenset(offered)
@@ -3605,6 +3608,9 @@ def test_the_roster_fixture_pins_the_context_tier_half_of_the_roster() -> None:
     assert tiers == MODEL_CONTEXT_TIERS
     assert set(tiers) <= set(_MODEL_ROSTER["roster"])
     assert all(offered <= CONTEXT_TIERS for offered in tiers.values())
+    for relisted in ("claude-opus-5.5", "claude-opus-5", "claude-opus-4.8", "gpt-6-astra"):
+        assert tiers[relisted] == frozenset({"default", "long_context"})
+    assert "claude-opus-4.7" not in tiers
 
 
 _EFFORT_GATE = _load_fixture("effort-gate.json")
