@@ -1,4 +1,14 @@
-"""Fixed GitHub REST reads. The transport is the only network substitution."""
+"""Fixed GitHub REST reads. The transport is the only network substitution.
+
+Endpoint-to-App-read-permission matrix for this tracer:
+    GET /repos/{repository}                       Metadata (default branch)
+    GET /repos/{repository}/commits/{ref}         Contents (pinned head)
+    GET /repos/{repository}/contents/VERSION     Contents (ref = pinned SHA)
+    GET /repos/{repository}/milestones           Issues (complete catalog)
+
+Pagination is state=all, per_page=100 and a monotonic page number. It never
+follows a caller-provided or foreign URL. The only API version is 2022-11-28.
+"""
 
 from __future__ import annotations
 

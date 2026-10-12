@@ -49,13 +49,8 @@ alongside a deterministic advisory Markdown packet. It pins trunk, reads
 `VERSION` with Promotion's parser, and resolves an open Release milestone
 without guessing. Repository-sourced Markdown syntax is neutralized.
 
-The policy snapshot is `<config-home>/git-loopy/assessment/config.toml`,
-using the existing `XDG_CONFIG_HOME` / `HOME/.config` resolution. Its only
-top-level keys are quoted `owner/name` repository tables, each with exactly
-`workflows` (unique workflow-name strings), `app_id` and `installation_id`
-(positive numeric strings), `app_identity`, and `key_file` (a path string).
-Unknown keys refuse startup. A table's canonical content hash stamps every
-result; policy edits take effect only after restart.
+The hand-edited allowlist/policy is snapshotted at startup and content-hashed
+in each result. Unknown configuration keys refuse startup.
 
 **Not yet operational:** the entry point fails closed until the dedicated App
 authentication transport lands in #760; it never borrows `gh` credentials.
@@ -64,18 +59,6 @@ checks (#762), open and unabsorbed work (#763), and baseline and line content
 (#764) remain explicit unreadable placeholders, so this version always returns
 `incomplete`, retaining any nothing-to-promote finding. Freshness (#761),
 fault injection (#765), and operator documentation (#766) are separate tickets.
-
-The tracer's fixed REST GET surface pins `X-GitHub-Api-Version: 2022-11-28`:
-
-| Endpoint | App read permission | Purpose |
-| --- | --- | --- |
-| `/repos/{owner}/{repo}` | Metadata | Discover trunk's default branch |
-| `/repos/{owner}/{repo}/commits/{ref}` | Contents | Pin trunk head |
-| `/repos/{owner}/{repo}/contents/VERSION?ref={sha}` | Contents | Read pinned Release authority |
-| `/repos/{owner}/{repo}/milestones?state=all&per_page=100&page={n}` | Issues | Resolve an open milestone, completing every page |
-
-Pagination never widens that surface or follows an arbitrary URL. A failed or
-partial read becomes an unreadable item, with no broader-access retry.
 
 ## Installation lifecycle
 
