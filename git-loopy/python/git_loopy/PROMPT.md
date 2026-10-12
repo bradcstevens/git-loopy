@@ -63,7 +63,8 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 **User-invoked operations beyond the bound issue** — catalog membership does not authorize a batch release or changes to the operator's model configuration:
 
 - `/release` — publishes a completed batch only when the user requests a release, never as a side effect of completing one issue.
-- `/model-fit` — recalibrates models and updates operator configuration only on explicit user invocation.
+- `/set-task-models` — recalibrates models and updates operator configuration only on explicit user invocation.
+- `/model-scorecard` — rebuilds its model scorecard from a live leaderboard and local session history only on explicit user invocation.
 - `/sync-model-roster` — repairs the pinned model roster and changes operator configuration only on explicit user invocation.
 - `/jev-ultrafast` — runs fast browser automation only when a user requests it or explicitly asks to use Jev.
 

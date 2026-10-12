@@ -259,7 +259,8 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | --- | --- |
 | [`/setup-git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/setup-git-loopy-skills) | Configure the repository's issue tracker, triage labels, and domain-document layout. |
 | [`/design-control-loop`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/design-control-loop) | Interview an operator, design a codebase control loop, and build its local commands and scheduled workflow. |
-| [`/model-fit`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/model-fit) | On explicit invocation, research available Copilot models and align model, effort, context, and enforcement settings with git-loopy routing. |
+| [`/set-task-models`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/set-task-models) | On explicit invocation, research available Copilot models and set the model, effort, context, and enforcement of every Copilot built-in subagent and git-loopy task type. |
+| [`/model-scorecard`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/model-scorecard) | On explicit invocation, score available Copilot models 1–100 for each Copilot built-in subagent and git-loopy task type from the live Artificial Analysis leaderboard. |
 | [`/wizard`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wizard) | Generate an interactive bash wizard for a manual procedure only a human can carry out. |
 | [`/next`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/next) | Choose the skill or flow that fits, or route to the one action to take now from live work state. |
 | [`/teach`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/teach) | Teach a concept over multiple sessions using the repository as a stateful workspace. |
