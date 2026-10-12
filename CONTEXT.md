@@ -2020,6 +2020,21 @@ The newest verified, downloadable **TUI helper** published at or below a Python
 that renders every **Status** and Event it emits.
 _Avoid_: Path baseline, helper version.
 
+### Concurrency proposals (accepted design)
+
+This term completes the vocabulary of
+[ADR-0084](docs/adr/0084-lane-eligibility-stays-opt-in-and-a-footprint-backs-each-proposal.md).
+The existing **Parallel-safe** and **Serial-required** entries above describe current
+behavior and keep their meanings; this decision record does not establish delivery
+acceptance.
+
+**Footprint**:
+The paths a ticket is expected to change, together with any shared counter or registry it is
+expected to bump, such as a contract version or a document number. The **Planner** states one
+with every `parallel-safe` proposal as the evidence the **Loop engineer** approves; it lives
+in the approved graph revision, and no **Agent**, **Reviewer** or **Orchestrator** reads it.
+_Avoid_: blast radius (a wide refactor's spread), touch set, change set.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
