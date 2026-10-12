@@ -2004,6 +2004,22 @@ its own closures leaves none of that document's child tickets open. A human's cl
 triggers it, and it never closes a `wayfinder:map`.
 _Avoid_: cleanup, root finalizer, Spec acceptance.
 
+### TUI helper ownership (accepted design)
+
+This term completes the vocabulary of
+[ADR-0083](docs/adr/0083-the-tui-helper-is-a-python-path-artifact-and-the-1-0-0-cut-waits-for-its-parity-baseline.md).
+Once delivered, the **TUI helper** is a **Path artifact** of the Python path, implemented in
+Rust, and the shell and PowerShell paths consume it through the **Event schema**. No Rust
+path is declared until a Rust Orchestrator exists. The existing **TUI helper** and
+**Orchestrator** entries above describe current behavior; this decision record does not
+establish delivery acceptance.
+
+**Helper baseline**:
+The newest verified, downloadable **TUI helper** published at or below a Python
+**Release version**, which `update` installs. A Python stable at or above 1.0.0 needs one
+that renders every **Status** and Event it emits.
+_Avoid_: Path baseline, helper version.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not

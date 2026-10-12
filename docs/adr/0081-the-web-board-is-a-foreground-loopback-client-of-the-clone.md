@@ -2,6 +2,11 @@
 
 **Status:** accepted design; implementation acceptance is tracked by the delivery issues.
 
+**Amended by [ADR-0083](0083-the-tui-helper-is-a-python-path-artifact-and-the-1-0-0-cut-waits-for-its-parity-baseline.md):**
+the Rust helper is a Python-path artifact, not part of a dormant Rust path. `--web` still
+leaves it unchanged, because the web board needs nothing from it. In 1.0.0 the helper
+changes only to render the Python Run's new Statuses and Events.
+
 Decided by [Decide the web frontend's launch parameter and lifecycle](https://github.com/bradcstevens/git-loopy/issues/664).
 Builds on [ADR-0058](0058-init-precedes-the-run-and-clients-do-not-own-its-lifetime.md)
 (clients observe, only Stop controls the Run),

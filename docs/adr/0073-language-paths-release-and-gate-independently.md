@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0083](0083-the-tui-helper-is-a-python-path-artifact-and-the-1-0-0-cut-waits-for-its-parity-baseline.md):**
+the TUI helper, the Rust path's only member, is a Path artifact of the Python path. No
+Rust path is declared until a Rust Orchestrator starts. That Orchestrator then opens the
+path with its own manifest and consumes the Dashboard library as a released dependency.
+
 **Supersedes in part:** [ADR-0013](0013-multi-language-runner-family.md),
 [ADR-0016](0016-single-distribution-release-version.md),
 [ADR-0045](0045-a-conformance-distribution-is-obliged-by-a-stream.md), and
