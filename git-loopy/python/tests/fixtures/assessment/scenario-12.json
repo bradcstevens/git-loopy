@@ -1,0 +1,9 @@
+{
+  "name": "ambiguous open milestones",
+  "version": "0.12.0-alpha.2",
+  "milestones": [
+    {"title": "v0.12.0", "state": "open", "number": 1},
+    {"title": "v0.13.0", "state": "open", "number": 2}
+  ],
+  "refusal": "cannot resolve one open Release milestone; found: v0.12.0 (open), v0.13.0 (open)"
+}
