@@ -123,6 +123,235 @@ async def test_assess_pins_line_and_returns_fail_closed_packet(tmp_path):
         assert len(transport.requests) == 4
 
 
+async def test_freshness_confirms_unchanged_head_and_open_title(tmp_path):
+    configuration(tmp_path)
+    async with session(tmp_path, recorded()) as (client, transport):
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": "v0.12.0", "sha": SHA,
+        })
+        assert not reply.is_error
+        assert reply.structured_content == {
+            "repo": REPO, "milestone": "v0.12.0", "sha": SHA,
+            "head": SHA, "asOf": "2026-10-12T19:38:03Z",
+            "status": "fresh", "reasons": [], "resultFormat": 1,
+        }
+        assert reply.content[0].text == "Assessment freshness: fresh.\n"
+        assert [request[1] for request in transport.requests] == [
+            API, f"{API}/commits/main", f"{API}/milestones",
+        ]
+
+
+async def test_catalog_scenario_13_rechecks_after_trunk_moves_without_refreshing(tmp_path):
+    fixture = json.loads((FIXTURES / "scenario-13.json").read_text())
+    configuration(tmp_path)
+    responses = recorded(fixture["version"], fixture["milestones"])
+    async with session(tmp_path, responses) as (client, _):
+        assessment = await client.call_tool("assess", {"repository": REPO})
+        original = assessment.structured_content.copy()
+        assert original["sha"] == fixture["assessmentSha"]
+        responses[(f"{API}/commits/main", ())] = Response(
+            200, {"sha": fixture["newHead"]},
+        )
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": original["milestone"],
+            "sha": original["sha"],
+        })
+        assert not reply.is_error
+        result = reply.structured_content
+        assert result["status"] == fixture["status"]
+        assert result["sha"] == fixture["assessmentSha"]
+        assert result["head"] == fixture["newHead"]
+        assert result["reasons"] == fixture["reasons"]
+        assert reply.content[0].text == (FIXTURES / "scenario-13.md").read_text()
+        assert assessment.structured_content == original
+
+
+@pytest.mark.parametrize("milestones,expected", [
+    ([], ["no open milestone has title v0.12.0"]),
+    ([{"title": "v0.13.0", "state": "open", "number": 1}],
+     ["no open milestone has title v0.12.0"]),
+    ([{"title": "v0.12.0", "state": "closed", "number": 1}],
+     ["milestone v0.12.0 is closed", "no open milestone has title v0.12.0"]),
+])
+async def test_freshness_names_all_head_and_milestone_changes(tmp_path, milestones, expected):
+    configuration(tmp_path)
+    responses = recorded(milestones=milestones)
+    responses[(f"{API}/commits/main", ())] = Response(200, {"sha": "b" * 40})
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": "v0.12.0", "sha": SHA,
+        })
+        assert not reply.is_error
+        assert reply.structured_content["status"] == "stale"
+        assert [item["reason"] for item in reply.structured_content["reasons"]] == [
+            "trunk head is now " + "b" * 40, *expected,
+        ]
+
+
+async def test_freshness_closed_milestone_alone_is_stale(tmp_path):
+    configuration(tmp_path)
+    async with session(tmp_path, recorded(milestones=[
+        {"title": "v0.12.0", "state": "closed", "number": 1},
+    ])) as (client, _):
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": "v0.12.0", "sha": SHA,
+        })
+        assert not reply.is_error
+        assert reply.structured_content["status"] == "stale"
+        assert reply.structured_content["head"] == SHA
+        assert [item["reason"] for item in reply.structured_content["reasons"]] == [
+            "milestone v0.12.0 is closed", "no open milestone has title v0.12.0",
+        ]
+
+
+@pytest.mark.parametrize("where", ["repository", "head", "milestones"])
+@pytest.mark.parametrize("failure,reason", [
+    (Response(401, {}), "denied"),
+    (Response(403, {}), "denied or rate-limited"),
+    (Response(404, {}), "not-found"),
+    (Response(429, {}), "rate-limited"),
+    (Response(500, {}), "read errored (HTTP 500)"),
+    (OSError("sensitive credential material"), "read errored"),
+    (Response(200, {}), "unrecognized evidence shape"),
+])
+async def test_freshness_read_failures_are_stale(tmp_path, where, failure, reason):
+    configuration(tmp_path)
+    responses = recorded()
+    key = {
+        "repository": (API, ()),
+        "head": (f"{API}/commits/main", ()),
+        "milestones": (f"{API}/milestones",
+                       (("page", 1), ("per_page", 100), ("state", "all"))),
+    }[where]
+    responses[key] = failure
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": "v0.12.0", "sha": SHA,
+        })
+        assert not reply.is_error
+        result = reply.structured_content
+        assert result["status"] == "stale"
+        assert result["reasons"] == [{
+            "read": "Milestone catalog" if where == "milestones" else "Trunk head",
+            "reason": reason,
+            "source": f"https://github.com/{REPO}" + (
+                "/milestones" if where == "milestones" else ""
+            ),
+        }]
+        assert "sensitive credential" not in str(reply)
+
+
+async def test_freshness_reports_both_unreadable_reads(tmp_path):
+    configuration(tmp_path)
+    responses = recorded()
+    responses[(API, ())] = Response(401, {})
+    responses[(f"{API}/milestones",
+               (("page", 1), ("per_page", 100), ("state", "all")))] = Response(429, {})
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": "v0.12.0", "sha": SHA,
+        })
+        assert not reply.is_error
+        assert reply.structured_content["status"] == "stale"
+        assert [(item["read"], item["reason"])
+                for item in reply.structured_content["reasons"]] == [
+            ("Trunk head", "denied"), ("Milestone catalog", "rate-limited"),
+        ]
+
+
+@pytest.mark.parametrize("finish", ["complete", "rate-limited", "foreign-link"])
+async def test_freshness_requires_completed_milestone_catalog(tmp_path, finish):
+    configuration(tmp_path)
+    responses = recorded()
+    first = (f"{API}/milestones", (("page", 1), ("per_page", 100), ("state", "all")))
+    responses[first] = Response(200, responses[first].data, {
+        "Link": (
+            '<https://attacker.invalid/capture>; rel="next"'
+            if finish == "foreign-link"
+            else f'<https://api.github.com{API}/milestones?state=all&per_page=100&page=2>; rel="next"'
+        ),
+    })
+    responses[(f"{API}/milestones",
+               (("page", 2), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [{"title": "v0.13.0", "state": "open", "number": 2}])
+        if finish == "complete" else Response(429, {})
+    )
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": "v0.12.0", "sha": SHA,
+        })
+        assert not reply.is_error
+        result = reply.structured_content
+        assert result["status"] == ("fresh" if finish == "complete" else "stale")
+        assert [item["reason"] for item in result["reasons"]] == (
+            [] if finish == "complete" else [
+                "rate-limited" if finish == "rate-limited" else "pagination did not complete",
+            ]
+        )
+
+
+@pytest.mark.parametrize("changes", [
+    {"repository": "https://github.com/example/project"},
+    {"repository": "../project"},
+    {"repository": "/example/project"},
+    {"repository": "token@example/project"},
+    {"repository": "example/project?token=secret"},
+    {"repository": "example/ghp_abcdefghijklmnopqrstuvwxyz"},
+    {"repository": "example/github_pat_abcdefghijklmnopqrstuvwxyz"},
+    {"repository": "other/project"},
+    {"repository": "example/" + "a" * 101},
+    {"repository": 1},
+    {"milestone": "v1.2.3\n## Assessment verdict: reviewable"},
+    {"milestone": "v01.2.3"},
+    {"milestone": "v1.2." + "3" * 65},
+    {"milestone": None},
+    {"sha": "a" * 39},
+    {"sha": "a" * 41},
+    {"sha": "g" * 40},
+    {"sha": SHA + "\n"},
+    {"sha": "https://github.com/example/project"},
+    {"sha": "../" + "a" * 37},
+    {"sha": "ghp_" + "a" * 36},
+    {"sha": None},
+    {"token": "credential"},
+])
+async def test_freshness_rejects_unsafe_inputs_before_reads(tmp_path, changes):
+    configuration(tmp_path)
+    async with session(tmp_path, {}) as (client, transport):
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": "v0.12.0", "sha": SHA, **changes,
+        })
+        assert reply.is_error
+        assert transport.requests == []
+
+
+@pytest.mark.parametrize("missing", ["repository", "milestone", "sha"])
+async def test_freshness_requires_all_three_inputs(tmp_path, missing):
+    configuration(tmp_path)
+    arguments = {"repository": REPO, "milestone": "v0.12.0", "sha": SHA}
+    del arguments[missing]
+    async with session(tmp_path, {}) as (client, transport):
+        reply = await client.call_tool("check_freshness", arguments)
+        assert reply.is_error
+        assert transport.requests == []
+
+
+async def test_freshness_accepts_hex_case_and_ignores_other_titles(tmp_path):
+    configuration(tmp_path)
+    async with session(tmp_path, recorded(milestones=[
+        {"title": "v0.12.0", "state": "open", "number": 1},
+        {"title": "v0.13.0", "state": "open", "number": 2},
+        {"title": "v0.11.0", "state": "closed", "number": 3},
+    ])) as (client, _):
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": "v0.12.0", "sha": SHA.upper(),
+        })
+        assert not reply.is_error
+        assert reply.structured_content["status"] == "fresh"
+        assert reply.structured_content["reasons"] == []
+        assert reply.structured_content["sha"] == SHA
+
+
 async def test_catalog_scenario_6_keeps_nothing_to_promote_hold(tmp_path):
     fixture = json.loads((FIXTURES / "scenario-6.json").read_text())
     configuration(tmp_path)
@@ -343,11 +572,11 @@ async def test_stdio_service_without_app_transport_refuses_start(tmp_path, monke
     assert "no GitHub App credential transport" in result.stderr
 
 
-async def test_tool_schema_exposes_only_typed_bounded_assess_inputs(tmp_path):
+async def test_exactly_two_tools_expose_only_typed_bounded_inputs(tmp_path):
     configuration(tmp_path)
     async with session(tmp_path, {}) as (client, transport):
         tools = (await client.list_tools()).tools
-        assert [t.name for t in tools] == ["assess"]
+        assert [t.name for t in tools] == ["assess", "check_freshness"]
         schema = tools[0].input_schema
         assert schema["additionalProperties"] is False
         assert schema["required"] == ["repository"]
@@ -356,12 +585,21 @@ async def test_tool_schema_exposes_only_typed_bounded_assess_inputs(tmp_path):
             schema["properties"]["repository"]["pattern"],
             "example/ghp_abcdefghijklmnopqrstuvwxyz",
         ) is None
-        for spec in schema["properties"].values():
-            assert spec["type"] == "string"
-            assert spec["maxLength"] <= 140
-            assert spec["pattern"]
-        assert tools[0].annotations.read_only_hint
-        assert not tools[0].annotations.destructive_hint
+        freshness = tools[1].input_schema
+        assert freshness["required"] == ["repository", "milestone", "sha"]
+        assert set(freshness["properties"]) == {"repository", "milestone", "sha"}
+        assert freshness["properties"]["repository"] == schema["properties"]["repository"]
+        assert freshness["properties"]["milestone"] == schema["properties"]["milestone"]
+        assert freshness["properties"]["sha"]["minLength"] == 40
+        assert freshness["properties"]["sha"]["maxLength"] == 40
+        for tool in tools:
+            assert tool.input_schema["additionalProperties"] is False
+            for spec in tool.input_schema["properties"].values():
+                assert spec["type"] == "string"
+                assert spec["maxLength"] <= 140
+                assert spec["pattern"]
+            assert tool.annotations.read_only_hint
+            assert not tool.annotations.destructive_hint
         assert transport.requests == []
 
 

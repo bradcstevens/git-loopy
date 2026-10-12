@@ -127,7 +127,7 @@ def create_server(
     *, env: Mapping[str, str] | None = None, transport: Transport | None = None,
     clock: Callable[[], str] | None = None,
 ):
-    """Load a policy snapshot and construct the single-tool tracer service."""
+    """Load a policy snapshot and construct the two read-only tools."""
     from mcp import types
     from mcp.server import Server
 
@@ -139,7 +139,7 @@ def create_server(
         )
     service_version = installed_version("git-loopy")
     now = clock or (lambda: datetime.now(timezone.utc).isoformat())
-    schema = {
+    schema: dict[str, Any] = {
         "type": "object", "additionalProperties": False, "required": ["repository"],
         "properties": {
             "repository": {
@@ -152,21 +152,43 @@ def create_server(
             },
         },
     }
+    sha_pattern = r"[0-9a-fA-F]{40}"
+    freshness_schema: dict[str, Any] = {
+        "type": "object", "additionalProperties": False,
+        "required": ["repository", "milestone", "sha"],
+        "properties": {
+            **schema["properties"],
+            "sha": {
+                "type": "string", "minLength": 40, "maxLength": 40,
+                "pattern": "^" + sha_pattern + "$",
+            },
+        },
+    }
+    schemas = {"assess": schema, "check_freshness": freshness_schema}
 
     async def list_tools(context, params):
         return types.ListToolsResult(tools=[types.Tool(
-            name="assess", description="Read one Release line; advice only.",
-            input_schema=schema,
+            name=name, description=description, input_schema=schemas[name],
             annotations=types.ToolAnnotations(
                 read_only_hint=True, destructive_hint=False, open_world_hint=True,
             ),
-        )])
+        ) for name, description in [
+            ("assess", "Read one Release line; advice only."),
+            ("check_freshness", "Confirm the pinned head and open milestone title; "
+             "stale assessments must be re-run, never refreshed in place."),
+        ]])
 
-    async def assess(arguments):
+    def validate_inputs(arguments, name):
+        contract = schemas[name]
         if not isinstance(arguments, dict) or (
-            set(arguments) - {"repository", "milestone"}
+            set(arguments) - set(contract["properties"])
+            or set(contract["required"]) - set(arguments)
         ):
-            raise ValueError("assess accepts only repository and optional milestone")
+            raise ValueError(
+                "assess accepts only repository and optional milestone"
+                if name == "assess" else
+                "check_freshness requires only repository, milestone and sha"
+            )
         repository = arguments.get("repository")
         milestone = arguments.get("milestone")
         if (
@@ -181,6 +203,10 @@ def create_server(
             raise ValueError("milestone must be a bounded vX.Y.Z")
         if repository not in policies:
             raise ValueError("repository is not allowlisted")
+        return repository, milestone
+
+    async def assess(arguments):
+        repository, milestone = validate_inputs(arguments, "assess")
         policy = policies[repository]
         github = GitHubReads(repository, transport)
         result = {
@@ -266,25 +292,80 @@ def create_server(
             })
         return result
 
+    async def check_freshness(arguments):
+        """Read head and title live; no expiry, cache or tracker-drift inference."""
+        repository, milestone = validate_inputs(arguments, "check_freshness")
+        sha = arguments["sha"]
+        if not isinstance(sha, str) or re.fullmatch(sha_pattern, sha) is None:
+            raise ValueError("sha must be 40 hexadecimal characters")
+        sha = sha.lower()
+        github = GitHubReads(repository, transport)
+        result = {
+            "repo": repository, "milestone": milestone, "sha": sha,
+            "head": None, "asOf": now(), "status": "stale",
+            "reasons": [], "resultFormat": 1,
+        }
+        try:
+            result["head"] = await github.pin_head()
+            if result["head"] != sha:
+                result["reasons"].append({
+                    "read": "Trunk head",
+                    "reason": f"trunk head is now {result['head']}",
+                    "source": f"{github.web}/commit/{result['head']}",
+                })
+        except Unreadable as exc:
+            result["reasons"].append(exc.item)
+        try:
+            catalog = await github.milestones()
+            matching = [m for m in catalog if m["title"] == milestone]
+            for item in matching:
+                if item["state"] == "closed":
+                    result["reasons"].append({
+                        "read": "Milestone catalog",
+                        "reason": f"milestone {milestone} is closed",
+                        "source": f"{github.web}/milestone/{item['number']}",
+                    })
+            if not any(m["state"] == "open" for m in matching):
+                result["reasons"].append({
+                    "read": "Milestone catalog",
+                    "reason": f"no open milestone has title {milestone}",
+                    "source": f"{github.web}/milestones",
+                })
+        except Unreadable as exc:
+            result["reasons"].append(exc.item)
+        if not result["reasons"]:
+            result["status"] = "fresh"
+        return result
+
     async def call_tool(context, params):
         try:
-            if params.name != "assess":
+            if params.name == "assess":
+                result = await assess(params.arguments)
+                text = render_packet(result)
+            elif params.name == "check_freshness":
+                result = await check_freshness(params.arguments)
+                text = f"Assessment freshness: {result['status']}.\n"
+                text += "".join(
+                    f"- {_inert(item['read'])}: {_inert(item['reason'])} "
+                    f"— [source]({item['source']})\n"
+                    for item in result["reasons"]
+                )
+            else:
                 raise ValueError("unknown tool")
-            result = await assess(params.arguments)
         except ValueError as exc:
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=html.escape(str(exc)))],
                 is_error=True,
             )
         return types.CallToolResult(
-            content=[types.TextContent(type="text", text=render_packet(result))],
+            content=[types.TextContent(type="text", text=text)],
             structured_content=result,
         )
 
     return Server(
         "git-loopy-assessment", version=service_version,
         on_list_tools=list_tools, on_call_tool=call_tool,
-        get_tool_input_schema=lambda name: schema if name == "assess" else None,
+        get_tool_input_schema=schemas.get,
     )
 
 
