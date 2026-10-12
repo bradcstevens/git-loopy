@@ -1,0 +1,17 @@
+{
+  "scenario": 13,
+  "version": "0.12.0-alpha.2",
+  "milestones": [
+    {"title": "v0.12.0", "state": "open", "number": 1}
+  ],
+  "assessmentSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "newHead": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "status": "stale",
+  "reasons": [
+    {
+      "read": "Trunk head",
+      "reason": "trunk head is now bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source": "https://github.com/example/project/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}
