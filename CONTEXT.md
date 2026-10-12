@@ -2035,6 +2035,41 @@ with every `parallel-safe` proposal as the evidence the **Loop engineer** approv
 in the approved graph revision, and no **Agent**, **Reviewer** or **Orchestrator** reads it.
 _Avoid_: blast radius (a wide refactor's spread), touch set, change set.
 
+### Completion measurement (accepted design)
+
+These terms complete the vocabulary of
+[ADR-0085](docs/adr/0085-completion-counts-verified-closures-and-a-completion-proof-gates-the-1-0-0-cut.md).
+The existing **Queue**, **Closed**, **Spec closure**, **Proving task** and **Trial**
+entries above describe current behavior and keep their meanings. This decision record
+does not establish delivery acceptance.
+
+**Completion rate**:
+The share of a **Run**'s worked **Queue** rows, the issues it bound at least once, that
+end in the **Orchestrator**'s own closure on an approved **Review verdict** in that Run.
+Every worked row counts: a block, a handoff, a **Stop** or the end of the Run leaves it
+in as a non-completion. A closure by a human or an Agent is not a completion.
+_Avoid_: close rate (the unverified measure before 1.0.0), success rate, throughput.
+
+**Eventual completion rate**:
+The share of picked-up issues that some **Run** eventually completes. It is reported
+beside the **Completion rate** and shows whether work is being abandoned.
+_Avoid_: closure rate.
+
+**Story gap**:
+A User Story that a Spec's **Acceptance ticket** found no closed ticket delivered. The
+ticket files it as a `needs-triage` Follow-up that blocks it. Gaps per User Story are
+the quality figure of a **Spec closure**.
+_Avoid_: missed story, Spec failure.
+
+**Completion proof**:
+The paired working of the same admitted **Proving tasks** under the last stable release
+before 1.0.0 and the 1.0.0 candidate, with each **Task type**'s **Routed pair**, the
+pins and the **Config** held fixed. The same oracle, gate and blind **Review verdict**
+judge both arms. It shows non-regression, never a lift or a confidence level. The
+**Rehearsal** refuses a Python stable at or above 1.0.0 without a committed record of a
+passing proof. It is not a **Calibration**, and it works within no **Run**.
+_Avoid_: replay (the event log's word), benchmark, evaluation.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
