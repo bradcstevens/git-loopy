@@ -214,7 +214,7 @@ def create_server(
         policy = policies[repository]
         token, identity = await apps[repository].installation(repository)
         github = GitHubReads(repository, transport, token=token)
-        result = {
+        result: dict[str, Any] = {
             "repo": repository, "milestone": milestone, "milestoneState": None,
             "sha": None, "asOf": now(), "version": None, "releaseTarget": None,
             "releaseTargetState": "unreadable",
@@ -374,12 +374,20 @@ def create_server(
         if not isinstance(sha, str) or re.fullmatch(sha_pattern, sha) is None:
             raise ValueError("sha must be 40 hexadecimal characters")
         sha = sha.lower()
-        github = GitHubReads(repository, transport)
-        result = {
+        result: dict[str, Any] = {
             "repo": repository, "milestone": milestone, "sha": sha,
             "head": None, "asOf": now(), "status": "stale",
             "reasons": [], "resultFormat": 1,
         }
+        try:
+            token, _ = await apps[repository].installation(repository)
+        except ValueError as exc:
+            result["reasons"].append({
+                "read": "GitHub App authentication", "reason": str(exc),
+                "source": f"https://github.com/{repository}",
+            })
+            return result
+        github = GitHubReads(repository, transport, token=token)
         try:
             result["head"] = await github.pin_head()
             if result["head"] != sha:

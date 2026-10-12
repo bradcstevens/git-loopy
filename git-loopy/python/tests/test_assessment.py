@@ -46,14 +46,16 @@ def signing_key():
 
 class RecordedTransport:
     def __init__(self, responses):
-        self.responses = {
+        self.responses = responses
+        defaults = {
             (f"{API}/installation", ()): Response(200, {"id": 456}),
             ("/app", ()): Response(200, {"id": 123, "name": "release-review-app"}),
             ("/app/installations/456/access_tokens", ()): Response(
                 201, {"token": TOKEN, "permissions": PERMISSIONS},
             ),
-            **responses,
         }
+        for key, response in defaults.items():
+            self.responses.setdefault(key, response)
         self.requests = []
         self.authentications = []
         self.violations = []
@@ -173,15 +175,20 @@ def ambient_credentials(tmp_path, monkeypatch):
     return recording
 
 
+@pytest.mark.parametrize("tool", ["assess", "check_freshness"])
 async def test_successful_assessment_ignores_ambient_credentials(
-    tmp_path, ambient_credentials, caplog,
+    tmp_path, ambient_credentials, caplog, tool,
 ):
     configuration(tmp_path)
     async with session(tmp_path, recorded()) as (client, transport):
-        reply = await client.call_tool("assess", {"repository": REPO})
+        reply = await client.call_tool(tool, {
+            "repository": REPO,
+            **({"milestone": "v0.12.0", "sha": SHA} if tool == "check_freshness" else {}),
+        })
         assert not reply.is_error
         assert reply.structured_content["sha"] == SHA
-        assert transport.authentications[3:] == [TOKEN] * 4
+        assert transport.authentications[3:]
+        assert all(auth == TOKEN for auth in transport.authentications[3:])
         assert not ambient_credentials.exists()
         assert "never-use-ambient-auth" not in str(reply) + caplog.text
 
@@ -234,7 +241,7 @@ async def test_freshness_confirms_unchanged_head_and_open_title(tmp_path):
             "status": "fresh", "reasons": [], "resultFormat": 1,
         }
         assert reply.content[0].text == "Assessment freshness: fresh.\n"
-        assert [request[1] for request in transport.requests] == [
+        assert [request[1] for request in transport.requests[3:]] == [
             API, f"{API}/commits/main", f"{API}/milestones",
         ]
 
@@ -922,6 +929,25 @@ async def test_uninstalled_allowlisted_repository_refuses_before_evidence(tmp_pa
         reply = await client.call_tool("assess", {"repository": REPO})
         assert reply.is_error
         assert reply.content[0].text == f"GitHub App is not installed on {REPO}"
+        assert transport.requests == [("GET", f"{API}/installation", {})]
+        assert TOKEN not in str(reply)
+
+
+async def test_freshness_without_installation_is_stale_before_evidence(tmp_path):
+    configuration(tmp_path)
+    async with session(tmp_path, {
+        (f"{API}/installation", ()): Response(404, {"message": TOKEN}),
+    }) as (client, transport):
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": "v0.12.0", "sha": SHA,
+        })
+        assert not reply.is_error
+        assert reply.structured_content["status"] == "stale"
+        assert reply.structured_content["reasons"] == [{
+            "read": "GitHub App authentication",
+            "reason": f"GitHub App is not installed on {REPO}",
+            "source": f"https://github.com/{REPO}",
+        }]
         assert transport.requests == [("GET", f"{API}/installation", {})]
         assert TOKEN not in str(reply)
 

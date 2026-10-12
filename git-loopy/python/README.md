@@ -69,11 +69,14 @@ operators must grant access only to their account using the file's ACL: this
 version does not enforce Windows ACLs.
 
 Tests run the same MCP protocol in-process with a generated throwaway key and
-recorded responses; authentication uses the same substituted transport. Counted
-checks (#762), open and unabsorbed work (#763), and baseline and line content
+recorded responses; authentication uses the same substituted transport for both
+`assess` and `check_freshness(repository, milestone, sha)`. The freshness tool
+returns `stale` if App authentication fails, without reading evidence.
+Counted workflow runs are read at the pinned SHA. Open and unabsorbed work
+(#763), and baseline and line content
 (#764) remain explicit unreadable placeholders, so this version always returns
-`incomplete`, retaining any nothing-to-promote finding. Freshness (#761),
-fault injection (#765), and operator documentation (#766) are separate tickets.
+`incomplete`, retaining any hold findings. Fault injection (#765) and operator
+documentation (#766) are separate tickets.
 
 ## Installation lifecycle
 
