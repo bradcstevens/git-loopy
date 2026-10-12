@@ -177,7 +177,9 @@ wording later without changing a single outcome.
   agent-authored one, and the cheap check — reject any commit carrying a closing keyword —
   fails because the prompt *requires* the agent to close its own issue. That ticket decides
   whether an authorship discriminator is invented or the rule is recorded as an obligation with
-  no runtime check.
+  no runtime check. **Resolved by
+  [ADR-0090](0090-a-self-initiated-commit-is-a-checkpoint-by-construction.md):** an obligation
+  held by construction through `checkpoint_message`, pinned by a test, with no runtime check.
 
 - **The Execution host ADR owed by §M** ([#465](https://github.com/bradcstevens/git-loopy/issues/465))
   supersedes ADR-0001, ADR-0024 and ADR-0010 and describes the seam itself. It does not
