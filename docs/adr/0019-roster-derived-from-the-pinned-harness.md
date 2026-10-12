@@ -25,7 +25,7 @@ corrects the diagnosis recorded in [#282](https://github.com/bradcstevens/git-lo
 
 ## Backend-catalog refresh: 2026-10-09
 
-**Historical:** the SDK 1.0.17rc3 record below supersedes this refresh. The
+**Historical:** the SDK 1.0.17rc3 and 1.0.17rc4 records below supersede this refresh. The
 present tense here describes the earlier SDK 1.0.14 / CLI 1.0.85 capture.
 
 The maintainer's authenticated 2026-10-08 catalog, exported through Copilot
@@ -188,6 +188,32 @@ recorded above. This SDK upgrade itself changes neither the kit's defaults nor
 the recommended routes; their independent quality-first retune is recorded in
 [ADR-0048](0048-the-recommended-routing-table-is-retuned.md#quality-first-retune-2026-10-09).
 The SDK 1.0.14 record above is now historical evidence, not the current pin.
+
+## Corporate-compatible upgrade record: SDK 1.0.17rc4
+
+On 2026-10-11 `python -m git_loopy.sdk_feed` reported SDK 1.0.17rc4 as the
+newest release on the Microsoft corporate feed; no stable 1.0.17 was offered.
+This upgrade moves the pin from 1.0.17rc3 to that published prerelease wheel.
+Its dependencies are unchanged, so the lockfile moves only the SDK entry. The
+wheel injects `CLI_VERSION = "1.0.92-4"`, and `spawned_harness_version()`
+reports the same value, so the roster stamp moves with the SDK and lockfile.
+The SDK's interface changes are additive: subagent start/stop hooks, a binary
+session-filesystem provider, and cleanup of a cloud session whose creation
+failed.
+
+The live listing was captured through CLI 1.0.92-4 itself, installed from the
+corporate npm feed and confirmed by the server's reported version, rather than
+through a release download. It returned 25 distinct ids (24 concrete models
+plus `auto`) after duplicate rows were collapsed by id. Every listed model's
+effort set equals its committed row, so no effort row changes. Four of the
+account-unlisted rows recorded above are listed again: `claude-opus-5.5`,
+`claude-opus-5`, `claude-opus-4.8`, and `gpt-6-astra`. Each carries a
+long-context price block, so each gains a `default`/`long_context` tier row;
+the tier table now covers the 24 concrete models. `claude-opus-4.7` remains
+unlisted, leaving eight account-unlisted compatibility rows, none with a tier.
+The fixture's own revision moves to `3` for these tier rows. Defaults and
+recommended routes do not change. The SDK 1.0.17rc3 record above is now
+historical evidence, not the current pin.
 
 ## Amendment: the roster follows the harness you are running
 

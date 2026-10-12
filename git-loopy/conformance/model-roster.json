@@ -1,7 +1,7 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "contract_version": "1.18",
-  "cli_version": "1.0.92-3",
+  "cli_version": "1.0.92-4",
   "context_tiers": {
     "claude-sonnet-5": ["default", "long_context"],
     "claude-haiku-4.5": ["default"],
@@ -22,7 +22,11 @@
     "gpt-6-luna": ["default", "long_context"],
     "gpt-6-sol": ["default", "long_context"],
     "grok-4.6": ["default", "long_context"],
-    "grok-4.7": ["default", "long_context"]
+    "grok-4.7": ["default", "long_context"],
+    "claude-opus-5.5": ["default", "long_context"],
+    "claude-opus-5": ["default", "long_context"],
+    "claude-opus-4.8": ["default", "long_context"],
+    "gpt-6-astra": ["default", "long_context"]
   },
   "roster": {
     "auto": [],
