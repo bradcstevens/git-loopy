@@ -1955,7 +1955,7 @@ _Avoid_: custom agent (the harness mechanism), persona, role, worker.
 ### Board (accepted design)
 
 These terms complete the vocabulary of
-[ADR-0079](docs/adr/0079-the-tracker-is-the-board-and-its-states-are-derived.md). The
+[ADR-0080](docs/adr/0080-the-tracker-is-the-board-and-its-states-are-derived.md). The
 existing **Readiness**, **Blocked**, **Lease**, **Queue** and **Status** entries above
 describe current behavior and keep their meanings; this decision record does not
 establish delivery acceptance.
