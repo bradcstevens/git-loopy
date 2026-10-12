@@ -274,7 +274,6 @@ def create_server(
         else:
             try:
                 runs = await github.workflow_runs(result["sha"])
-                source = f"{github.web}/commit/{result['sha']}/checks"
                 result["checks"] = []
                 result["context"].extend(
                     f"Unlisted workflow {run['name']}: "
@@ -286,17 +285,20 @@ def create_server(
                     matching = [run for run in runs if run["name"] == workflow]
                     if not matching:
                         result["checks"].append({
-                            "workflow": workflow, "conclusion": "missing", "url": source,
+                            "workflow": workflow, "conclusion": "missing",
+                            "url": checks_source,
                         })
                         result["incompletes"].append({
                             "read": f"Counted workflow {workflow}",
-                            "reason": "missing: no run at pinned SHA", "source": source,
+                            "reason": "missing: no run at pinned SHA",
+                            "source": checks_source,
                         })
                     disagree = len({run["conclusion"] for run in matching}) > 1
                     if disagree:
                         result["incompletes"].append({
                             "read": f"Counted workflow {workflow}",
-                            "reason": "unrecognized evidence shape", "source": source,
+                            "reason": "unrecognized evidence shape",
+                            "source": checks_source,
                         })
                     for run in matching:
                         conclusion = run["conclusion"] or run["status"]
@@ -304,6 +306,8 @@ def create_server(
                         result["checks"].append({
                             "workflow": workflow, "conclusion": conclusion, "url": url,
                         })
+                        if disagree:
+                            continue
                         if run["status"] in ("queued", "in_progress") and (
                             run["conclusion"] is None
                         ):
@@ -321,7 +325,7 @@ def create_server(
                             })
                         elif not (
                             run["status"] == "completed" and conclusion == "success"
-                        ) and not disagree:
+                        ):
                             result["incompletes"].append({
                                 "read": f"Counted workflow {workflow}",
                                 "reason": "unrecognized evidence shape", "source": url,

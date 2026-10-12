@@ -139,7 +139,6 @@ class GitHubReads:
                       for p in parts]
             if any(m is None for m in parsed):
                 raise Unreadable(read, "pagination did not complete", source)
-
             next_links = [m.group(1) for m in parsed if m and m.group(2) == "next"]
             if not next_links:
                 return found
@@ -153,7 +152,6 @@ class GitHubReads:
                 }
             ):
                 raise Unreadable(read, "pagination did not complete", source)
-
         raise Unreadable(read, "pagination did not complete", source)
 
     async def workflow_runs(self, sha: str) -> list[dict]:

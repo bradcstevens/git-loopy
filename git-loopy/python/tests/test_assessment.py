@@ -234,6 +234,8 @@ async def test_unclassifiable_counted_runs_fail_closed(tmp_path, conclusions):
         assert result["incompletes"][0]["source"].startswith(
             f"https://github.com/{REPO}/",
         )
+        assert result["holds"] == []
+        assert len(result["incompletes"]) == 3
         assert [c["url"] for c in result["checks"]] == [
             f"https://github.com/{REPO}/actions/runs/{42 + n}"
             for n in range(len(runs))
