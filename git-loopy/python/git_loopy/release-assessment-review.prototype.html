@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE — Release assessment review experience (#573)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --ink:#1f2328; --mute:#59636e; --line:#d1d9e0; --bg:#f6f8fa; --card:#fff;
+          --accent:#0969da; --hold:#9a6700; --holdbg:#fff8c5; --inc:#6e7781; --incbg:#eaeef2;
+          --ok:#1a7f37; --okbg:#dafbe1; --stale:#cf222e; --stalebg:#ffebe9; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; color:var(--ink); background:var(--bg); padding-bottom:120px; }
+  header.proto { background:#24292f; color:#fff; padding:14px 24px; }
+  header.proto h1 { margin:0; font-size:16px; }
+  header.proto p { margin:4px 0 0; color:#c9d1d9; font-size:13px; max-width:980px; }
+  main { max-width:1180px; margin:20px auto; padding:0 24px; display:grid; grid-template-columns:1fr 300px; gap:20px; }
+  .note { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; font-size:13px; align-self:start; position:sticky; top:12px; }
+  .note h3 { margin:0 0 6px; font-size:13px; }
+  .note ul { margin:4px 0 10px; padding-left:18px; }
+  code, .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+  a { color:var(--accent); text-decoration:none; }
+  table { border-collapse:collapse; width:100%; margin:6px 0 10px; font-size:13px; }
+  th, td { border:1px solid var(--line); padding:4px 8px; text-align:left; vertical-align:top; }
+  th { background:var(--bg); }
+  .pill { display:inline-block; border-radius:12px; padding:1px 10px; font-weight:600; font-size:12px; }
+  .v-reviewable { background:var(--okbg); color:var(--ok); }
+  .v-hold_advised { background:var(--holdbg); color:var(--hold); }
+  .v-incomplete { background:var(--incbg); color:var(--inc); }
+  .stale-banner { background:var(--stalebg); color:var(--stale); border:1px solid #ffcecb; border-radius:6px; padding:8px 12px; font-weight:600; margin:8px 0; }
+  .advice { border-left:3px solid var(--accent); padding:4px 10px; color:var(--mute); margin:6px 0 10px; }
+
+  /* conversation + packet: Copilot App chat look */
+  .chat { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; }
+  .msg { margin:0 0 16px; }
+  .msg .who { font-size:12px; font-weight:600; color:var(--mute); margin-bottom:4px; }
+  .msg.user .body { background:#ddf4ff; border-radius:8px; padding:8px 12px; display:inline-block; }
+  .msg.tool .body { font-size:12px; color:var(--mute); font-family:ui-monospace,Menlo,monospace; }
+  .msg.later { border-top:1px dashed var(--line); padding-top:12px; }
+  .packet h2 { font-size:15px; margin:14px 0 4px; }
+  .packet h2:first-child { margin-top:0; }
+  .packet ul { margin:4px 0 8px; padding-left:20px; }
+  pre.raw { background:var(--bg); border:1px solid var(--line); padding:10px; white-space:pre-wrap; font-size:12px; max-height:420px; overflow:auto; }
+
+  /* canvas */
+  .canvas { display:grid; grid-template-columns:260px 1fr; background:var(--card); border:1px solid var(--line); border-radius:8px; min-height:520px; }
+  .canvas aside { border-right:1px solid var(--line); padding:16px; }
+  .canvas aside .big { font-size:20px; margin:6px 0; }
+  .canvas aside dl { margin:10px 0; font-size:12px; }
+  .canvas aside dt { color:var(--mute); }
+  .canvas aside dd { margin:0 0 6px; }
+  .canvas .pane { padding:0; }
+  .tabs { display:flex; border-bottom:1px solid var(--line); }
+  .tabs button { border:0; background:none; padding:10px 14px; cursor:pointer; font:inherit; color:var(--mute); border-bottom:2px solid transparent; }
+  .tabs button.on { color:var(--ink); border-bottom-color:var(--accent); font-weight:600; }
+  .tabs .count { background:var(--incbg); border-radius:10px; padding:0 6px; margin-left:4px; font-size:11px; }
+  .pane .inner { padding:16px; }
+  .noaction { font-size:12px; color:var(--mute); border-top:1px solid var(--line); padding:8px 16px; }
+
+  /* floating bar */
+  .bar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); background:#24292f; color:#fff; border-radius:12px; padding:10px 14px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; box-shadow:0 8px 24px rgba(0,0,0,.25); max-width:96vw; font-size:13px; z-index:9; }
+  .bar .grp { display:flex; gap:4px; align-items:center; }
+  .bar .lbl { color:#8c959f; margin-right:4px; }
+  .bar button { background:#32383f; color:#fff; border:1px solid #444c56; border-radius:6px; padding:4px 10px; cursor:pointer; font:inherit; font-size:12px; }
+  .bar button.on { background:var(--accent); border-color:var(--accent); }
+</style>
+</head>
+<body>
+<header class="proto">
+  <h1>PROTOTYPE — throwaway. Release assessment review experience (#573)</h1>
+  <p><b>Question:</b> what is the smallest Copilot App experience that lets a Loop engineer understand the
+  Assessment verdict, inspect its evidence, see what is uncertain, and decide their next step without mistaking
+  advice for authorization? Compare three shapes over the same fixtures: <b>native conversation</b>,
+  a <b>review packet</b>, and a <b>custom canvas</b>. All data is representative fixture data (issue numbers in
+  the 900s are invented), following the contract decided in #570 and #572.</p>
+</header>
+
+<main>
+  <section id="stage"></section>
+  <aside class="note" id="note"></aside>
+</main>
+
+<div class="bar" id="bar"></div>
+
+<script>
+/* ---------- Liftable module: fixtures + the information hierarchy (pure, no DOM) ---------- */
+const REPO = "bradcstevens/git-loopy";
+const POLICY = { revision: "assessment-policy r3 (2026-10-11)", workflows: ["Runner family gate", "Cross-repo Skills proof", "Lint the workflows", "Promote Release line"] };
+const SERVICE = "release-assessment 0.1.0-prototype";
+const IDENTITY = "GitHub App git-loopy-assessment (installation 41, repository-restricted, read-only)";
+
+function base(overrides) {
+  return Object.assign({
+    repo: REPO, milestone: "v0.12.0", milestoneState: "open", sha: "9b41c07d2e5f", asOf: "2026-10-11 21:40 MDT",
+    version: "0.12.0-beta.2", baseline: "v0.11.1", policy: POLICY.revision, service: SERVICE, identity: IDENTITY,
+    checks: POLICY.workflows.map(w => ({ workflow: w, conclusion: "success", url: "#fixture" })),
+    holds: [], incompletes: [],
+    content: [
+      { n: 901, title: "Lease heartbeat survives laptop sleep", cls: "merged", via: "PR #931 merged at 4c1e9aa" },
+      { n: 902, title: "Dashboard shows Lane cost", cls: "merged", via: "GitLoopy-Checkpoint: 902 on 77d0b3e" },
+      { n: 905, title: "Doctor reports drifted Skill pin", cls: "merged", via: "Closes #905 on 1aa92f0" },
+      { n: 907, title: "Explain routing in the Run summary", cls: "closed_not_linked", via: "closed as completed; no merged PR or trailer found" },
+      { n: 911, title: "Windows ANSI fallback", cls: "excluded", via: "closed not_planned" },
+    ],
+    context: [
+      "Prerelease stage is beta.2 — context only; Promotion promotes from any stage.",
+      "#915 is attached to milestone v0.12.0 but carries no v0.12.0 label — milestone membership is context only.",
+      "Unlisted workflow “Release smoke” has no run on this SHA — not counted by the assessment policy.",
+    ],
+  }, overrides);
+}
+
+const SCENARIOS = {
+  reviewable: { label: "Reviewable", blurb: "Everything required was read at the pinned SHA and nothing argues for holding. Watch whether the shape still makes clear this is not permission.",
+    a: base({ verdict: "reviewable" }) },
+  hold: { label: "Hold advised", blurb: "Complete evidence, three findings: an open labelled issue with an open closing PR, a failed counted check, and a label the line never absorbed.",
+    a: base({ verdict: "hold_advised",
+      checks: POLICY.workflows.map(w => ({ workflow: w, conclusion: w === "Cross-repo Skills proof" ? "failure" : "success", url: "#fixture" })),
+      holds: [
+        { text: "Open issue #918 “Pickup re-read skips closed blockers” carries the v0.12.0 label.", source: "issue #918", observed: "state=open, labels=[v0.12.0]", context: "Open closing PR #934 (draft). Native blocker #920 is open — context only; Readiness is not judged." },
+        { text: "Counted workflow “Cross-repo Skills proof” failed on 9b41c07d2e5f.", source: "workflow run 36410022", observed: "conclusion=failure" },
+        { text: "Closed issue #909 carries label v0.13.0, which this line (VERSION 0.12.0-beta.2) never absorbed.", source: "issue #909", observed: "labels=[v0.13.0], closed completed" },
+      ] }) },
+  incomplete: { label: "Incomplete", blurb: "One counted check is still running and one cross-repository blocker could not be read. A hold finding was also found — incomplete beats hold_advised but still lists it. Watch that nothing reads as ‘probably fine’.",
+    a: base({ verdict: "incomplete",
+      checks: POLICY.workflows.map(w => ({ workflow: w, conclusion: w === "Runner family gate" ? "in_progress" : "success", url: "#fixture" })),
+      holds: [ { text: "Open issue #918 “Pickup re-read skips closed blockers” carries the v0.12.0 label.", source: "issue #918", observed: "state=open, labels=[v0.12.0]" } ],
+      incompletes: [
+        { read: "Counted workflow “Runner family gate” on 9b41c07d2e5f", why: "run 36410090 is in_progress — no conclusion yet", source: "workflow run 36410090" },
+        { read: "Native blocker of #918 in bradcstevens/git-loopy-skills", why: "not visible to the read identity; access is never widened to resolve it", source: "issue-dependencies of #918" },
+      ] }) },
+  stale: { label: "Stale (head moved)", blurb: "Starts as a reviewable assessment; trunk then gains a commit. Press “Trunk moves” in the bar at any time on any scenario. Watch which shape lets an earlier answer keep looking current.",
+    a: base({ verdict: "reviewable" }), startMoved: true },
+  nothing: { label: "Nothing to promote", blurb: "The milestone is open but VERSION at the SHA is stable, so closing it would promote nothing.",
+    a: base({ verdict: "hold_advised", version: "0.11.1", milestone: "v0.12.0",
+      holds: [ { text: "Closing milestone v0.12.0 would promote nothing: VERSION at 9b41c07d2e5f is 0.11.1 (stable), not a v0.12.0 Release line.", source: "VERSION at 9b41c07d2e5f", observed: "0.11.1" } ],
+      content: [], context: ["No v0.12.0-labelled issues are closed yet."] }) },
+};
+
+const VERDICT_TEXT = {
+  reviewable: "Evidence is complete and none argues for holding. Sufficient for your review — not authorization.",
+  hold_advised: "Evidence is complete and at least one finding argues for holding.",
+  incomplete: "Some required evidence could not be read. No conclusion either way — this does not mean probably fine.",
+};
+const ADVICE = "Advice only. Whether to close the milestone is your decision; closing it triggers Promotion, and Rehearsal and Release smoke still prove the snapshot afterwards. This assessment changes nothing.";
+const CLASS_TEXT = { merged: "merged", closed_not_linked: "closed, not linked", excluded: "excluded" };
+
+function freshness(a, head) {
+  return head === a.sha ? { stale: false } : { stale: true, text: `Stale: trunk head is now ${head}, not the assessed ${a.sha}. Re-run the assessment; this one is not refreshed in place.` };
+}
+
+// What would change the verdict: never a repair instruction, never "close the milestone".
+function nextDecisions(a) {
+  const out = [];
+  if (a.verdict === "incomplete") out.push("Re-run the assessment once the unreadable items above can be read (e.g. the running check finishes).");
+  if (a.holds.length) out.push("Each hold finding stands until its source record changes; resolving it happens outside this assessment.");
+  if (a.verdict === "reviewable") out.push("Review the line content below, then decide yourself whether to close the milestone in GitHub.");
+  out.push("Any new trunk commit makes this assessment stale — re-run before deciding.");
+  return out;
+}
+
+function packetSections(a, head) {
+  return {
+    headline: { verdict: a.verdict, line: `${a.milestone} at ${a.sha}`, asOf: a.asOf, meaning: VERDICT_TEXT[a.verdict] },
+    advice: ADVICE,
+    freshness: freshness(a, head),
+    holds: a.holds, incompletes: a.incompletes,
+    next: nextDecisions(a),
+    checks: a.checks, content: a.content, context: a.context,
+    provenance: [
+      ["Repository", a.repo], ["Milestone", `${a.milestone} (${a.milestoneState})`], ["Pinned SHA", a.sha], ["As of", a.asOf],
+      ["VERSION at SHA", a.version], ["Baseline tag", a.baseline], ["Assessment policy", a.policy], ["Service", a.service], ["Read identity", a.identity],
+    ],
+  };
+}
+
+function packetMarkdown(s) {
+  const L = [];
+  L.push(`## Assessment verdict: \`${s.headline.verdict}\` — ${s.headline.line}`);
+  L.push(`${s.headline.meaning} As of ${s.headline.asOf}.`, "", `> ${s.advice}`, "");
+  if (s.freshness.stale) L.push(`**${s.freshness.text}**`, "");
+  L.push(`## Why — hold findings (${s.holds.length})`);
+  s.holds.length ? s.holds.forEach(h => L.push(`- ${h.text} — [${h.source}](#) · observed \`${h.observed}\`${h.context ? `\n  - Context: ${h.context}` : ""}`)) : L.push("- None.");
+  L.push("", `## Could not read (${s.incompletes.length})`);
+  s.incompletes.length ? s.incompletes.forEach(i => L.push(`- ${i.read}: ${i.why} — [${i.source}](#)`)) : L.push("- Nothing — every required read completed.");
+  L.push("", "## What would change this", ...s.next.map(n => `- ${n}`), "");
+  L.push("## Counted checks", "| Workflow | Conclusion |", "|---|---|", ...s.checks.map(c => `| ${c.workflow} | ${c.conclusion} |`), "");
+  L.push("## Line content", "| Issue | Classification | Link evidence |", "|---|---|---|", ...s.content.map(c => `| #${c.n} ${c.title} | ${CLASS_TEXT[c.cls]} | ${c.via} |`), "");
+  L.push("## Context (does not change the verdict)", ...s.context.map(c => `- ${c}`), "");
+  L.push("## Provenance", ...s.provenance.map(([k, v]) => `- ${k}: ${v}`));
+  return L.join("\n");
+}
+
+/* ---------- Throwaway page shell ---------- */
+const VARIANTS = {
+  conversation: { label: "A · Native conversation",
+    note: `<h3>A · Native conversation</h3>The skill calls the MCP tool; the model reads the structured result and answers in its own words. No packaging beyond the skill + MCP server.
+      <h3>Watch for</h3><ul><li>Hierarchy changes from answer to answer — the model chooses what to lead with.</li><li>Uncertainty and provenance get summarized away (“a check is still running”).</li><li>The follow-up “so we're good to ship?” is where advice turns into authorization.</li><li>After “Trunk moves”, the earlier answer in history still reads as current.</li></ul>` },
+  packet: { label: "B · Review packet in chat",
+    note: `<h3>B · Review packet in chat</h3>The MCP tool returns structured JSON <i>and</i> a service-rendered Markdown packet with a fixed section order. The skill shows the packet verbatim, then the conversation continues for questions.
+      <h3>Watch for</h3><ul><li>Same order every time: verdict → advice line → why → could not read → what would change it → evidence → context → provenance.</li><li>Every finding carries its source and observed value.</li><li>Follow-ups re-check freshness first (cheap read of trunk head) and answer only from the packet.</li><li>The packet in history cannot update itself — the SHA line and the re-check carry staleness.</li></ul>` },
+  canvas: { label: "C · Custom canvas",
+    note: `<h3>C · Custom canvas</h3>An App canvas panel renders the same structure with tabs, counts and a live freshness banner.
+      <h3>Watch for</h3><ul><li>Best scanning and the only shape that can show staleness on its own.</li><li>Cost: canvas authoring is on the experimental SDK boundary (#571), separately packaged and versioned, and needs polling for live staleness.</li><li>Tabs hide hold findings and unreadable items behind a click unless the summary forces them forward.</li><li>Does it add anything the packet does not, for a one-repository first user?</li></ul>` },
+};
+
+const params = new URLSearchParams(location.search);
+let state = {
+  variant: VARIANTS[params.get("variant")] ? params.get("variant") : "packet",
+  scenario: SCENARIOS[params.get("scenario")] ? params.get("scenario") : "hold",
+  moved: false, tab: "why", raw: false,
+};
+state.moved = !!SCENARIOS[state.scenario].startMoved;
+
+function set(patch) {
+  Object.assign(state, patch);
+  const p = new URLSearchParams({ variant: state.variant, scenario: state.scenario });
+  history.replaceState(null, "", "?" + p);
+  render();
+}
+
+const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const pill = v => `<span class="pill v-${v}">${v}</span>`;
+const md = s => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/\[([^\]]+)\]\(#\)/g, '<a href="#fixture">$1</a>');
+
+function packetHtml(s) {
+  return `<div class="packet">
+    <h2>Assessment verdict: ${pill(s.headline.verdict)} — <span class="mono">${esc(s.headline.line)}</span></h2>
+    <div>${esc(s.headline.meaning)} As of ${esc(s.headline.asOf)}.</div>
+    <div class="advice">${esc(s.advice)}</div>
+    ${s.freshness.stale ? `<div class="stale-banner">${esc(s.freshness.text)}</div>` : ""}
+    <h2>Why — hold findings (${s.holds.length})</h2>
+    <ul>${s.holds.length ? s.holds.map(h => `<li>${esc(h.text)} — <a href="#fixture">${esc(h.source)}</a> · observed <code>${esc(h.observed)}</code>${h.context ? `<ul><li>Context: ${esc(h.context)}</li></ul>` : ""}</li>`).join("") : "<li>None.</li>"}</ul>
+    <h2>Could not read (${s.incompletes.length})</h2>
+    <ul>${s.incompletes.length ? s.incompletes.map(i => `<li><b>${esc(i.read)}</b>: ${esc(i.why)} — <a href="#fixture">${esc(i.source)}</a></li>`).join("") : "<li>Nothing — every required read completed.</li>"}</ul>
+    <h2>What would change this</h2><ul>${s.next.map(n => `<li>${esc(n)}</li>`).join("")}</ul>
+    <h2>Counted checks</h2>${checksTable(s.checks)}
+    <h2>Line content</h2>${contentTable(s.content)}
+    <h2>Context (does not change the verdict)</h2><ul>${s.context.map(c => `<li>${esc(c)}</li>`).join("")}</ul>
+    <h2>Provenance</h2><ul>${s.provenance.map(([k, v]) => `<li>${esc(k)}: <span class="mono">${esc(v)}</span></li>`).join("")}</ul>
+  </div>`;
+}
+const checksTable = cs => `<table><tr><th>Workflow (assessment policy)</th><th>Conclusion at SHA</th></tr>${cs.map(c => `<tr><td>${esc(c.workflow)}</td><td>${esc(c.conclusion)}</td></tr>`).join("")}</table>`;
+const contentTable = cs => cs.length ? `<table><tr><th>Issue</th><th>Classification</th><th>Link evidence</th></tr>${cs.map(c => `<tr><td>#${c.n} ${esc(c.title)}</td><td>${CLASS_TEXT[c.cls]}</td><td>${esc(c.via)}</td></tr>`).join("")}</table>` : "<p>No closed v-labelled issues.</p>";
+
+function conversationReply(a, s) {
+  const lead = { reviewable: `Good news — the assessment for <b>${a.milestone}</b> came back <b>reviewable</b>. All four counted workflows passed and there are no open issues on the line.`,
+    hold_advised: `The assessment for <b>${a.milestone}</b> advises holding. ` + (a.holds.length === 1 ? esc(a.holds[0].text) : `There are ${a.holds.length} things to look at: an open issue (#918), a failed Skills proof, and a stray v0.13.0 label on #909.`),
+    incomplete: `I couldn't get a full read on <b>${a.milestone}</b> — the Runner family gate is still running and one blocker in git-loopy-skills wasn't visible. Otherwise things look close: there's one open issue (#918).` }[a.verdict];
+  const merged = a.content.filter(c => c.cls === "merged").length;
+  return `<p>${lead}</p><p>${merged} of ${a.content.length} closed issues are merged into trunk.${a.content.some(c => c.cls === "closed_not_linked") ? " #907 was closed but I couldn't find its PR." : ""} Want me to dig into any of these?</p>`;
+}
+function conversationFollowUp(a) {
+  return { reviewable: "Based on the evidence, yes — nothing is blocking. When you close the milestone, Promotion will cut the stable release.",
+    hold_advised: "Not yet. Once #918 merges and the Skills proof is green, you should be clear to close the milestone.",
+    incomplete: "Probably, once the Runner family gate finishes — the rest looked fine." }[a.verdict];
+}
+
+function renderConversation(a, s) {
+  const moved = s.freshness.stale;
+  return `<div class="chat">
+    <div class="msg user"><div class="who">You</div><div class="body">Assess ${a.milestone} for ${a.repo}</div></div>
+    <div class="msg tool"><div class="who">Tool</div><div class="body">release-assessment.assess(repository="${a.repo}", milestone="${a.milestone}") → verdict=${a.verdict}, sha=${a.sha}</div></div>
+    <div class="msg"><div class="who">Copilot</div><div class="body">${conversationReply(a, s)}</div></div>
+    <div class="msg user later"><div class="who">You${moved ? " — after trunk moved" : ""}</div><div class="body">So we're good to ship?</div></div>
+    <div class="msg"><div class="who">Copilot</div><div class="body"><p>${esc(conversationFollowUp(a))}</p>${moved ? "" : ""}</div></div>
+  </div>`;
+}
+
+function renderPacket(a, s) {
+  const moved = s.freshness.stale;
+  return `<div class="chat">
+    <div class="msg user"><div class="who">You</div><div class="body">/release-assessment ${a.milestone}</div></div>
+    <div class="msg tool"><div class="who">Tool</div><div class="body">release-assessment.assess(repository="${a.repo}", milestone="${a.milestone}") → packet (Markdown, service-rendered) + JSON</div></div>
+    <div class="msg"><div class="who">Copilot — packet shown verbatim
+      <button style="float:right;font-size:11px" onclick="set({raw:!state.raw})">${state.raw ? "Rendered" : "Raw Markdown"}</button></div>
+      <div class="body">${state.raw ? `<pre class="raw">${esc(packetMarkdown(s))}</pre>` : packetHtml(Object.assign({}, s, { freshness: { stale: false } }))}</div></div>
+    <div class="msg user later"><div class="who">You${moved ? " — after trunk moved" : ""}</div><div class="body">So we're good to ship?</div></div>
+    <div class="msg tool"><div class="who">Tool</div><div class="body">release-assessment.freshness(sha="${a.sha}", milestone="${a.milestone}") → ${moved ? "stale (head 3d7aa01f9c20)" : "current"}</div></div>
+    <div class="msg"><div class="who">Copilot</div><div class="body">${moved
+      ? `<div class="stale-banner">${esc(s.freshness.text)}</div><p>I can't answer from this packet any more. Run <code>/release-assessment ${a.milestone}</code> again.</p>`
+      : `<p>The assessment can't tell you that. Its verdict is ${pill(a.verdict)} for <span class="mono">${a.sha}</span>: ${esc(VERDICT_TEXT[a.verdict])}</p><p class="advice">${esc(ADVICE)}</p>`}</div></div>
+  </div>`;
+}
+
+function renderCanvas(a, s) {
+  const tabs = [["why", "Hold findings", a.holds.length], ["unread", "Could not read", a.incompletes.length], ["content", "Line content", a.content.length], ["checks", "Checks", a.checks.length], ["context", "Context", a.context.length], ["prov", "Provenance", null]];
+  const body = {
+    why: `<ul>${a.holds.length ? a.holds.map(h => `<li>${esc(h.text)}<br><small><a href="#fixture">${esc(h.source)}</a> · observed <code>${esc(h.observed)}</code></small>${h.context ? `<br><small>Context: ${esc(h.context)}</small>` : ""}</li>`).join("") : "<li>None.</li>"}</ul>`,
+    unread: `<ul>${a.incompletes.length ? a.incompletes.map(i => `<li><b>${esc(i.read)}</b><br><small>${esc(i.why)} — <a href="#fixture">${esc(i.source)}</a></small></li>`).join("") : "<li>Nothing — every required read completed.</li>"}</ul>`,
+    content: contentTable(a.content), checks: checksTable(a.checks),
+    context: `<ul>${a.context.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`,
+    prov: `<table>${s.provenance.map(([k, v]) => `<tr><th>${esc(k)}</th><td class="mono">${esc(v)}</td></tr>`).join("")}</table>`,
+  }[state.tab];
+  return `<div class="canvas">
+    <aside>
+      <div style="color:var(--mute);font-size:12px">Release assessment · ${esc(a.repo)}</div>
+      <div class="big">${pill(a.verdict)}</div>
+      <div class="mono">${esc(a.milestone)} @ ${esc(a.sha)}</div>
+      ${s.freshness.stale ? `<div class="stale-banner">STALE — trunk moved. Re-run.</div>` : `<div style="color:var(--ok);font-size:12px">● Current (head checked live)</div>`}
+      <p style="font-size:13px">${esc(VERDICT_TEXT[a.verdict])}</p>
+      <dl><dt>Hold findings</dt><dd>${a.holds.length}</dd><dt>Could not read</dt><dd>${a.incompletes.length}</dd><dt>VERSION / baseline</dt><dd class="mono">${esc(a.version)} / ${esc(a.baseline)}</dd><dt>As of</dt><dd>${esc(a.asOf)}</dd></dl>
+      <button onclick="set({moved:false})" style="font-size:12px">Re-run assessment</button>
+    </aside>
+    <div class="pane">
+      <div class="tabs">${tabs.map(([k, l, n]) => `<button class="${state.tab === k ? "on" : ""}" onclick="set({tab:'${k}'})">${l}${n !== null ? `<span class="count">${n}</span>` : ""}</button>`).join("")}</div>
+      <div class="inner">${body}<h4>What would change this</h4><ul>${s.next.map(n => `<li>${esc(n)}</li>`).join("")}</ul></div>
+      <div class="noaction">${esc(ADVICE)} No buttons here close, relabel, repair or promote.</div>
+    </div>
+  </div>`;
+}
+
+function render() {
+  const sc = SCENARIOS[state.scenario], a = sc.a;
+  const head = state.moved ? "3d7aa01f9c20" : a.sha;
+  const s = packetSections(a, head);
+  const intro = `<p style="margin:0 0 10px"><b>${esc(sc.label)}:</b> ${esc(sc.blurb)}</p>`;
+  const view = { conversation: renderConversation, packet: renderPacket, canvas: renderCanvas }[state.variant](a, s);
+  document.getElementById("stage").innerHTML = intro + view;
+  document.getElementById("note").innerHTML = VARIANTS[state.variant].note +
+    `<h3>Current state</h3><table><tr><th>Variant</th><td>${state.variant}</td></tr><tr><th>Scenario</th><td>${state.scenario}</td></tr><tr><th>Verdict</th><td>${pill(a.verdict)}</td></tr><tr><th>Assessed SHA</th><td class="mono">${a.sha}</td></tr><tr><th>Trunk head now</th><td class="mono">${head}</td></tr><tr><th>Fresh?</th><td>${s.freshness.stale ? "<b style='color:var(--stale)'>stale</b>" : "current"}</td></tr></table>`;
+  document.getElementById("bar").innerHTML =
+    `<div class="grp"><span class="lbl">Variant</span>${Object.entries(VARIANTS).map(([k, v]) => `<button class="${state.variant === k ? "on" : ""}" onclick="set({variant:'${k}'})">${v.label}</button>`).join("")}</div>
+     <div class="grp"><span class="lbl">Scenario</span>${Object.entries(SCENARIOS).map(([k, v]) => `<button class="${state.scenario === k ? "on" : ""}" onclick="set({scenario:'${k}', moved:${!!v.startMoved}, tab:'why'})">${v.label}</button>`).join("")}</div>
+     <div class="grp"><button class="${state.moved ? "on" : ""}" onclick="set({moved:!state.moved})">${state.moved ? "Trunk moved ✓ (undo)" : "Trunk moves"}</button></div>`;
+}
+render();
+</script>
+</body>
+</html>
