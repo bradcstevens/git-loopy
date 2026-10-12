@@ -495,7 +495,7 @@ def create_server(
                         except Unreadable as exc:
                             result["incompletes"].append(exc.item)
                         hold["context"] = " ".join(contexts)
-                    elif selected and issue["milestone"] and (
+                    elif label not in labels and selected and issue["milestone"] and (
                         issue["milestone"]["number"] == selected["number"]
                     ):
                         result["context"].append(
