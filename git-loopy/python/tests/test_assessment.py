@@ -143,7 +143,7 @@ def configuration(home: Path, workflows='["Runner family gate"]', extra=""):
 async def session(home, responses):
     transport = RecordedTransport(responses)
     server = create_server(
-        env={"XDG_CONFIG_HOME": str(home)}, transport=transport,
+        env={**os.environ, "XDG_CONFIG_HOME": str(home)}, transport=transport,
         clock=lambda: "2026-10-12T19:38:03Z",
     )
     async with create_client_server_memory_streams() as (client, serving):
@@ -156,6 +156,34 @@ async def session(home, responses):
                 yield connection, transport
             tasks.cancel_scope.cancel()
     assert not transport.violations
+
+
+@pytest.fixture
+def ambient_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "never-use-ambient-auth")
+    monkeypatch.setenv("GITHUB_TOKEN", "never-use-ambient-auth")
+    recording = tmp_path / "gh-called"
+    gh = tmp_path / ("gh.cmd" if os.name == "nt" else "gh")
+    gh.write_text(
+        f'@echo called > "{recording}"\r\n' if os.name == "nt"
+        else f"#!/bin/sh\nprintf called > '{recording}'\n"
+    )
+    gh.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    return recording
+
+
+async def test_successful_assessment_ignores_ambient_credentials(
+    tmp_path, ambient_credentials, caplog,
+):
+    configuration(tmp_path)
+    async with session(tmp_path, recorded()) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert not reply.is_error
+        assert reply.structured_content["sha"] == SHA
+        assert transport.authentications[3:] == [TOKEN] * 4
+        assert not ambient_credentials.exists()
+        assert "never-use-ambient-auth" not in str(reply) + caplog.text
 
 
 async def test_assess_pins_line_and_returns_fail_closed_packet(tmp_path):
@@ -848,7 +876,9 @@ async def test_unknown_configuration_keys_refuse_start(tmp_path, extra):
     ("invalid", "App key file is not a valid RSA private key"),
     ("directory", "App key file is unreadable"),
 ])
-async def test_bad_key_fails_closed_without_ambient_auth(tmp_path, monkeypatch, problem, reason):
+async def test_bad_key_fails_closed_without_ambient_auth(
+    tmp_path, ambient_credentials, problem, reason,
+):
     if os.name != "posix" and problem in {"unreadable", "permissive"}:
         pytest.skip("POSIX key permissions; Windows ACLs are documented, not enforced")
     path = configuration(tmp_path)
@@ -864,16 +894,6 @@ async def test_bad_key_fails_closed_without_ambient_auth(tmp_path, monkeypatch, 
     else:
         key.unlink()
         key.mkdir()
-    monkeypatch.setenv("GH_TOKEN", "never-use-ambient-auth")
-    monkeypatch.setenv("GITHUB_TOKEN", "never-use-ambient-auth")
-    recording = tmp_path / "gh-called"
-    gh = tmp_path / ("gh.cmd" if os.name == "nt" else "gh")
-    gh.write_text(
-        f'@echo called > "{recording}"\r\n' if os.name == "nt"
-        else f"#!/bin/sh\nprintf called > '{recording}'\n"
-    )
-    gh.chmod(0o700)
-    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     with pytest.raises(AssessmentConfigError, match=reason):
         create_server(env={"XDG_CONFIG_HOME": str(tmp_path)})
     transport = RecordedTransport({})
@@ -891,7 +911,7 @@ async def test_bad_key_fails_closed_without_ambient_auth(tmp_path, monkeypatch, 
     assert result.stdout == ""
     assert reason in result.stderr
     assert "never-use-ambient-auth" not in result.stderr
-    assert not recording.exists()
+    assert not ambient_credentials.exists()
 
 
 async def test_uninstalled_allowlisted_repository_refuses_before_evidence(tmp_path):

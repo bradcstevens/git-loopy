@@ -63,14 +63,6 @@ class Policy:
     key_file: Path
     revision: str
 
-    @property
-    def identity(self) -> str:
-        return (
-            f"GitHub App {self.app_identity} (app {self.app_id}, "
-            f"installation {self.installation_id})"
-        )
-
-
 def load_policy(env: Mapping[str, str]) -> dict[str, Policy]:
     path = global_dir(env) / "assessment" / "config.toml"
     try:
