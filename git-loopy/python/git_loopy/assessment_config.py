@@ -15,6 +15,7 @@ from .settings import global_dir
 
 REPOSITORY_PATTERN = (
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/"
+    r"(?!gh[pousr]_|github_pat_)"
     r"[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,99})"
 )
 MILESTONE_PATTERN = r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"

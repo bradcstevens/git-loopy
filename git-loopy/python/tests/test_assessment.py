@@ -108,6 +108,7 @@ async def test_assess_pins_line_and_returns_fail_closed_packet(tmp_path):
         assert result["verdict"] == "incomplete"
         assert result["sha"] == SHA
         assert result["releaseTarget"] == "0.12.0"
+        assert result["releaseTargetState"] == "derived"
         assert result["milestone"] == "v0.12.0"
         assert result["resultFormat"] == 1
         assert result["holds"] == []
@@ -133,6 +134,7 @@ async def test_catalog_scenario_6_keeps_nothing_to_promote_hold(tmp_path):
         result = reply.structured_content
         assert result["verdict"] == fixture["verdict"]
         assert result["releaseTarget"] is None
+        assert result["releaseTargetState"] == "no_target"
         assert result["holds"][0]["text"] == fixture["hold"]
         assert result["holds"][0]["source"] == (
             f"https://github.com/{REPO}/blob/{SHA}/VERSION"
@@ -350,6 +352,10 @@ async def test_tool_schema_exposes_only_typed_bounded_assess_inputs(tmp_path):
         assert schema["additionalProperties"] is False
         assert schema["required"] == ["repository"]
         assert set(schema["properties"]) == {"repository", "milestone"}
+        assert re.fullmatch(
+            schema["properties"]["repository"]["pattern"],
+            "example/ghp_abcdefghijklmnopqrstuvwxyz",
+        ) is None
         for spec in schema["properties"].values():
             assert spec["type"] == "string"
             assert spec["maxLength"] <= 140
@@ -383,6 +389,7 @@ async def test_version_text_is_strict_and_unknown_shapes_are_incomplete(tmp_path
             "read": "VERSION at pinned SHA", "reason": "unrecognized evidence shape",
             "source": f"https://github.com/{REPO}/blob/{SHA}/VERSION",
         }
+        assert result["releaseTargetState"] == "unreadable"
         assert len([line for line in reply.content[0].text.splitlines()
                     if "Assessment verdict:" in line]) == 1
 

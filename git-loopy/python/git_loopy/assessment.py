@@ -98,7 +98,7 @@ def render_packet(result: dict[str, Any]) -> str:
         lines.append("- None.")
     target = r["releaseTarget"] or (
         "no target (VERSION is stable)"
-        if r["version"] and "-" not in r["version"] and "+" not in r["version"]
+        if r["releaseTargetState"] == "no_target"
         else "unreadable"
     )
     lines.extend(["", "## Provenance"])
@@ -186,6 +186,7 @@ def create_server(
         result = {
             "repo": repository, "milestone": milestone, "milestoneState": None,
             "sha": None, "asOf": now(), "version": None, "releaseTarget": None,
+            "releaseTargetState": "unreadable",
             "baseline": None, "policy": policy.revision, "service": service_version,
             "identity": policy.identity, "resultFormat": 1,
             "countedWorkflows": list(policy.workflows),
@@ -208,10 +209,13 @@ def create_server(
                 line = parse_release_line(result["version"])
                 if line.counter:
                     result["releaseTarget"] = line.target
+                    result["releaseTargetState"] = "derived"
                     result["context"].append(
                         f"Prerelease stage is {line.stage}.{line.counter} — context only; "
                         "Promotion promotes from any stage."
                     )
+                else:
+                    result["releaseTargetState"] = "no_target"
             except Unreadable as exc:
                 result["incompletes"].append(exc.item)
             except ValueError:
