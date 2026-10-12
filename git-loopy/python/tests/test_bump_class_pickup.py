@@ -91,15 +91,25 @@ def test_a_valid_carried_bump_class_is_read_without_reclassification_or_write() 
     assert client.applied == []
 
 
+def _line_after(
+    last_stable: str, target: str, counter: int = 0, stage: str = "alpha"
+):
+    def read() -> tuple[str, ReleaseLine]:
+        return last_stable, ReleaseLine(target=target, counter=counter, stage=stage)
+
+    return read
+
+
 @pytest.mark.parametrize(
     ("key", "line", "written"),
     [
-        ("major", _line(), ["v1.0.0"]),
         ("minor", _line(), ["v0.11.0"]),
         ("patch", _line(), ["v0.10.1"]),
         ("none", _line(), []),
         ("patch", _line("0.11.0", 3, "beta"), ["v0.11.0"]),
-        ("major", _line("0.11.0", 3, "rc"), ["v1.0.0"]),
+        ("minor", _line_after("0.11.1", "1.0.0", 2), ["v1.0.0"]),
+        ("patch", _line_after("0.11.1", "1.0.0", 2), ["v1.0.0"]),
+        ("none", _line_after("0.11.1", "1.0.0", 2), []),
     ],
 )
 def test_every_bump_class_writes_the_release_it_ships_in(
@@ -239,3 +249,99 @@ def test_a_non_tracker_item_never_spends_to_infer_an_unwritable_bump_class() -> 
     )
 
     assert labelled is item
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        _line(),
+        _line("0.11.0", 3, "rc"),
+        _line_after("0.11.1", "1.0.0", 2),
+    ],
+)
+def test_an_inferred_major_writes_no_label_and_asks_for_a_human_one(
+    line: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only a human opens a major line (ADR-0079): a guess never ratchets it."""
+    from git_loopy.bump_class_pickup import PickupBumpClassifier
+
+    client = _RecordingLabelClient()
+
+    async def propose(_pair: ClassifierPair, _item: AfkReadyItem) -> str:
+        return "<bump-class>major</bump-class>"
+
+    item = _item()
+    with caplog.at_level(logging.INFO):
+        labelled = asyncio.run(
+            PickupBumpClassifier(
+                pair=ClassifierPair(model="cheap-model", effort=None),
+                propose=propose,
+                client=client,
+                release_line=line,
+                diag=logging.getLogger("test.bump-class"),
+            ).labelled(item)
+        )
+
+    assert labelled is item
+    assert client.applied == []
+    assert "major_needs_human_label" in caplog.text
+
+
+def test_an_inferred_major_is_classified_as_needing_a_human_label() -> None:
+    """The classification itself names the outcome, carrying the inferred class."""
+    from git_loopy.bump_class_pickup import (
+        BumpClassClassificationOutcome,
+        classify_bump_class,
+    )
+
+    async def propose(_pair: ClassifierPair, _item: AfkReadyItem) -> str:
+        return "<bump-class>major</bump-class>"
+
+    classification = asyncio.run(
+        classify_bump_class(
+            _item(),
+            pair=ClassifierPair(model="cheap-model", effort=None),
+            propose=propose,
+            last_stable_version="0.10.0",
+        )
+    )
+
+    assert (
+        classification.outcome
+        is BumpClassClassificationOutcome.MAJOR_NEEDS_HUMAN_LABEL
+    )
+    assert classification.bump_class == "major"
+    assert classification.detail is not None
+
+
+def test_a_human_applied_major_successor_label_is_honoured_unchanged() -> None:
+    """A human's ``v1.0.0`` after ``0.11.1`` is never reclassified, and it raises
+    the line to ``1.0.0-alpha`` at Integration as before."""
+    from git_loopy.bump_class_pickup import PickupBumpClassifier
+    from git_loopy.release_version import advance_release_line, resolve_bump_class
+
+    client = _RecordingLabelClient()
+    calls: list[Any] = []
+
+    async def propose(pair: ClassifierPair, item: AfkReadyItem) -> str:
+        calls.append((pair, item))
+        return "<bump-class>minor</bump-class>"
+
+    item = _item("ready-for-agent", "v1.0.0")
+    labelled = asyncio.run(
+        PickupBumpClassifier(
+            pair=ClassifierPair(model="cheap-model", effort=None),
+            propose=propose,
+            client=client,
+            release_line=_line_after("0.11.1", "0.12.0", 4, "beta"),
+        ).labelled(item)
+    )
+
+    assert labelled is item
+    assert calls == []
+    assert client.applied == []
+    bump_class = resolve_bump_class(labelled.labels, "0.11.1")
+    assert bump_class == "major"
+    assert advance_release_line(
+        "0.11.1", "0.12.0", 4, bump_class, current_stage="beta"
+    ) == ReleaseLine(target="1.0.0", counter=5, stage="alpha")
