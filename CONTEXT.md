@@ -1954,6 +1954,31 @@ policy** also enables. A profile carries no model or reasoning effort, because
 **Routing** alone decides those.
 _Avoid_: custom agent (the harness mechanism), persona, role, worker.
 
+### Board (accepted design)
+
+These terms complete the vocabulary of
+[ADR-0079](docs/adr/0079-the-tracker-is-the-board-and-its-states-are-derived.md). The
+existing **Readiness**, **Blocked**, **Lease**, **Queue** and **Status** entries above
+describe current behavior and keep their meanings; this decision record does not
+establish delivery acceptance.
+
+**Board**:
+Every executable issue in the tracker, each shown in one **Board column**. The tracker
+is the board's only record: the board holds no state of its own, and what it changes it
+writes back to the tracker. Planning documents are not on it, except as the parent of
+the tickets made from them.
+_Avoid_: kanban database, backlog, Queue (which belongs to one **Run**).
+
+**Board column**:
+Where one issue stands on the **Board**, computed from the facts **Pickup** reads and
+never stored as a label. The columns are Triage, Todo, Ready, Running, Review, Blocked
+and Done. Two of their names differ from the glossary on purpose. The Blocked column
+means the issue waits on a human. An open dependency, which this glossary calls
+**Blocked**, appears in Todo together with **Awaiting merge**. Because the column comes
+from the same rules as Pickup, Ready shows exactly the issues a Run would admit.
+_Avoid_: state label, Status (that is an issue's lifecycle within one Run), Blocked
+unqualified when the column is meant.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
