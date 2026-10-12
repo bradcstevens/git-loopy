@@ -8,7 +8,6 @@ Some required evidence could not be read. No conclusion either way — this does
   - [source](https://github.com/example/project/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/VERSION); observed: VERSION&#61;0&#46;11&#46;1&#59; milestone&#61;v0&#46;12&#46;0
 
 ## Could not read
-- Counted checks: not yet assessed by this service version — [source](https://github.com/example/project/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/checks)
 - Open and unabsorbed work: not yet assessed by this service version — [source](https://github.com/example/project/issues)
 - Baseline and line content: not yet assessed by this service version — [source](https://github.com/example/project/tags)
 
@@ -18,7 +17,7 @@ Some required evidence could not be read. No conclusion either way — this does
 - Any new trunk commit makes this assessment stale — re-run before deciding.
 
 ## Counted checks
-- Not yet assessed by this service version; see Could not read.
+- Runner family gate: success — [run](https://github.com/example/project/actions/runs/42)
 
 ## Line content
 - Not yet assessed by this service version; see Could not read.

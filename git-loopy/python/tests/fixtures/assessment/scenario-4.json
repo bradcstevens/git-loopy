@@ -1,0 +1,18 @@
+{
+  "workflow_runs": [
+    {
+      "id": 42,
+      "name": "Runner family gate",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "completed",
+      "conclusion": "failure"
+    }
+  ],
+  "verdict": "incomplete",
+  "hold": {
+    "text": "Counted workflow Runner family gate concluded failure.",
+    "source": "https://github.com/example/project/actions/runs/42",
+    "observed": "failure",
+    "context": ""
+  }
+}
