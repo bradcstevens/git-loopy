@@ -1941,8 +1941,10 @@ _Avoid_: profile memory, learnings, scratchpad.
 ### Agent profiles (accepted design)
 
 This term completes the vocabulary of
-[ADR-0078](docs/adr/0078-one-agent-profile-per-task-type.md) and
-[ADR-0086](docs/adr/0086-agent-profiles-are-markdown-beside-the-skills-proved-and-installed-with-the-catalog.md).
+[ADR-0078](docs/adr/0078-one-agent-profile-per-task-type.md),
+[ADR-0086](docs/adr/0086-agent-profiles-are-markdown-beside-the-skills-proved-and-installed-with-the-catalog.md)
+and
+[ADR-0087](docs/adr/0087-the-planner-is-generated-from-the-pin-and-launched-into-the-loop-engineers-harness.md).
 The existing **Required Skill**, **Skill policy**, **Minimal Skill policy**, **Installed
 catalog** and **Task type** entries above describe current behavior; these decision
 records do not establish delivery acceptance. Permitted Skills enter this glossary when
@@ -1950,12 +1952,13 @@ they ship.
 
 **Agent profile**:
 A reusable definition that an **Agent** starts from: role instructions layered on the Run
-instructions, preloaded **Required Skills**, the further Skills it may invoke on demand,
+instructions (the **Planner**'s stand alone, because it works outside every **Run**),
+preloaded **Required Skills**, the further Skills it may invoke on demand,
 and its tool access, which is read-only for the **Reviewer** and full for every other
 profile. There is one per **Task type**: the **Planner** is `planning`, the **Reviewer**
 is `review`, and the other five are execution profiles. An issue's Task type selects its
 profile, and an issue whose Task type does not resolve runs as `implementation`. An
-**Agent** can reach only its profile's Skills, and only those the **Effective Skill
+in-Run **Agent** can reach only its profile's Skills, and only those the **Effective Skill
 policy** also enables. A profile carries no model or reasoning effort, because
 **Routing** alone decides those. The profiles, not the Run instructions, declare a
 **Run**'s Required Skills. Profiles come from the same pinned external catalog as the

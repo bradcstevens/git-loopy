@@ -2,6 +2,11 @@
 
 **Status:** accepted design; implementation acceptance is tracked by the delivery issues.
 
+**Amended by [ADR-0087](0087-the-planner-is-generated-from-the-pin-and-launched-into-the-loop-engineers-harness.md):**
+the `planning` profile's body stands alone and is never layered on `PROMPT.md`, and the
+profile declares `access: full`. ADR-0087 also decides how a Loop engineer's harness
+gets the Planner.
+
 Decided by [Decide how Agent profiles are expressed and proved in the Skills
 repository](https://github.com/bradcstevens/git-loopy/issues/748). Builds on
 [ADR-0078](0078-one-agent-profile-per-task-type.md), which put each **Agent profile**
