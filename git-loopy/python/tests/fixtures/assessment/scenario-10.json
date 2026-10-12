@@ -1,0 +1,26 @@
+{
+  "description": "A known hold remains present when a subsequent work read is rate-limited.",
+  "issues": [
+    {
+      "number": 7, "state": "open", "title": "Unfinished work",
+      "url": "https://api.github.com/repos/example/project/issues/7",
+      "labels": [{"name": "v0.12.0"}], "milestone": null
+    }
+  ],
+  "blockers": {"7": {"status": 200, "data": []}},
+  "pulls_status": 429,
+  "holds": [
+    {
+      "text": "Open issue #7: Unfinished work carries the line's label v0.12.0.",
+      "source": "https://github.com/example/project/issues/7",
+      "observed": "state=open; label=v0.12.0", "context": ""
+    }
+  ],
+  "incompletes": [
+    {
+      "read": "Open pull requests", "reason": "rate-limited",
+      "source": "https://github.com/example/project/pulls"
+    }
+  ],
+  "verdict": "incomplete"
+}

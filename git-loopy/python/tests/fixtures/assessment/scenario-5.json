@@ -1,0 +1,19 @@
+{
+  "description": "A closed issue has a Release-target label VERSION never absorbed.",
+  "issues": [
+    {
+      "number": 7, "state": "closed", "title": "Unabsorbed work",
+      "url": "https://api.github.com/repos/example/project/issues/7",
+      "labels": [{"name": "v0.13.0"}], "milestone": null
+    }
+  ],
+  "holds": [
+    {
+      "text": "Closed issue #7: Unabsorbed work carries unabsorbed label v0.13.0; VERSION is 0.12.0-alpha.2 (target 0.12.0).",
+      "source": "https://github.com/example/project/issues/7",
+      "observed": "state=closed; label=v0.13.0; VERSION=0.12.0-alpha.2", "context": ""
+    }
+  ],
+  "incompletes": [],
+  "verdict": "incomplete"
+}
