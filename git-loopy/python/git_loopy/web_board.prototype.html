@@ -1,0 +1,1539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE — Web Board & Card Drawer (Issue #663)</title>
+<style>
+  :root {
+    --ink: #1f2328;
+    --muted: #656d76;
+    --line: #d1d9e0;
+    --bg: #f6f8fa;
+    --card-bg: #ffffff;
+    --header-bg: #24292f;
+    --accent: #0969da;
+    --accent-hover: #085cc0;
+    --col-bg: #eaeff4;
+    --col-header: #57606a;
+    --tag-bg: #ddf4ff;
+    --tag-fg: #0969da;
+    --warn-bg: #fff8c5;
+    --warn-fg: #9a6700;
+    --danger-bg: #ffebe9;
+    --danger-fg: #cf222e;
+    --success-bg: #dafbe1;
+    --success-fg: #1a7f37;
+    --purple-bg: #fbefff;
+    --purple-fg: #8250df;
+    --running-pulse: #2da44e;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* Top Bar */
+  header.proto-banner {
+    background: var(--header-bg);
+    color: #fff;
+    padding: 10px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #30363d;
+    flex-shrink: 0;
+  }
+  .banner-left { display: flex; align-items: center; gap: 12px; }
+  .proto-tag {
+    background: #e3b341;
+    color: #1f2328;
+    font-weight: 700;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+  }
+  .proto-title { font-weight: 600; font-size: 14px; }
+  .proto-meta { font-size: 12px; color: #8b949e; }
+  .banner-actions { display: flex; gap: 8px; align-items: center; }
+
+  /* App Sub-header */
+  .app-bar {
+    background: #ffffff;
+    border-bottom: 1px solid var(--line);
+    padding: 8px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .app-title-area { display: flex; align-items: center; gap: 10px; }
+  .app-logo { font-weight: 700; font-size: 15px; letter-spacing: -0.02em; color: var(--ink); }
+  .run-badge {
+    background: var(--tag-bg);
+    color: var(--tag-fg);
+    border: 1px solid rgba(9, 105, 218, 0.2);
+    border-radius: 12px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+  }
+  .app-filters { display: flex; gap: 10px; align-items: center; }
+  .filter-input {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    width: 220px;
+  }
+
+  /* Board Area */
+  .board-container {
+    flex: 1;
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 16px 20px;
+    gap: 14px;
+    background: var(--bg);
+  }
+
+  /* Columns */
+  .column {
+    flex: 0 0 280px;
+    background: var(--col-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+  }
+  .col-header {
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+    background: rgba(255,255,255,0.5);
+    border-radius: 8px 8px 0 0;
+  }
+  .col-title-wrap { display: flex; align-items: center; gap: 6px; }
+  .col-name { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--col-header); }
+  .col-count {
+    background: rgba(0,0,0,0.08);
+    color: var(--ink);
+    border-radius: 10px;
+    padding: 0 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .col-rule-tip {
+    font-size: 11px;
+    color: var(--muted);
+    cursor: help;
+  }
+  .col-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    cursor: pointer;
+    transition: transform 0.1s ease, border-color 0.1s ease, box-shadow 0.1s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 3px 8px rgba(0,0,0,0.08);
+    transform: translateY(-1px);
+  }
+  .card.selected {
+    border-color: var(--accent);
+    outline: 2px solid var(--accent);
+  }
+  .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+  .card-id {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .card-parent-badge {
+    font-size: 10px;
+    background: #f0f3f6;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-weight: 500;
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--ink);
+    margin: 0;
+  }
+  .card-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 2px;
+  }
+  .chip {
+    font-size: 10px;
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .chip-profile { background: var(--purple-bg); color: var(--purple-fg); }
+  .chip-route { background: var(--tag-bg); color: var(--tag-fg); font-family: ui-monospace, monospace; }
+  .chip-warn { background: var(--warn-bg); color: var(--warn-fg); }
+  .chip-danger { background: var(--danger-bg); color: var(--danger-fg); }
+  .chip-success { background: var(--success-bg); color: var(--success-fg); }
+  .chip-default { background: #eaeef2; color: #424a53; }
+
+  .card-bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px solid #f0f3f6;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .card-status-desc {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+  }
+  .pulse-dot {
+    width: 7px;
+    height: 7px;
+    background: var(--running-pulse);
+    border-radius: 50%;
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse {
+    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(46, 164, 79, 0.7); }
+    70% { transform: scale(1); box-shadow: 0 0 0 5px rgba(46, 164, 79, 0); }
+    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(46, 164, 79, 0); }
+  }
+
+  /* Drawer */
+  .drawer-overlay {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    background: rgba(0,0,0,0.3);
+    z-index: 100;
+    display: none;
+    justify-content: flex-end;
+  }
+  .drawer-overlay.open { display: flex; }
+  .drawer {
+    width: 680px;
+    max-width: 90vw;
+    height: 100%;
+    background: #ffffff;
+    box-shadow: -4px 0 24px rgba(0,0,0,0.15);
+    display: flex;
+    flex-direction: column;
+    animation: slideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes slideIn {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+
+  .drawer-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: #fafbfc;
+  }
+  .drawer-top-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .drawer-id-badge {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .drawer-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    color: var(--muted);
+    cursor: pointer;
+    line-height: 1;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  .drawer-close:hover { background: #eaeef2; color: var(--ink); }
+  .drawer-title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .drawer-parent-context {
+    font-size: 12px;
+    color: var(--muted);
+    background: #f0f3f6;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 4px 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .drawer-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--line);
+    background: #fff;
+    font-size: 12px;
+  }
+  .meta-item { display: flex; flex-direction: column; gap: 2px; }
+  .meta-label { color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.03em; }
+  .meta-val { font-weight: 600; font-family: ui-monospace, monospace; }
+
+  /* Drawer Tabs */
+  .drawer-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--line);
+    background: #fafbfc;
+    padding: 0 20px;
+  }
+  .d-tab {
+    padding: 10px 14px;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .d-tab:hover { color: var(--ink); }
+  .d-tab.active {
+    color: var(--ink);
+    font-weight: 600;
+    border-bottom-color: var(--accent);
+  }
+  .d-tab-count {
+    background: rgba(0,0,0,0.06);
+    border-radius: 10px;
+    padding: 0 5px;
+    font-size: 11px;
+  }
+
+  .drawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+  }
+
+  /* Drawer Tab Contents */
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  /* Details Pane */
+  .section-block {
+    margin-bottom: 20px;
+  }
+  .section-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin: 0 0 8px 0;
+  }
+  .dep-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .dep-row {
+    background: #f8fafc;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .dep-target { display: flex; align-items: center; gap: 6px; }
+
+  .review-verdict-box {
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    border: 1px solid;
+  }
+  .review-verdict-box.handoff {
+    background: var(--danger-bg);
+    border-color: #ffcecb;
+    color: #82071e;
+  }
+  .review-verdict-box.approved {
+    background: var(--success-bg);
+    border-color: #aceebb;
+    color: #116329;
+  }
+
+  /* Activity Timeline */
+  .activity-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+  }
+  .activity-feed::before {
+    content: "";
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    left: 11px;
+    width: 2px;
+    background: var(--line);
+  }
+  .activity-item {
+    display: flex;
+    gap: 12px;
+    position: relative;
+    font-size: 12px;
+  }
+  .act-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+    z-index: 1;
+  }
+  .act-content { flex: 1; background: #f8fafc; border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; }
+  .act-header { display: flex; justify-content: space-between; margin-bottom: 4px; color: var(--muted); font-size: 11px; }
+
+  /* Log Viewer */
+  .log-box {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border-radius: 6px;
+    padding: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 380px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+  }
+  .log-line-meta { color: #858585; }
+  .log-line-tool { color: #4ec9b0; }
+  .log-line-info { color: #569cd6; }
+  .log-line-warn { color: #ce9178; }
+
+  /* Interactive Walkthrough / Bottom Control Bar */
+  .proto-bottom-bar {
+    position: fixed;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #24292f;
+    color: #fff;
+    border-radius: 12px;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    z-index: 50;
+    font-size: 12px;
+  }
+  .pbb-group { display: flex; align-items: center; gap: 6px; }
+  .pbb-label { color: #8b949e; font-weight: 600; text-transform: uppercase; font-size: 10px; }
+  .pbb-btn {
+    background: #32383f;
+    border: 1px solid #444c56;
+    color: #fff;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .pbb-btn:hover { background: #444c56; }
+  .pbb-btn.active { background: var(--accent); border-color: var(--accent); }
+
+  /* Walkthrough Modal */
+  .wt-drawer {
+    position: fixed;
+    bottom: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    padding: 12px 18px;
+    width: 620px;
+    max-width: 94vw;
+    z-index: 49;
+    display: none;
+  }
+  .wt-drawer.open { display: block; }
+  .wt-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .wt-title { font-weight: 700; font-size: 13px; color: var(--accent); }
+  .wt-desc { font-size: 12px; color: var(--ink); margin-bottom: 8px; line-height: 1.4; }
+  .wt-actions { display: flex; gap: 6px; }
+</style>
+</head>
+<body>
+
+<!-- Top Prototype Banner -->
+<header class="proto-banner">
+  <div class="banner-left">
+    <span class="proto-tag">THROWAWAY PROTOTYPE</span>
+    <span class="proto-title">Web Board & Card Drawer · Issue #663</span>
+    <span class="proto-meta">Derived states over ADR-0080 · Parent context for planning docs · Hermes-referenced</span>
+  </div>
+  <div class="banner-actions">
+    <button class="pbb-btn" onclick="toggleWalkthrough()">Guided Walkthroughs</button>
+  </div>
+</header>
+
+<!-- App Bar -->
+<div class="app-bar">
+  <div class="app-title-area">
+    <span class="app-logo">git-loopy board</span>
+    <span class="run-badge" id="run-badge">Run: run-20261012-0814-par (Parallel)</span>
+  </div>
+  <div class="app-filters">
+    <input type="text" class="filter-input" placeholder="Filter cards (title, #id, profile)..." oninput="filterCards(this.value)">
+  </div>
+</div>
+
+<!-- Board Area (7 Columns in Precedence Order per ADR-0080) -->
+<main class="board-container" id="board-container">
+  <!-- 1. Done -->
+  <div class="column" data-col="done">
+    <div class="col-header">
+      <div class="col-title-wrap">
+        <span class="col-name">Done</span>
+        <span class="col-count" id="count-done">0</span>
+      </div>
+      <span class="col-rule-tip" title="Precedence 1: Issue closed in tracker (completed or wontfix)">ℹ️</span>
+    </div>
+    <div class="col-body" id="col-done"></div>
+  </div>
+
+  <!-- 2. Review -->
+  <div class="column" data-col="review">
+    <div class="col-header">
+      <div class="col-title-wrap">
+        <span class="col-name">Review</span>
+        <span class="col-count" id="count-review">0</span>
+      </div>
+      <span class="col-rule-tip" title="Precedence 2: Live Run Queue shows reviewing">ℹ️</span>
+    </div>
+    <div class="col-body" id="col-review"></div>
+  </div>
+
+  <!-- 3. Running -->
+  <div class="column" data-col="running">
+    <div class="col-header">
+      <div class="col-title-wrap">
+        <span class="col-name">Running</span>
+        <span class="col-count" id="count-running">0</span>
+      </div>
+      <span class="col-rule-tip" title="Precedence 3: Live lease held, or Status active/parked/admitted/integrating/recovering">ℹ️</span>
+    </div>
+    <div class="col-body" id="col-running"></div>
+  </div>
+
+  <!-- 4. Blocked (Needs a human) -->
+  <div class="column" data-col="blocked">
+    <div class="col-header">
+      <div class="col-title-wrap">
+        <span class="col-name">Blocked</span>
+        <span class="col-count" id="count-blocked">0</span>
+      </div>
+      <span class="col-rule-tip" title="Precedence 4: Needs a human! (needs-info, ready-for-human, pool exclusion, unresolved readiness, or review-handoff)">ℹ️</span>
+    </div>
+    <div class="col-body" id="col-blocked"></div>
+  </div>
+
+  <!-- 5. Todo (Waits that clear themselves) -->
+  <div class="column" data-col="todo">
+    <div class="col-header">
+      <div class="col-title-wrap">
+        <span class="col-name">Todo</span>
+        <span class="col-count" id="count-todo">0</span>
+      </div>
+      <span class="col-rule-tip" title="Precedence 5: ready-for-agent, waiting on open dependency (Blocked) or Awaiting merge">ℹ️</span>
+    </div>
+    <div class="col-body" id="col-todo"></div>
+  </div>
+
+  <!-- 6. Ready -->
+  <div class="column" data-col="ready">
+    <div class="col-header">
+      <div class="col-title-wrap">
+        <span class="col-name">Ready</span>
+        <span class="col-count" id="count-ready">0</span>
+      </div>
+      <span class="col-rule-tip" title="Precedence 6: ready-for-agent, Pickup-admissible, and no Lease held elsewhere">ℹ️</span>
+    </div>
+    <div class="col-body" id="col-ready"></div>
+  </div>
+
+  <!-- 7. Triage -->
+  <div class="column" data-col="triage">
+    <div class="col-header">
+      <div class="col-title-wrap">
+        <span class="col-name">Triage</span>
+        <span class="col-count" id="count-triage">0</span>
+      </div>
+      <span class="col-rule-tip" title="Precedence 7: Any other open issue (needs-triage, or unassigned role)">ℹ️</span>
+    </div>
+    <div class="col-body" id="col-triage"></div>
+  </div>
+</main>
+
+<!-- Card Detail Drawer -->
+<div class="drawer-overlay" id="drawer-overlay" onclick="onDrawerOverlayClick(event)">
+  <div class="drawer" id="drawer">
+    <div class="drawer-header">
+      <div class="drawer-top-row">
+        <div class="drawer-id-badge">
+          <span id="d-issue-id">#000</span>
+          <span class="chip" id="d-col-badge">Column</span>
+        </div>
+        <button class="drawer-close" onclick="closeDrawer()" title="Close drawer (Esc)">×</button>
+      </div>
+      <h2 class="drawer-title" id="d-issue-title">Issue Title</h2>
+      <div class="drawer-parent-context" id="d-parent-context" style="display:none;">
+        <span>Parent Planning Doc:</span>
+        <b id="d-parent-name">#648 Wayfinder: git-loopy 1.0.0 on the Python path</b>
+      </div>
+    </div>
+
+    <!-- Key Metadata (Profile, Routed pair, Lease, Readiness) -->
+    <div class="drawer-meta-grid">
+      <div class="meta-item">
+        <span class="meta-label">Agent Profile</span>
+        <span class="meta-val" id="d-agent-profile">implementation</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Routed Pair</span>
+        <span class="meta-val" id="d-routed-pair">gpt-5.4-mini @ low</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Readiness</span>
+        <span class="meta-val" id="d-readiness">admissible</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Lease Status</span>
+        <span class="meta-val" id="d-lease">None</span>
+      </div>
+    </div>
+
+    <!-- Drawer Navigation Tabs -->
+    <div class="drawer-tabs">
+      <button class="d-tab active" data-tab="details" onclick="switchDrawerTab('details')">Overview & Dependencies</button>
+      <button class="d-tab" data-tab="attempts" onclick="switchDrawerTab('attempts')">Attempts & Review <span class="d-tab-count" id="d-attempt-count">1</span></button>
+      <button class="d-tab" data-tab="activity" onclick="switchDrawerTab('activity')">Activity <span class="d-tab-count" id="d-act-count">3</span></button>
+      <button class="d-tab" data-tab="log" onclick="switchDrawerTab('log')">Live Log</button>
+    </div>
+
+    <!-- Drawer Body -->
+    <div class="drawer-body">
+      <!-- 1. Overview & Dependencies -->
+      <div class="tab-pane active" id="pane-details">
+        <div id="d-review-handoff-alert" class="review-verdict-box handoff" style="display:none;">
+          <b>⚠️ Last Run: review handoff</b> — 3 consecutive Reviewer verdicts requested changes. Remains Blocked (needs human attention) for this Run; reverts to Ready on next Run.
+        </div>
+
+        <div class="section-block">
+          <h4 class="section-title">What to build</h4>
+          <p id="d-what" style="margin: 0 0 10px; font-size: 13px; line-height: 1.5;"></p>
+          <h4 class="section-title">Acceptance criteria</h4>
+          <ul id="d-criteria" style="margin: 0; padding-left: 18px; font-size: 12px;"></ul>
+        </div>
+
+        <div class="section-block">
+          <h4 class="section-title">Dependencies (Hermes: Blocked by / Blocks)</h4>
+          <div style="margin-bottom: 8px;">
+            <span style="font-size: 11px; font-weight: 600; color: var(--muted);">BLOCKED BY (prerequisites)</span>
+            <div class="dep-list" id="d-blocked-by">
+              <span style="font-size: 12px; color: var(--muted); font-style: italic;">None</span>
+            </div>
+          </div>
+          <div>
+            <span style="font-size: 11px; font-weight: 600; color: var(--muted);">BLOCKS (dependents)</span>
+            <div class="dep-list" id="d-blocks">
+              <span style="font-size: 12px; color: var(--muted); font-style: italic;">None</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-block">
+          <h4 class="section-title">Triage & Routing Facts</h4>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;" id="d-labels"></div>
+        </div>
+      </div>
+
+      <!-- 2. Attempts & Review Stage -->
+      <div class="tab-pane" id="pane-attempts">
+        <div class="section-block">
+          <h4 class="section-title">Attempt Lifecycle (Strikes Accounting)</h4>
+          <div id="d-strikes-info" style="font-size: 13px; margin-bottom: 12px;"></div>
+        </div>
+        <div class="section-block">
+          <h4 class="section-title">Review Verdicts (ADR-0072 Independent Reviewer)</h4>
+          <div id="d-verdicts-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
+      </div>
+
+      <!-- 3. Activity Feed -->
+      <div class="tab-pane" id="pane-activity">
+        <div class="activity-feed" id="d-activity-feed"></div>
+      </div>
+
+      <!-- 4. Live Log -->
+      <div class="tab-pane" id="pane-log">
+        <div style="margin-bottom: 8px; display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size: 11px; color: var(--muted);">Per-issue streamed tail · Output scrubber active</span>
+          <span class="chip chip-route" id="d-log-model-chip">gpt-5.4-mini</span>
+        </div>
+        <div class="log-box" id="d-log-box"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Walkthrough Modal / Drawer -->
+<div class="wt-drawer" id="wt-drawer">
+  <div class="wt-header">
+    <span class="wt-title" id="wt-step-title">Scenario 1: ADR-0080 Column Precedence & Derived States</span>
+    <button class="drawer-close" onclick="toggleWalkthrough()">×</button>
+  </div>
+  <div class="wt-desc" id="wt-step-desc">
+    Notice how issues #753, #748, #734, #732, and #731 sort into columns purely derived from tracker facts and live Run states. There are no stored "state:*" labels.
+  </div>
+  <div class="wt-actions">
+    <button class="pbb-btn active" id="wt-btn-1" onclick="loadScenario(1)">1. Baseline (All Columns)</button>
+    <button class="pbb-btn" id="wt-btn-2" onclick="loadScenario(2)">2. Todo: Awaiting Merge vs Blocked</button>
+    <button class="pbb-btn" id="wt-btn-3" onclick="loadScenario(3)">3. Blocked: Review-handoff & Pool Exclusion</button>
+    <button class="pbb-btn" id="wt-btn-4" onclick="loadScenario(4)">4. Drawer: Agent Profile & Routed Pair</button>
+  </div>
+</div>
+
+<!-- Bottom Floating Switcher -->
+<div class="proto-bottom-bar">
+  <div class="pbb-group">
+    <span class="pbb-label">Active Scenario:</span>
+    <button class="pbb-btn active" id="sb-1" onclick="loadScenario(1)">1. Realistic Live Set</button>
+    <button class="pbb-btn" id="sb-2" onclick="loadScenario(2)">2. Awaiting Merge Edge</button>
+    <button class="pbb-btn" id="sb-3" onclick="loadScenario(3)">3. Review Handoff Edge</button>
+    <button class="pbb-btn" id="sb-4" onclick="loadScenario(4)">4. Pool Exclusion Edge</button>
+  </div>
+  <div class="pbb-group">
+    <button class="pbb-btn" onclick="toggleWalkthrough()">📖 Guided Scenarios</button>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   PURE LOGIC MODULE: ADR-0080 DERIVED COLUMN RULES & REPOSITORY VOCABULARY
+   ========================================================================= */
+
+/**
+ * ADR-0080: Columns evaluated top to bottom; first match wins:
+ * 1. Done: Issue is closed, whatever the reason (completed or wontfix).
+ * 2. Review: Live Run Queue shows 'reviewing'.
+ * 3. Running: Live Lease held, or Queue Status of 'active', 'parked', 'admitted', 'integrating', 'recovering'.
+ * 4. Blocked (needs a human): needs-info, ready-for-human, pool exclusion, unresolved readiness, or review-handoff in live Run.
+ * 5. Todo (waits that clear themselves): ready-for-agent, and Readiness proves a wait: Blocked (open dep) or Awaiting merge.
+ * 6. Ready: ready-for-agent, Pickup-admissible, and no Lease held elsewhere.
+ * 7. Triage: Any other open issue: needs-triage, or no triage role yet.
+ */
+function deriveColumn(issue, liveRunState) {
+  // Planning docs (Spec:, PRD:, wayfinder:map) are NEVER cards on the board
+  if (isPlanningDocument(issue)) {
+    return null;
+  }
+
+  // 1. Done
+  if (issue.state === 'closed') {
+    return 'done';
+  }
+
+  const live = liveRunState && liveRunState.issues[issue.number];
+
+  // 2. Review (live Run Queue shows reviewing)
+  if (live && live.queueStatus === 'reviewing') {
+    return 'review';
+  }
+
+  // 3. Blocked (needs a human: review-handoff in live Run beats running/parked)
+  // ADR-0080 precedence: Done -> Review -> Running -> Blocked -> Todo -> Ready -> Triage.
+  // Note: an issue with review-handoff in the live Run has no active lease and is parked/stopped for the Run.
+  // If review-handoff is latched, it must match Blocked (precedence 4).
+  if (live && live.reviewHandoff) {
+    return 'blocked';
+  }
+
+  // 4. Running: live lease held, or Queue Status active/parked/admitted/integrating/recovering
+  if (live && (live.hasLease || ['active', 'parked', 'admitted', 'integrating', 'recovering'].includes(live.queueStatus))) {
+    return 'running';
+  }
+
+  // 5. Blocked (Needs a human: needs-info, ready-for-human, pool exclusion, unresolved readiness)
+  if (
+    issue.labels.includes('needs-info') ||
+    issue.labels.includes('ready-for-human') ||
+    issue.poolExclusion ||
+    issue.unresolvedReadiness
+  ) {
+    return 'blocked';
+  }
+
+  // 5. Todo (Waits that clear themselves: open dep or awaiting merge)
+  if (issue.labels.includes('ready-for-agent')) {
+    if (issue.readiness === 'blocked' || issue.awaitingMerge) {
+      return 'todo';
+    }
+  }
+
+  // 6. Ready
+  if (issue.labels.includes('ready-for-agent') && issue.readiness === 'admissible' && !(live && live.hasLeaseElsewhere)) {
+    return 'ready';
+  }
+
+  // 7. Triage
+  return 'triage';
+}
+
+function isPlanningDocument(issue) {
+  const t = issue.title.toLowerCase();
+  return t.startsWith('spec:') || t.startsWith('prd:') || issue.labels.includes('wayfinder:map');
+}
+
+/**
+ * ADR-0078: Agent profiles derive strictly from task-type label.
+ */
+function getAgentProfile(issue) {
+  for (const l of issue.labels) {
+    if (l.startsWith('task-type:')) {
+      const type = l.replace('task-type:', '');
+      return type; // implementation, bugfix, test, docs, chore, planning, review
+    }
+  }
+  return 'implementation'; // default fallback
+}
+
+/* =========================================================================
+   REALISTIC DATA FIXTURES DRAWN FROM GIT-LOOPY REPOSITORY
+   ========================================================================= */
+
+const PARENT_MAP = {
+  number: 648,
+  title: "Wayfinder: git-loopy 1.0.0 on the Python path",
+  labels: ["ready-for-human", "wayfinder:map", "task-type:planning"]
+};
+
+const BASE_ISSUES = [
+  // 1. Closed issue -> Done
+  {
+    number: 751,
+    title: "Upgrade github-copilot-sdk to 1.0.17rc4 (corporate feed)",
+    state: "closed",
+    labels: ["task-type:chore"],
+    parent: PARENT_MAP,
+    readiness: "admissible",
+    whatToBuild: "Bump pinned Copilot SDK to 1.0.17rc4 from corporate package proxy.",
+    acceptanceCriteria: [
+      "uv lock reflects 1.0.17rc4 from internal feed.",
+      "Python tests pass with the new SDK version."
+    ],
+    routedPair: "gpt-5.4-mini @ low",
+    blockedBy: [],
+    blocks: [],
+    attempts: [{ ordinal: 1, ending: "closed", cost: "0.14 AI Credits", duration: "1m 40s" }],
+    activity: [
+      { time: "2026-10-12 10:04", text: "Issue closed by PR #752 merge on main." }
+    ],
+    log: "[10:02:11] Starting chore execution on gpt-5.4-mini @ low\n[10:03:15] Executed: uv lock\n[10:03:50] Validated python test suite\n[10:04:10] Published and closed #751."
+  },
+  // 2. Closed issue -> Done
+  {
+    number: 730,
+    title: "An issue's Ending reaches the wire and the Queue explains a Status",
+    state: "closed",
+    labels: ["ready-for-agent", "task-type:implementation"],
+    parent: PARENT_MAP,
+    readiness: "admissible",
+    whatToBuild: "Emit session outcomes as Ending on wrapper.iteration.end and show inline in Queue.",
+    acceptanceCriteria: [
+      "Ending field added to wire event.",
+      "TUI Queue renders ending inline without defaulting."
+    ],
+    routedPair: "gpt-6.1-sol @ med",
+    blockedBy: [],
+    blocks: [731, 732],
+    attempts: [{ ordinal: 1, ending: "closed", cost: "1.20 AI Credits", duration: "4m 12s" }],
+    activity: [
+      { time: "2026-10-12 10:01", text: "Closed by PR #744 merge." }
+    ],
+    log: "[09:58:10] Pickup bound #730\n[10:00:20] Implemented ending propagation in python/loop.py\n[10:01:25] Tests passing\n[10:01:46] Closed."
+  },
+
+  // 3. Review column (Live queue status 'reviewing')
+  {
+    number: 734,
+    title: "The Dashboard-fault terminal test lets its killed client exit",
+    state: "open",
+    labels: ["bug", "ready-for-agent", "parallel-safe", "priority", "task-type:test"],
+    parent: PARENT_MAP,
+    readiness: "admissible",
+    whatToBuild: "Ensure client process clean termination in terminal crash test suite.",
+    acceptanceCriteria: [
+      "No dangling child process when test kills TUI client.",
+      "Terminal state reliably restored."
+    ],
+    routedPair: "gpt-5.4 @ med",
+    blockedBy: [],
+    blocks: [],
+    attempts: [{ ordinal: 1, ending: "reviewing", cost: "0.85 AI Credits", duration: "3m 10s" }],
+    reviewVerdicts: [
+      { ordinal: 1, reviewer: "review (code-review)", verdict: "in_progress", spec: "pending", standards: "pending", notes: "Reviewer session running on review ref git-loopy/review/734." }
+    ],
+    activity: [
+      { time: "2026-10-12 11:10", text: "Serial feedback loops green; entered Review stage (ADR-0072)." },
+      { time: "2026-10-12 11:06", text: "Claimed by Lane 2 on gpt-5.4 @ med." }
+    ],
+    log: "[11:06:12] Lane 2 claimed #734\n[11:08:40] Edited git-loopy/tui/tests/terminal_fault.rs\n[11:09:55] Loops green: cargo test passing\n[11:10:05] Cut review ref git-loopy/review/734. Reviewer started."
+  },
+
+  // 4. Running column (Active lease)
+  {
+    number: 732,
+    title: "The shell and PowerShell Orchestrators emit the endings they observe",
+    state: "open",
+    labels: ["ready-for-agent", "task-type:implementation"],
+    parent: PARENT_MAP,
+    readiness: "admissible",
+    whatToBuild: "Add Ending emission to shell and powershell orchestrators matching python conformance.",
+    acceptanceCriteria: [
+      "Shell loop.sh passes conformance test for ending emission.",
+      "PowerShell emit-ending matches event schema."
+    ],
+    routedPair: "gpt-6.1-sol @ max",
+    blockedBy: [730],
+    blocks: [],
+    attempts: [{ ordinal: 1, ending: "in_progress", cost: "0.45 AI Credits", duration: "1m 55s" }],
+    activity: [
+      { time: "2026-10-12 11:12", text: "Claimed by Lane 1. Active worktree setup in .git/git-loopy/run-20261012-0814-par/issue-732." }
+    ],
+    log: "[11:12:05] Lane 1 claimed #732\n[11:12:30] Reading conformance/status-endings.json\n[11:13:10] Inspecting git-loopy/shell/lib/loop.sh..."
+  },
+
+  // 5. Blocked column (Needs a human: review-handoff or ready-for-human)
+  {
+    number: 748,
+    title: "Decide how Agent profiles are expressed and proved in the Skills repository",
+    state: "open",
+    labels: ["ready-for-human", "wayfinder:grilling", "task-type:planning"],
+    parent: PARENT_MAP,
+    readiness: "admissible",
+    whatToBuild: "Synthesize and prove the cross-repository agent profile contract in git-loopy-skills.",
+    acceptanceCriteria: [
+      "ADR agreed with human loop engineer.",
+      "Upstream skill repository pin proof procedure documented."
+    ],
+    routedPair: "gpt-6-astra @ high",
+    blockedBy: [],
+    blocks: [663],
+    attempts: [],
+    activity: [
+      { time: "2026-10-11 19:46", text: "Labelled ready-for-human by loop engineer." }
+    ],
+    log: "[Idle] Waiting for operator /grill-me session."
+  },
+
+  // 6. Blocked column (Needs a human: review-handoff edge case)
+  {
+    number: 731,
+    title: "The drill-in accounts for every attempt, and a Skipped issue is named in its Queue row",
+    state: "open",
+    labels: ["ready-for-agent", "task-type:implementation"],
+    parent: PARENT_MAP,
+    readiness: "admissible",
+    whatToBuild: "Queue row drill-in showing each attempt's ending, tokens, and cost breakdown.",
+    acceptanceCriteria: [
+      "Attempt count displayed accurately.",
+      "Skipped status rendered inline with ending explanation."
+    ],
+    routedPair: "gpt-6.1-sol @ med",
+    blockedBy: [730],
+    blocks: [],
+    reviewHandoff: true, // Marked review handoff!
+    attempts: [
+      { ordinal: 1, ending: "changes_requested", cost: "0.90 AI Credits", duration: "3m 12s" },
+      { ordinal: 2, ending: "changes_requested", cost: "0.85 AI Credits", duration: "2m 50s" },
+      { ordinal: 3, ending: "changes_requested", cost: "1.10 AI Credits", duration: "3m 35s" }
+    ],
+    reviewVerdicts: [
+      { ordinal: 3, reviewer: "review (code-review)", verdict: "changes_requested", spec: "fail", standards: "pass", notes: "Third verdict requested changes: drill-in view omits skipped status indicator when strike count reaches N." }
+    ],
+    activity: [
+      { time: "2026-10-12 09:30", text: "Review handoff reached (3rd changes_requested). Card placed in Blocked for current Run." }
+    ],
+    log: "[09:28:10] Reviewer: Spec fail — skipped indicator missing.\n[09:30:00] Review handoff latched. Review ref preserved as breadcrumb."
+  },
+
+  // 7. Todo column (Waits on open dependency: Blocked)
+  {
+    number: 663,
+    title: "Prototype the web board and card drawer",
+    state: "open",
+    labels: ["ready-for-agent", "task-type:planning"],
+    parent: PARENT_MAP,
+    readiness: "blocked", // Blocked on 748 / 659
+    whatToBuild: "Build throwaway web board and card drawer over ADR-0080 derived states.",
+    acceptanceCriteria: [
+      "Columns match ADR-0080 order.",
+      "Drawer displays agent profile, routed pair, dependencies, and live log."
+    ],
+    routedPair: "gpt-5.4 @ med",
+    blockedBy: [748, 659],
+    blocks: [],
+    attempts: [],
+    activity: [
+      { time: "2026-10-12 08:15", text: "Readiness check: blocked by open prerequisite #748." }
+    ],
+    log: "[Readiness] Open native dependency #748 has not closed."
+  },
+
+  // 8. Todo column (Waits on open pull request: Awaiting merge)
+  {
+    number: 753,
+    title: "Pickup never writes an inferred major Release-target label",
+    state: "open",
+    labels: ["ready-for-agent", "task-type:implementation"],
+    parent: PARENT_MAP,
+    readiness: "admissible",
+    awaitingMerge: { pr: "#754", title: "fix(pickup): restrict release-target inference to minor and patch" },
+    whatToBuild: "Guard pickup from inferring major bump class without operator confirmation.",
+    acceptanceCriteria: [
+      "Major version bump requires operator assertion.",
+      "Pickup skip reports awaiting merge if PR open."
+    ],
+    routedPair: "gpt-6.1-sol @ med",
+    blockedBy: [],
+    blocks: [],
+    attempts: [],
+    activity: [
+      { time: "2026-10-12 04:51", text: "PR #754 opened; candidate marked Awaiting merge." }
+    ],
+    log: "[Readiness] Awaiting merge of closing PR #754."
+  },
+
+  // 9. Ready column (Pickup-admissible, no lease)
+  {
+    number: 719,
+    title: "The Serial drain Header derives its cohort, oldest Lane age, and elapsed wait",
+    state: "open",
+    labels: ["ready-for-agent", "task-type:implementation"],
+    parent: PARENT_MAP,
+    readiness: "admissible",
+    whatToBuild: "Refine serial drain header output to report cohort age and waiting lane duration.",
+    acceptanceCriteria: [
+      "Drain header calculates cohort age accurately.",
+      "Unit tests cover serial drain time calculation."
+    ],
+    routedPair: "gpt-5.4-mini @ low",
+    blockedBy: [],
+    blocks: [],
+    attempts: [],
+    activity: [
+      { time: "2026-10-11 14:00", text: "Dependencies satisfied; promoted to Ready." }
+    ],
+    log: "[Idle] Ready for Pickup in next Run Iteration."
+  },
+
+  // 10. Triage column (needs-triage, unassigned role)
+  {
+    number: 738,
+    title: "Update the runner prompt before moving the skill pin past git-loopy-skills' upstream sync",
+    state: "open",
+    labels: ["needs-triage", "upstream-sync"],
+    parent: PARENT_MAP,
+    readiness: "unassigned",
+    whatToBuild: "Audit runner prompt for deprecated skill invocations before bumping pin.",
+    acceptanceCriteria: [
+      "Prompt audit complete.",
+      "Doctor command validates clean skill policy."
+    ],
+    routedPair: "gpt-5.4-mini (unclassified default)",
+    blockedBy: [],
+    blocks: [],
+    attempts: [],
+    activity: [
+      { time: "2026-10-11 20:37", text: "Opened by operator; awaiting triage." }
+    ],
+    log: "[Triage] No triage role assigned yet."
+  },
+
+  // 11. Blocked column (Pool Exclusion edge case: missing What to build)
+  {
+    number: 676,
+    title: "An account-level failure is blamed on individual issues instead of stopping the Run",
+    state: "open",
+    labels: ["ready-for-agent", "task-type:bugfix"],
+    parent: PARENT_MAP,
+    readiness: "admissible",
+    poolExclusion: "AFK-ready discriminator failed: body missing '## Acceptance criteria'. Human fix required.",
+    whatToBuild: "Differentiate harness 401/403 credential failure from individual issue failure.",
+    acceptanceCriteria: [], // Missing!
+    routedPair: "gpt-5.4 @ med",
+    blockedBy: [],
+    blocks: [],
+    attempts: [],
+    activity: [
+      { time: "2026-10-10 12:00", text: "Pool preflight excluded issue: missing acceptance criteria." }
+    ],
+    log: "[Preflight] Pool exclusion: ## Acceptance criteria missing in issue body."
+  }
+];
+
+/* =========================================================================
+   APPLICATION STATE & RENDERING
+   ========================================================================= */
+
+let currentIssues = JSON.parse(JSON.stringify(BASE_ISSUES));
+let liveRunState = {
+  id: "run-20261012-0814-par",
+  mode: "parallel",
+  issues: {
+    734: { queueStatus: "reviewing", hasLease: true },
+    732: { queueStatus: "active", hasLease: true },
+    731: { queueStatus: "parked", reviewHandoff: true }
+  }
+};
+let selectedIssue = null;
+let activeDrawerTab = 'details';
+
+function renderBoard() {
+  const cols = ['done', 'review', 'running', 'blocked', 'todo', 'ready', 'triage'];
+  const colCounts = { done:0, review:0, running:0, blocked:0, todo:0, ready:0, triage:0 };
+
+  cols.forEach(c => {
+    document.getElementById(`col-${c}`).innerHTML = '';
+  });
+
+  currentIssues.forEach(issue => {
+    const col = deriveColumn(issue, liveRunState);
+    if (!col) return; // Planning document filtered out!
+
+    colCounts[col]++;
+    const cardEl = createCardElement(issue, col);
+    document.getElementById(`col-${col}`).appendChild(cardEl);
+  });
+
+  cols.forEach(c => {
+    document.getElementById(`count-${c}`).innerText = colCounts[c];
+  });
+}
+
+function createCardElement(issue, colName) {
+  const card = document.createElement('div');
+  card.className = `card ${selectedIssue && selectedIssue.number === issue.number ? 'selected' : ''}`;
+  card.onclick = () => openDrawer(issue);
+
+  const profile = getAgentProfile(issue);
+
+  let statusBadge = '';
+  if (colName === 'running') {
+    statusBadge = `<span class="card-status-desc"><span class="pulse-dot"></span> Active in Lane</span>`;
+  } else if (colName === 'review') {
+    statusBadge = `<span class="chip chip-warn">Independent Reviewer</span>`;
+  } else if (issue.awaitingMerge) {
+    statusBadge = `<span class="chip chip-success">Awaiting merge (${issue.awaitingMerge.pr})</span>`;
+  } else if (issue.reviewHandoff) {
+    statusBadge = `<span class="chip chip-danger">last Run: review handoff</span>`;
+  } else if (issue.poolExclusion) {
+    statusBadge = `<span class="chip chip-danger">Pool exclusion</span>`;
+  } else if (colName === 'todo') {
+    statusBadge = `<span class="chip chip-warn">Blocked by dep</span>`;
+  } else if (colName === 'done') {
+    statusBadge = `<span class="chip chip-default">Closed</span>`;
+  } else {
+    statusBadge = `<span class="chip chip-default">${colName}</span>`;
+  }
+
+  card.innerHTML = `
+    <div class="card-top">
+      <span class="card-id">#${issue.number}</span>
+      ${issue.parent ? `<span class="card-parent-badge" title="${issue.parent.title}">parent: #${issue.parent.number}</span>` : ''}
+    </div>
+    <h3 class="card-title">${escapeHtml(issue.title)}</h3>
+    <div class="card-chips">
+      <span class="chip chip-profile">profile: ${profile}</span>
+      <span class="chip chip-route">${issue.routedPair}</span>
+    </div>
+    <div class="card-bottom">
+      ${statusBadge}
+      <span>${issue.attempts ? issue.attempts.length : 0} att</span>
+    </div>
+  `;
+  return card;
+}
+
+/* =========================================================================
+   CARD DRAWER BEHAVIOR & DETAILS
+   ========================================================================= */
+
+function openDrawer(issue) {
+  selectedIssue = issue;
+  const col = deriveColumn(issue, liveRunState);
+  const profile = getAgentProfile(issue);
+
+  document.getElementById('d-issue-id').innerText = `#${issue.number}`;
+  document.getElementById('d-issue-title').innerText = issue.title;
+
+  const colBadge = document.getElementById('d-col-badge');
+  colBadge.innerText = `Column: ${col.toUpperCase()}`;
+  colBadge.className = `chip ${col === 'blocked' ? 'chip-danger' : col === 'running' ? 'chip-success' : col === 'review' ? 'chip-warn' : 'chip-default'}`;
+
+  // Parent Planning Context
+  const parentContextEl = document.getElementById('d-parent-context');
+  if (issue.parent) {
+    parentContextEl.style.display = 'flex';
+    document.getElementById('d-parent-name').innerText = `#${issue.parent.number} ${issue.parent.title}`;
+  } else {
+    parentContextEl.style.display = 'none';
+  }
+
+  // Meta row
+  document.getElementById('d-agent-profile').innerText = profile;
+  document.getElementById('d-routed-pair').innerText = issue.routedPair;
+  document.getElementById('d-readiness').innerText = issue.readiness || 'unknown';
+
+  const live = liveRunState.issues[issue.number];
+  document.getElementById('d-lease').innerText = live && live.hasLease ? 'Active Lease (Lane)' : 'None';
+
+  // Review handoff alert
+  const handoffAlert = document.getElementById('d-review-handoff-alert');
+  if (issue.reviewHandoff) {
+    handoffAlert.style.display = 'block';
+  } else {
+    handoffAlert.style.display = 'none';
+  }
+
+  // What to build & criteria
+  document.getElementById('d-what').innerText = issue.whatToBuild || 'No description provided.';
+  const criteriaUl = document.getElementById('d-criteria');
+  criteriaUl.innerHTML = '';
+  if (issue.acceptanceCriteria && issue.acceptanceCriteria.length > 0) {
+    issue.acceptanceCriteria.forEach(c => {
+      const li = document.createElement('li');
+      li.innerText = c;
+      criteriaUl.appendChild(li);
+    });
+  } else if (issue.poolExclusion) {
+    const li = document.createElement('li');
+    li.style.color = 'var(--danger-fg)';
+    li.innerText = `EXCLUSION: ${issue.poolExclusion}`;
+    criteriaUl.appendChild(li);
+  } else {
+    criteriaUl.innerHTML = '<li style="color:var(--muted); font-style:italic;">None specified</li>';
+  }
+
+  // Dependencies (Blocked by / Blocks)
+  renderDrawerDependencies(issue);
+
+  // Labels
+  const labelsDiv = document.getElementById('d-labels');
+  labelsDiv.innerHTML = '';
+  issue.labels.forEach(l => {
+    const s = document.createElement('span');
+    s.className = 'chip chip-default';
+    s.innerText = l;
+    labelsDiv.appendChild(s);
+  });
+
+  // Attempts & Review
+  renderDrawerAttempts(issue);
+
+  // Activity Feed
+  renderDrawerActivity(issue);
+
+  // Log View
+  renderDrawerLog(issue);
+
+  document.getElementById('drawer-overlay').classList.add('open');
+  renderBoard(); // re-render to reflect selection ring
+}
+
+function closeDrawer() {
+  selectedIssue = null;
+  document.getElementById('drawer-overlay').classList.remove('open');
+  renderBoard();
+}
+
+function onDrawerOverlayClick(e) {
+  if (e.target.id === 'drawer-overlay') {
+    closeDrawer();
+  }
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeDrawer();
+});
+
+function switchDrawerTab(tabId) {
+  activeDrawerTab = tabId;
+  document.querySelectorAll('.d-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tabId);
+  });
+  document.querySelectorAll('.tab-pane').forEach(p => {
+    p.classList.toggle('active', p.id === `pane-${tabId}`);
+  });
+}
+
+function renderDrawerDependencies(issue) {
+  const bbEl = document.getElementById('d-blocked-by');
+  const bEl = document.getElementById('d-blocks');
+  bbEl.innerHTML = '';
+  bEl.innerHTML = '';
+
+  if (issue.blockedBy && issue.blockedBy.length > 0) {
+    issue.blockedBy.forEach(num => {
+      const depIssue = currentIssues.find(i => i.number === num);
+      const row = document.createElement('div');
+      row.className = 'dep-row';
+      row.innerHTML = `
+        <div class="dep-target">
+          <b>#${num}</b>
+          <span>${depIssue ? escapeHtml(depIssue.title) : 'External Dependency'}</span>
+        </div>
+        <span class="chip ${depIssue && depIssue.state === 'closed' ? 'chip-success' : 'chip-warn'}">
+          ${depIssue && depIssue.state === 'closed' ? 'Closed' : 'Open (Blocking)'}
+        </span>
+      `;
+      bbEl.appendChild(row);
+    });
+  } else {
+    bbEl.innerHTML = '<span style="font-size: 12px; color: var(--muted); font-style: italic;">None</span>';
+  }
+
+  if (issue.blocks && issue.blocks.length > 0) {
+    issue.blocks.forEach(num => {
+      const depIssue = currentIssues.find(i => i.number === num);
+      const row = document.createElement('div');
+      row.className = 'dep-row';
+      row.innerHTML = `
+        <div class="dep-target">
+          <b>#${num}</b>
+          <span>${depIssue ? escapeHtml(depIssue.title) : 'Dependent Issue'}</span>
+        </div>
+        <span class="chip chip-default">Dependent</span>
+      `;
+      bEl.appendChild(row);
+    });
+  } else {
+    bEl.innerHTML = '<span style="font-size: 12px; color: var(--muted); font-style: italic;">None</span>';
+  }
+}
+
+function renderDrawerAttempts(issue) {
+  const strikesEl = document.getElementById('d-strikes-info');
+  const verdictsEl = document.getElementById('d-verdicts-list');
+  const countBadge = document.getElementById('d-attempt-count');
+
+  const attempts = issue.attempts || [];
+  countBadge.innerText = attempts.length;
+
+  strikesEl.innerHTML = `
+    <div>Attempt count: <b>${attempts.length} / 3 strikes budget</b></div>
+    <div style="font-size:12px; color:var(--muted); margin-top:2px;">
+      Monotonic per-issue accounting (ADR-0070). Stalls escalate to Escalation rung; N-th strike reaches Skip.
+    </div>
+  `;
+
+  verdictsEl.innerHTML = '';
+  if (issue.reviewVerdicts && issue.reviewVerdicts.length > 0) {
+    issue.reviewVerdicts.forEach(v => {
+      const box = document.createElement('div');
+      box.className = `review-verdict-box ${v.verdict === 'approved' ? 'approved' : 'handoff'}`;
+      box.innerHTML = `
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+          <b>Verdict #${v.ordinal}: ${v.verdict.toUpperCase()}</b>
+          <span style="font-size:11px;">${v.reviewer}</span>
+        </div>
+        <div style="font-size:12px; margin-bottom:4px;">
+          Spec axis: <b>${v.spec}</b> · Standards axis: <b>${v.standards}</b>
+        </div>
+        <div style="font-size:12px; font-style:italic;">"${escapeHtml(v.notes)}"</div>
+      `;
+      verdictsEl.appendChild(box);
+    });
+  } else {
+    verdictsEl.innerHTML = '<span style="font-size:12px; color:var(--muted); font-style:italic;">No review verdicts recorded for this issue yet.</span>';
+  }
+}
+
+function renderDrawerActivity(issue) {
+  const feed = document.getElementById('d-activity-feed');
+  const countBadge = document.getElementById('d-act-count');
+  feed.innerHTML = '';
+
+  const activities = issue.activity || [];
+  countBadge.innerText = activities.length;
+
+  if (activities.length === 0) {
+    feed.innerHTML = '<div style="font-size:12px; color:var(--muted); font-style:italic;">No recorded events yet.</div>';
+    return;
+  }
+
+  activities.forEach(act => {
+    const item = document.createElement('div');
+    item.className = 'activity-item';
+    item.innerHTML = `
+      <div class="act-icon">⏱</div>
+      <div class="act-content">
+        <div class="act-header">
+          <span>Event</span>
+          <span>${act.time}</span>
+        </div>
+        <div>${escapeHtml(act.text)}</div>
+      </div>
+    `;
+    feed.appendChild(item);
+  });
+}
+
+function renderDrawerLog(issue) {
+  const logBox = document.getElementById('d-log-box');
+  const chip = document.getElementById('d-log-model-chip');
+  chip.innerText = issue.routedPair;
+  logBox.innerText = issue.log || '[No logs streamed for this issue yet]';
+}
+
+function filterCards(query) {
+  const q = query.toLowerCase().trim();
+  const allCards = document.querySelectorAll('.card');
+  allCards.forEach(c => {
+    const text = c.innerText.toLowerCase();
+    c.style.display = text.includes(q) ? 'flex' : 'none';
+  });
+}
+
+/* =========================================================================
+   GUIDED SCENARIO WALKTHROUGHS
+   ========================================================================= */
+
+function toggleWalkthrough() {
+  document.getElementById('wt-drawer').classList.toggle('open');
+}
+
+function loadScenario(num) {
+  document.querySelectorAll('.pbb-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`sb-${num}`).classList.add('active');
+  const wtBtn = document.getElementById(`wt-btn-${num}`);
+  if (wtBtn) wtBtn.classList.add('active');
+
+  const titleEl = document.getElementById('wt-step-title');
+  const descEl = document.getElementById('wt-step-desc');
+
+  if (num === 1) {
+    titleEl.innerText = "Scenario 1: Baseline ADR-0080 Column Precedence";
+    descEl.innerText = "Observe the full 7-column layout derived from tracker and Run state. Notice how planning docs (#648) are filtered from the cards and shown only as parent context. Running work is shown with a pulsing indicator.";
+    currentIssues = JSON.parse(JSON.stringify(BASE_ISSUES));
+  } else if (num === 2) {
+    titleEl.innerText = "Scenario 2: Todo Column (Awaiting Merge vs Blocked)";
+    descEl.innerText = "ADR-0080 places waits that clear themselves into 'Todo'. Look at #753 (Awaiting merge of PR #754) and #663 (waiting on prerequisite issue #748). Neither is in Review or Blocked!";
+    currentIssues = JSON.parse(JSON.stringify(BASE_ISSUES));
+    openDrawer(currentIssues.find(i => i.number === 753));
+  } else if (num === 3) {
+    titleEl.innerText = "Scenario 3: Blocked Column (Needs Human & Review Handoff)";
+    descEl.innerText = "The Board column 'Blocked' means waiting on a human. Notice #731 which suffered a review handoff (3 changes_requested). It remains Blocked for this Run, but the drawer highlights that it stays per-Run!";
+    currentIssues = JSON.parse(JSON.stringify(BASE_ISSUES));
+    openDrawer(currentIssues.find(i => i.number === 731));
+  } else if (num === 4) {
+    titleEl.innerText = "Scenario 4: Card Drawer Details (Agent Profile & Routed Pair)";
+    descEl.innerText = "Open any card to inspect the exact Agent profile (derived from task-type), the Routed pair (model @ effort), Blocked by / Blocks dependencies, and live log tail.";
+    currentIssues = JSON.parse(JSON.stringify(BASE_ISSUES));
+    openDrawer(currentIssues.find(i => i.number === 734));
+  }
+
+  renderBoard();
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/[&<>'"]/g, tag => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;'
+  }[tag] || tag));
+}
+
+// Initial render
+renderBoard();
+</script>
+</body>
+</html>
