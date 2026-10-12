@@ -1,0 +1,30 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_the_model_roster_fixture_names_the_harness_it_describes _________
+
+    def test_the_model_roster_fixture_names_the_harness_it_describes() -> None:
+        """An unstamped roster cannot tell a correction from a defect (#401).
+
+        ``models.list`` does not report the vendor's reasoning-effort array — the
+        Copilot CLI overwrites it from a table hardcoded in its own bundle — so the
+        roster is a **function of CLI version** (ADR-0019). The fixture named no
+        version at all, which is how it was twice "fixed" toward a binary the kit
+        does not run while every assertion stayed green.
+
+        The SDK pin and roster stamp must move together. Checking the installed
+        SDK's published pin is offline: no account or live catalogue is needed.
+        """
+        from copilot._cli_version import CLI_VERSION
+
+>       assert _MODEL_ROSTER["cli_version"] == CLI_VERSION
+E       AssertionError: assert '1.0.92-4' == '1.0.92-3'
+E
+E         - 1.0.92-3
+E         ?        ^
+E         + 1.0.92-4
+E         ?        ^
+
+git-loopy/python/tests/test_conformance.py:3559: AssertionError
+=========================== short test summary info ============================
+FAILED git-loopy/python/tests/test_conformance.py::test_the_model_roster_fixture_names_the_harness_it_describes
+1 failed in 2.00s

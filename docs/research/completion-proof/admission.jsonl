@@ -1,0 +1,5 @@
+{"issue": 753, "task_type": "implementation", "verdict": "unrunnable", "detail": "the oracle was red at the base commit for a reason that is not a test result: 'Python suite' timed out after 60s", "seconds": 61.17}
+{"issue": 630, "task_type": "test", "verdict": "unrunnable", "detail": "the oracle was red at the base commit for a reason that is not a test result: 'Python suite' timed out after 60s", "seconds": 60.97}
+{"issue": 543, "task_type": "docs", "verdict": "unrunnable", "detail": "the oracle was red at the base commit for a reason that is not a test result: 'Python suite' timed out after 60s", "seconds": 60.64}
+{"issue": 751, "task_type": "chore", "verdict": "unrunnable", "detail": "the oracle was red at the base commit for a reason that is not a test result: 'Python suite' timed out after 60s", "seconds": 61.17}
+{"issue": 645, "task_type": "bugfix", "verdict": "unrunnable", "detail": "the oracle was red at the base commit for a reason that is not a test result: 'Python suite' timed out after 60s", "seconds": 60.99}
