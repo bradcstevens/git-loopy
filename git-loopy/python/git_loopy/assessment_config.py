@@ -63,6 +63,7 @@ class Policy:
     key_file: Path
     revision: str
 
+
 def load_policy(env: Mapping[str, str]) -> dict[str, Policy]:
     path = global_dir(env) / "assessment" / "config.toml"
     try:

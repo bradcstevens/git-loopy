@@ -165,7 +165,7 @@ class Unreadable(ValueError):
 
 
 class GitHubReads:
-    def __init__(self, repository: str, transport: Transport, *, token: str = ""):
+    def __init__(self, repository: str, transport: Transport, *, token: str):
         self.api = f"/repos/{repository}"
         self.web = f"https://github.com/{repository}"
         self.transport = transport

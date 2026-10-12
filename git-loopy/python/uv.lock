@@ -334,6 +334,7 @@ dependencies = [
 
 [package.optional-dependencies]
 assessment = [
+    { name = "httpx" },
     { name = "mcp" },
     { name = "pyjwt", extra = ["crypto"] },
 ]
@@ -358,6 +359,7 @@ release = [
 [package.metadata]
 requires-dist = [
     { name = "github-copilot-sdk", specifier = "==1.0.17rc4" },
+    { name = "httpx", marker = "extra == 'assessment'", specifier = ">=0.24,<1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.24.0" },
     { name = "mcp", marker = "extra == 'assessment'", specifier = ">=2.3,<3" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.20,<2" },
