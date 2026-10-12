@@ -1,0 +1,37 @@
+{
+  "workflows": ["Promote Release line", "Runner family gate", "Cross-repo Skills proof"],
+  "workflow_runs": [
+    {
+      "id": 42,
+      "name": "Runner family gate",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "queued",
+      "conclusion": null
+    },
+    {
+      "id": 43,
+      "name": "Cross-repo Skills proof",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "in_progress",
+      "conclusion": null
+    }
+  ],
+  "verdict": "incomplete",
+  "incompletes": [
+    {
+      "read": "Counted workflow Promote Release line",
+      "reason": "missing: no run at pinned SHA",
+      "source": "https://github.com/example/project/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/checks"
+    },
+    {
+      "read": "Counted workflow Runner family gate",
+      "reason": "queued",
+      "source": "https://github.com/example/project/actions/runs/42"
+    },
+    {
+      "read": "Counted workflow Cross-repo Skills proof",
+      "reason": "in_progress",
+      "source": "https://github.com/example/project/actions/runs/43"
+    }
+  ]
+}

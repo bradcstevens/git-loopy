@@ -8,7 +8,6 @@ Some required evidence could not be read. No conclusion either way — this does
 
 ## Could not read
 - VERSION at pinned SHA: denied or rate&#45;limited — [source](https://github.com/example/project/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/VERSION)
-- Counted checks: not yet assessed by this service version — [source](https://github.com/example/project/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/checks)
 - Open and unabsorbed work: not yet assessed by this service version — [source](https://github.com/example/project/issues)
 - Baseline and line content: not yet assessed by this service version — [source](https://github.com/example/project/tags)
 
@@ -17,7 +16,7 @@ Some required evidence could not be read. No conclusion either way — this does
 - Any new trunk commit makes this assessment stale — re-run before deciding.
 
 ## Counted checks
-- Not yet assessed by this service version; see Could not read.
+- Runner family gate: success — [run](https://github.com/example/project/actions/runs/42)
 
 ## Line content
 - Not yet assessed by this service version; see Could not read.

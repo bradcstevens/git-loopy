@@ -40,7 +40,7 @@ class RecordedTransport:
             assert method == "GET"
             assert path in {
                 API, f"{API}/commits/main", f"{API}/contents/VERSION",
-                f"{API}/milestones",
+                f"{API}/milestones", f"{API}/actions/runs",
             }
             assert headers["X-GitHub-Api-Version"] == "2022-11-28"
             response = self.responses[(path, tuple(sorted(params.items())))]
@@ -64,6 +64,11 @@ def recorded(version="0.12.0-alpha.2", milestones=None):
             Response(200, milestones if milestones is not None else [
                 {"title": "v0.12.0", "state": "open", "number": 1},
             ]),
+        (f"{API}/actions/runs", (("head_sha", SHA), ("page", 1), ("per_page", 100))):
+            Response(200, {"total_count": 1, "workflow_runs": [
+                {"id": 42, "name": "Runner family gate", "head_sha": SHA,
+                 "status": "completed", "conclusion": "success"},
+            ]}),
     }
 
 
@@ -113,14 +118,19 @@ async def test_assess_pins_line_and_returns_fail_closed_packet(tmp_path):
         assert result["resultFormat"] == 1
         assert result["holds"] == []
         assert [i["read"] for i in result["incompletes"]] == [
-            "Counted checks", "Open and unabsorbed work", "Baseline and line content",
+            "Open and unabsorbed work", "Baseline and line content",
         ]
         assert all(i["reason"] == "not yet assessed by this service version"
                    for i in result["incompletes"])
         assert reply.content[0].text.startswith(
             f"## Assessment verdict: incomplete — v0.12.0 at {SHA}\n",
         )
-        assert len(transport.requests) == 4
+        assert result["checks"] == [{
+            "workflow": "Runner family gate", "conclusion": "success",
+            "url": f"https://github.com/{REPO}/actions/runs/42",
+        }]
+        assert "- Runner family gate: success — [run]" in reply.content[0].text
+        assert len(transport.requests) == 5
 
 
 async def test_catalog_scenario_6_keeps_nothing_to_promote_hold(tmp_path):
@@ -140,6 +150,216 @@ async def test_catalog_scenario_6_keeps_nothing_to_promote_hold(tmp_path):
             f"https://github.com/{REPO}/blob/{SHA}/VERSION"
         )
         assert result["context"] == []
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out"])
+async def test_catalog_scenario_4_retains_counted_hold_with_incomplete_evidence(
+    tmp_path, conclusion,
+):
+    fixture = json.loads((FIXTURES / "scenario-4.json").read_text())
+    configuration(tmp_path)
+    responses = recorded()
+    runs = fixture["workflow_runs"]
+    runs[0]["conclusion"] = conclusion
+    responses[(f"{API}/actions/runs",
+               (("head_sha", SHA), ("page", 1), ("per_page", 100)))] = Response(
+        200, {"total_count": len(runs), "workflow_runs": runs},
+    )
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert result["verdict"] == fixture["verdict"]
+        expected = fixture["hold"]
+        if conclusion != "failure":
+            expected = {
+                **expected,
+                "text": f"Counted workflow Runner family gate concluded {conclusion}.",
+                "observed": conclusion,
+            }
+        assert result["holds"] == [expected]
+        assert result["checks"][0]["conclusion"] == conclusion
+        assert all(i["read"] != "Counted checks" for i in result["incompletes"])
+
+
+async def test_catalog_scenario_7_names_pending_and_missing_workflows_in_policy_order(tmp_path):
+    fixture = json.loads((FIXTURES / "scenario-7.json").read_text())
+    configuration(tmp_path, workflows=json.dumps(fixture["workflows"]))
+    responses = recorded()
+    responses[(f"{API}/actions/runs",
+               (("head_sha", SHA), ("page", 1), ("per_page", 100)))] = Response(
+        200, {"total_count": 2, "workflow_runs": fixture["workflow_runs"]},
+    )
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert result["verdict"] == fixture["verdict"]
+        assert result["holds"] == []
+        assert result["incompletes"][:3] == fixture["incompletes"]
+        assert result["checks"] == [
+            {"workflow": "Promote Release line", "conclusion": "missing",
+             "url": f"https://github.com/{REPO}/commit/{SHA}/checks"},
+            {"workflow": "Runner family gate", "conclusion": "queued",
+             "url": f"https://github.com/{REPO}/actions/runs/42"},
+            {"workflow": "Cross-repo Skills proof", "conclusion": "in_progress",
+             "url": f"https://github.com/{REPO}/actions/runs/43"},
+        ]
+
+
+@pytest.mark.parametrize("conclusions", [
+    ["neutral"], ["skipped"], ["action_required"], ["startup_failure"], ["stale"],
+    [None], ["unknown"], ["success", "failure"], ["failure", "cancelled"],
+    ["success", None],
+])
+async def test_unclassifiable_counted_runs_fail_closed(tmp_path, conclusions):
+    configuration(tmp_path)
+    responses = recorded()
+    runs = [
+        {"id": 42 + n, "name": "Runner family gate", "head_sha": SHA,
+         "status": "completed" if c is not None else "in_progress", "conclusion": c}
+        for n, c in enumerate(conclusions)
+    ]
+    if conclusions == [None]:
+        runs[0]["status"] = "completed"
+    responses[(f"{API}/actions/runs",
+               (("head_sha", SHA), ("page", 1), ("per_page", 100)))] = Response(
+        200, {"total_count": len(runs), "workflow_runs": runs},
+    )
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert not reply.is_error
+        assert result["verdict"] == "incomplete"
+        assert result["incompletes"][0]["read"] == "Counted workflow Runner family gate"
+        assert result["incompletes"][0]["reason"] == "unrecognized evidence shape"
+        assert result["incompletes"][0]["source"].startswith(
+            f"https://github.com/{REPO}/",
+        )
+        assert [c["url"] for c in result["checks"]] == [
+            f"https://github.com/{REPO}/actions/runs/{42 + n}"
+            for n in range(len(runs))
+        ]
+
+
+async def test_agreeing_runs_pass_and_unlisted_workflows_are_context_only(tmp_path):
+    configuration(tmp_path)
+    responses = recorded()
+    responses[(f"{API}/actions/runs",
+               (("head_sha", SHA), ("page", 1), ("per_page", 100)))] = Response(
+        200, {"total_count": 3, "workflow_runs": [
+            {"id": 42, "name": "Runner family gate", "head_sha": SHA,
+             "status": "completed", "conclusion": "success",
+             "jobs": [{"conclusion": "skipped"}]},
+            {"id": 43, "name": "Runner family gate", "head_sha": SHA,
+             "status": "completed", "conclusion": "success"},
+            {"id": 44, "name": "Uncounted workflow", "head_sha": SHA,
+             "status": "completed", "conclusion": "failure"},
+        ]},
+    )
+    async with session(tmp_path, responses) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert result["holds"] == []
+        assert [i["read"] for i in result["incompletes"]] == [
+            "Open and unabsorbed work", "Baseline and line content",
+        ]
+        assert result["checks"] == [
+            {"workflow": "Runner family gate", "conclusion": "success",
+             "url": f"https://github.com/{REPO}/actions/runs/42"},
+            {"workflow": "Runner family gate", "conclusion": "success",
+             "url": f"https://github.com/{REPO}/actions/runs/43"},
+        ]
+        assert result["context"][-1] == (
+            "Unlisted workflow Uncounted workflow: failure "
+            f"(https://github.com/{REPO}/actions/runs/44)."
+        )
+        assert all("/jobs" not in path for _, path, _ in transport.requests)
+
+
+@pytest.mark.parametrize("patch", [
+    {"head_sha": "b" * 40}, {"id": True}, {"id": -1}, {"id": "42"},
+    {"name": None}, {"name": ""}, {"status": None}, {"conclusion": []},
+])
+async def test_malformed_or_unpinned_workflow_runs_are_unreadable(tmp_path, patch):
+    configuration(tmp_path)
+    responses = recorded()
+    key = (f"{API}/actions/runs",
+           (("head_sha", SHA), ("page", 1), ("per_page", 100)))
+    responses[key].data["workflow_runs"][0].update(patch)
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert not reply.is_error
+        result = reply.structured_content
+        assert result["incompletes"][0] == {
+            "read": "Counted checks", "reason": "unrecognized evidence shape",
+            "source": f"https://github.com/{REPO}/commit/{SHA}/checks",
+        }
+        assert result["checks"][0]["conclusion"] == "unreadable"
+
+
+@pytest.mark.parametrize("case", [
+    "complete", "rate-limited", "cut", "foreign", "malformed-link",
+    "empty-page", "changed-count", "duplicate-run", "over-limit",
+])
+async def test_workflow_catalog_requires_complete_pinned_pagination(tmp_path, case):
+    configuration(tmp_path, workflows='["Runner family gate", "Promote Release line"]')
+    responses = recorded()
+    first = (f"{API}/actions/runs",
+             (("head_sha", SHA), ("page", 1), ("per_page", 100)))
+    second = (f"{API}/actions/runs",
+              (("head_sha", SHA), ("page", 2), ("per_page", 100)))
+    link = (
+        f'<https://api.github.com{API}/actions/runs'
+        f'?head_sha={SHA}&per_page=100&page=2>; rel="next"'
+    )
+    responses[first] = Response(
+        200, {"total_count": 2, "workflow_runs": responses[first].data["workflow_runs"]},
+        {"Link": link},
+    )
+    responses[second] = Response(200, {"total_count": 2, "workflow_runs": [
+        {"id": 43, "name": "Promote Release line", "head_sha": SHA,
+         "status": "completed", "conclusion": "timed_out"},
+    ]})
+    if case == "rate-limited":
+        responses[second] = Response(429, {})
+    elif case == "cut":
+        responses[first] = Response(200, responses[first].data)
+    elif case == "foreign":
+        responses[first] = Response(
+            200, responses[first].data, {"Link": '<https://evil.invalid/>; rel="next"'},
+        )
+    elif case == "malformed-link":
+        responses[first] = Response(200, responses[first].data, {"Link": "bad"})
+    elif case == "empty-page":
+        responses[second].data["workflow_runs"] = []
+    elif case == "changed-count":
+        responses[second].data["total_count"] = 1
+    elif case == "duplicate-run":
+        responses[second].data["workflow_runs"][0]["id"] = 42
+    elif case == "over-limit":
+        responses[first].data["total_count"] = 1001
+    async with session(tmp_path, responses) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert not reply.is_error
+        result = reply.structured_content
+        if case == "complete":
+            assert [c["workflow"] for c in result["checks"]] == [
+                "Runner family gate", "Promote Release line",
+            ]
+            assert result["holds"][0]["observed"] == "timed_out"
+            assert [i["read"] for i in result["incompletes"]] == [
+                "Open and unabsorbed work", "Baseline and line content",
+            ]
+        else:
+            assert result["verdict"] == "incomplete"
+            assert result["incompletes"][0]["read"] == "Counted checks"
+            assert result["incompletes"][0]["reason"] == (
+                "rate-limited" if case == "rate-limited" else "pagination did not complete"
+            )
+            assert all(c["conclusion"] == "unreadable" for c in result["checks"])
+        assert all(
+            params["head_sha"] == SHA for _, path, params in transport.requests
+            if path.endswith("/actions/runs")
+        )
 
 
 async def test_catalog_scenario_12_refuses_to_guess(tmp_path):
@@ -212,7 +432,7 @@ async def test_refused_inputs_make_no_reads(tmp_path, arguments):
         assert transport.requests == []
 
 
-@pytest.mark.parametrize("where", ["head", "version", "milestones"])
+@pytest.mark.parametrize("where", ["head", "version", "milestones", "runs"])
 @pytest.mark.parametrize("failure,reason", [
     (Response(401, {}), "denied"),
     (Response(403, {}), "denied or rate-limited"),
@@ -230,6 +450,8 @@ async def test_required_read_failures_remain_unreadable(tmp_path, where, failure
         "version": (f"{API}/contents/VERSION", (("ref", SHA),)),
         "milestones": (f"{API}/milestones",
                        (("page", 1), ("per_page", 100), ("state", "all"))),
+        "runs": (f"{API}/actions/runs",
+                 (("head_sha", SHA), ("page", 1), ("per_page", 100))),
     }[where]
     responses[key] = failure
     async with session(tmp_path, responses) as (client, transport):
@@ -241,12 +463,15 @@ async def test_required_read_failures_remain_unreadable(tmp_path, where, failure
         assert item["reason"] == reason
         assert item["read"] == {
             "head": "Trunk head", "version": "VERSION at pinned SHA",
-            "milestones": "Milestone catalog",
+            "milestones": "Milestone catalog", "runs": "Counted checks",
         }[where]
         assert item["source"].startswith(f"https://github.com/{REPO}")
         assert "sensitive credential" not in str(result)
-        assert len(result["incompletes"]) == 4
-        assert len(transport.requests) == (3 if where == "head" else 4)
+        assert len(result["incompletes"]) == (4 if where == "head" else 3)
+        assert len(transport.requests) == (3 if where == "head" else 5)
+        if where in ("head", "runs"):
+            assert result["checks"][0]["workflow"] == "Runner family gate"
+            assert result["checks"][0]["conclusion"] == "unreadable"
 
 
 @pytest.mark.parametrize("link", [
@@ -411,7 +636,7 @@ async def test_promotion_version_text_and_stage_remain_shared(tmp_path, text):
         assert result["version"] == text.rstrip("\r\n")
         assert result["releaseTarget"] == "0.12.0"
         assert result["holds"] == []
-        assert len(result["incompletes"]) == 3
+        assert len(result["incompletes"]) == 2
         assert result["context"][0].startswith("Prerelease stage is ")
 
 
@@ -435,12 +660,24 @@ async def test_repository_and_policy_strings_cannot_forge_packet_sections(tmp_pa
         )
 
 
-@pytest.mark.parametrize("case", ["prerelease", "nothing", "read-error"])
+@pytest.mark.parametrize("case", [
+    "prerelease", "nothing", "read-error", "scenario-4", "scenario-7",
+])
 async def test_golden_packets_at_tool_boundary(tmp_path, case):
     configuration(tmp_path)
     responses = recorded("0.11.1" if case == "nothing" else "0.12.0-alpha.2")
     if case == "read-error":
         responses[(f"{API}/contents/VERSION", (("ref", SHA),))] = Response(403, {})
+    if case.startswith("scenario-"):
+        fixture = json.loads((FIXTURES / f"{case}.json").read_text())
+        configuration(tmp_path, workflows=json.dumps(
+            fixture.get("workflows", ["Runner family gate"]),
+        ))
+        responses[(f"{API}/actions/runs",
+                   (("head_sha", SHA), ("page", 1), ("per_page", 100)))] = Response(
+            200, {"total_count": len(fixture["workflow_runs"]),
+                  "workflow_runs": fixture["workflow_runs"]},
+        )
     async with session(tmp_path, responses) as (client, _):
         reply = await client.call_tool("assess", {"repository": REPO})
         packet = re.sub(

@@ -1,0 +1,47 @@
+## Assessment verdict: incomplete — v0.12.0 at aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Some required evidence could not be read. No conclusion either way — this does not mean probably fine. As of 2026-10-12T19:38:03Z.
+
+> Advice only. Whether to close the milestone is your decision. Closing it triggers Promotion, and Rehearsal and Release smoke still prove the snapshot afterwards. This assessment changes nothing.
+
+## Why — hold findings
+- None.
+
+## Could not read
+- Counted workflow Promote Release line: missing&#58; no run at pinned SHA — [source](https://github.com/example/project/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/checks)
+- Counted workflow Runner family gate: queued — [source](https://github.com/example/project/actions/runs/42)
+- Counted workflow Cross&#45;repo Skills proof: in&#95;progress — [source](https://github.com/example/project/actions/runs/43)
+- Open and unabsorbed work: not yet assessed by this service version — [source](https://github.com/example/project/issues)
+- Baseline and line content: not yet assessed by this service version — [source](https://github.com/example/project/tags)
+
+## What would change this
+- Re-run the assessment once the unreadable items above can be read.
+- Any new trunk commit makes this assessment stale — re-run before deciding.
+
+## Counted checks
+- Promote Release line: missing — [source](https://github.com/example/project/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/checks)
+- Runner family gate: queued — [run](https://github.com/example/project/actions/runs/42)
+- Cross&#45;repo Skills proof: in&#95;progress — [run](https://github.com/example/project/actions/runs/43)
+
+## Line content
+- Not yet assessed by this service version; see Could not read.
+
+## Context (does not change the verdict)
+- Prerelease stage is alpha&#46;2 &#8212; context only&#59; Promotion promotes from any stage&#46;
+
+## Provenance
+- Repository: example&#47;project
+- Milestone: v0&#46;12&#46;0
+- Milestone state: open
+- Milestone source: [source](https://github.com/example/project/milestone/1)
+- Pinned SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+- As of: 2026&#45;10&#45;12T19&#58;38&#58;03Z
+- Trunk source: [source](https://github.com/example/project/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+- VERSION at SHA: 0&#46;12&#46;0&#45;alpha&#46;2
+- VERSION source: [source](https://github.com/example/project/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/VERSION)
+- Release target: 0&#46;12&#46;0
+- Baseline tag: not yet assessed
+- Assessment policy revision: <POLICY>
+- Counted workflows: Promote Release line&#44; Runner family gate&#44; Cross&#45;repo Skills proof
+- Service version: <SERVICE>
+- Result-format version: 1
+- Read identity: GitHub App release&#45;review&#45;app &#40;app 123&#44; installation 456&#41;

@@ -88,7 +88,13 @@ def render_packet(result: dict[str, Any]) -> str:
     lines.extend([
         "- Any new trunk commit makes this assessment stale — re-run before deciding.",
         "", "## Counted checks",
-        "- Not yet assessed by this service version; see Could not read.",
+    ])
+    lines.extend(
+        f"- {_inert(c['workflow'])}: {_inert(c['conclusion'])} "
+        f"— [{'run' if '/actions/runs/' in c['url'] else 'source'}]({c['url']})"
+        for c in r["checks"]
+    )
+    lines.extend([
         "", "## Line content",
         "- Not yet assessed by this service version; see Could not read.",
         "", "## Context (does not change the verdict)",
@@ -255,8 +261,74 @@ def create_server(
                 "observed": f"VERSION={result['version']}; milestone={result['milestone']}",
                 "context": "",
             })
+        checks_source = f"{github.web}/commit/{result['sha'] or 'unresolved'}/checks"
+        result["checks"] = [
+            {"workflow": w, "conclusion": "unreadable", "url": checks_source}
+            for w in policy.workflows
+        ]
+        if not result["sha"]:
+            result["incompletes"].append({
+                "read": "Counted checks", "reason": "pinned SHA unavailable",
+                "source": checks_source,
+            })
+        else:
+            try:
+                runs = await github.workflow_runs(result["sha"])
+                source = f"{github.web}/commit/{result['sha']}/checks"
+                result["checks"] = []
+                result["context"].extend(
+                    f"Unlisted workflow {run['name']}: "
+                    f"{run['conclusion'] or run['status']} "
+                    f"({github.web}/actions/runs/{run['id']})."
+                    for run in runs if run["name"] not in policy.workflows
+                )
+                for workflow in policy.workflows:
+                    matching = [run for run in runs if run["name"] == workflow]
+                    if not matching:
+                        result["checks"].append({
+                            "workflow": workflow, "conclusion": "missing", "url": source,
+                        })
+                        result["incompletes"].append({
+                            "read": f"Counted workflow {workflow}",
+                            "reason": "missing: no run at pinned SHA", "source": source,
+                        })
+                    disagree = len({run["conclusion"] for run in matching}) > 1
+                    if disagree:
+                        result["incompletes"].append({
+                            "read": f"Counted workflow {workflow}",
+                            "reason": "unrecognized evidence shape", "source": source,
+                        })
+                    for run in matching:
+                        conclusion = run["conclusion"] or run["status"]
+                        url = f"{github.web}/actions/runs/{run['id']}"
+                        result["checks"].append({
+                            "workflow": workflow, "conclusion": conclusion, "url": url,
+                        })
+                        if run["status"] in ("queued", "in_progress") and (
+                            run["conclusion"] is None
+                        ):
+                            result["incompletes"].append({
+                                "read": f"Counted workflow {workflow}",
+                                "reason": run["status"], "source": url,
+                            })
+                        elif run["status"] == "completed" and conclusion in (
+                            "failure", "cancelled", "timed_out",
+                        ):
+                            result["holds"].append({
+                                "text": f"Counted workflow {workflow} concluded "
+                                        f"{conclusion}.",
+                                "source": url, "observed": conclusion, "context": "",
+                            })
+                        elif not (
+                            run["status"] == "completed" and conclusion == "success"
+                        ) and not disagree:
+                            result["incompletes"].append({
+                                "read": f"Counted workflow {workflow}",
+                                "reason": "unrecognized evidence shape", "source": url,
+                            })
+            except Unreadable as exc:
+                result["incompletes"].append(exc.item)
         for read, suffix in [
-            ("Counted checks", f"/commit/{result['sha'] or 'unresolved'}/checks"),
             ("Open and unabsorbed work", "/issues"),
             ("Baseline and line content", "/tags"),
         ]:

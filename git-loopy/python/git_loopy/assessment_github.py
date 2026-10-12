@@ -5,6 +5,7 @@ Endpoint-to-App-read-permission matrix for this tracer:
     GET /repos/{repository}/commits/{ref}         Contents (pinned head)
     GET /repos/{repository}/contents/VERSION     Contents (ref = pinned SHA)
     GET /repos/{repository}/milestones           Issues (complete catalog)
+    GET /repos/{repository}/actions/runs         Actions (head_sha = pinned SHA)
 
 Pagination is state=all, per_page=100 and a monotonic page number. It never
 follows a caller-provided or foreign URL. The only API version is 2022-11-28.
@@ -53,7 +54,7 @@ class GitHubReads:
 
     async def _get(self, suffix, params, read, source) -> Response:
         # No caller-provided URL is ever followed, including pagination links.
-        if suffix not in ("", "/contents/VERSION", "/milestones") and not (
+        if suffix not in ("", "/contents/VERSION", "/milestones", "/actions/runs") and not (
             re.fullmatch(r"/commits/[A-Za-z0-9%_.-]+", suffix)
         ):
             raise Unreadable(read, "endpoint is not allowed", source)
@@ -138,6 +139,7 @@ class GitHubReads:
                       for p in parts]
             if any(m is None for m in parsed):
                 raise Unreadable(read, "pagination did not complete", source)
+
             next_links = [m.group(1) for m in parsed if m and m.group(2) == "next"]
             if not next_links:
                 return found
@@ -148,6 +150,77 @@ class GitHubReads:
                 or target.path != self.api + "/milestones" or target.fragment
                 or parse_qs(target.query) != {
                     "state": ["all"], "per_page": ["100"], "page": [str(page + 1)],
+                }
+            ):
+                raise Unreadable(read, "pagination did not complete", source)
+
+        raise Unreadable(read, "pagination did not complete", source)
+
+    async def workflow_runs(self, sha: str) -> list[dict]:
+        read, source = "Counted checks", f"{self.web}/commit/{sha}/checks"
+        found = []
+        total = None
+        # GitHub caps filtered workflow-run searches at 1,000 results.
+        for page in range(1, 11):
+            response = await self._get(
+                "/actions/runs", {"head_sha": sha, "per_page": 100, "page": page},
+                read, source,
+            )
+            data = response.data
+            if (
+                not isinstance(data, dict)
+                or not isinstance(data.get("total_count"), int)
+                or isinstance(data["total_count"], bool) or data["total_count"] < 0
+                or not isinstance(data.get("workflow_runs"), list)
+                or not all(
+                    isinstance(run, dict)
+                    and isinstance(run.get("id"), int) and not isinstance(run["id"], bool)
+                    and run["id"] > 0
+                    and isinstance(run.get("name"), str) and 0 < len(run["name"]) <= 200
+                    and run.get("head_sha") == sha
+                    and isinstance(run.get("status"), str) and 0 < len(run["status"]) <= 100
+                    and "conclusion" in run and (
+                        run["conclusion"] is None or (
+                            isinstance(run["conclusion"], str)
+                            and 0 < len(run["conclusion"]) <= 100
+                        )
+                    )
+                    for run in data["workflow_runs"]
+                )
+            ):
+                raise Unreadable(read, "unrecognized evidence shape", source)
+            if total is None:
+                total = data["total_count"]
+            found.extend(data["workflow_runs"])
+            if (
+                total > 1000 or total != data["total_count"] or len(found) > total
+                or len(data["workflow_runs"]) > 100
+                or len({run["id"] for run in found}) != len(found)
+            ):
+                raise Unreadable(read, "pagination did not complete", source)
+            link = next(
+                (v for k, v in response.headers.items() if k.lower() == "link"), "",
+            )
+            parsed = [
+                re.fullmatch(r'\s*<([^>]+)>;\s*rel="([^"]+)"\s*', part)
+                for part in link.split(",")
+            ] if link else []
+            if any(match is None for match in parsed):
+                raise Unreadable(read, "pagination did not complete", source)
+            next_links = [
+                match.group(1) for match in parsed if match and match.group(2) == "next"
+            ]
+            if not next_links:
+                if len(found) == total:
+                    return found
+                raise Unreadable(read, "pagination did not complete", source)
+            target = urlsplit(next_links[0])
+            if (
+                len(next_links) != 1 or not data["workflow_runs"] or len(found) >= total
+                or target.scheme != "https" or target.netloc != "api.github.com"
+                or target.path != self.api + "/actions/runs" or target.fragment
+                or parse_qs(target.query) != {
+                    "head_sha": [sha], "per_page": ["100"], "page": [str(page + 1)],
                 }
             ):
                 raise Unreadable(read, "pagination did not complete", source)
