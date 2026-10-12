@@ -347,7 +347,7 @@ def release_line_from_version(
     version: str, *, last_stable_version: str | None = None
 ) -> tuple[str, ReleaseLine]:
     """Resolve persisted Release metadata into its stable base and current line."""
-    line = _parse_release_line(version)
+    line = parse_release_line(version)
     if line.counter == 0:
         return line.target, line
     if last_stable_version is None:
@@ -362,7 +362,8 @@ def release_line_from_version(
     return last_stable_version, line
 
 
-def _parse_release_line(version: str) -> ReleaseLine:
+def parse_release_line(version: str) -> ReleaseLine:
+    """Derive the Release target, stage and counter without a baseline read."""
     match = _RELEASE_LINE_VERSION.fullmatch(version)
     if match is None:
         raise ReleaseVersionError(
@@ -403,6 +404,13 @@ def _validate_semver(value: str, label: str) -> str:
 
 def _read_release_value(path: Path, label: str) -> str:
     content = _read_metadata_text(path, label)
+    return parse_release_version(content, label=f"{label} {path}")
+
+
+def parse_release_version(
+    content: str, *, label: str = "Release version authority"
+) -> str:
+    """Parse VERSION text with the same strict rule used by file readers."""
     if content.endswith("\r\n"):
         value = content[:-2]
     elif content.endswith("\n"):
@@ -410,7 +418,7 @@ def _read_release_value(path: Path, label: str) -> str:
     else:
         value = content
 
-    return _validate_semver(value, f"{label} {path}")
+    return _validate_semver(value, label)
 
 
 def read_release_version(path: Path) -> str:
@@ -1197,7 +1205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None
         )
         if promoted is not None:
-            current_line = _parse_release_line(current_version)
+            current_line = parse_release_line(current_version)
             write_repository_release_version(args.repository_root, promoted)
             try:
                 notes_write = write_repository_release_notes(

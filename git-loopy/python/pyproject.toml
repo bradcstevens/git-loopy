@@ -34,6 +34,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+assessment = [
+    "mcp>=2.3,<3",
+]
+
 # Optional OpenTelemetry export. Off by default so the base install stays
 # light. Operators who run an OTel collector flip it on by either setting
 # OTEL_EXPORTER_OTLP_ENDPOINT or GIT_LOOPY_OTEL_ENABLED=1 — see issue #12.
@@ -71,6 +75,7 @@ dev = [
 
 [project.scripts]
 git-loopy = "git_loopy.cli:main"
+git-loopy-assessment = "git_loopy.assessment:main"
 
 [build-system]
 requires = ["hatchling>=1.24"]

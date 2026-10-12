@@ -1,0 +1,7 @@
+{
+  "name": "nothing to promote",
+  "version": "0.11.1",
+  "milestones": [{"title": "v0.12.0", "state": "open", "number": 1}],
+  "verdict": "incomplete",
+  "hold": "Closing milestone v0.12.0 would promote nothing: VERSION is 0.11.1."
+}
