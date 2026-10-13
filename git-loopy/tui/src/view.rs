@@ -311,6 +311,8 @@ pub struct QueueRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ending: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub commits: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_advances: Option<i64>,
@@ -586,6 +588,12 @@ pub struct ContributionRow {
     pub credits: Option<f64>,
     pub premium_requests: Option<f64>,
     pub peak_context_window: Option<PeakContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ending: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commits: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_advances: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -834,6 +842,7 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                     issue: issue.clone(),
                     status: entry.status.clone(),
                     ending: entry.ending.clone(),
+                    skipped: entry.skipped.then_some(true),
                     commits: entry.commits,
                     pr_advances: entry.pr_advances,
                     started_at: entry.started_at.map(|at| at.to_zoned_iso(&context.zone)),
@@ -1013,6 +1022,9 @@ fn contribution_row(contribution: &IssueContribution) -> ContributionRow {
         outcome: contribution.outcome.clone(),
         duration_seconds: contribution.duration_seconds,
         status: contribution.status.clone(),
+        ending: contribution.ending.clone(),
+        commits: contribution.commits,
+        pr_advances: contribution.pr_advances,
         drift: contribution.drift,
         active_seconds: contribution.active_seconds,
         route: contribution.route.as_ref().map(RouteView::project),

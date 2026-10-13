@@ -23,6 +23,24 @@ use common::assert_snapshot;
 const DASHBOARD_INSIGHTS: &str = include_str!("../../conformance/dashboard-insights.json");
 
 #[test]
+fn skipped_is_inline_beside_its_ending_even_at_the_terminal_floor() {
+    let view = fixture_view("ending-no-progress-content_filtered");
+    for width in [40, 80, 160] {
+        let lines = render_lines(&view, width, 40, TerminalCapabilities::default());
+        let queue = band(&lines, " Queue ").join("\n");
+        assert!(queue.contains("#42"), "{queue}");
+        assert!(queue.contains("skipped"), "{queue}");
+        assert!(queue.contains("content filtered"), "{queue}");
+    }
+    let absent = fixture_view("ending-no-progress-absent");
+    let lines = render_lines(&absent, 160, 40, TerminalCapabilities::default());
+    let queue = band(&lines, " Queue ").join("\n");
+    assert!(queue.contains("skipped"), "{queue}");
+    assert!(!queue.contains("timed out"), "{queue}");
+    assert!(!queue.contains("left nothing"), "{queue}");
+}
+
+#[test]
 fn run_only_consumption_is_visible_without_inventing_a_work_row() {
     let mut state = DashboardState::new(RunInputs::new("work-model", "high"));
     state.apply(

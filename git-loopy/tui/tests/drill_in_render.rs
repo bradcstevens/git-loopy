@@ -19,6 +19,33 @@ use common::assert_snapshot;
 
 const DASHBOARD_INSIGHTS: &str = include_str!("../../conformance/dashboard-insights.json");
 
+#[test]
+fn the_account_names_both_endings_and_each_attempts_recorded_work() {
+    let frame = rolling_drill_in_frame("rolling-endings-stay-with-their-issue-and-attempt");
+    let lines = render_lines(&frame, 240, 40);
+    let rows = band(&lines, "Iteration breakdown");
+    let first = rows.iter().find(|row| row.contains("c-0001")).unwrap();
+    let second = rows.iter().find(|row| row.contains("c-0004")).unwrap();
+    assert!(
+        first.contains("timed out") && first.contains("1 commit"),
+        "{first}"
+    );
+    assert!(
+        second.contains("crashed") && second.contains("1 commit"),
+        "{second}"
+    );
+    assert!(rows.iter().position(|row| row == first) < rows.iter().position(|row| row == second));
+
+    let native = drill_in_frame("native-orchestrator-unavailable-capabilities", "7");
+    let lines = render_lines(&native, 240, 40);
+    let rows = band(&lines, "Iteration breakdown").join("\n");
+    assert!(
+        rows.contains("2 commits") && rows.contains("1 PR"),
+        "{rows}"
+    );
+    assert!(!rows.contains("left nothing"), "{rows}");
+}
+
 fn fixture() -> Value {
     serde_json::from_str(DASHBOARD_INSIGHTS).expect("the shared fixture is valid JSON")
 }
@@ -239,9 +266,9 @@ fn the_detail_header_states_the_issues_whole_lifecycle() {
 #[test]
 fn the_iteration_breakdown_carries_the_locked_columns() {
     let frame = drill_in_frame("baseline-closed-iteration", "42");
-    // The full inventory, including the 34-cell Route and Drift, needs 204
-    // columns. Narrow-terminal column selection belongs to `responsive_render.rs`.
-    let lines = render_lines(&frame, 208, 40);
+    // Include room for the attempt's progress detail in Status as well as
+    // the full inventory. Responsive selection is tested separately.
+    let lines = render_lines(&frame, 240, 40);
     let breakdown = band(&lines, "Iteration breakdown");
 
     let expected_labels: Vec<String> = fixture()["semantic_contract"]
@@ -270,7 +297,7 @@ fn the_iteration_breakdown_carries_the_locked_columns() {
             "iter 1",
             "closed",
             "0:00:04",
-            "closed",
+            "closed · 1 commit",
             "—",
             "0:00:04",
             "—",
@@ -296,7 +323,7 @@ fn the_iteration_breakdown_carries_the_locked_columns() {
 #[test]
 fn the_breakdown_separates_cache_reads_from_cache_writes() {
     let frame = drill_in_frame("parallel-lanes-and-non-closure-outcomes", "310");
-    let lines = render_lines(&frame, 200, 40);
+    let lines = render_lines(&frame, 240, 40);
     let breakdown = band(&lines, "Iteration breakdown");
 
     let row = &expected_drill_in("parallel-lanes-and-non-closure-outcomes")["iteration_breakdown"]
@@ -323,7 +350,7 @@ fn the_breakdown_separates_cache_reads_from_cache_writes() {
 #[test]
 fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
     let frame = drill_in_frame("native-orchestrator-unavailable-capabilities", "7");
-    let lines = render_lines(&frame, 200, 40);
+    let lines = render_lines(&frame, 240, 40);
     let breakdown = band(&lines, "Iteration breakdown");
 
     let rows = expected_drill_in("native-orchestrator-unavailable-capabilities")
@@ -341,7 +368,7 @@ fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
     for row in &breakdown[1..] {
         let drawn = cells(row);
         assert_eq!(
-            &drawn[5..],
+            &drawn[6..],
             ["n/a", "—", "—", "—", "—", "n/a", "n/a", "—"],
             "an unavailable measurement never renders as an observed zero, and \
              an Orchestrator that resolves no Route and can report no Cost at \

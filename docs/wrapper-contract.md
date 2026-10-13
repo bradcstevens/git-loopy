@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.26 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.27 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1530,6 +1530,28 @@ equality. Python's retained pure replay projection is the semantic oracle; the
 live terminal Dashboard is the external Rust helper since #459, not a second
 Python widget implementation.
 
+#### Per-attempt account and inline Skip (contract 2.27, ADR-0075)
+
+The drill-in MUST retain every completed attempt, oldest first, with that
+attempt's own **Routed pair**, optional **Ending**, and observed commits or PR
+advances. These facts come from the replay log alone: the issue-outcome records
+and existing attributed progress records. An absent Ending stays absent, including
+for ordinary advancement and members that cannot observe an Ending. A current
+attempt remains in progress in the detail Header and Activity; it MUST NOT acquire
+a completed breakdown row before its issue-outcome record arrives.
+
+A named issue's `wrapper.strike` with `outcome: skip` latches an optional
+`skipped: true` on that issue's Queue row. The marker MUST render inline in the
+Status cell beside the Ending from the issue-outcome record, never an Ending
+borrowed from the Strike. Neither an unnamed legacy Strike nor `outcome: warn`
+marks a row Skipped. No column or Run-wide list is added. The Header continues
+to show the Strikes of the issue at stake against N, exactly as ADR-0070 defines.
+
+Dashboard fixture revision **1.19** pins the account, an open retry, and the
+Skipped marker with full-object replay equality in Rust and Python. Event
+schema **1.7** and compatibility schema **1** are unchanged: no wire record
+or producer behaviour changes.
+
 The language-neutral
 [`dashboard-insights.json`](../git-loopy/conformance/dashboard-insights.json) fixture is the
 semantic boundary between Orchestrators and live-interface implementations. It supplies normalized
@@ -2259,7 +2281,8 @@ branch drift (§12, #684), 2.20 with Recovery attempts (§12, #685), 2.21 with
 the refill turn (§12, #686), 2.22 with the per-issue Strike record (§6,
 ADR-0070), 2.23 with upstream-durable Integration publication (§12, #418),
 and 2.24 with Subagent lifecycle telemetry and Activity totals (ADR-0022),
-and 2.26 with per-issue Endings and inline Queue explanations (ADR-0075).
+and 2.26 with per-issue Endings and inline Queue explanations (ADR-0075),
+and 2.27 with the per-attempt account and inline Skipped marker (ADR-0075).
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;

@@ -425,6 +425,7 @@ impl DashboardState {
 pub(crate) struct IssueLedgerEntry {
     pub(crate) status: String,
     pub(crate) ending: Option<String>,
+    pub(crate) skipped: bool,
     pub(crate) commits: Option<i64>,
     pub(crate) pr_advances: Option<i64>,
     attempt_commit_shas: BTreeSet<String>,
@@ -461,6 +462,7 @@ impl IssueLedgerEntry {
         Self {
             status: STATUS_QUEUED.to_string(),
             ending: None,
+            skipped: false,
             commits: None,
             pr_advances: None,
             attempt_commit_shas: BTreeSet::new(),
@@ -976,6 +978,12 @@ impl DashboardState {
                             .get_or_insert_with(BTreeMap::new)
                             .insert(issue.clone(), strikes);
                         self.strike_focus = Some(issue.clone());
+                        if strike.outcome.as_deref() == Some("skip") {
+                            self.insert_entry(issue.clone());
+                            if let Some(entry) = self.ledger.get_mut(issue) {
+                                entry.skipped = true;
+                            }
+                        }
                     }
                     (None, Some(strikes)) => self.strikes = strikes,
                     _ => {}

@@ -334,6 +334,7 @@ def _queue_row(row: QueueRow, *, denomination: CostDenomination) -> dict[str, An
         **({"ending": row.ending} if row.ending is not None else {}),
         **({"commits": row.commits} if row.commits is not None else {}),
         **({"pr_advances": row.pr_advances} if row.pr_advances is not None else {}),
+        **({"skipped": True} if row.skipped else {}),
         "started_at": _timestamp(row.started_wall),
         "active_seconds": row.active_seconds,
         "closed_at": _timestamp(row.closed_wall),
@@ -454,6 +455,12 @@ def _contribution_row(
             }
             if peak is not None
             else None
+        ),
+        **({"ending": contribution.ending} if contribution.ending is not None else {}),
+        **({"commits": contribution.commits} if contribution.commits is not None else {}),
+        **(
+            {"pr_advances": contribution.pr_advances}
+            if contribution.pr_advances is not None else {}
         ),
     }
 

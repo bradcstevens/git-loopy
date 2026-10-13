@@ -732,13 +732,19 @@ fn draw_queue(
 
 /// Status, with phase age beside parked, admitted, integrating, and recovering.
 fn queue_status(row: &QueueRow, show_progress: bool, glyphs: &Glyphs) -> String {
-    let status = status_cell(
-        &row.status,
+    let compact_skip = row.skipped == Some(true) && !show_progress;
+    let mut status = status_cell(
+        if compact_skip { "skipped" } else { &row.status },
         row.ending.as_deref(),
-        row.commits.filter(|_| show_progress),
-        row.pr_advances.filter(|_| show_progress),
+        row.commits
+            .filter(|_| show_progress && row.status == "advanced"),
+        row.pr_advances
+            .filter(|_| show_progress && row.status == "advanced"),
         glyphs,
     );
+    if row.skipped == Some(true) && !compact_skip {
+        status.push_str(&format!(" {}skipped", glyphs.attribution));
+    }
     match row.phase_age_seconds {
         Some(age) => format!("{status} {}", duration(age)),
         None => status,
@@ -762,13 +768,13 @@ fn status_cell(
     glyphs: &Glyphs,
 ) -> String {
     let mut cell = status.to_string();
-    if let ("advanced", Some(commits)) = (status, commits) {
+    if let Some(commits) = commits {
         if commits > 0 {
             let unit = if commits == 1 { "commit" } else { "commits" };
             cell.push_str(&format!(" {}{commits} {unit}", glyphs.attribution));
         }
     }
-    if let ("advanced", Some(pr_advances)) = (status, pr_advances) {
+    if let Some(pr_advances) = pr_advances {
         if pr_advances > 0 {
             let unit = if pr_advances == 1 { "PR" } else { "PRs" };
             cell.push_str(&format!(" {}{pr_advances} {unit}", glyphs.attribution));
@@ -1768,17 +1774,36 @@ fn draw_breakdown(
     routing: &str,
     glyphs: &Glyphs,
 ) {
+    let mut columns = BREAKDOWN_COLUMNS;
+    let statuses: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            status_cell(
+                &row.status,
+                row.ending.as_deref(),
+                row.commits,
+                row.pr_advances,
+                glyphs,
+            )
+        })
+        .collect();
+    columns[3].width = status_column_width(
+        statuses.iter().cloned(),
+        columns[3].width,
+        area.width
+            .saturating_sub(2 + columns[0].width + COLUMN_SPACING),
+    );
     draw_table(
         frame,
         area,
-        &BREAKDOWN_COLUMNS,
-        rows.iter().map(|row| {
+        &columns,
+        rows.iter().zip(statuses).map(|(row, status)| {
             vec![
                 contribution_label(row, glyphs),
                 row.outcome.clone().unwrap_or_else(|| glyphs.unknown.into()),
                 row.duration_seconds
                     .map_or_else(|| glyphs.unknown.to_string(), duration),
-                row.status.clone(),
+                status,
                 row.drift
                     .map_or_else(|| glyphs.unknown.to_string(), |count| count.to_string()),
                 duration(row.active_seconds),
