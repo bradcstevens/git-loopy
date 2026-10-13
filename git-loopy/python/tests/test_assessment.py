@@ -1502,6 +1502,27 @@ async def test_bad_key_fails_closed_without_ambient_auth(
     assert not ambient_credentials.exists()
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS extended ACLs")
+def test_extended_acl_key_fails_startup_without_ambient_auth(tmp_path, ambient_credentials):
+    path = configuration(tmp_path)
+    key = path.parent / "app.pem"
+    subprocess.run(
+        ["chmod", "+a", "everyone allow read", str(key)],
+        check=True, capture_output=True, text=True,
+    )
+    try:
+        assert key.stat().st_mode & 0o777 == 0o600
+        with pytest.raises(AssessmentConfigError, match="App key file must have no extended ACL"):
+            create_server(env={"XDG_CONFIG_HOME": str(tmp_path)})
+        transport = RecordedTransport({})
+        with pytest.raises(AssessmentConfigError, match="App key file must have no extended ACL"):
+            create_server(env={"XDG_CONFIG_HOME": str(tmp_path)}, transport=transport)
+        assert transport.requests == []
+        assert not ambient_credentials.exists()
+    finally:
+        subprocess.run(["chmod", "-N", str(key)], check=True, capture_output=True)
+
+
 async def test_uninstalled_allowlisted_repository_refuses_before_evidence(tmp_path):
     configuration(tmp_path)
     async with session(tmp_path, {

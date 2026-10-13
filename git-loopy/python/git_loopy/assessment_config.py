@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+import sys
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -30,6 +31,26 @@ class AssessmentConfigError(ValueError):
     """The service cannot start with this policy."""
 
 
+def _check_macos_acl(fd: int) -> None:
+    import ctypes
+    import errno
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    libc.acl_get_fd_np.restype = ctypes.c_void_p
+    libc.acl_free.argtypes = [ctypes.c_void_p]
+    libc.acl_free.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    acl = libc.acl_get_fd_np(fd, 0x100)  # ACL_TYPE_EXTENDED from macOS sys/acl.h.
+    if acl is None:
+        # For an opened descriptor, Darwin's ENOENT means no extended ACL exists.
+        if ctypes.get_errno() == errno.ENOENT:
+            return
+        raise AssessmentConfigError("could not inspect App key file ACL")
+    libc.acl_free(acl)
+    raise AssessmentConfigError("App key file must have no extended ACL")
+
+
 def read_app_key(path: Path) -> bytes:
     """Check the opened file, not a separate stat that could race a replacement."""
     try:
@@ -44,6 +65,8 @@ def read_app_key(path: Path) -> bytes:
                 raise AssessmentConfigError("App key file must be owner-only")
             if os.name == "posix" and not info.st_mode & stat.S_IRUSR:
                 raise AssessmentConfigError("App key file is unreadable")
+            if sys.platform == "darwin":
+                _check_macos_acl(key.fileno())
             material = key.read(65537)
     except FileNotFoundError:
         raise AssessmentConfigError("App key file is missing") from None

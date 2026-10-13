@@ -64,7 +64,10 @@ operator's configured name), `key_file`, and `workflows`. The App's name in
 Provenance comes from GitHub, not `app_identity`. The PEM RSA private key must be
 readable only by its owner. On POSIX, startup checks the opened regular file's
 owner and permissions (use mode `0600`); missing, unreadable, over-permissive or
-invalid keys refuse startup even when a test transport is supplied. On Windows,
+invalid keys refuse startup even when a test transport is supplied. On macOS,
+the opened key file must also have no extended ACL, even one that grants no
+additional read access; remove it with `chmod -N <key-file>`, then use mode `0600`.
+If the ACL cannot be inspected, startup refuses the key. On Windows,
 operators must grant access only to their account using the file's ACL: this
 version does not enforce Windows ACLs.
 
