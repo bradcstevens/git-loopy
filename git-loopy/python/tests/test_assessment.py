@@ -1353,13 +1353,23 @@ async def test_policy_is_a_startup_snapshot_and_has_full_provenance(tmp_path):
 
 
 @pytest.mark.parametrize("extra", [
-    "unknown = true\n", "sandbox = true\n", "faults = []\n",
+    "unknown = true\n",
 ])
 async def test_unknown_configuration_keys_refuse_start(tmp_path, extra):
     configuration(tmp_path, extra=extra)
     with pytest.raises(AssessmentConfigError, match="unknown keys"):
         async with session(tmp_path, {}) as _:
             pytest.fail("invalid policy started a service")
+
+
+@pytest.mark.parametrize("marker", ["", "sandbox = false\n"])
+async def test_fault_entries_require_a_sandbox_table_at_startup(tmp_path, marker):
+    configuration(tmp_path, extra=marker + (
+        'faults = [{read = "Issue catalog", fault = "rate-limited"}]\n'
+    ))
+    with pytest.raises(AssessmentConfigError, match=f"{REPO}.*sandbox"):
+        async with session(tmp_path, {}) as _:
+            pytest.fail("non-sandbox fault policy started a service")
 
 
 async def test_stdio_service_without_app_transport_refuses_start(tmp_path, monkeypatch):
