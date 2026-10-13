@@ -1,6 +1,6 @@
 """The glossary entry ADR-0038's shipped code earned (#382).
 
-``CONTEXT.md`` records *shipped reality*, and ADR-0038 says so itself:
+``GLOSSARY.md`` records *shipped reality*, and ADR-0038 says so itself:
 **Collapsed** "becomes a named state of the **Activity** band with defined
 transitions, so ``CONTEXT.md`` owes the term […] it is recorded when the code
 implements it and not before." This is when it is implemented.
@@ -23,9 +23,9 @@ ADR_0038 = "docs/adr/0038-collapsed-activity-band-keeps-its-handle.md"
 
 
 def _repo_root() -> Path | None:
-    """First ancestor holding both ``docs/adr/`` and ``CONTEXT.md`` (else None)."""
+    """First ancestor holding both ``docs/adr/`` and ``GLOSSARY.md`` (else None)."""
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 
@@ -43,11 +43,11 @@ def _entry(term: str) -> str:
     """One glossary entry's body, reflowed.
 
     An entry runs from its ``**Term**:`` heading to the next blank line, which is
-    what separates entries throughout ``CONTEXT.md``. Reading the entry rather
+    what separates entries throughout ``GLOSSARY.md``. Reading the entry rather
     than the whole document is what keeps a claim asserted *about the term* —
     otherwise a sentence elsewhere in the glossary could satisfy it.
     """
-    lines = _doc("CONTEXT.md").splitlines()
+    lines = _doc("GLOSSARY.md").splitlines()
     heading = f"**{term}**:"
     for index, line in enumerate(lines):
         if line.strip() == heading:
@@ -57,7 +57,7 @@ def _entry(term: str) -> str:
                     break
                 body.append(candidate)
             return " ".join(" ".join(body).split())
-    raise AssertionError(f"CONTEXT.md has no glossary entry for **{term}**")
+    raise AssertionError(f"GLOSSARY.md has no glossary entry for **{term}**")
 
 
 def test_the_glossary_names_collapsed_as_a_state_of_the_activity_band() -> None:

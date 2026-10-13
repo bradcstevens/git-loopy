@@ -714,7 +714,7 @@ def _pinned_skill_file(skill: str, name: str) -> Path:
     when there is none — the suite never reaches the network.
     """
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             root = parent
             break
     else:  # pragma: no cover - installed wheel, no source checkout

@@ -242,7 +242,7 @@ _STATUS_STOPPED = "stopped"
 # ---------------------------------------------------------------------------
 # Per-run ledger (issue #25)
 # ---------------------------------------------------------------------------
-#: Issue-lifecycle statuses within a run (CONTEXT.md glossary). Public so the
+#: Issue-lifecycle statuses within a run (GLOSSARY.md glossary). Public so the
 #: live Queue (#26) and drill-in (#27) can switch on them without re-declaring.
 STATUS_QUEUED = "queued"
 STATUS_ACTIVE = "active"
@@ -2326,7 +2326,7 @@ class LiveRunState:
         New refs enter as ``queued`` (capturing ``first_seen_at``); a ref that
         had gone ``gone`` and reappears returns to ``queued``. Any still-
         ``queued`` issue absent from this pool left without ever being worked —
-        ``gone`` (decisions D4b; CONTEXT.md).
+        ``gone`` (decisions D4b; GLOSSARY.md).
         """
         refs = [self._normalize_ref(r) for r in issues] if issues else []
         self._iter_pool = refs
@@ -3250,7 +3250,7 @@ class QueueRow:
 def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRow]:
     """Project the per-run ledger into ordered Queue rows (issue #33 columns).
 
-    Ordering (decision D5/CONTEXT.md): the **active** issue first, then
+    Ordering (decision D5/GLOSSARY.md): the **active** issue first, then
     **queued** issues, then the completed history (closed / advanced /
     no-progress / gone). Within each group the ledger's first-seen order is
     preserved (the sort is stable over ``ledger`` insertion order).

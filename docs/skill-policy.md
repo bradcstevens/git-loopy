@@ -15,7 +15,7 @@ the first-time setup path is
 ## Seven words that are not synonyms
 
 Most Skill-policy confusion is one of these seven being read as another. They are
-defined in [`CONTEXT.md`](../CONTEXT.md); what follows is what each one means
+defined in [`GLOSSARY.md`](../GLOSSARY.md); what follows is what each one means
 when you are holding a terminal.
 
 **Skill catalog** — everything git-loopy can *see*. Discovery asks the same

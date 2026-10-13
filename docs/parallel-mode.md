@@ -5,7 +5,7 @@ in isolated git worktrees whenever its Pool has **Lane** work. The bound
 **Execution host** declares the Lane ceiling. This page is the operator's guide
 to reading that behavior. [ADR-0020](adr/0020-rolling-dispatch-with-bounded-green-integration.md)
 records the design; §12 of the [Wrapper contract](wrapper-contract.md) defines
-the Events; [`CONTEXT.md`](../CONTEXT.md) defines every term in bold below.
+the Events; [`GLOSSARY.md`](../GLOSSARY.md) defines every term in bold below.
 
 ## Does your distribution have it?
 
