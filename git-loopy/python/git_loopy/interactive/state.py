@@ -777,6 +777,11 @@ class LiveRunState:
         #: line from telemetry the Orchestrator did not complete.
         self.release_target: str | None = None
         self.release_version: str | None = None
+        #: The **Release version** of the Orchestrator that started this Run,
+        #: as its ``wrapper.run.start`` declared it. Unrelated to the Release
+        #: line above: that is what Integration advanced *to*, this is what is
+        #: running.
+        self.run_release_version: str | None = None
         # An absent declaration is historical silence, not evidence the Run used
         # the local host.
         self.execution_host = ExecutionHostSnapshot()
@@ -1029,6 +1034,9 @@ class LiveRunState:
             self._mark_started()
             self.status = _STATUS_RUNNING
             self.execution_host = _execution_host_snapshot(event.get("execution_host"))
+            run_release_version = event.get("release_version")
+            if isinstance(run_release_version, str) and run_release_version:
+                self.run_release_version = run_release_version
             capabilities = event.get("insight_capabilities")
             if isinstance(capabilities, Mapping):
                 available = capabilities.get("context_window")

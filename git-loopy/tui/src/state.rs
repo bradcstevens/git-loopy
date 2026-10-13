@@ -600,6 +600,9 @@ pub struct DashboardState {
     /// The latched **Serial drain** and the cohort it waits for (ADR-0074).
     pub(crate) serial_drain: SerialDrainTracker,
     pub(crate) context_window: Option<ContextWindowSample>,
+    /// The Release version that started this Run, from its Run start. Not the
+    /// Release line's advance, which names what Integration moved *to*.
+    pub(crate) run_release_version: Option<String>,
     /// The last successfully committed **Release line** this Run announced.
     pub(crate) release_line: Option<ReleaseAdvanced>,
     pub(crate) active_ref: Option<IssueRef>,
@@ -671,6 +674,7 @@ impl DashboardState {
             parallel: ParallelPosture::default(),
             serial_drain: SerialDrainTracker::default(),
             context_window: None,
+            run_release_version: None,
             release_line: None,
             active_ref: None,
             order: Vec::new(),
@@ -881,6 +885,9 @@ impl DashboardState {
                 }
                 if let Some(execution_host) = &start.execution_host {
                     self.execution_host = ExecutionHostProvenance::from(execution_host);
+                }
+                if let Some(version) = &start.release_version {
+                    self.run_release_version = Some(version.clone());
                 }
             }
             EventPayload::ContributionStart(start) => {

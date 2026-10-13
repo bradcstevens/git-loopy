@@ -2544,8 +2544,8 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.20 accounts for each attempt and marks Skipped inline. 1.19 is reserved
-    # by the independently reviewed Dynamic-effort change (#789). 1.18 adds
+    # 1.20 accounts for each attempt and marks Skipped inline.
+    # 1.19 adds the Header's run_release_version from Run start. 1.18 adds
     # optional Ending/progress to Status (ADR-0075). 1.17 pins
     # observed zero wait, Lane activation during setup, and a Queue phase
     # that agrees with the drain after admission followed by parking.

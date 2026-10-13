@@ -647,10 +647,14 @@ fn draw_header(
     segments.extend(diagnostic_segment(diagnostics).map(|note| (0, note)));
     let progress = fitted_line(segments, area, glyphs);
 
+    let title = match header.run_release_version.as_deref() {
+        Some(version) => format!(" git-loopy {version} "),
+        None => " git-loopy ".to_string(),
+    };
     frame.render_widget(
         Paragraph::new(vec![Line::from(identity), Line::from(progress)]).block(
             glyphs
-                .block(" git-loopy ")
+                .block(title)
                 .title_style(Style::default().add_modifier(Modifier::BOLD)),
         ),
         area,

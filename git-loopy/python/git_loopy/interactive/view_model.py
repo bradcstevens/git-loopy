@@ -168,6 +168,9 @@ def _header(state: LiveRunState) -> dict[str, Any]:
         ),
         "release_target": state.release_target,
         "release_version": state.release_version,
+        # The Release version that started this Run, from its Run start; never
+        # the Release line's advance above, which names a later version.
+        "run_release_version": state.run_release_version,
         # Cost is unknown for more than one reason, and only the Run-start
         # declaration carries which (ADR-0026): a nulled figure cannot, because
         # the Wrapper contract lets a producer signal an unobservable
