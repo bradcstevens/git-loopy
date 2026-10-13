@@ -18,8 +18,10 @@ from .assessment_config import (
 )
 from .assessment_github import GitHubReads, Transport, Unreadable
 from .release_version import (
-    parse_release_line, parse_release_version, promote_closed_milestone,
+    is_release_target_label, parse_release_line, parse_release_version, promote_closed_milestone,
+    release_target_label,
 )
+from .wrapper import extract_close_refs
 
 
 ADVICE = (
@@ -34,6 +36,29 @@ MEANINGS = {
     "incomplete": "Some required evidence could not be read. "
                   "No conclusion either way — this does not mean probably fine.",
 }
+
+
+def _work_record(record: Any, read: str, source: str, api: str) -> dict:
+    if not isinstance(record, dict) or (
+        not isinstance(record.get("number"), int) or isinstance(record["number"], bool)
+        or record["number"] < 1 or record.get("state") not in ("open", "closed")
+        or not isinstance(record.get("title"), str)
+        or record.get("url") != f"https://api.github.com{api}/issues/{record['number']}"
+        or not isinstance(record.get("labels"), list)
+        or not all(isinstance(label, dict) and isinstance(label.get("name"), str)
+                   for label in record["labels"])
+        or "milestone" not in record or (
+            record["milestone"] is not None and (
+                not isinstance(record["milestone"], dict)
+                or not isinstance(record["milestone"].get("number"), int)
+                or isinstance(record["milestone"]["number"], bool)
+                or record["milestone"]["number"] < 1
+                or not isinstance(record["milestone"].get("title"), str)
+            )
+        )
+    ):
+        raise Unreadable(read, "unrecognized evidence shape", source)
+    return record
 
 
 def _inert(value: object) -> str:
@@ -226,6 +251,7 @@ def create_server(
             "verdict": "incomplete", "sources": {},
         }
         line = None
+        selected = None
         try:
             result["sha"] = await github.pin_head()
             result["sources"]["trunk"] = f"{github.web}/commit/{result['sha']}"
@@ -358,14 +384,166 @@ def create_server(
                             })
             except Unreadable as exc:
                 result["incompletes"].append(exc.item)
-        for read, suffix in [
-            ("Open and unabsorbed work", "/issues"),
-            ("Baseline and line content", "/tags"),
-        ]:
+        label = (
+            release_target_label(line.target) if line is not None and line.counter else
+            result["milestone"] if line is not None else None
+        )
+        if label is None:
             result["incompletes"].append({
-                "read": read, "reason": "not yet assessed by this service version",
-                "source": github.web + suffix,
+                "read": "Open and unabsorbed work", "reason": "line label unavailable",
+                "source": github.web + "/issues",
             })
+        else:
+            open_issues = set()
+            try:
+                async for raw in github.work_records("issues"):
+                    try:
+                        issue = _work_record(
+                            raw, "Issue catalog", github.web + "/issues", github.api,
+                        )
+                    except Unreadable as exc:
+                        result["incompletes"].append(exc.item)
+                        continue
+                    if "pull_request" in issue:
+                        if not isinstance(issue["pull_request"], dict) or (
+                            issue["pull_request"].get("url") != (
+                                f"https://api.github.com{github.api}/pulls/{issue['number']}"
+                            )
+                        ):
+                            result["incompletes"].append({
+                                "read": "Issue catalog", "reason": "unrecognized evidence shape",
+                                "source": github.web + "/issues",
+                            })
+                        continue
+                    number = issue["number"]
+                    source = f"{github.web}/issues/{number}"
+                    labels = [item["name"] for item in issue["labels"]]
+                    targets = []
+                    for claim in dict.fromkeys(labels):
+                        if not is_release_target_label(claim):
+                            continue
+                        try:
+                            release_target_label(claim[1:])
+                            targets.append(claim)
+                        except ValueError:
+                            result["incompletes"].append({
+                                "read": f"Release label of issue #{number}",
+                                "reason": "unrecognized evidence shape", "source": source,
+                            })
+                    if len(targets) > 1:
+                        result["incompletes"].append({
+                            "read": f"Release label of issue #{number}",
+                            "reason": "unrecognized evidence shape", "source": source,
+                        })
+                    if issue["state"] == "closed":
+                        for target in targets:
+                            if tuple(map(int, target[1:].split("."))) > tuple(
+                                map(int, line.target.split(".")),
+                            ):
+                                result["holds"].append({
+                                    "text": f"Closed issue #{number}: {issue['title']} carries "
+                                            f"unabsorbed label {target}; VERSION is "
+                                            f"{result['version']} (target {line.target}).",
+                                    "source": source,
+                                    "observed": f"state=closed; label={target}; "
+                                                f"VERSION={result['version']}",
+                                    "context": "",
+                                })
+                    if issue["state"] == "open" and label in labels:
+                        open_issues.add(number)
+                        hold = {
+                            "text": f"Open issue #{number}: {issue['title']} carries "
+                                    f"the line's label {label}.",
+                            "source": source, "observed": f"state=open; label={label}",
+                            "context": "",
+                        }
+                        result["holds"].append(hold)
+                        contexts = []
+                        read = f"Native blockers of issue #{number}"
+                        try:
+                            async for raw_blocker in github.work_records("blockers", number):
+                                try:
+                                    blocker_url = (
+                                        raw_blocker.get("url", "")
+                                        if isinstance(raw_blocker, dict) else ""
+                                    )
+                                    match = re.fullmatch(
+                                        r"https://api\.github\.com/repos/("
+                                        + REPOSITORY_PATTERN + r")/issues/([1-9][0-9]*)",
+                                        blocker_url if isinstance(blocker_url, str) else "",
+                                    )
+                                    if match is None:
+                                        raise Unreadable(
+                                            read, "unrecognized evidence shape", source,
+                                        )
+                                    blocker = _work_record(
+                                        raw_blocker,
+                                        f"Native blocker {match.group(1)}"
+                                        f"#{match.group(2)} of issue #{number}",
+                                        source,
+                                        f"/repos/{match.group(1)}",
+                                    )
+                                    if blocker["state"] == "open":
+                                        contexts.append(
+                                            f"Open blocker {match.group(1)}"
+                                            f"#{blocker['number']}: {blocker['title']} "
+                                            f"(https://github.com/{match.group(1)}"
+                                            f"/issues/{blocker['number']})."
+                                        )
+                                except Unreadable as exc:
+                                    result["incompletes"].append(exc.item)
+                        except Unreadable as exc:
+                            result["incompletes"].append(exc.item)
+                        hold["context"] = " ".join(contexts)
+                    elif label not in labels and selected and issue["milestone"] and (
+                        issue["milestone"]["number"] == selected["number"]
+                    ):
+                        result["context"].append(
+                            f"Issue #{number}: {issue['title']} belongs to milestone "
+                            f"{selected['title']} — context only ({source})."
+                        )
+            except Unreadable as exc:
+                result["incompletes"].append(exc.item)
+            try:
+                async for pull in github.work_records("pulls"):
+                    if not isinstance(pull, dict) or (
+                        not isinstance(pull.get("number"), int)
+                        or isinstance(pull["number"], bool) or pull["number"] < 1
+                        or pull.get("state") != "open"
+                        or not isinstance(pull.get("title"), str)
+                        or "body" not in pull or (
+                            pull["body"] is not None and not isinstance(pull["body"], str)
+                        )
+                        or pull.get("url") != (
+                            f"https://api.github.com{github.api}/pulls/{pull['number']}"
+                        )
+                    ):
+                        result["incompletes"].append({
+                            "read": "Open pull requests", "reason": "unrecognized evidence shape",
+                            "source": github.web + "/pulls",
+                        })
+                        continue
+                    closing = [
+                        number for number in extract_close_refs(
+                            pull["title"] + "\n" + (pull["body"] or ""),
+                        ) if number in open_issues
+                    ]
+                    if closing:
+                        refs = ", ".join(f"#{number}" for number in closing)
+                        result["holds"].append({
+                            "text": f"Open pull request #{pull['number']}: {pull['title']} "
+                                    f"closes open line issues {refs}.",
+                            "source": f"{github.web}/pull/{pull['number']}",
+                            "observed": f"state=open; closing references={refs}",
+                            "context": "",
+                        })
+            except Unreadable as exc:
+                result["incompletes"].append(exc.item)
+        result["incompletes"].append({
+            "read": "Baseline and line content",
+            "reason": "not yet assessed by this service version",
+            "source": github.web + "/tags",
+        })
         return result
 
     async def check_freshness(arguments):

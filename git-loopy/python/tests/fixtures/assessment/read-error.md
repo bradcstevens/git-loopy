@@ -8,7 +8,7 @@ Some required evidence could not be read. No conclusion either way — this does
 
 ## Could not read
 - VERSION at pinned SHA: denied or rate&#45;limited — [source](https://github.com/example/project/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/VERSION)
-- Open and unabsorbed work: not yet assessed by this service version — [source](https://github.com/example/project/issues)
+- Open and unabsorbed work: line label unavailable — [source](https://github.com/example/project/issues)
 - Baseline and line content: not yet assessed by this service version — [source](https://github.com/example/project/tags)
 
 ## What would change this

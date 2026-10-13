@@ -1,0 +1,35 @@
+{
+  "description": "An open PR closes a target-labelled issue; a free-text mention does not.",
+  "issues": [
+    {
+      "number": 7, "state": "open", "title": "Unfinished work",
+      "url": "https://api.github.com/repos/example/project/issues/7",
+      "labels": [{"name": "v0.12.0"}], "milestone": null
+    }
+  ],
+  "blockers": {"7": {"status": 200, "data": []}},
+  "pulls": [
+    {
+      "number": 20, "state": "open", "title": "Finish the work", "body": "Closes #7",
+      "url": "https://api.github.com/repos/example/project/pulls/20"
+    },
+    {
+      "number": 21, "state": "open", "title": "Related #7", "body": null,
+      "url": "https://api.github.com/repos/example/project/pulls/21"
+    }
+  ],
+  "holds": [
+    {
+      "text": "Open issue #7: Unfinished work carries the line's label v0.12.0.",
+      "source": "https://github.com/example/project/issues/7",
+      "observed": "state=open; label=v0.12.0", "context": ""
+    },
+    {
+      "text": "Open pull request #20: Finish the work closes open line issues #7.",
+      "source": "https://github.com/example/project/pull/20",
+      "observed": "state=open; closing references=#7", "context": ""
+    }
+  ],
+  "incompletes": [],
+  "verdict": "incomplete"
+}

@@ -1,0 +1,30 @@
+{
+  "description": "A native dependency references a cross-repository blocker whose contents the App cannot see.",
+  "issues": [
+    {
+      "number": 7, "state": "open", "title": "Blocked work",
+      "url": "https://api.github.com/repos/example/project/issues/7",
+      "labels": [{"name": "v0.12.0"}], "milestone": null
+    }
+  ],
+  "blockers": {
+    "7": {"status": 200, "data": [
+      {"number": 9, "url": "https://api.github.com/repos/private/project/issues/9"}
+    ]}
+  },
+  "holds": [
+    {
+      "text": "Open issue #7: Blocked work carries the line's label v0.12.0.",
+      "source": "https://github.com/example/project/issues/7",
+      "observed": "state=open; label=v0.12.0", "context": ""
+    }
+  ],
+  "incompletes": [
+    {
+      "read": "Native blocker private/project#9 of issue #7",
+      "reason": "unrecognized evidence shape",
+      "source": "https://github.com/example/project/issues/7"
+    }
+  ],
+  "verdict": "incomplete"
+}
