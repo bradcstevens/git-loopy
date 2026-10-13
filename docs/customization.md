@@ -32,13 +32,13 @@
 
 ```
 ├── AGENTS.md                       # Your project's agent guide — Tech stack + Feedback loops table (see below).
-├── CONTEXT.md                      # Your project's domain glossary.
+├── GLOSSARY.md                     # Your project's domain glossary.
 ├── docs/
 │   ├── adr/                        # Architecture decision records (created lazily by /grill-with-docs).
 │   └── agents/                     # Per-repo skill config — written by /setup-git-loopy-skills.
 │       ├── issue-tracker.md        #   Where issues live (GitHub / GitLab / local markdown / other).
 │       ├── triage-labels.md        #   Label vocabulary used by /triage.
-│       └── domain.md               #   Single- vs multi-context layout for CONTEXT.md / ADRs.
+│       └── domain.md               #   Single- vs multi-context layout for GLOSSARY.md / ADRs.
 ├── prds/                           # Optional legacy local-markdown PRDs (GIT_LOOPY_ISSUE_SOURCE=prds).
 ├── issues/                         # Optional legacy local-markdown issues.
 └── <your application code>

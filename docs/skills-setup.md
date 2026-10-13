@@ -317,7 +317,7 @@ For the last two, **accepting the defaults is the right move** unless you have a
 - **`AGENTS.md` → `## Agent skills` block** (at the bottom): pointers the other skills follow to find the config below. This block is owned by the skill — don't hand-edit it the first time around.
 - **`docs/agents/issue-tracker.md`**: where issues live and, optionally, whether pull requests are a request surface (`PRs as a request surface: yes`).
 - **`docs/agents/triage-labels.md`**: the label vocabulary `/triage` drives.
-- **`docs/agents/domain.md`**: single- vs multi-context layout for `CONTEXT.md` / ADRs.
+- **`docs/agents/domain.md`**: single- vs multi-context layout for `GLOSSARY.md` / ADRs.
 
 Specs and issues are saved wherever the issue-tracker answer points (GitHub Issues by default).
 
@@ -351,10 +351,11 @@ Two sections are load-bearing:
 
 Optionally add the [First-run bootstrap directive](customization.md#first-run-bootstrap-directive) at the top so interactive sessions auto-trigger `/setup-git-loopy-skills`. Leave the trailing `## Agent skills` block alone — `/setup-git-loopy-skills` owns it.
 
-### `CONTEXT.md`, ADRs, and specs
+### `GLOSSARY.md`, ADRs, and specs
 
 Use `/grill-with-docs` to sharpen the repository's shared language in
-`CONTEXT.md` and record consequential decisions under `docs/adr/`. Once the
+`GLOSSARY.md` (or the context glossaries linked from `GLOSSARY-MAP.md`) and
+record consequential decisions under `docs/adr/`. Once the
 planning context has reached shared understanding, `/to-spec` synthesizes that
 discussion and publishes the destination to the configured issue tracker. A
 spec carries the problem, solution, user stories, implementation and testing
@@ -392,7 +393,7 @@ The two compose cleanly: run `uv run --project git-loopy/python git-loopy` on a 
 On a greenfield project, the temptation is to jump straight to
 `/grill-with-docs` because vocabulary is most malleable early. Do not define a
 glossary for entities that do not exist yet. Use `/grill-me` until three or four
-terms recur, then switch to `/grill-with-docs` to codify them in `CONTEXT.md`.
+terms recur, then switch to `/grill-with-docs` to codify them in `GLOSSARY.md`.
 The decision guide is in
 [`docs/workflow.md`](workflow.md#grill-me-or-grill-with-docs-pick-the-right-one).
 
