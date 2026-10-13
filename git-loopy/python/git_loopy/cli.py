@@ -2252,6 +2252,26 @@ def _resolve_persisted_str(
     return settings.table_str(global_, key, scope="global")
 
 
+def _resolve_host_yield(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> str:
+    from git_loopy.host_yield import default_host_yield, parse_host_yield
+
+    for table, key, source in (
+        (env, "GIT_LOOPY_HOST_YIELD", "GIT_LOOPY_HOST_YIELD"),
+        (project, "host_yield", "project Config"),
+        (global_, "host_yield", "global Config"),
+    ):
+        if key in table:
+            try:
+                return parse_host_yield(table[key])
+            except ValueError as exc:
+                raise settings.SettingsError(f"{source}: {exc}") from exc
+    return default_host_yield()
+
+
 def _resolve_denylist(
     cli_values: list[str],
     env_var: str,
@@ -3001,7 +3021,7 @@ def resolve_config(
     so it is exhaustively unit-testable. The persisted (config-tiered) knobs are
     ``model``, ``reasoning_effort``, ``max_nmt_strikes``, ``issue_source``,
     ``include_prs``, ``enabled_skills``, ``deny_tools``, ``deny_skills``,
-    ``otel_enabled``, ``send_timeout_seconds`` and the
+    ``otel_enabled``, ``host_yield``, ``send_timeout_seconds`` and the
     ``[routing]`` table. The
     per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``,
     temporary Skill overlays) are NEVER read from a config
@@ -3123,6 +3143,7 @@ def resolve_config(
         render_reasoning=bool(args.render_reasoning),
         otel_enabled=_otel_enabled(env, project, global_),
         execution_host=execution_host,
+        host_yield=_resolve_host_yield(env, project, global_),
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
         context_tier=context_tier,
@@ -3500,6 +3521,16 @@ def main(argv: list[str] | None = None) -> int:
 
     config = resolved.run
 
+    from git_loopy.host_yield import HostYieldError, enter_line_printer_policy
+
+    interactive = _should_run_interactive()
+    if not interactive:
+        try:
+            enter_line_printer_policy(config.host_yield, argv)
+        except HostYieldError as exc:
+            print(f"git-loopy: error: {exc}", file=sys.stderr)
+            return 1
+
     from git_loopy.host_capability import remote_static_execution
     from git_loopy.run_routing_preflight import (
         RunRoutingPreflight,
@@ -3572,7 +3603,7 @@ def main(argv: list[str] | None = None) -> int:
     # A non-terminal Run stays here as the line printer and never spawns a
     # client.
     select_model = _should_select_model(args)
-    if _should_run_interactive():
+    if interactive:
         return asyncio.run(
             _drive_interactive(config, select_model=select_model)
         )
@@ -3746,6 +3777,7 @@ def _run_tty_sidecar(
 ) -> int:
     """Start the detached worker, then keep the parent as the attach client."""
     from git_loopy import run_sidecar
+    from git_loopy.host_yield import HostYieldError
     from git_loopy.persist import create_writers
 
     writers = create_writers(repo_root)
@@ -3764,11 +3796,15 @@ def _run_tty_sidecar(
             f"({type(exc).__name__}: {exc}); using the line-printer client."
         )
         release_version = ""
-    child = run_sidecar.spawn_detached_child(
-        spec,
-        diagnostics_path=writers.diagnostics_path,
-        cwd=Path.cwd(),
-    )
+    try:
+        child = run_sidecar.spawn_detached_child(
+            spec,
+            diagnostics_path=writers.diagnostics_path,
+            cwd=Path.cwd(),
+        )
+    except HostYieldError as exc:
+        print(f"git-loopy: error: {exc}", file=sys.stderr)
+        return 1
     return run_sidecar.run_terminal_client(
         repository_root=repo_root,
         config=config,

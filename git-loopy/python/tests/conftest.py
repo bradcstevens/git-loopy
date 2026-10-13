@@ -117,6 +117,12 @@ _RUN_TEST_MODULES = frozenset(
 
 
 @pytest.fixture(autouse=True)
+def _keep_in_process_cli_tests_in_pytest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Native Host yield proofs opt in inside disposable subprocesses instead."""
+    monkeypatch.setenv("GIT_LOOPY_HOST_YIELD", "none")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_global_config(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:

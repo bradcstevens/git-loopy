@@ -108,6 +108,39 @@ preflight works without it; this directive adds the interactive auto-trigger.
 > **First-run bootstrap (read on every invocation).** If `docs/agents/issue-tracker.md` does **NOT** exist at the repo root, your very first action this session is to invoke `/setup-git-loopy-skills` - **before any other work**, including the user's stated request. After it completes, return to whatever the user originally asked. If `docs/agents/issue-tracker.md` already exists, this bootstrap is satisfied; ignore this paragraph and proceed normally. The autonomous git-loopy Orchestrator (`git-loopy/python/`) refuses to start without this file, so if you are reading this directive from inside a `copilot --yolo -p` invocation, surface the inconsistency and stop.
 ```
 
+## Host yield policy on macOS
+
+The Python Runner defaults to `host_yield = "utility"` on macOS. Its Run
+process, Copilot runtime, agent tool commands and Integration feedback loops
+inherit the `taskpolicy -c utility` QoS clamp: they yield CPU to foreground
+work while retaining throughput on an idle host. On the Dashboard path the
+detached worker is clamped; the operator's Dashboard client stays foreground.
+On the line-printer path the CLI process itself is clamped.
+
+For a host that serves no interactive work, opt out in project
+`git-loopy/config.toml` or global `<config-home>/git-loopy/config.toml`:
+
+```toml
+host_yield = "none"
+```
+
+Equivalently, use `git-loopy config set --project host_yield none` (or
+`--global`), or `GIT_LOOPY_HOST_YIELD=none git-loopy` for one invocation.
+Precedence is **environment > project Config > global Config > platform
+default**. The only values are `utility` and `none`; an unknown value refuses
+the Run with a diagnostic. On macOS, a missing `taskpolicy` also refuses
+instead of silently running unclamped. Restore it on `PATH` or explicitly
+opt out.
+
+Other platforms keep their existing scheduling behavior (default `none`;
+`utility` has no scheduling effect there). Opt-out does not undo a policy
+inherited from an external launcher. This is not a CPU quota or permission
+to generate unbounded load. `nice` does not protect foreground work on macOS,
+and the `background` clamp throttles deadline-bound tests too far. See
+[ADR-0092](adr/0092-runs-yield-to-the-operators-foreground-on-macos.md) for
+the measured trade-off. Automated policy checks read process priority and
+never create CPU load.
+
 ## Skills reference
 
 Three different things supply Skills, and they are not interchangeable:
