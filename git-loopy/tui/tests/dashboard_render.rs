@@ -203,6 +203,27 @@ fn the_header_band_states_the_run_at_a_glance() {
 }
 
 #[test]
+fn the_header_title_names_the_release_version_that_started_the_run() {
+    let view = fixture_view("baseline-closed-iteration");
+    let lines = render_lines(&view, 160, 40, TerminalCapabilities::default());
+    let title = lines
+        .iter()
+        .find(|line| line.contains(" git-loopy "))
+        .expect("the Header border carries its title");
+    assert!(title.contains(" git-loopy 1.2.3 "), "{title}");
+
+    let mut unversioned = view.clone();
+    unversioned.dashboard.header.run_release_version = None;
+    let lines = render_lines(&unversioned, 160, 40, TerminalCapabilities::default());
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(" git-loopy ─") || line.contains(" git-loopy -")),
+        "an undeclared version leaves the plain title, never a placeholder"
+    );
+}
+
+#[test]
 fn the_queue_band_lists_every_issue_in_the_locked_columns() {
     let view = fixture_view("baseline-closed-iteration");
     // 167 is the width at which `integrating 0:00:00` still keeps every
