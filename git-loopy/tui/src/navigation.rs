@@ -37,9 +37,9 @@ pub enum Key {
     PageUp,
     /// Scroll the visible Queue or drill-in Log down by one page.
     PageDown,
-    /// Scroll the Dashboard's Activity tail up by one page without changing focus.
+    /// Page the Dashboard Activity or drill-in attempt account up without changing focus.
     ActivityPageUp,
-    /// Scroll the Dashboard's Activity tail down by one page without changing focus.
+    /// Page the Dashboard Activity or drill-in attempt account down without changing focus.
     ActivityPageDown,
     /// Resume following the Log and Activity tails.
     Follow,

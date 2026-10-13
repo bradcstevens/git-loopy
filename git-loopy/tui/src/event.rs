@@ -1018,6 +1018,10 @@ pub struct Strike {
     /// The configured Strike limit.
     #[serde(default, deserialize_with = "lenient_i64")]
     pub max_strikes: Option<i64>,
+    /// Only a named issue's `skip` disposition marks a Queue row. Its
+    /// explanation still comes exclusively from the issue-outcome record.
+    #[serde(default)]
+    pub outcome: Option<String>,
 }
 
 /// The Run-end payload.

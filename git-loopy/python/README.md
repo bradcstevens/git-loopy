@@ -52,13 +52,34 @@ without guessing. Repository-sourced Markdown syntax is neutralized.
 The hand-edited allowlist/policy is snapshotted at startup and content-hashed
 in each result. Unknown configuration keys refuse startup.
 
-**Not yet operational:** the entry point fails closed until the dedicated App
-authentication transport lands in #760; it never borrows `gh` credentials.
-Tests run the same MCP protocol in-process with recorded responses. Counted
-checks (#762), open and unabsorbed work (#763), and baseline and line content
-(#764) remain explicit unreadable placeholders, so this version always returns
-`incomplete`, retaining any nothing-to-promote finding. Freshness (#761),
-fault injection (#765), and operator documentation (#766) are separate tickets.
+The entry point authenticates only as the configured GitHub App: it signs an
+RS256 JWT in-process, verifies the repository's installation against the policy,
+and exchanges the JWT for a token scoped to that repository and read permissions.
+Provenance names the App observed from GitHub and its installation, never a token.
+Every request uses GitHub.com's REST API version `2022-11-28`; the token exchange
+is the only POST. There is no `gh`, `GH_TOKEN` or `GITHUB_TOKEN` fallback.
+
+Each repository table names `app_id`, `installation_id`, `app_identity` (the
+operator's configured name), `key_file`, and `workflows`. The App's name in
+Provenance comes from GitHub, not `app_identity`. The PEM RSA private key must be
+readable only by its owner. On POSIX, startup checks the opened regular file's
+owner and permissions (use mode `0600`); missing, unreadable, over-permissive or
+invalid keys refuse startup even when a test transport is supplied. On macOS,
+the opened key file must also have no extended ACL, even one that grants no
+additional read access; remove it with `chmod -N <key-file>`, then use mode `0600`.
+If the ACL cannot be inspected, startup refuses the key. On Windows,
+operators must grant access only to their account using the file's ACL: this
+version does not enforce Windows ACLs.
+
+Tests run the same MCP protocol in-process with a generated throwaway key and
+recorded responses; authentication uses the same substituted transport for both
+`assess` and `check_freshness(repository, milestone, sha)`. The freshness tool
+returns `stale` if App authentication fails, without reading evidence.
+Counted workflow runs, open and unabsorbed work, and line content from the newest
+reachable stable baseline are read at the pinned SHA. Complete evidence yields
+`reviewable` or `hold_advised`; an unreadable item yields `incomplete`, retaining
+any known hold findings. A reviewable verdict is advice, never authorization.
+Fault injection (#765) and operator documentation (#766) are separate tickets.
 
 ## Installation lifecycle
 
@@ -1365,37 +1386,38 @@ above (`model`, `reasoning_effort`, `context_tier`, `route_policy`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
 
-### Quality-first static recipe
+### Recommended static recipe
 
-The recommended seven routes are a maintainer-selected quality-first preset,
-not a measured ranking. Their models, efforts and long-context support were
-verified through the SDK-pinned harness on 2026-10-09:
+The recommended seven routes are a maintainer-selected preset calibrated
+against public leaderboard evidence, not a measured ranking. Their models,
+efforts and long-context support were verified through the SDK-pinned harness
+on 2026-10-12:
 
 | Task type | Model | Reasoning effort |
 | --- | --- | --- |
-| `planning` | `gpt-6.1-sol` | `xhigh` |
-| `review` | `claude-sonnet-5.5` | `xhigh` |
-| `implementation` | `gpt-6.1-sol` | `high` |
-| `test` | `claude-sonnet-5.5` | `high` |
-| `docs` | `gpt-6.1-sol` | `low` |
-| `chore` | `gpt-6-luna` | `medium` |
-| `bugfix` | `gpt-6.1-sol` | `xhigh` |
+| `planning` | `claude-opus-5.5` | `medium` |
+| `review` | `claude-opus-5.5` | `medium` |
+| `implementation` | `gpt-6-astra` | `medium` |
+| `test` | `gpt-6-astra` | `medium` |
+| `docs` | `claude-sonnet-5.5` | `medium` |
+| `chore` | `claude-sonnet-5.5` | `low` |
+| `bugfix` | `claude-opus-5.5` | `medium` |
 
 `init` offers this optional static recipe; `config routing use-recommended`
 adopts its pairs without silently rewriting existing Config. Static entries
-inherit the run-level `context_tier`. The tracked project Config selects its
-own static table (Claude Opus for planning/review, Claude Haiku for chores),
-`long_context` and the Static policy. To adopt long
+inherit the run-level `context_tier`. The tracked project Config selects this
+same table, `long_context` and the Static policy. To adopt long
 context in another scope, use `config set context_tier long_context`; adopting
 the recommended pairs alone does not change that scope's tier. The built-in
 fallback stays `default` where neither Config scope supplies a tier. A global
 tier is inherited where a project omits its own; a project can opt out with
 `context_tier = "default"` without changing the global preset.
-Review is a different vendor from implementation/docs, and every route leaves
-the `gpt-6.1-sol @ max` legacy escalation rung distinct. Static retries change
-pairs only with an explicitly configured `[escalation]` block.
+Review is a different vendor from implementation and test (docs, planning and
+bugfix share its vendor), and every route leaves the `gpt-6.1-sol @ max` legacy
+escalation rung distinct. Static retries change pairs only with an explicitly
+configured `[escalation]` block.
 
-See [ADR-0048's current preset](../../docs/adr/0048-the-recommended-routing-table-is-retuned.md#quality-first-retune-2026-10-09)
+See [ADR-0048's current preset](../../docs/adr/0048-the-recommended-routing-table-is-retuned.md#evidence-calibrated-retune-2026-10-12)
 for the reported window and prompt caps. Those limits are not a static runtime
 budget: context fill still uses live telemetry, the bounded working budget is
 unchanged, and long context may cost more. Dynamic routing continues to elect

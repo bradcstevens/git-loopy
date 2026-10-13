@@ -209,15 +209,19 @@ the proof is the failure this sequence exists to prevent.
    of the SHA you published, clean of later edits. A pass still does not move
    the pin. `python -m git_loopy.skill_source` cannot stand in for this step:
    it fetches the pin, so it cannot judge a revision the pin does not yet name.
-4. **Pin last.** Only after that proof passes, edit `skill_source.json` to
-   that SHA. The git-loopy commit names the upstream revision and the Skill
-   edit it carries. In that same change, reconcile the pin's consumers: the
+   If a retired Skill breaks the proof, reconcile the consumers before
+   rerunning it; a failed preview never authorizes moving the pin.
+   Reconcile the pin's consumers in that same change: the
    offline revision and Skill-name snapshot in `tests/test_prompt.py`, the
    README's catalog table, and both `PROMPT.md` copies when a Skill is added,
    renamed, or retired. Decide explicitly whether new Skills belong in an
    autonomous Iteration; user-invoked operations must not become implicit
    follow-up work. Keep the Required Skills unchanged unless the Run contract
-   itself is changing. Then run the Python feedback loop from `AGENTS.md`.
+   itself is changing.
+4. **Pin last.** Only after that proof passes and the consumers are ready,
+   edit `skill_source.json` to that SHA as the last file edit. The git-loopy
+   commit names the upstream revision and the Skill edits it carries.
+   Then run the Python feedback loop from `AGENTS.md`.
    Acquiring the new pin so the live-catalog guards run rather than skip is
    confirmation after the pin move, not a substitute for the proof above.
 
@@ -229,14 +233,20 @@ names this pin rather than repeating a revision that could drift away from it.
 ### Upgrading existing policies
 
 The catalog is pinned to
-`d4b73153f654b9f8251d4ee28bcd49aeb34d6fae`, published and proved for the
-rename of `/model-fit` to `/set-task-models` and the addition of
-`/model-scorecard`. The previous pin,
-`89ba57c41f9959699e2267f794d200b57b229c02`, carried the retirement of
-`/build-iterated-agentic-loop` into `/design-control-loop` and the addition of
-`/jev-ultrafast`.
+`7d98aa729d04cb01686793150272cf9c1094fb9a`, the published upstream `main`
+selected for #833. It replaces the previous
+`d4b73153f654b9f8251d4ee28bcd49aeb34d6fae` pin: conflict resolution now
+belongs to `/implement`, closing with `/code-review`; `/batch-grill-me` is
+retired; and `/implement-spec`, `/retro`, and `/pr` join the catalog.
+`/to-handoff` and `/chief-of-staff` are absent at this revision and await a
+later pin move.
 
-The current catalog includes 43 Skills. `/next` handles both workflow routing
+The catalog uses `GLOSSARY.md`, or `GLOSSARY-MAP.md` for multiple contexts.
+The Run prompt prefers these root entry points in both domain reading and
+plan stress-testing, falling back to `CONTEXT.md` / `CONTEXT-MAP.md` only when
+neither new entry point exists.
+
+The current catalog includes 44 Skills. `/next` handles both workflow routing
 and skill selection, replacing `/skill-router`; its skill-selection and
 phase-boundary references travel with a standalone installation. An earlier
 upgrade also adopted the upstream retirement of `/loose-ends` and the addition
@@ -261,9 +271,18 @@ too; use `/design-control-loop`, which absorbed its scaffolding.
 Replace `model-fit` with `set-task-models` in saved policies and custom
 prompts; the Skill was renamed, not changed.
 
-New catalog members, including `jev-ultrafast` and `model-scorecard`, do not
-automatically enter an existing allowlist. The packaged Required Skills remain
-unchanged, and the packaged prompt keeps `release`, `set-task-models`,
+Remove `batch-grill-me` from saved policies and custom prompts. Replace
+`resolving-merge-conflicts` with `implement` wherever conflict resolution is
+needed. The packaged Required Skills make that same replacement, so a saved
+policy used with the packaged prompt must enable `implement`. Its general
+orchestration stays outside the Run; only conflict resolution for the bound PR
+uses it, followed by review of the resolved head.
+
+New catalog members do not automatically enter an existing allowlist.
+`implement-spec` orchestrates an entire spec's ticket graph and `retro` needs a
+user, so neither runs inside an unattended Iteration. `pr` is optional
+pull-request body guidance, not permission to create or merge a PR.
+The packaged prompt also keeps `release`, `set-task-models`,
 `model-scorecard`, `sync-model-roster`, and `jev-ultrafast` out of autonomous
 Iterations. Install the catalog into your agent client separately to invoke these yourself; doing
 so neither changes git-loopy's saved policy nor authorizes a release.

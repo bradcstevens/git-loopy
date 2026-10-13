@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "key": "powershell",
+  "state": "dormant",
+  "release_authority": {
+    "file": "git-loopy/paths/powershell.json",
+    "field": "baseline.release_version"
+  },
+  "tag_namespace": "powershell/vX.Y.Z",
+  "contract_support": "2.26",
+  "event_schema_support": [1],
+  "members": ["powershell"],
+  "artifacts": [],
+  "owned_files": ["git-loopy/powershell/**", "git-loopy/paths/powershell.json"],
+  "gate_rows": ["PowerShell Orchestrator suites"],
+  "baseline": {
+    "release_version": "0.11.2",
+    "source_tag": "v0.11.2",
+    "source_commit": "a0f912b57c222f2525238d37ae268b0adb4c764f",
+    "owed_waivers": [
+      {"fixture": "attempt-lifecycle.json", "issue": 554},
+      {"fixture": "status-endings.json", "issue": 835}
+    ]
+  }
+}

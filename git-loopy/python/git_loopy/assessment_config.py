@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
+import sys
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -28,6 +31,52 @@ class AssessmentConfigError(ValueError):
     """The service cannot start with this policy."""
 
 
+def _check_macos_acl(fd: int) -> None:
+    import ctypes
+    import errno
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    libc.acl_get_fd_np.restype = ctypes.c_void_p
+    libc.acl_free.argtypes = [ctypes.c_void_p]
+    libc.acl_free.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    acl = libc.acl_get_fd_np(fd, 0x100)  # ACL_TYPE_EXTENDED from macOS sys/acl.h.
+    if acl is None:
+        # For an opened descriptor, Darwin's ENOENT means no extended ACL exists.
+        if ctypes.get_errno() == errno.ENOENT:
+            return
+        raise AssessmentConfigError("could not inspect App key file ACL")
+    libc.acl_free(acl)
+    raise AssessmentConfigError("App key file must have no extended ACL")
+
+
+def read_app_key(path: Path) -> bytes:
+    """Check the opened file, not a separate stat that could race a replacement."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as key:
+            info = os.fstat(key.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise AssessmentConfigError("App key file must be a regular file")
+            if os.name == "posix" and (
+                info.st_uid != os.geteuid() or info.st_mode & 0o077
+            ):
+                raise AssessmentConfigError("App key file must be owner-only")
+            if os.name == "posix" and not info.st_mode & stat.S_IRUSR:
+                raise AssessmentConfigError("App key file is unreadable")
+            if sys.platform == "darwin":
+                _check_macos_acl(key.fileno())
+            material = key.read(65537)
+    except FileNotFoundError:
+        raise AssessmentConfigError("App key file is missing") from None
+    except OSError:
+        raise AssessmentConfigError("App key file is unreadable") from None
+    if not material or len(material) > 65536:
+        raise AssessmentConfigError("App key file is empty or too large")
+    return material
+
+
 @dataclass(frozen=True)
 class Policy:
     workflows: tuple[str, ...]
@@ -36,13 +85,6 @@ class Policy:
     app_identity: str
     key_file: Path
     revision: str
-
-    @property
-    def identity(self) -> str:
-        return (
-            f"GitHub App {self.app_identity} (app {self.app_id}, "
-            f"installation {self.installation_id})"
-        )
 
 
 def load_policy(env: Mapping[str, str]) -> dict[str, Policy]:

@@ -242,20 +242,21 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {
 #: ==================  ====================  ========
 #: task-type key       Model                 Effort
 #: ==================  ====================  ========
-#: ``planning``        ``gpt-6.1-sol``       ``xhigh``
-#: ``review``          ``claude-sonnet-5.5`` ``xhigh``
-#: ``implementation``  ``gpt-6.1-sol``       ``high``
-#: ``test``            ``claude-sonnet-5.5`` ``high``
-#: ``docs``            ``gpt-6.1-sol``       ``low``
-#: ``chore``           ``gpt-6-luna``        ``medium``
-#: ``bugfix``          ``gpt-6.1-sol``       ``xhigh``
+#: ``planning``        ``claude-opus-5.5``   ``medium``
+#: ``review``          ``claude-opus-5.5``   ``medium``
+#: ``implementation``  ``gpt-6-astra``       ``medium``
+#: ``test``            ``gpt-6-astra``       ``medium``
+#: ``docs``            ``claude-sonnet-5.5`` ``medium``
+#: ``chore``           ``claude-sonnet-5.5`` ``low``
+#: ``bugfix``          ``claude-opus-5.5``   ``medium``
 #: ==================  ====================  ========
 #:
-#: **Provenance.** The quality-first maintainer retune of **2026-10-09** is
-#: recorded in ADR-0048. Availability, efforts and tiers were verified against
-#: the SDK-pinned harness, agreeing with the supplied 2026-10-08 catalog; model
-#: quality is a recommendation, not a new benchmark measurement. Every chosen
-#: model supports the authored preset's ``long_context`` tier.
+#: **Provenance.** The maintainer's evidence-calibrated retune of
+#: **2026-10-12**, recorded in ADR-0048, supersedes the 2026-10-09
+#: quality-first values. Availability, efforts and tiers were verified against
+#: the SDK-pinned harness (CLI 1.0.92-4); model quality rests on public
+#: leaderboard evidence, not a routing measurement. Every chosen model supports
+#: the authored preset's ``long_context`` tier.
 #:
 #: * **No routed pair holds** ``max``. The built-in legacy escalation rung is
 #:   ``gpt-6.1-sol @ max``, a real pair change from every recommended route.
@@ -269,19 +270,21 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {
 #:   ``settings.table_routing``'s exactly-``{model, effort}`` demand, ``init``'s
 #:   ``supported_efforts`` filter, and ``tests/test_config.py``'s uniform
 #:   gates-clean assertion.
-#: * **Cross-vendor review holds by construction.** ``review`` remains
-#:   Anthropic while ``implementation`` and ``docs`` remain OpenAI, preserving
-#:   ADR-0035's exclusion of ``gpt-5.6-sol`` from a write-capable review Lane.
-#:   No vendor map or cross-entry mechanism enforces the preference.
+#: * **Review stays cross-vendor from the code-writing rows.** ``review`` is
+#:   Anthropic while ``implementation`` and ``test`` are OpenAI, and ``review``
+#:   is never ``gpt-5.6-sol`` (ADR-0035's exclusion from a write-capable review
+#:   Lane). Since the 2026-10-12 retune ``docs``, ``planning`` and ``bugfix``
+#:   share review's vendor, a cost ADR-0048 records. No vendor map or
+#:   cross-entry mechanism enforces either property.
 RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
-        "planning": ("gpt-6.1-sol", "xhigh"),
-        "review": ("claude-sonnet-5.5", "xhigh"),
-        "implementation": ("gpt-6.1-sol", "high"),
-        "test": ("claude-sonnet-5.5", "high"),
-        "docs": ("gpt-6.1-sol", "low"),
-        "chore": ("gpt-6-luna", "medium"),
-        "bugfix": ("gpt-6.1-sol", "xhigh"),
+        "planning": ("claude-opus-5.5", "medium"),
+        "review": ("claude-opus-5.5", "medium"),
+        "implementation": ("gpt-6-astra", "medium"),
+        "test": ("gpt-6-astra", "medium"),
+        "docs": ("claude-sonnet-5.5", "medium"),
+        "chore": ("claude-sonnet-5.5", "low"),
+        "bugfix": ("claude-opus-5.5", "medium"),
     }
 )
 

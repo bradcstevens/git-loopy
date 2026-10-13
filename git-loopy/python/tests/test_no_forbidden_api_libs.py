@@ -1,10 +1,15 @@
-"""Static guard: no Python-native API libraries in ``git_loopy/``.
+"""Static guard: no Python-native API libraries in the Runner.
 
 The wrapper contract (PRD #1, issue #6) requires every external GitHub or
 git API call to flow through ``subprocess.run`` against the ``gh`` and
 ``git`` CLIs. The user's existing ``gh auth`` and ``git config`` (including
 SSO tokens, credential helpers, ``safe.directory`` settings, GitHub
 Enterprise endpoints) is the single source of truth.
+
+The separate, optional assessment service has the opposite credential contract
+(#575, #760): only its dedicated GitHub App may read GitHub, never ambient gh
+auth. Its sole transport module may therefore import httpx. No other module or
+API library is exempt.
 
 We explicitly forbid these importable top-level packages:
 
@@ -72,6 +77,9 @@ def test_no_forbidden_api_libraries_in_any_git_loopy_module() -> None:
     """
     failures: list[str] = []
     for py_file in _iter_package_python_files():
+        app_transport = (
+            py_file == Path(git_loopy.__file__).parent / "assessment_github.py"
+        )
         try:
             source = py_file.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
@@ -86,7 +94,7 @@ def test_no_forbidden_api_libraries_in_any_git_loopy_module() -> None:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     top = alias.name.split(".")[0]
-                    if top in FORBIDDEN:
+                    if top in FORBIDDEN and not (app_transport and top == "httpx"):
                         failures.append(
                             f"{py_file}:{node.lineno}: forbidden `import {alias.name}` "
                             f"(top-level package {top!r} is in the forbidden set)"
@@ -99,16 +107,16 @@ def test_no_forbidden_api_libraries_in_any_git_loopy_module() -> None:
                 if not node.module:
                     continue
                 top = node.module.split(".")[0]
-                if top in FORBIDDEN:
+                if top in FORBIDDEN and not (app_transport and top == "httpx"):
                     failures.append(
                         f"{py_file}:{node.lineno}: forbidden "
                         f"`from {node.module} import ...` "
                         f"(top-level package {top!r} is in the forbidden set)"
                     )
     assert not failures, (
-        "git-loopy/ must funnel every external API call through subprocess "
-        "wrappers around `gh` and `git` — Python-native API libraries are "
-        "forbidden:\n  " + "\n  ".join(failures)
+        "The Runner must funnel external API calls through `gh` and `git`; "
+        "only the dedicated assessment transport may import httpx:\n  "
+        + "\n  ".join(failures)
     )
 
 

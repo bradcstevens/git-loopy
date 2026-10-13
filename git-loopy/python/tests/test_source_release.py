@@ -207,6 +207,10 @@ def _copy_source_distribution(tmp_path: Path) -> Path:
         REPOSITORY_ROOT / "git-loopy/powershell",
         root / "git-loopy/powershell",
     )
+    shutil.copytree(
+        REPOSITORY_ROOT / "git-loopy/paths",
+        root / "git-loopy/paths",
+    )
     return root
 
 
@@ -273,6 +277,47 @@ def _replace_release_version(root: Path, old: str, new: str) -> None:
             path.read_text(encoding="utf-8").replace(old, new),
             encoding="utf-8",
         )
+
+
+def test_source_identity_checks_dormant_versions_independently_of_python(
+    tmp_path: Path,
+) -> None:
+    root = _copy_source_distribution(tmp_path)
+    _replace_release_version(root, RELEASE_FIXTURE["expected_release_version"], "1.0.0")
+
+    verify_source_tree_identity(root, "1.0.0")
+
+
+@pytest.mark.parametrize("content", [None, "{}", '{"baseline":{"release_version":123}}'])
+def test_source_identity_refuses_incomplete_or_invalid_path_identity(
+    tmp_path: Path, content: str | None,
+) -> None:
+    root = _copy_source_distribution(tmp_path)
+    manifest = root / "git-loopy/paths/shell.json"
+    if content is None:
+        manifest.unlink()
+    else:
+        manifest.write_text(content, encoding="utf-8")
+    with pytest.raises(SourceReleaseError, match="Path manifest"):
+        verify_source_tree_identity(root, RELEASE_FIXTURE["expected_release_version"])
+
+
+def test_source_identity_still_verifies_pre_split_distributions(tmp_path: Path) -> None:
+    root = _copy_source_distribution(tmp_path)
+    shutil.rmtree(root / "git-loopy/paths")
+    (root / "git-loopy/shell/git-loopy.sh").write_text(
+        'source "$(dirname "$0")/lib/release-version.sh"\n'
+        'printf "git-loopy %s\\n" "$(git_loopy_read_release_version '
+        '"$(dirname "$0")/../../VERSION")"\n',
+        encoding="utf-8",
+    )
+    (root / "git-loopy/powershell/git-loopy.ps1").write_text(
+        'Import-Module (Join-Path $PSScriptRoot "GitLoopy.Release.psm1")\n'
+        '"git-loopy $(Get-GitLoopyReleaseVersion '
+        '-Path (Join-Path $PSScriptRoot "../../VERSION"))"\n',
+        encoding="utf-8",
+    )
+    verify_source_tree_identity(root, RELEASE_FIXTURE["expected_release_version"])
 
 
 def _tagged_source_distribution(

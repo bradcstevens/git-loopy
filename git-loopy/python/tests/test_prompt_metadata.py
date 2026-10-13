@@ -22,8 +22,8 @@ EXPECTED_PACKAGED_REQUIRED_SKILLS = (
     "code-review",
     "codebase-design",
     "diagnosing-bugs",
+    "implement",
     "prototype",
-    "resolving-merge-conflicts",
     "tdd",
 )
 

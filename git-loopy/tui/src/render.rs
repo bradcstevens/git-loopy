@@ -672,7 +672,7 @@ fn draw_queue(
     let mut columns = QUEUE_COLUMNS;
     let mut status_cells: Vec<String> = rows
         .iter()
-        .map(|row| queue_status(row, true, glyphs))
+        .map(|row| queue_status(row, false, glyphs))
         .collect();
     let needed = status_cells
         .iter()
@@ -700,7 +700,7 @@ fn draw_queue(
         // At the floor, a lost-session ending is more important than its
         // progress detail. Never clip that ending to keep the counts.
         if Line::raw(&*cell).width() > usize::from(available) && row.ending.is_some() {
-            *cell = queue_status(row, false, glyphs);
+            *cell = queue_status(row, true, glyphs);
         }
     }
     columns[1].width =
@@ -735,14 +735,19 @@ fn draw_queue(
 }
 
 /// Status, with phase age beside parked, admitted, integrating, and recovering.
-fn queue_status(row: &QueueRow, show_progress: bool, glyphs: &Glyphs) -> String {
-    let status = status_cell(
-        &row.status,
+fn queue_status(row: &QueueRow, compact: bool, glyphs: &Glyphs) -> String {
+    let compact_skip = row.skipped == Some(true) && compact;
+    let mut status = status_cell(
+        if compact_skip { "skipped" } else { &row.status },
         row.ending.as_deref(),
-        row.commits.filter(|_| show_progress),
-        row.pr_advances.filter(|_| show_progress),
+        row.commits.filter(|_| !compact && row.status == "advanced"),
+        row.pr_advances
+            .filter(|_| !compact && row.status == "advanced"),
         glyphs,
     );
+    if row.skipped == Some(true) && !compact_skip {
+        status.push_str(&format!(" {}skipped", glyphs.attribution));
+    }
     match row.phase_age_seconds {
         Some(age) => format!("{status} {}", duration(age)),
         None => status,
@@ -766,13 +771,13 @@ fn status_cell(
     glyphs: &Glyphs,
 ) -> String {
     let mut cell = status.to_string();
-    if let ("advanced", Some(commits)) = (status, commits) {
+    if let Some(commits) = commits {
         if commits > 0 {
             let unit = if commits == 1 { "commit" } else { "commits" };
             cell.push_str(&format!(" {}{commits} {unit}", glyphs.attribution));
         }
     }
-    if let ("advanced", Some(pr_advances)) = (status, pr_advances) {
+    if let Some(pr_advances) = pr_advances {
         if pr_advances > 0 {
             let unit = if pr_advances == 1 { "PR" } else { "PRs" };
             cell.push_str(&format!(" {}{pr_advances} {unit}", glyphs.attribution));
@@ -1654,6 +1659,7 @@ pub fn draw_drill_in(frame: &mut Frame, dashboard: &DashboardFrame) {
         frame,
         breakdown,
         &view.drill_in.iteration_breakdown.rows,
+        dashboard.breakdown_offset,
         cost_placeholder(&view.dashboard.header, &glyphs),
         routing_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
@@ -1669,7 +1675,8 @@ pub(crate) fn drill_in_bands(area: Rect) -> Option<DrillInBands> {
     let (breakdown_rows, _) = tail_heights(area.height, 9, 9);
     let [detail, breakdown, log] = Layout::vertical([
         Constraint::Length(HEADER_ROWS),
-        Constraint::Length(breakdown_rows),
+        // Border, headings, and at least one attempt even at the terminal floor.
+        Constraint::Length(breakdown_rows.max(4)),
         Constraint::Min(3),
     ])
     .areas(area);
@@ -1684,6 +1691,12 @@ pub(crate) struct DrillInBands {
     pub(crate) detail: Rect,
     pub(crate) breakdown: Rect,
     pub(crate) log: Rect,
+}
+
+impl DrillInBands {
+    pub(crate) fn breakdown_height(&self) -> u16 {
+        log_height(self.breakdown).saturating_sub(1)
+    }
 }
 
 pub(crate) fn log_height(area: Rect) -> u16 {
@@ -1768,21 +1781,55 @@ fn draw_breakdown(
     frame: &mut Frame,
     area: Rect,
     rows: &[ContributionRow],
+    offset: usize,
     cost: &str,
     routing: &str,
     glyphs: &Glyphs,
 ) {
+    let height = usize::from(log_height(area).saturating_sub(1));
+    let offset = offset.min(rows.len().saturating_sub(height));
+    let overflowing = rows.len() > height;
+    let title = if overflowing {
+        format!(
+            " Iteration breakdown {}-{}/{} ",
+            offset + 1,
+            (offset + height).min(rows.len()),
+            rows.len()
+        )
+    } else {
+        " Iteration breakdown ".to_string()
+    };
+    let rows = &rows[offset..];
+    let mut columns = BREAKDOWN_COLUMNS;
+    let statuses: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            status_cell(
+                &row.status,
+                row.ending.as_deref(),
+                row.commits,
+                row.pr_advances,
+                glyphs,
+            )
+        })
+        .collect();
+    columns[3].width = status_column_width(
+        statuses.iter().cloned(),
+        columns[3].width,
+        area.width
+            .saturating_sub(2 + columns[0].width + COLUMN_SPACING),
+    );
     draw_table(
         frame,
         area,
-        &BREAKDOWN_COLUMNS,
-        rows.iter().map(|row| {
+        &columns,
+        rows.iter().zip(statuses).map(|(row, status)| {
             vec![
                 contribution_label(row, glyphs),
                 row.outcome.clone().unwrap_or_else(|| glyphs.unknown.into()),
                 row.duration_seconds
                     .map_or_else(|| glyphs.unknown.to_string(), duration),
-                row.status.clone(),
+                status,
                 row.drift
                     .map_or_else(|| glyphs.unknown.to_string(), |count| count.to_string()),
                 duration(row.active_seconds),
@@ -1796,9 +1843,18 @@ fn draw_breakdown(
                 peak_context(row.peak_context_window.as_ref(), glyphs),
             ]
         }),
-        " Iteration breakdown ",
+        &title,
         glyphs,
     );
+    if overflowing {
+        frame.render_widget(
+            glyphs
+                .block("")
+                .borders(Borders::BOTTOM)
+                .title_bottom(" Ctrl-PgUp/PgDn / wheel "),
+            area,
+        );
+    }
 }
 
 /// One contribution's identity: its identifier where rolling dispatch gave it

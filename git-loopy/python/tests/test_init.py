@@ -540,13 +540,13 @@ def test_run_init_accepts_all_recommended_routes_in_selected_scope(
     assert rc == 0
     config = tomllib.loads(settings.project_config_path(tmp_path).read_text())
     assert config["routing"] == {
-        "planning": {"model": "gpt-6.1-sol", "effort": "xhigh"},
-        "review": {"model": "claude-sonnet-5.5", "effort": "xhigh"},
-        "implementation": {"model": "gpt-6.1-sol", "effort": "high"},
-        "test": {"model": "claude-sonnet-5.5", "effort": "high"},
-        "docs": {"model": "gpt-6.1-sol", "effort": "low"},
-        "chore": {"model": "gpt-6-luna", "effort": "medium"},
-        "bugfix": {"model": "gpt-6.1-sol", "effort": "xhigh"},
+        "planning": {"model": "claude-opus-5.5", "effort": "medium"},
+        "review": {"model": "claude-opus-5.5", "effort": "medium"},
+        "implementation": {"model": "gpt-6-astra", "effort": "medium"},
+        "test": {"model": "gpt-6-astra", "effort": "medium"},
+        "docs": {"model": "claude-sonnet-5.5", "effort": "medium"},
+        "chore": {"model": "claude-sonnet-5.5", "effort": "low"},
+        "bugfix": {"model": "claude-opus-5.5", "effort": "medium"},
     }
     assert config["model"] == "claude-opus-4.8"
     assert config["reasoning_effort"] == "max"
@@ -587,9 +587,9 @@ def test_run_init_writes_kept_and_overridden_routes_but_omits_skipped(
     config_path = settings.global_config_path(_env(tmp_path))
     config = tomllib.loads(config_path.read_text())
     assert config["routing"] == {
-        "planning": {"model": "gpt-6.1-sol", "effort": "xhigh"},
+        "planning": {"model": "claude-opus-5.5", "effort": "medium"},
         "implementation": {"model": "claude-sonnet-5", "effort": "high"},
-        "docs": {"model": "gpt-6.1-sol", "effort": "low"},
+        "docs": {"model": "claude-sonnet-5.5", "effort": "medium"},
     }
     assert config["model"] == "claude-opus-4.8"
     assert config["reasoning_effort"] == "max"

@@ -151,7 +151,7 @@ run_version_entrypoint() {
 
   (
     cd "$version_outside"
-    PATH="$version_bin:/usr/bin:/bin" \
+    PATH="$version_bin:$real_jq_dir:/usr/bin:/bin" \
       HOME="$temp_dir/missing-home" \
       XDG_CONFIG_HOME="$temp_dir/version-config" \
       GIT_LOOPY_ISSUE_SOURCE="unavailable" \
@@ -461,8 +461,12 @@ trap 'rm -rf "$temp_dir"' EXIT
 version_runtime="$temp_dir/version-runtime"
 mkdir -p "$version_runtime/git-loopy"
 cp -R "$port_dir" "$version_runtime/git-loopy/shell"
-expected_release_version="$(jq -r '.expected_release_version' "$release_fixture")"
-printf '%s\n' "$expected_release_version" >"$version_runtime/VERSION"
+path_manifest="$port_dir/../paths/shell.json"
+expected_release_version="$(jq -r '.baseline.release_version' "$path_manifest")"
+mkdir -p "$version_runtime/git-loopy/paths"
+version_manifest="$version_runtime/git-loopy/paths/shell.json"
+cp "$path_manifest" "$version_manifest"
+printf '1.0.0-alpha.1\n' >"$version_runtime/VERSION"
 
 version_outside="$temp_dir/version-outside"
 version_config="$temp_dir/version-config/git-loopy"
@@ -470,7 +474,7 @@ version_bin="$temp_dir/version-bin"
 version_tool_log="$temp_dir/version-tools.log"
 mkdir -p "$version_outside" "$version_config" "$version_bin"
 printf 'invalid = [\n' >"$version_config/config.toml"
-for tool in git gh copilot jq; do
+for tool in git gh copilot; do
   cat >"$version_bin/$tool" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$(basename "$0") $*" >>"$VERSION_TOOL_LOG"
@@ -495,7 +499,7 @@ assert_equal \
 
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"
-  jq -jr '.value + "\n"' <<<"$case_json" >"$version_runtime/VERSION"
+  jq '{baseline: {release_version: .value}}' <<<"$case_json" >"$version_manifest"
   if ! run_version_entrypoint \
     "$temp_dir/version-$case_id.stdout" \
     "$temp_dir/version-$case_id.stderr" \
@@ -512,7 +516,7 @@ done < <(jq -c '.valid_versions[]' "$release_fixture")
 
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"
-  jq -j '.value' <<<"$case_json" >"$version_runtime/VERSION"
+  jq '{baseline: {release_version: .value}}' <<<"$case_json" >"$version_manifest"
   set +e
   run_version_entrypoint \
     "$temp_dir/version-$case_id.stdout" \
@@ -532,11 +536,11 @@ done < <(jq -c '.invalid_versions[]' "$release_fixture")
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"
   kind="$(jq -r '.kind' <<<"$case_json")"
-  rm -rf "$version_runtime/VERSION"
+  rm -rf "$version_manifest"
   case "$kind" in
     missing) ;;
-    directory) mkdir "$version_runtime/VERSION" ;;
-    invalid_utf8) printf '\377\n' >"$version_runtime/VERSION" ;;
+    directory) mkdir "$version_manifest" ;;
+    invalid_utf8) printf '\377\n' >"$version_manifest" ;;
     *) fail "unsupported invalid Release authority fixture kind: $kind" ;;
   esac
   set +e
@@ -555,8 +559,8 @@ while IFS= read -r case_json; do
     fail "invalid Release metadata reported unknown: $case_id"
 done < <(jq -c '.invalid_authority_inputs[]' "$release_fixture")
 
-rm -rf "$version_runtime/VERSION"
-printf '%s\n' "$expected_release_version" >"$version_runtime/VERSION"
+rm -rf "$version_manifest"
+cp "$path_manifest" "$version_manifest"
 
 set +e
 "$bash_bin" "$entrypoint" --help \
@@ -578,10 +582,13 @@ export FAKE_GH_LIST_COUNT="$temp_dir/empty-list.count"
 export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
 export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
 
+entrypoint="$version_runtime/git-loopy/shell/git-loopy.sh"
+rm "$version_runtime/VERSION"
 if ! run_entrypoint \
   "$repo" "$fake_bin" "$temp_dir/empty.stdout" "$temp_dir/empty.stderr"; then
   fail "empty GitHub Pool did not exit 0: $(<"$temp_dir/empty.stderr")"
 fi
+entrypoint="$port_dir/git-loopy.sh"
 
 expected_types="$(
   jq -cn '[

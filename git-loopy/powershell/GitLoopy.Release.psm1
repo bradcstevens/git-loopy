@@ -1,15 +1,10 @@
 Set-StrictMode -Version Latest
 
-# The single semver authority for the PowerShell distribution's Release version.
-#
-# The Orchestrator answers `--version` with it, stamps it onto `wrapper.run.start`,
-# and refuses a clone-local TUI helper that disagrees with it. The installer
-# stages that helper. Both read the same file
-# through this one reader, so there is no second opinion about what Release a
-# clone is (ADR-0016, Wrapper contract §16, issue #194).
+# Runtime identity comes from the PowerShell Path manifest (ADR-0091).
+# An explicit -Path still reads plain-text VERSION for repository Release writes.
 
 $Script:ReleaseVersionPath = [IO.Path]::GetFullPath(
-    (Join-Path $PSScriptRoot "../../VERSION")
+    (Join-Path $PSScriptRoot "../paths/powershell.json")
 )
 $script:ReleaseVersionPaths = [string[]]@(
     "VERSION",
@@ -49,7 +44,26 @@ function Get-GitLoopyReleaseVersion {
         )
     }
 
-    $Value = if ($Content.EndsWith("`r`n", [StringComparison]::Ordinal)) {
+    $Value = if (-not $PSBoundParameters.ContainsKey("Path")) {
+        try {
+            $Manifest = ConvertFrom-Json -InputObject $Content -AsHashtable -NoEnumerate -ErrorAction Stop
+            if ($Manifest -isnot [Collections.IDictionary]) {
+                throw "the Path manifest must be a JSON object"
+            }
+            $Version = $Manifest["baseline"]["release_version"]
+            if ($Version -isnot [string]) {
+                throw "baseline.release_version must be a string"
+            }
+            $Version
+        }
+        catch {
+            throw [IO.InvalidDataException]::new(
+                "cannot read Release metadata from Path manifest ${Path}: $($_.Exception.Message)",
+                $_.Exception
+            )
+        }
+    }
+    elseif ($Content.EndsWith("`r`n", [StringComparison]::Ordinal)) {
         $Content.Substring(0, $Content.Length - 2)
     }
     elseif ($Content.EndsWith("`n", [StringComparison]::Ordinal)) {

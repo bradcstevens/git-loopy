@@ -715,7 +715,7 @@ Assert-Contains $BoundedRefusal "pagination limit" `
 
 # --- The installer, end to end ----------------------------------------------
 #
-# A fake clone with its own VERSION, installing from a fake published Release.
+# A fake clone with its own Path manifest, installing from a fake published Release.
 
 $CliDir = New-Scratch -Name install
 $Pwsh = if ($null -ne (Get-Command pwsh -ErrorAction SilentlyContinue)) {
@@ -740,7 +740,16 @@ function New-FakeClone {
     Copy-Item -Path (Join-Path $PortDir "*.psm1") -Destination $Port
     Copy-Item -LiteralPath $ArtifactMetadata `
         -Destination (Join-Path $Root "git-loopy/conformance")
-    [IO.File]::WriteAllText((Join-Path $Root "VERSION"), "$Version`n")
+    $Manifests = Join-Path $Root "git-loopy/paths"
+    [void](New-Item -ItemType Directory -Path $Manifests -Force)
+    $Manifest = Get-Content -LiteralPath (Join-Path $PortDir "../paths/powershell.json") -Raw |
+        ConvertFrom-Json -AsHashtable
+    $Manifest["baseline"]["release_version"] = $Version
+    [IO.File]::WriteAllText(
+        (Join-Path $Manifests "powershell.json"),
+        (ConvertTo-Json $Manifest -Depth 10)
+    )
+    [IO.File]::WriteAllText((Join-Path $Root "VERSION"), "99.0.0-alpha.1`n")
     return (Join-Path $Port "install.ps1")
 }
 
@@ -802,6 +811,7 @@ Assert-Contains $OnPath.Output "Run it from inside any git repository" `
 #    refusal is about the missing manifest rather than about anything downloaded.
 $AirgapClone = Join-Path $CliDir "airgap"
 $AirgapInstaller = New-FakeClone -Root $AirgapClone -Version 4.5.6
+Remove-Item -LiteralPath (Join-Path $AirgapClone "VERSION")
 $Lonely = Invoke-Installer -Installer $AirgapInstaller -Arguments @(
     "-BinDir", (Join-Path $CliDir "airgap-bin"),
     "-TuiArchive", (Join-Path $ReleaseDir $HostNames.Archive)

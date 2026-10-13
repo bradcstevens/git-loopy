@@ -16,7 +16,9 @@ from typing import Any
 from .assessment_config import (
     MILESTONE_PATTERN, REPOSITORY_PATTERN, AssessmentConfigError, load_policy,
 )
-from .assessment_github import SHA_PATTERN, GitHubReads, Transport, Unreadable
+from .assessment_github import (
+    SHA_PATTERN, GitHubApp, GitHubReads, HTTPTransport, Transport, Unreadable,
+)
 from .release_version import (
     is_release_target_label, parse_release_line, parse_release_version, promote_closed_milestone,
     release_target_label,
@@ -173,11 +175,9 @@ def create_server(
     from mcp.server import Server
 
     policies = load_policy(os.environ if env is None else env)
-    if transport is None:
-        raise AssessmentConfigError(
-            "no GitHub App credential transport is available in this service version; "
-            "App authentication arrives with #760; ambient credentials are never used"
-        )
+    transport = HTTPTransport() if transport is None else transport
+    apps = {repository: GitHubApp(policy, transport)
+            for repository, policy in policies.items()}
     service_version = installed_version("git-loopy")
     now = clock or (lambda: datetime.now(timezone.utc).isoformat())
     schema: dict[str, Any] = {
@@ -249,13 +249,14 @@ def create_server(
     async def assess(arguments):
         repository, milestone = validate_inputs(arguments, "assess")
         policy = policies[repository]
-        github = GitHubReads(repository, transport)
+        token, identity = await apps[repository].installation(repository)
+        github = GitHubReads(repository, transport, token=token)
         result: dict[str, Any] = {
             "repo": repository, "milestone": milestone, "milestoneState": None,
             "sha": None, "asOf": now(), "version": None, "releaseTarget": None,
             "releaseTargetState": "unreadable",
             "baseline": None, "policy": policy.revision, "service": service_version,
-            "identity": policy.identity, "resultFormat": 1,
+            "identity": identity, "resultFormat": 1,
             "countedWorkflows": list(policy.workflows),
             "checks": [], "holds": [], "incompletes": [], "content": [], "context": [],
             "verdict": "incomplete", "sources": {},
@@ -399,7 +400,7 @@ def create_server(
             result["milestone"] if line is not None else None
         )
         closed_issues = []
-        if label is None:
+        if line is None or label is None:
             result["incompletes"].append({
                 "read": "Open and unabsorbed work", "reason": "line label unavailable",
                 "source": github.web + "/issues",
@@ -695,12 +696,20 @@ def create_server(
         if not isinstance(sha, str) or re.fullmatch(sha_pattern, sha) is None:
             raise ValueError("sha must be 40 hexadecimal characters")
         sha = sha.lower()
-        github = GitHubReads(repository, transport)
-        result = {
+        result: dict[str, Any] = {
             "repo": repository, "milestone": milestone, "sha": sha,
             "head": None, "asOf": now(), "status": "stale",
             "reasons": [], "resultFormat": 1,
         }
+        try:
+            token, _ = await apps[repository].installation(repository)
+        except ValueError as exc:
+            result["reasons"].append({
+                "read": "GitHub App authentication", "reason": str(exc),
+                "source": f"https://github.com/{repository}",
+            })
+            return result
+        github = GitHubReads(repository, transport, token=token)
         try:
             result["head"] = await github.pin_head()
             if result["head"] != sha:

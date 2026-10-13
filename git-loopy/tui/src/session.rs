@@ -41,6 +41,8 @@ pub struct DashboardFrame {
     pub selected: IssueRef,
     /// The first Queue row visible, independent of the selected issue.
     pub queue_offset: usize,
+    /// First visible attempt in the oldest-first drill-in account.
+    pub breakdown_offset: usize,
     /// The drill-in Log's independent follow/scroll position.
     pub log_position: LogPosition,
     /// The visible Activity tail's position; never the Queue's selection.
@@ -120,6 +122,7 @@ pub struct DashboardSession {
     zone: Zone,
     cursor: Cursor,
     queue_offset: usize,
+    breakdown_offset: usize,
     log_position: LogPosition,
     activity_position: LogPosition,
     activity_positions: Vec<LogPosition>,
@@ -176,6 +179,7 @@ impl DashboardSession {
             zone,
             cursor: Cursor::new(drill_in),
             queue_offset: 0,
+            breakdown_offset: 0,
             log_position: LogPosition::default(),
             activity_position: LogPosition::default(),
             activity_positions: Vec::new(),
@@ -361,6 +365,7 @@ impl DashboardSession {
             screen: self.cursor.screen,
             selected: self.cursor.selected().clone(),
             queue_offset: self.queue_offset,
+            breakdown_offset: self.breakdown_offset,
             log_position: self.log_position,
             activity_position: self.activity_position,
             activity_positions: self.activity_positions.clone(),
@@ -423,8 +428,17 @@ impl DashboardSession {
     pub fn handle_key(&mut self, key: Key) -> Flow {
         match key {
             Key::ActivityPageUp | Key::ActivityPageDown => {
+                let direction = if key == Key::ActivityPageUp { -1 } else { 1 };
+                if self.cursor.screen == Screen::DrillIn {
+                    if let Some(bands) = drill_in_bands(self.terminal) {
+                        self.scroll_breakdown(
+                            direction * bands.breakdown_height() as isize,
+                            bands.breakdown_height(),
+                        );
+                    }
+                    return Flow::Continue;
+                }
                 if let Some(bands) = self.bands() {
-                    let direction = if key == Key::ActivityPageUp { -1 } else { 1 };
                     let activity = self.view().dashboard.activity;
                     if activity.windows.is_empty() {
                         let height = log_height(bands.activity);
@@ -505,6 +519,7 @@ impl DashboardSession {
         let flow = self.cursor.apply(key, &queue);
         if self.cursor.selected() != &selected {
             self.log_position = LogPosition::default();
+            self.breakdown_offset = 0;
         }
         if matches!(key, Key::Up | Key::Down | Key::First | Key::Last) {
             if let (Some(bands), Some(index)) = (
@@ -597,6 +612,7 @@ impl DashboardSession {
                 {
                     if self.cursor.selected() != &issue {
                         self.log_position = LogPosition::default();
+                        self.breakdown_offset = 0;
                     }
                     self.cursor.open(issue);
                 }
@@ -664,6 +680,8 @@ impl DashboardSession {
                     let count = self.view().drill_in.log.lines.len();
                     self.log_position
                         .scroll(delta, count, log_height(bands.log));
+                } else if bands.breakdown.contains(point) {
+                    self.scroll_breakdown(delta, bands.breakdown_height());
                 }
             }
         }
@@ -682,8 +700,21 @@ impl DashboardSession {
         }
     }
 
+    fn scroll_breakdown(&mut self, delta: isize, height: u16) {
+        if height > 0 {
+            let count = self.view().drill_in.iteration_breakdown.rows.len();
+            let bottom = count.saturating_sub(usize::from(height));
+            self.breakdown_offset = self
+                .breakdown_offset
+                .min(bottom)
+                .saturating_add_signed(delta)
+                .min(bottom);
+        }
+    }
+
     fn fit_positions(&mut self) {
         if let Some(bands) = drill_in_bands(self.terminal) {
+            self.scroll_breakdown(0, bands.breakdown_height());
             self.log_position.scroll(
                 0,
                 self.state.issue_log(self.cursor.selected()).len(),

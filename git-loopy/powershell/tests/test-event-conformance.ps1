@@ -7,9 +7,9 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $PortDir = Split-Path -Parent $PSScriptRoot
 $FixturePath = Join-Path (Split-Path -Parent $PortDir) "conformance/event-schema.json"
-$ReleaseFixturePath = Join-Path (
+$PathManifestPath = Join-Path (
     Split-Path -Parent $PortDir
-) "conformance/release-version.json"
+) "paths/powershell.json"
 $DashboardFixturePath = Join-Path (
     Split-Path -Parent $PortDir
 ) "conformance/dashboard-insights.json"
@@ -55,7 +55,7 @@ function Assert-Equal {
 
 $Fixture = Get-Content -LiteralPath $FixturePath -Raw |
     ConvertFrom-Json -AsHashtable
-$ReleaseFixture = Get-Content -LiteralPath $ReleaseFixturePath -Raw |
+$PathManifest = Get-Content -LiteralPath $PathManifestPath -Raw |
     ConvertFrom-Json -AsHashtable
 $ExpectedTypes = $Fixture["event_types"]
 $ActualTypes = Get-GitLoopyEventTypes
@@ -252,12 +252,12 @@ Assert-Equal 1 $RunStartCase.Count "Run-start serialization case count"
 # event-schema.json's `release_version` sites are synthetic (#487): the wire
 # form doesn't disagree with itself on a value it merely copies. The live
 # value is asserted here against the PowerShell distribution's own production
-# decision seam instead, against the one fixture allowed to name it.
+# decision seam instead, against its Path manifest.
 Assert-Equal (
-    $ReleaseFixture["expected_release_version"]
+    $PathManifest["baseline"]["release_version"]
 ) (
     Get-GitLoopyReleaseVersion
-) "PowerShell Release version seam drifted from the shared Release version authority"
+) "PowerShell Release version seam drifted from its Path manifest"
 
 foreach ($Case in $Fixture["serialization_cases"]) {
     $Actual = ConvertTo-GitLoopyJsonLine -Event $Case["event"]

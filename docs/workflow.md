@@ -48,7 +48,7 @@ Then choose the smallest planning path that can reach shared understanding:
   decision that does not need repository-backed vocabulary.
 - [`/grill-with-docs`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/grill-with-docs) for
   repository or domain work where terms and architectural decisions must
-  persist in `CONTEXT.md` and `docs/adr/`.
+  persist in `GLOSSARY.md` and `docs/adr/`.
 - [`/wayfinder`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wayfinder) when planning itself is
   too large or foggy for one useful context. It creates a shared map of
   decision tickets and works the frontier until the route is clear.
@@ -86,7 +86,7 @@ It synthesizes the discussion into a durable spec on the configured issue
 tracker, including the problem, user stories, implementation decisions, testing
 seams, and explicit exclusions.
 
-The spec is the destination. `CONTEXT.md` supplies the shared language and ADRs
+The spec is the destination. `GLOSSARY.md` supplies the shared language and ADRs
 record consequential decisions; the spec says what this effort must make true.
 
 ### 4. Create the route with `/to-tickets`
@@ -147,7 +147,8 @@ One serial Iteration makes one bounded attempt at one Active issue:
 2. **Declare the Active issue.** The agent selects exactly one Pool member and
    emits its Working marker so timing and output are attributed immediately.
 3. **Recover the domain.** The fresh agent reads the issue, recent commits,
-   `AGENTS.md`, `CONTEXT.md`, and relevant ADRs instead of relying on memory from
+   `AGENTS.md`, `GLOSSARY.md` (or the context glossaries linked by
+   `GLOSSARY-MAP.md`), and relevant ADRs instead of relying on memory from
    an earlier Iteration.
 4. **Execute in vertical slices.** The prompt routes hard bugs to
    `/diagnosing-bugs`, uncertain behavior to `/prototype`, implementation to
@@ -195,6 +196,13 @@ The reference skills workflow ends an interactive path with
 human-selected spec or ticket through `/tdd`, `/code-review`, and commit. Use it
 when a person is staying in the session and choosing the work directly.
 
+It also resolves diverged branches and merge/rebase conflicts, then closes with
+`/code-review` of the resolved head. A Run uses that conflict-resolution path
+only for its bound PR; it does not nest general implementation orchestration.
+For a whole spec's ticket graph, `/implement-spec` coordinates implementers on
+one integration branch outside the Run. `/pr` supplies pull-request body writing,
+and `/retro` is a user-invoked retrospective on a coding session.
+
 git-loopy is the autonomous execution path. Its prompt performs the equivalent
 orchestration one Active issue per Iteration, while deliberately leaving
 human-only planning skills outside the unattended Run.
@@ -204,7 +212,7 @@ human-only planning skills outside the unattended Run.
 Fresh contexts are a feature. State survives through a small set of reviewable
 artifacts:
 
-- `CONTEXT.md` and ADRs preserve language and decisions.
+- `GLOSSARY.md` (or `GLOSSARY-MAP.md` and its context glossaries) and ADRs preserve language and decisions.
 - Specs and issues preserve intent, dependencies, and acceptance criteria.
 - Commits preserve implementation progress.
 - Issue state records which slices are ready, active, or closed.
