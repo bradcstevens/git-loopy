@@ -452,6 +452,7 @@ fn an_unresolved_viewing_zone_is_announced_rather_than_shown_as_local() {
         selected: IssueRef::number(42),
         queue_offset: 0,
         log_position: Default::default(),
+        breakdown_offset: 0,
         activity_position: Default::default(),
         activity_positions: Default::default(),
         activity_band: Default::default(),

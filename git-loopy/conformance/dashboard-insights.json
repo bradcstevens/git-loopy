@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.19",
+  "fixture_schema_version": "1.20",
   "wrapper_contract_version": "2.27",
   "event_schema_version": "1.7",
   "semantic_contract": {

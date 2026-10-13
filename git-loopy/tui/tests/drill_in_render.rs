@@ -7,8 +7,8 @@
 //! draws. Nothing here reads a host clock, a zone, or a real terminal.
 
 use git_loopy_tui::{
-    draw_frame, DashboardFrame, DashboardSession, IssueRef, Key, RunInputs, Screen,
-    TerminalCapabilities, Timestamp, Zone,
+    draw_frame, DashboardFrame, DashboardSession, IssueRef, Key, Pointer, PointerAction, RunInputs,
+    Screen, TerminalCapabilities, Timestamp, Zone,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -18,6 +18,132 @@ mod common;
 use common::assert_snapshot;
 
 const DASHBOARD_INSIGHTS: &str = include_str!("../../conformance/dashboard-insights.json");
+
+fn many_attempts() -> DashboardSession {
+    let mut session =
+        DashboardSession::new(RunInputs::default(), Zone::utc(), IssueRef::number(42));
+    session.resize(240, 40);
+    session.ingest(r#"{"type":"wrapper.run.start","run_id":"attempts"}"#);
+    session.ingest(r#"{"type":"wrapper.afk_ready.collected","issues":[42,43]}"#);
+    for attempt in 1..=13 {
+        session.ingest(
+            &serde_json::json!({"type":"wrapper.iteration.start","iter":attempt}).to_string(),
+        );
+        session.ingest(r#"{"type":"wrapper.issue.activated","issue":42}"#);
+        for line in 1..=5 {
+            session.ingest(
+                &serde_json::json!({
+                    "type":"agent.output","text":format!("attempt {attempt}, output {line}")
+                })
+                .to_string(),
+            );
+        }
+        session.ingest(
+            &serde_json::json!({
+                "type":"wrapper.iteration.end", "iter":attempt,
+                "outcome":"no-progress", "duration_seconds":1,
+                "issues":[{"issue":42,"status":"no-progress","ending":"timeout"}]
+            })
+            .to_string(),
+        );
+    }
+    session.handle_key(Key::Open);
+    session
+}
+
+fn visible_attempts(session: &DashboardSession, columns: u16, rows: u16) -> Vec<String> {
+    band(
+        &render_lines(&session.frame(), columns, rows),
+        "Iteration breakdown",
+    )
+    .iter()
+    .skip(1)
+    .map(|row| cells(row)[0].clone())
+    .collect()
+}
+
+#[test]
+fn keyboard_paging_reaches_every_attempt_oldest_first_without_moving_the_log_or_issue() {
+    let mut session = many_attempts();
+    let before = serde_json::to_value(session.view()).unwrap();
+    let log = band(&render_lines(&session.frame(), 240, 40), " Log ");
+    assert!(render_lines(&session.frame(), 240, 40)
+        .join("\n")
+        .contains("Ctrl-PgUp/PgDn"));
+    assert_eq!(
+        visible_attempts(&session, 240, 40),
+        ["iter 1", "iter 2", "iter 3", "iter 4", "iter 5", "iter 6"]
+    );
+    session.handle_key(Key::ActivityPageDown);
+    assert_eq!(
+        visible_attempts(&session, 240, 40),
+        ["iter 7", "iter 8", "iter 9", "iter 10", "iter 11", "iter 12"]
+    );
+    session.handle_key(Key::ActivityPageDown);
+    assert_eq!(
+        visible_attempts(&session, 240, 40),
+        ["iter 8", "iter 9", "iter 10", "iter 11", "iter 12", "iter 13"]
+    );
+    session.handle_key(Key::ActivityPageUp);
+    session.handle_key(Key::ActivityPageUp);
+    assert_eq!(
+        visible_attempts(&session, 240, 40),
+        ["iter 1", "iter 2", "iter 3", "iter 4", "iter 5", "iter 6"]
+    );
+    assert_eq!(session.frame().selected, IssueRef::number(42));
+    assert_eq!(serde_json::to_value(session.view()).unwrap(), before);
+    assert_eq!(band(&render_lines(&session.frame(), 240, 40), " Log "), log);
+}
+
+#[test]
+fn the_account_remains_reachable_at_the_terminal_floor_and_resets_for_a_different_issue() {
+    let mut session = many_attempts();
+    session.handle_key(Key::ActivityPageDown);
+    session.resize(40, 12);
+    assert_eq!(visible_attempts(&session, 40, 12), ["iter 7"]);
+    let lines = render_lines(&session.frame(), 40, 12);
+    let row = lines
+        .iter()
+        .position(|line| line.contains("Iteration breakdown"))
+        .unwrap() as u16
+        + 2;
+    for expected in [
+        "iter 8", "iter 9", "iter 10", "iter 11", "iter 12", "iter 13",
+    ] {
+        session.handle_pointer(Pointer {
+            action: PointerAction::WheelDown,
+            column: 1,
+            row,
+        });
+        assert_eq!(visible_attempts(&session, 40, 12), [expected]);
+    }
+    session.handle_pointer(Pointer {
+        action: PointerAction::WheelUp,
+        column: 1,
+        row,
+    });
+    assert_eq!(visible_attempts(&session, 40, 12), ["iter 12"]);
+    session.resize(240, 40);
+    assert_eq!(
+        visible_attempts(&session, 240, 40),
+        ["iter 8", "iter 9", "iter 10", "iter 11", "iter 12", "iter 13"]
+    );
+    session.resize(40, 12);
+    assert_eq!(visible_attempts(&session, 40, 12), ["iter 8"]);
+    session.handle_key(Key::First);
+    assert_eq!(session.frame().selected, IssueRef::number(43));
+    assert!(visible_attempts(&session, 40, 12).is_empty());
+    session.handle_key(Key::Last);
+    assert_eq!(session.frame().selected, IssueRef::number(42));
+    assert_eq!(visible_attempts(&session, 40, 12), ["iter 1"]);
+    for expected in [
+        "iter 2", "iter 3", "iter 4", "iter 5", "iter 6", "iter 7", "iter 8", "iter 9", "iter 10",
+        "iter 11", "iter 12", "iter 13",
+    ] {
+        session.handle_key(Key::ActivityPageDown);
+        assert_eq!(visible_attempts(&session, 40, 12), [expected]);
+    }
+}
 
 #[test]
 fn the_account_names_both_endings_and_each_attempts_recorded_work() {

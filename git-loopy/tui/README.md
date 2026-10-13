@@ -120,8 +120,13 @@ Lanes read the ending from `wrapper.contribution.end` itself. An **advanced**
 row names its observed commits, and a timeout or crash remains visible beside
 progress or closure. Missing endings remain absent. A retry clears the Queue's
 latest ending and progress counts, while the drill-in retains each finished
-attempt's existing accounting, oldest first. Per-attempt ending presentation
-belongs to the separate drill-in extension.
+attempt's Routed pair, Ending and recorded work, oldest first. The account initially opens
+at its oldest attempt; Ctrl-PageUp/Ctrl-PageDown or the wheel over the breakdown
+reach every later attempt without moving the Log or the selected issue. A range
+on the band and a paging hint indicate overflow. Even a 40×12 terminal retains
+one attempt row; resizing clamps the position to the available rows, and changing
+issues starts the account at its oldest attempt again. An open attempt stays
+active rather than appearing as a finished row.
 Commit counts come from existing issue-attributed commit records while work is
 live. A sole-issue outcome's reported summary count is authoritative when
 present; a modern contribution owns one issue even without normalized
@@ -144,7 +149,7 @@ count never implies that a PR advanced.
 | Open a visible issue | Click anywhere inside its Queue row |
 | Back to the Dashboard | `Esc`, `Backspace`, `←`, `h` |
 | Scroll the Queue or open Log by a page | `PageUp`, `PageDown` |
-| Scroll the Activity tail without changing focus | `Ctrl-PageUp`, `Ctrl-PageDown` |
+| Scroll the Activity tail or drill-in attempt account without changing focus | `Ctrl-PageUp`, `Ctrl-PageDown` |
 | Resume following the Log and Activity tails | `f` |
 | Stop the attached Run | `s` (again to escalate; not Quit) |
 | Quit | `q`, `Ctrl-C`, `Ctrl-D` |
@@ -173,7 +178,7 @@ restore the band, and dragging that header only resizes it.
 Back returns to the Dashboard. No double-click timer or host clock is involved.
 Activity window headers display facts; they are not navigation targets.
 
-The wheel scrolls the **Queue**, **Log**, or **Activity** tail under the pointer
+The wheel scrolls the **Queue**, **Log**, **Activity** tail, or drill-in attempt account under the pointer
 without changing the selected issue or any Run facts. Log and Activity positions
 are independent: scrolling away from the bottom pauses following, and reaching
 the bottom resumes it. `f` restores following without needing a mouse.

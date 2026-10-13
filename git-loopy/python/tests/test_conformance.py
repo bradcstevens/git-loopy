@@ -2544,7 +2544,8 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.19 accounts for each attempt and marks Skipped inline. 1.18 adds
+    # 1.20 accounts for each attempt and marks Skipped inline. 1.19 is reserved
+    # by the independently reviewed Dynamic-effort change (#789). 1.18 adds
     # optional Ending/progress to Status (ADR-0075). 1.17 pins
     # observed zero wait, Lane activation during setup, and a Queue phase
     # that agrees with the drain after admission followed by parking.
@@ -2556,7 +2557,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.19"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.20"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]

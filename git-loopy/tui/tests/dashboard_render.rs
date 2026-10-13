@@ -146,6 +146,7 @@ fn render_screen_lines(
         selected: IssueRef::number(42),
         queue_offset: 0,
         log_position: Default::default(),
+        breakdown_offset: 0,
         activity_position: Default::default(),
         activity_positions: Default::default(),
         activity_band: Default::default(),

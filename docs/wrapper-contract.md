@@ -1547,7 +1547,7 @@ borrowed from the Strike. Neither an unnamed legacy Strike nor `outcome: warn`
 marks a row Skipped. No column or Run-wide list is added. The Header continues
 to show the Strikes of the issue at stake against N, exactly as ADR-0070 defines.
 
-Dashboard fixture revision **1.19** pins the account, an open retry, and the
+Dashboard fixture revision **1.20** pins the account, an open retry, and the
 Skipped marker with full-object replay equality in Rust and Python. Event
 schema **1.7** and compatibility schema **1** are unchanged: no wire record
 or producer behaviour changes.
