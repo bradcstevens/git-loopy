@@ -1,6 +1,6 @@
 """``git_loopy.task_type_classifier`` tests — the classifier (#377, ADR-0029).
 
-ADR-0029 reversed ``CONTEXT.md``'s *"read, never inferred"* clause on the reading
+ADR-0029 reversed ``GLOSSARY.md``'s *"read, never inferred"* clause on the reading
 that what the invariant protected was the **runtime** property: routing reads a
 label and never re-reads content. So these tests ask what that reversal actually
 commits to — that inference happens **once, before the label exists**, that it

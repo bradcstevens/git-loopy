@@ -83,7 +83,7 @@ def is_parallel_safe(candidate: PoolCandidate) -> bool:
 
     The default eligibility predicate. Eligibility is read off the label a human
     applied and is *never* inferred from issue content, dependencies, or code
-    overlap (#219 non-goals, CONTEXT.md "Parallel-safe"). An ``int`` ref is also
+    overlap (#219 non-goals, GLOSSARY.md "Parallel-safe"). An ``int`` ref is also
     required: a local-markdown path or a pull request is not Lane work.
     """
     return isinstance(candidate.ref, int) and LABEL_PARALLEL_SAFE in candidate.labels

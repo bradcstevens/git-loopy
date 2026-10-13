@@ -20,7 +20,7 @@ use crate::event::{
 };
 use crate::timestamp::Timestamp;
 
-/// Issue lifecycle statuses within a Run (`CONTEXT.md` glossary).
+/// Issue lifecycle statuses within a Run (`GLOSSARY.md` glossary).
 pub(crate) const STATUS_QUEUED: &str = "queued";
 pub(crate) const STATUS_ACTIVE: &str = "active";
 /// Finished, still holding its Lane, waiting for the Integration backlog.

@@ -1,7 +1,7 @@
 """``git_loopy.usage`` — the ``UsageTally`` **Consumption** value object.
 
 This module is the single code representation of **Consumption** (see
-``CONTEXT.md``): the tokens-in / tokens-out and the model they were billed
+``GLOSSARY.md``): the tokens-in / tokens-out and the model they were billed
 against, plus the one shared rule every **Cost** figure is derived from.
 
 That rule — *first non-None model wins; tokens sum* — was, until this module,

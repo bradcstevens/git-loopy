@@ -20,9 +20,9 @@ ADR_0059 = "docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immu
 
 
 def _repo_root() -> Path | None:
-    """First ancestor holding both ``docs/adr/`` and ``CONTEXT.md`` (else None)."""
+    """First ancestor holding both ``docs/adr/`` and ``GLOSSARY.md`` (else None)."""
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 
@@ -45,11 +45,11 @@ def _entry(term: str) -> str:
     """One glossary entry's body, reflowed.
 
     An entry runs from its ``**Term**:`` heading to the next blank line, which is
-    what separates entries throughout ``CONTEXT.md``. Reading the entry rather
+    what separates entries throughout ``GLOSSARY.md``. Reading the entry rather
     than the whole document is what keeps a claim asserted *about the term* —
     otherwise a sentence elsewhere in the glossary could satisfy it.
     """
-    lines = _doc("CONTEXT.md").splitlines()
+    lines = _doc("GLOSSARY.md").splitlines()
     heading = f"**{term}**:"
     for index, line in enumerate(lines):
         if line.strip() == heading:
@@ -59,7 +59,7 @@ def _entry(term: str) -> str:
                     break
                 body.append(candidate)
             return " ".join(" ".join(body).split())
-    raise AssertionError(f"CONTEXT.md has no glossary entry for **{term}**")
+    raise AssertionError(f"GLOSSARY.md has no glossary entry for **{term}**")
 
 
 def test_an_all_skipped_notice_counts_refusal_kinds_not_only_pickup_skips() -> None:
@@ -181,7 +181,7 @@ def test_usd_is_recorded_as_not_published_rather_than_as_a_companion_unit() -> N
         "a refusal without its revisiting bar reads as a permanent taboo"
     )
 
-    glossary = _prose("CONTEXT.md")
+    glossary = _prose("GLOSSARY.md")
     assert "dollars" in glossary
     assert "**AI Credits**, and no USD figure is published" in glossary, (
         "the retired dollar figure belongs in Flagged ambiguities, "
@@ -212,7 +212,7 @@ def test_no_part_of_the_glossary_still_derives_cost_from_a_usage_tally_rule() ->
     Correcting only the entry would leave the claim standing twice over, which is
     how a deleted rule survives its deletion.
     """
-    glossary = _prose("CONTEXT.md")
+    glossary = _prose("GLOSSARY.md")
 
     assert "derive Cost from the same `UsageTally` rule" not in glossary
     assert "`UsageTally`" not in glossary
