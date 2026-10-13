@@ -279,3 +279,22 @@ def test_missing_taskpolicy_refuses_instead_of_starting_unclamped_work(
             cwd=repo,
         )
     assert not output.exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="native macOS re-exec evidence")
+def test_line_printer_emits_config_warnings_once_across_reexec(
+    process_probe: tuple[Path, dict[str, str], Path],
+) -> None:
+    repo, env, _output = process_probe
+    env.update({
+        "GIT_LOOPY_ROUTE_POLICY": "unselected",
+        "GIT_LOOPY_MODEL": "unknown-host-yield-test-model",
+        "GIT_LOOPY_PRICING_FILE": "retired-prices.toml",
+    })
+    result = subprocess.run(
+        [sys.executable, "-m", "git_loopy.cli", "1"],
+        cwd=repo, env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert result.stderr.count("GIT_LOOPY_PRICING_FILE is set") == 1
+    assert result.stderr.count("unknown-host-yield-test-model") == 1

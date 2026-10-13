@@ -3461,8 +3461,15 @@ def main(argv: list[str] | None = None) -> int:
     # Load the two persisted Config scopes (project + global) and merge them
     # with CLI flags + env vars into the effective RunConfig (ADR-0006). A
     # malformed config.toml surfaces a clean stderr message, not a traceback.
+    from git_loopy.host_yield import HostYieldError, enter_line_printer_policy
+
+    interactive = _should_run_interactive()
     try:
         tables = settings.load_configs(repo_root, os.environ)
+        if not interactive:
+            enter_line_printer_policy(
+                _resolve_host_yield(os.environ, tables.project, tables.global_), argv
+            )
         resolved = resolve_config(
             args,
             os.environ,
@@ -3474,7 +3481,7 @@ def main(argv: list[str] | None = None) -> int:
     except TaskTypeError as exc:
         print(f"git-loopy: error: {task_type_refusal(exc)}", file=sys.stderr)
         return 1
-    except settings.SettingsError as exc:
+    except (settings.SettingsError, HostYieldError) as exc:
         print(f"git-loopy: error: {exc}", file=sys.stderr)
         return 1
 
@@ -3520,16 +3527,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     config = resolved.run
-
-    from git_loopy.host_yield import HostYieldError, enter_line_printer_policy
-
-    interactive = _should_run_interactive()
-    if not interactive:
-        try:
-            enter_line_printer_policy(config.host_yield, argv)
-        except HostYieldError as exc:
-            print(f"git-loopy: error: {exc}", file=sys.stderr)
-            return 1
 
     from git_loopy.host_capability import remote_static_execution
     from git_loopy.run_routing_preflight import (

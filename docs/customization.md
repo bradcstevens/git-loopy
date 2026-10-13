@@ -127,10 +127,10 @@ host_yield = "none"
 Equivalently, use `git-loopy config set --project host_yield none` (or
 `--global`), or `GIT_LOOPY_HOST_YIELD=none git-loopy` for one invocation.
 Precedence is **environment > project Config > global Config > platform
-default**. The only values are `utility` and `none`; an unknown value refuses
-the Run with a diagnostic. On macOS, a missing `taskpolicy` also refuses
-instead of silently running unclamped. Restore it on `PATH` or explicitly
-opt out.
+default**. The only values are `utility` and `none`; an unknown value, including
+an explicitly empty value, refuses the Run with a diagnostic. On macOS, a
+missing `taskpolicy` also refuses instead of silently running unclamped.
+Restore it on `PATH` or explicitly opt out.
 
 Other platforms keep their existing scheduling behavior (default `none`;
 `utility` has no scheduling effect there). Opt-out does not undo a policy
