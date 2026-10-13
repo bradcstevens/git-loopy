@@ -4,7 +4,7 @@ required-skills:
   - prototype
   - tdd
   - codebase-design
-  - resolving-merge-conflicts
+  - implement
   - code-review
 ---
 # YOUR ISSUE
@@ -21,7 +21,7 @@ You've also been passed the last few commits. Read them to understand what work 
 
 # DOMAIN AWARENESS
 
-Before exploring code or proposing changes, read `docs/agents/domain.md` for the consumer rules. If `CONTEXT.md` (root) exists, treat it as the glossary; if `docs/adr/` exists, respect any ADRs that touch the area you're about to change. Use the project's vocabulary in issue comments, commit messages, test names, and module names. When in doubt about how a section of code fits in, go up a layer of abstraction and map the relevant modules and callers (in the project's glossary vocabulary) before drilling in.
+Before exploring code or proposing changes, read `docs/agents/domain.md` for the consumer rules. Read `GLOSSARY.md` at the repository root, or follow `GLOSSARY-MAP.md` there to the relevant context glossaries. If neither exists, fall back to `CONTEXT.md` / `CONTEXT-MAP.md` for repositories that have not migrated. If `docs/adr/` exists, respect any ADRs that touch the area you're about to change. Use the project's vocabulary in issue comments, commit messages, test names, and module names. When in doubt about how a section of code fits in, go up a layer of abstraction and map the relevant modules and callers (in the project's glossary vocabulary) before drilling in.
 
 # TASK TYPE
 
@@ -33,7 +33,7 @@ Your issue is your task. Read it and classify it by type — the type decides wh
 - **Polish or quick win** — implement with `/tdd`.
 - **Refactor** — use `/codebase-design` to find deepening opportunities (a lot of behaviour behind a small interface at a clean seam) first, then implement the agreed change with `/tdd`.
 
-If you're about to commit to a non-trivial plan (cross-cutting refactor, ambiguous requirements, new module boundary), pause and stress-test that plan against the domain docs (`docs/agents/domain.md`, `CONTEXT.md`, and any ADRs under `docs/adr/`) before you start — does it fit the existing vocabulary and decisions? Cheap stress-test, big save when you're wrong.
+If you're about to commit to a non-trivial plan (cross-cutting refactor, ambiguous requirements, new module boundary), pause and stress-test that plan against `docs/agents/domain.md`, `GLOSSARY.md` or the context glossaries reached through `GLOSSARY-MAP.md` at the repository root, and any ADRs under `docs/adr/`. If neither glossary entry point exists, fall back to `CONTEXT.md` / `CONTEXT-MAP.md` before you start — does the plan fit the existing vocabulary and decisions? Cheap stress-test, big save when you're wrong.
 
 # CONFIRM YOUR ACTIVE ISSUE (working marker)
 
@@ -55,10 +55,11 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 
 **Human-in-the-loop skills** — they need a person to answer, so they can't run unattended. Most are `disable-model-invocation: true`; `/grilling` is model-invocable but still needs a human to grill:
 
-- `/grill-me`, `/batch-grill-me`, `/grill-with-docs`, `/grilling` — interrogate a human about a plan or decision.
+- `/grill-me`, `/grill-with-docs`, `/grilling` — interrogate a human about a plan or decision.
 - `/improve-codebase-architecture` — a human-driven architecture review; for autonomous refactors use `/codebase-design` instead.
 - `/teach` — walks a human through an area of the code.
 - `/design-control-loop` — interviews an operator before designing and building a new control loop.
+- `/retro` — reviews a coding session with the user to identify improvements to the agent's environment.
 
 **User-invoked operations beyond the bound issue** — catalog membership does not authorize a batch release or changes to the operator's model configuration:
 
@@ -71,12 +72,19 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 **Session-management, setup & authoring** — irrelevant to a fresh one-shot `copilot -p` iteration:
 
 - `/handoff` — launches and watches another agent for a `/next` recommendation; the runner already owns the bound issue's execution, so this would nest another driver.
-- `/implement` — a human-driven "implement this spec end-to-end" orchestrator; this loop already *is* that orchestration (it picks one task, drives `/tdd`, and commits), so invoking it would just nest a second driver.
+- `/implement` — leave its general orchestration outside the Run; the one exception is conflict resolution for the bound PR, as described in **Pull-request mode** below, followed by `/code-review` of the resolved head.
+- `/implement-spec` — coordinates a spec's entire ticket graph on an integration branch, beyond this Run's one bound issue.
 - `/next` — a router whose route table hands work straight to `/implement`, so it nests that same second driver; and the runner has already bound your issue, so its selection role contradicts the binding rather than merely duplicating it.
 - `/loop-me` — starts a loop of its own, which inside a loop iteration is the nesting above one level worse.
 - `/setup-git-loopy-skills`, `/writing-for-agents` — install skills or author the documents agents read, not loop work.
 
 The guidance the excluded and now-removed skills used to carry still holds and is already inlined above: favour reviewable output over token compression while running unattended, go up a layer to map an unfamiliar area before drilling in, stress-test plans against the domain docs, and reach for deep-module design via `/codebase-design`.
+
+# OPTIONAL SKILLS
+
+These are not Required Skills. Use them only when the effective Skill policy permits them and the bound issue calls for their work:
+
+- `/pr` — writes a pull-request body for the bound work; it does not authorize creating, merging, or closing a PR.
 
 # EXPLORATION
 
@@ -148,7 +156,7 @@ When a block is headed `=== PR #N: ... (branch: <head-branch>) ===`, you're adva
 7. **Comment progress** with `gh pr comment <N> --body-file <path>` only when there's genuinely new information — same restraint as issue comments.
 8. **Never merge or close the PR.** A human reviews and merges it in QA. Your job is to push the diff forward, not to land it.
 
-If the branch has diverged and you hit merge conflicts, use `/resolving-merge-conflicts` to work through the ones you can resolve from the diff and the brief. If the PR is in a state you genuinely can't advance (conflicts you can't resolve without more context, a brief blocked on a dependency), post one comment explaining the blocker and end the turn.
+If the branch has diverged and you hit merge conflicts, use `/implement` to work through the ones you can resolve from the diff and the brief; it closes with `/code-review` of the resolved head. This is the conflict-resolution exception to the general orchestration exclusion above, not permission to select other work. If the PR is in a state you genuinely can't advance (conflicts you can't resolve without more context, a brief blocked on a dependency), post one comment explaining the blocker and end the turn.
 
 ## Local-markdown mode (legacy)
 
