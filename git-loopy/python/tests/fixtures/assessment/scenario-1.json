@@ -1,0 +1,21 @@
+{
+  "description": "A clean line is reviewable, even at alpha; this is not authorization.",
+  "version": "0.12.0-alpha.2",
+  "issues": [{
+    "number": 7, "state": "closed", "state_reason": "completed",
+    "title": "Delivered line change",
+    "url": "https://api.github.com/repos/example/project/issues/7",
+    "labels": [{"name": "v0.12.0"}], "milestone": null
+  }],
+  "commit_message": "Deliver the line\n\nCloses #7",
+  "verdict": "reviewable",
+  "holds": [],
+  "incompletes": [],
+  "content": [{
+    "n": 7, "title": "Delivered line change", "cls": "merged",
+    "via": [{
+      "text": "Commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa carries a closing keyword.",
+      "source": "https://github.com/example/project/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }]
+  }]
+}

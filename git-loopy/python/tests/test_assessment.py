@@ -24,6 +24,7 @@ from git_loopy.assessment_config import AssessmentConfigError
 
 REPO = "example/project"
 SHA = "a" * 40
+BASE = "b" * 40
 API = f"/repos/{REPO}"
 FIXTURES = Path(__file__).parent / "fixtures" / "assessment"
 
@@ -42,8 +43,12 @@ class RecordedTransport:
                 API, f"{API}/commits/main", f"{API}/contents/VERSION",
                 f"{API}/milestones", f"{API}/actions/runs", f"{API}/issues",
                 f"{API}/pulls",
+                f"{API}/tags",
             } or re.fullmatch(
-                re.escape(API) + r"/issues/[1-9][0-9]*/dependencies/blocked_by", path,
+                re.escape(API) + (
+                    r"/(?:issues/[1-9][0-9]*/dependencies/blocked_by"
+                    r"|compare/[0-9a-f]{40}\.\.\.[0-9a-f]{40})"
+                ), path,
             )
             assert headers["X-GitHub-Api-Version"] == "2022-11-28"
             response = self.responses[(path, tuple(sorted(params.items())))]
@@ -57,6 +62,16 @@ class RecordedTransport:
 
 def recorded(version="0.12.0-alpha.2", milestones=None):
     return {
+        (f"{API}/tags", (("page", 1), ("per_page", 100))):
+            Response(200, [{"name": "v0.11.1", "commit": {"sha": BASE}}]),
+        (f"{API}/compare/{BASE}...{SHA}", (("page", 1), ("per_page", 100))):
+            Response(200, {
+                "status": "ahead", "merge_base_commit": {"sha": BASE},
+                "total_commits": 1,
+                "commits": [{"sha": SHA, "commit": {"message": "Implement the line"}}],
+            }),
+        (f"{API}/pulls", (("page", 1), ("per_page", 100), ("state", "closed"))):
+            Response(200, []),
         (f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all"))):
             Response(200, []),
         (f"{API}/pulls", (("page", 1), ("per_page", 100), ("state", "open"))):
@@ -80,9 +95,9 @@ def recorded(version="0.12.0-alpha.2", milestones=None):
 
 
 def issue_record(number, *, state="open", labels=("v0.12.0",), title="Unfinished work",
-                 milestone=None):
+                 milestone=None, state_reason="completed"):
     return {
-        "number": number, "state": state, "title": title,
+        "number": number, "state": state, "title": title, "state_reason": state_reason,
         "labels": [{"name": label} for label in labels], "milestone": milestone,
         "url": f"https://api.github.com{API}/issues/{number}",
     }
@@ -102,6 +117,60 @@ def work_fixture(responses, fixture):
     return responses
 
 
+@pytest.mark.parametrize("evidence", ["keyword", "checkpoint", "pull", "mention", "excluded"])
+async def test_closed_line_content_needs_reachable_closing_evidence(tmp_path, evidence):
+    from git_loopy.wrapper import checkpoint_message
+
+    configuration(tmp_path)
+    responses = recorded()
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [issue_record(
+            7, state="closed", title="Line change",
+            state_reason="not_planned" if evidence == "excluded" else "completed",
+        )])
+    )
+    comparison = responses[
+        (f"{API}/compare/{BASE}...{SHA}", (("page", 1), ("per_page", 100)))
+    ].data
+    comparison["commits"][0]["commit"]["message"] = {
+        "keyword": "FIXES\t#7", "checkpoint": checkpoint_message(7),
+        "mention": "Related to #7", "pull": "Implement the change",
+        "excluded": "Closes #7",
+    }[evidence]
+    if evidence == "pull":
+        responses[(f"{API}/pulls", (("page", 1), ("per_page", 100), ("state", "closed")))] = (
+            Response(200, [{
+                "number": 20, "state": "closed", "title": "Line change", "body": "Closes #7",
+                "url": f"https://api.github.com{API}/pulls/20",
+                "merged_at": "2026-10-12T18:00:00Z", "merge_commit_sha": SHA,
+            }])
+        )
+        responses[(f"{API}/compare/{SHA}...{SHA}", (("page", 1), ("per_page", 100)))] = (
+            Response(200, {
+                "status": "identical", "merge_base_commit": {"sha": SHA},
+                "total_commits": 0, "commits": [],
+            })
+        )
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert result["verdict"] == "reviewable"
+        assert result["incompletes"] == []
+        assert len(result["content"]) == 1
+        content = result["content"][0]
+        assert (content["n"], content["title"], content["cls"]) == (
+            7, "Line change", "closed_not_linked" if evidence == "mention" else
+            "excluded" if evidence == "excluded" else "merged",
+        )
+        assert content["via"]
+        if evidence in ("mention", "excluded"):
+            assert "merged" not in reply.content[0].text
+        else:
+            assert f"https://github.com/{REPO}/commit/{SHA}" in str(content["via"])
+        if evidence == "pull":
+            assert f"https://github.com/{REPO}/pull/20" in str(content["via"])
+
+
 @pytest.mark.parametrize("scenario", [2, 3, 5, 8, 10])
 async def test_work_catalog_records_holds_and_unreadable_items(tmp_path, scenario):
     fixture = json.loads((FIXTURES / f"scenario-{scenario}.json").read_text())
@@ -112,8 +181,7 @@ async def test_work_catalog_records_holds_and_unreadable_items(tmp_path, scenari
         assert not reply.is_error
         assert result["verdict"] == fixture["verdict"]
         assert result["holds"] == fixture["holds"]
-        assert result["incompletes"][:-1] == fixture["incompletes"]
-        assert result["incompletes"][-1]["read"] == "Baseline and line content"
+        assert result["incompletes"] == fixture["incompletes"]
         assert all(path.startswith(API) for _, path, _ in transport.requests)
         if scenario == 2:
             packet = reply.content[0].text
@@ -125,6 +193,232 @@ async def test_work_catalog_records_holds_and_unreadable_items(tmp_path, scenari
                 "Issue #8: Milestone-only work belongs to milestone v0.12.0 — "
                 "context only (https://github.com/example/project/issues/8)."
             )
+
+
+@pytest.mark.parametrize("case", ["reachable", "none", "missing", "cut"])
+async def test_baseline_is_newest_stable_reachable_tag_not_catalog_order(tmp_path, case):
+    configuration(tmp_path)
+    responses = recorded()
+    other = "c" * 40
+    first = (f"{API}/tags", (("page", 1), ("per_page", 100)))
+    second = (f"{API}/tags", (("page", 2), ("per_page", 100)))
+    responses[first] = Response(200, [
+        {"name": "v0.9.0", "commit": {"sha": BASE}},
+        {"name": "v9.0.0-rc.1", "commit": {"sha": other}},
+    ], {"Link": f'<https://api.github.com{API}/tags?per_page=100&page=2>; rel="next"'})
+    responses[second] = Response(200, [
+        {"name": "v0.11.1", "commit": {"sha": BASE}},
+        {"name": "v1.0.0", "commit": {"sha": other}},
+    ])
+    responses[(f"{API}/compare/{other}...{SHA}", (("page", 1), ("per_page", 100)))] = (
+        Response(200, {
+            "status": "diverged", "merge_base_commit": {"sha": "d" * 40},
+            "total_commits": 1, "commits": [{"sha": SHA, "commit": {"message": "Work"}}],
+        })
+    )
+    if case == "none":
+        responses[first] = Response(200, [{"name": "v9.0.0-rc.1", "commit": {"sha": other}}])
+    elif case == "missing":
+        responses[second] = Response(404, {})
+    elif case == "cut":
+        responses[second] = Response(200, [])
+    async with session(tmp_path, responses) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        if case == "reachable":
+            assert result["verdict"] == "reviewable"
+            assert result["baseline"] == "v0.11.1"
+            assert result["incompletes"] == []
+        else:
+            assert result["verdict"] == "incomplete"
+            assert result["baseline"] is None
+            assert result["incompletes"] == [{
+                "read": "Baseline tag", "source": f"https://github.com/{REPO}/tags",
+                "reason": {"none": "no reachable stable tag", "missing": "not-found",
+                           "cut": "pagination did not complete"}[case],
+            }]
+        assert all("/releases" not in path for _, path, _ in transport.requests)
+
+
+@pytest.mark.parametrize("case", [
+    "complete", "cut", "duplicate", "changed-count", "foreign", "missing", "empty",
+])
+async def test_line_commit_range_is_complete_or_unreadable(tmp_path, case):
+    configuration(tmp_path)
+    responses = recorded()
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [issue_record(7, state="closed")])
+    )
+    suffix = f"/compare/{BASE}...{SHA}"
+    first = (API + suffix, (("page", 1), ("per_page", 100)))
+    second = (API + suffix, (("page", 2), ("per_page", 100)))
+    link = f'<https://api.github.com{API}{suffix}?per_page=100&page=2>; rel="next"'
+    responses[first] = Response(200, {
+        "status": "ahead", "merge_base_commit": {"sha": BASE}, "total_commits": 2,
+        "commits": [{"sha": "c" * 40, "commit": {"message": "Earlier change"}}],
+    }, {"Link": link})
+    responses[second] = Response(200, {
+        "status": "ahead", "merge_base_commit": {"sha": BASE}, "total_commits": 2,
+        "commits": [{"sha": SHA, "commit": {"message": "Closes #7"}}],
+    })
+    if case == "cut":
+        responses[first] = Response(200, responses[first].data)
+    elif case == "duplicate":
+        responses[second].data["commits"] = responses[first].data["commits"]
+    elif case == "changed-count":
+        responses[second].data["total_commits"] = 3
+    elif case == "foreign":
+        responses[first] = Response(
+            200, responses[first].data, {"Link": '<https://evil.invalid/>; rel="next"'},
+        )
+    elif case == "missing":
+        responses[second] = Response(403, {})
+    elif case == "empty":
+        responses[second].data["commits"] = []
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert result["baseline"] == "v0.11.1"
+        if case == "complete":
+            assert result["verdict"] == "reviewable"
+            assert result["content"][0]["cls"] == "merged"
+            assert result["incompletes"] == []
+        else:
+            assert result["verdict"] == "incomplete"
+            assert result["content"] == []
+            assert result["incompletes"] == [{
+                "read": "Line commit range",
+                "reason": "denied or rate-limited" if case == "missing"
+                          else "pagination did not complete",
+                "source": f"https://github.com/{REPO}{suffix}",
+            }]
+
+
+@pytest.mark.parametrize("message", [
+    "Mention GitLoopy-Checkpoint: 7 in prose",
+    "Subject\n\nGitLoopy-Checkpoint: 7\n\nLater body text",
+    "Subject\n\nGitLoopy-Checkpoint: #7",
+    "Subject\n\nGitLoopy-Checkpoint: 7 trailing prose",
+    "Subject\n\nGitLoopy-Checkpoint: unattributed",
+    "Subject\n\nGitLoopy-Checkpoint: docs/7",
+    "Subject\n\nGitLoopy-Checkpoint: 0",
+])
+async def test_checkpoint_mentions_and_nonissue_attributions_are_not_linkage(tmp_path, message):
+    configuration(tmp_path)
+    responses = recorded()
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [issue_record(7, state="closed")])
+    )
+    responses[(f"{API}/compare/{BASE}...{SHA}", (("page", 1), ("per_page", 100)))].data[
+        "commits"
+    ][0]["commit"]["message"] = message
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert reply.structured_content["verdict"] == "reviewable"
+        assert reply.structured_content["content"][0]["cls"] == "closed_not_linked"
+        assert "merged" not in reply.content[0].text
+
+
+@pytest.mark.parametrize("where,patch", [
+    ("tags", [{"name": "v0.11.1", "commit": {"sha": "not-a-sha"}}]),
+    ("tags", [{"name": None}]),
+    ("comparison", {"total_commits": True}),
+    ("comparison", {"status": "unknown"}),
+    ("comparison", {"merge_base_commit": {"sha": "c" * 40}}),
+    ("comparison", {"commits": [{"sha": SHA, "commit": {"message": None}}]}),
+    ("closed_pulls", [{"number": 20, "state": "closed"}]),
+])
+async def test_line_sources_with_unknown_shapes_fail_closed(tmp_path, where, patch):
+    configuration(tmp_path)
+    responses = recorded()
+    if where == "tags":
+        responses[(f"{API}/tags", (("page", 1), ("per_page", 100)))] = Response(200, patch)
+    elif where == "comparison":
+        responses[(f"{API}/compare/{BASE}...{SHA}",
+                   (("page", 1), ("per_page", 100)))].data.update(patch)
+    else:
+        responses[(f"{API}/pulls",
+                   (("page", 1), ("per_page", 100), ("state", "closed")))] = Response(200, patch)
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert not reply.is_error
+        result = reply.structured_content
+        assert result["verdict"] == "incomplete"
+        assert len(result["incompletes"]) == 1
+        assert result["incompletes"][0]["reason"] == "unrecognized evidence shape"
+
+
+@pytest.mark.parametrize("complete", [False, True])
+async def test_closed_pull_catalog_requires_all_pages(tmp_path, complete):
+    configuration(tmp_path)
+    responses = recorded()
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [issue_record(7, state="closed")])
+    )
+    first = (f"{API}/pulls", (("page", 1), ("per_page", 100), ("state", "closed")))
+    second = (f"{API}/pulls", (("page", 2), ("per_page", 100), ("state", "closed")))
+    responses[first] = Response(200, [{
+        "number": 20, "state": "closed", "title": "Unrelated", "body": None,
+        "url": f"https://api.github.com{API}/pulls/20", "merged_at": None,
+    }], {"Link": (
+        f'<https://api.github.com{API}/pulls?state=closed&per_page=100&page=2>; rel="next"'
+    )})
+    responses[second] = Response(200, [{
+        "number": 21, "state": "closed", "title": "Closes #7", "body": None,
+        "url": f"https://api.github.com{API}/pulls/21",
+        "merged_at": "2026-10-12T18:00:00Z", "merge_commit_sha": BASE,
+    }]) if complete else Response(429, {})
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        if complete:
+            assert result["verdict"] == "reviewable"
+            assert result["content"][0]["cls"] == "merged"
+            assert result["content"][0]["via"][0]["source"].endswith("/pull/21")
+        else:
+            assert result["verdict"] == "incomplete"
+            assert result["content"] == []
+            assert result["incompletes"] == [{
+                "read": "Closed pull requests", "reason": "rate-limited",
+                "source": f"https://github.com/{REPO}/pulls",
+            }]
+
+
+@pytest.mark.parametrize("case", ["unmerged", "unreachable", "unreadable", "unknown-closure"])
+async def test_closed_pr_is_not_proof_without_reachable_merge(tmp_path, case):
+    configuration(tmp_path)
+    responses = recorded()
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [issue_record(
+            7, state="closed", state_reason=None if case == "unknown-closure" else "completed",
+        )])
+    )
+    merge = "c" * 40
+    responses[(f"{API}/pulls", (("page", 1), ("per_page", 100), ("state", "closed")))] = (
+        Response(200, [{
+            "number": 20, "state": "closed", "title": "Fixes #7", "body": None,
+            "url": f"https://api.github.com{API}/pulls/20",
+            "merged_at": None if case == "unmerged" else "2026-10-12T18:00:00Z",
+            "merge_commit_sha": merge,
+        }])
+    )
+    responses[(f"{API}/compare/{merge}...{SHA}", (("page", 1), ("per_page", 100)))] = (
+        Response(404, {}) if case == "unreadable" else Response(200, {
+            "status": "behind", "merge_base_commit": {"sha": SHA},
+            "total_commits": 0, "commits": [],
+        })
+    )
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        if case in ("unreadable", "unknown-closure"):
+            assert result["verdict"] == "incomplete"
+            assert result["content"] == []
+            assert len(result["incompletes"]) == 1
+        else:
+            assert result["verdict"] == "reviewable"
+            assert result["content"][0]["cls"] == "closed_not_linked"
+        assert "merged" not in reply.content[0].text
 
 
 async def test_open_target_issues_are_holds_not_milestone_membership(tmp_path):
@@ -151,7 +445,7 @@ async def test_open_target_issues_are_holds_not_milestone_membership(tmp_path):
             "Issue #8: Unfinished work belongs to milestone v0.13.0 — "
             "context only (https://github.com/example/project/issues/8)."
         )
-        assert [i["read"] for i in result["incompletes"]] == ["Baseline and line content"]
+        assert result["incompletes"] == []
 
 
 @pytest.mark.parametrize("unseen", [False, True])
@@ -219,7 +513,7 @@ async def test_only_open_closing_prs_are_holds_with_wrapper_keyword_semantics(tm
             "observed": "state=open; closing references=#7, #8", "context": "",
         }
         assert len(result["holds"]) == 3
-        assert [i["read"] for i in result["incompletes"]] == ["Baseline and line content"]
+        assert result["incompletes"] == []
 
 
 @pytest.mark.parametrize("version", ["0.12.0-alpha.2", "0.12.0"])
@@ -302,11 +596,11 @@ async def test_work_pagination_keeps_known_holds_but_never_follows_foreign_links
         reply = await client.call_tool("assess", {"repository": REPO})
         result = reply.structured_content
         assert not reply.is_error
-        assert result["verdict"] == "incomplete"
+        assert result["verdict"] == ("hold_advised" if case == "complete" else "incomplete")
         assert result["holds"][0]["observed"] == "state=open; label=v0.12.0"
         if case == "complete":
             assert len(result["holds"]) == {"issues": 2, "pulls": 3, "blockers": 1}[kind]
-            assert [i["read"] for i in result["incompletes"]] == ["Baseline and line content"]
+            assert result["incompletes"] == []
             if kind == "blockers":
                 assert "example/project#9" in result["holds"][0]["context"]
         else:
@@ -391,33 +685,33 @@ async def session(home, responses):
     assert not transport.violations
 
 
-async def test_assess_pins_line_and_returns_fail_closed_packet(tmp_path):
+async def test_assess_clean_line_is_reviewable_not_authorization(tmp_path):
     configuration(tmp_path)
     async with session(tmp_path, recorded()) as (client, transport):
         reply = await client.call_tool("assess", {"repository": REPO})
         assert not reply.is_error
         result = reply.structured_content
-        assert result["verdict"] == "incomplete"
+        assert result["verdict"] == "reviewable"
         assert result["sha"] == SHA
         assert result["releaseTarget"] == "0.12.0"
         assert result["releaseTargetState"] == "derived"
         assert result["milestone"] == "v0.12.0"
         assert result["resultFormat"] == 1
         assert result["holds"] == []
-        assert [i["read"] for i in result["incompletes"]] == [
-            "Baseline and line content",
-        ]
-        assert all(i["reason"] == "not yet assessed by this service version"
-                   for i in result["incompletes"])
+        assert result["incompletes"] == []
+        assert result["baseline"] == "v0.11.1"
+        assert "Baseline tag: v0&#46;11&#46;1" in reply.content[0].text
+        assert "not authorization" in reply.content[0].text
+        assert "Whether to close the milestone is your decision." in reply.content[0].text
         assert reply.content[0].text.startswith(
-            f"## Assessment verdict: incomplete — v0.12.0 at {SHA}\n",
+            f"## Assessment verdict: reviewable — v0.12.0 at {SHA}\n",
         )
         assert result["checks"] == [{
             "workflow": "Runner family gate", "conclusion": "success",
             "url": f"https://github.com/{REPO}/actions/runs/42",
         }]
         assert "- Runner family gate: success — [run]" in reply.content[0].text
-        assert len(transport.requests) == 7
+        assert len(transport.requests) == 11
 
 
 async def test_freshness_confirms_unchanged_head_and_open_title(tmp_path):
@@ -751,7 +1045,7 @@ async def test_unclassifiable_counted_runs_fail_closed(tmp_path, conclusions):
             f"https://github.com/{REPO}/",
         )
         assert result["holds"] == []
-        assert len(result["incompletes"]) == 2
+        assert len(result["incompletes"]) == 1
         assert [c["url"] for c in result["checks"]] == [
             f"https://github.com/{REPO}/actions/runs/{42 + n}"
             for n in range(len(runs))
@@ -777,9 +1071,7 @@ async def test_agreeing_runs_pass_and_unlisted_workflows_are_context_only(tmp_pa
         reply = await client.call_tool("assess", {"repository": REPO})
         result = reply.structured_content
         assert result["holds"] == []
-        assert [i["read"] for i in result["incompletes"]] == [
-            "Baseline and line content",
-        ]
+        assert result["incompletes"] == []
         assert result["checks"] == [
             {"workflow": "Runner family gate", "conclusion": "success",
              "url": f"https://github.com/{REPO}/actions/runs/42"},
@@ -864,9 +1156,7 @@ async def test_workflow_catalog_requires_complete_pinned_pagination(tmp_path, ca
                 "Runner family gate", "Promote Release line",
             ]
             assert result["holds"][0]["observed"] == "timed_out"
-            assert [i["read"] for i in result["incompletes"]] == [
-                "Baseline and line content",
-            ]
+            assert result["incompletes"] == []
         else:
             assert result["verdict"] == "incomplete"
             assert result["incompletes"][0]["read"] == "Counted checks"
@@ -896,7 +1186,7 @@ async def test_catalog_scenario_12_refuses_to_guess(tmp_path):
         result = explicit.structured_content
         assert result["milestone"] == "v0.13.0"
         assert result["releaseTarget"] == "0.12.0"
-        assert result["verdict"] == "incomplete"
+        assert result["verdict"] == "hold_advised"
         assert "would promote nothing" in result["holds"][0]["text"]
 
 
@@ -986,10 +1276,10 @@ async def test_required_read_failures_remain_unreadable(tmp_path, where, failure
         assert item["source"].startswith(f"https://github.com/{REPO}")
         assert "sensitive credential" not in str(result)
         assert len(result["incompletes"]) == (
-            4 if where == "head" else 2 if where == "runs" else 3
+            4 if where == "head" else 1 if where == "runs" else 2
         )
         assert len(transport.requests) == (
-            3 if where == "head" else 7 if where == "runs" else 5
+            3 if where == "head" else 11 if where == "runs" else 9
         )
         if where in ("head", "runs"):
             assert result["checks"][0]["workflow"] == "Runner family gate"
@@ -1167,7 +1457,7 @@ async def test_promotion_version_text_and_stage_remain_shared(tmp_path, text):
         assert result["version"] == text.rstrip("\r\n")
         assert result["releaseTarget"] == "0.12.0"
         assert result["holds"] == []
-        assert len(result["incompletes"]) == 1
+        assert result["incompletes"] == []
         assert result["context"][0].startswith("Prerelease stage is ")
 
 
@@ -1194,6 +1484,7 @@ async def test_repository_and_policy_strings_cannot_forge_packet_sections(tmp_pa
 @pytest.mark.parametrize("case", [
     "prerelease", "nothing", "read-error", "scenario-4", "scenario-7",
     "scenario-2", "scenario-3", "scenario-5", "scenario-8", "scenario-10",
+    "scenario-1", "scenario-6", "scenario-11",
 ])
 async def test_golden_packets_at_tool_boundary(tmp_path, case):
     configuration(tmp_path)
@@ -1202,6 +1493,8 @@ async def test_golden_packets_at_tool_boundary(tmp_path, case):
         responses[(f"{API}/contents/VERSION", (("ref", SHA),))] = Response(403, {})
     if case.startswith("scenario-"):
         fixture = json.loads((FIXTURES / f"{case}.json").read_text())
+        responses = recorded(fixture.get("version", "0.12.0-alpha.2"),
+                             fixture.get("milestones"))
         configuration(tmp_path, workflows=json.dumps(
             fixture.get("workflows", ["Runner family gate"]),
         ))
@@ -1213,8 +1506,27 @@ async def test_golden_packets_at_tool_boundary(tmp_path, case):
             )
         if "issues" in fixture:
             work_fixture(responses, fixture)
+        if "commit_message" in fixture:
+            responses[(f"{API}/compare/{BASE}...{SHA}",
+                       (("page", 1), ("per_page", 100)))].data[
+                "commits"
+            ][0]["commit"]["message"] = fixture["commit_message"]
     async with session(tmp_path, responses) as (client, _):
         reply = await client.call_tool("assess", {"repository": REPO})
+        if case.startswith("scenario-"):
+            result = reply.structured_content
+            assert result["verdict"] == fixture["verdict"]
+            assert result["incompletes"] == fixture.get("incompletes", [])
+            if "holds" in fixture:
+                assert result["holds"] == fixture["holds"]
+            elif "hold" not in fixture:
+                assert result["holds"] == []
+            elif isinstance(fixture["hold"], dict):
+                assert result["holds"] == [fixture["hold"]]
+            else:
+                assert [h["text"] for h in result["holds"]] == [fixture["hold"]]
+            if "content" in fixture:
+                assert result["content"] == fixture["content"]
         packet = re.sub(
             r"(?m)^- Assessment policy revision: .*",
             "- Assessment policy revision: <POLICY>", reply.content[0].text,
