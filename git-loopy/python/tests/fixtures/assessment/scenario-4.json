@@ -8,7 +8,7 @@
       "conclusion": "failure"
     }
   ],
-  "verdict": "incomplete",
+  "verdict": "hold_advised",
   "hold": {
     "text": "Counted workflow Runner family gate concluded failure.",
     "source": "https://github.com/example/project/actions/runs/42",

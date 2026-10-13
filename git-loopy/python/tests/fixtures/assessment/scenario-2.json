@@ -13,7 +13,8 @@
       "labels": [], "milestone": {"number": 1, "title": "v0.12.0"}
     },
     {
-      "number": 11, "state": "closed", "title": "Completed target-labelled work",
+      "number": 11, "state": "closed", "state_reason": "completed",
+      "title": "Completed target-labelled work",
       "url": "https://api.github.com/repos/example/project/issues/11",
       "labels": [{"name": "v0.12.0"}],
       "milestone": {"number": 1, "title": "v0.12.0"}
@@ -42,5 +43,5 @@
     }
   ],
   "incompletes": [],
-  "verdict": "incomplete"
+  "verdict": "hold_advised"
 }
