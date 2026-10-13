@@ -1,7 +1,7 @@
 """Tests for ``git_loopy.usage`` (issue #39 — the ``UsageTally`` value object).
 
 ``UsageTally`` is the single code representation of **Consumption** (see
-``CONTEXT.md``): the tokens-in / tokens-out and the model they were billed
+``GLOSSARY.md``): the tokens-in / tokens-out and the model they were billed
 against, plus the one shared rule every Cost figure derives from (first non-None
 model wins; tokens sum). Today that rule is duplicated across the **Summary**'s
 per-**Iteration** accrual (``RunSummary.record_usage``) and the **Queue**'s

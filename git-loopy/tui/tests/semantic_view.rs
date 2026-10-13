@@ -332,6 +332,49 @@ fn a_release_line_advance_replaces_the_headers_placeholder_with_its_latest_value
     );
 }
 
+#[test]
+fn the_header_names_the_release_version_that_started_the_run() {
+    let before = reduce_jsonl(&[], IssueRef::number(42));
+    assert!(before["dashboard"]["header"]["run_release_version"].is_null());
+
+    let started = reduce_jsonl(
+        &[r#"{"type":"wrapper.run.start","run_id":"run-1","release_version":"0.11.2"}"#],
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        started["dashboard"]["header"]["run_release_version"],
+        serde_json::json!("0.11.2")
+    );
+    assert!(
+        started["dashboard"]["header"]["release_version"].is_null(),
+        "the Release line's advance is a different fact and stays separate"
+    );
+
+    for undeclared in [
+        r#"{"type":"wrapper.run.start","run_id":"run-1"}"#,
+        r#"{"type":"wrapper.run.start","run_id":"run-1","release_version":""}"#,
+    ] {
+        let projected = reduce_jsonl(&[undeclared], IssueRef::number(42));
+        assert!(
+            projected["dashboard"]["header"]["run_release_version"].is_null(),
+            "{undeclared}"
+        );
+    }
+
+    let malformed = reduce_jsonl(
+        &[
+            r#"{"type":"wrapper.run.start","run_id":"run-1","release_version":7,"max_nmt_strikes":5}"#,
+        ],
+        IssueRef::number(42),
+    );
+    assert!(malformed["dashboard"]["header"]["run_release_version"].is_null());
+    assert_eq!(
+        malformed["dashboard"]["header"]["strikes"]["limit"],
+        serde_json::json!(5),
+        "a malformed version must not discard the rest of the Run start"
+    );
+}
+
 fn queue_row(projected: &Value, issue: i64) -> &Value {
     projected["dashboard"]["queue"]["rows"]
         .as_array()

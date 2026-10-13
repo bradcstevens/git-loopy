@@ -132,7 +132,7 @@ def _missing_checkout_outcome(module_path: Path) -> tuple[str, str]:
     return (
         FAIL,
         "cannot locate the repository root (no ancestor of "
-        f"{module_path} holds both docs/adr/ and CONTEXT.md), and this run is "
+        f"{module_path} holds both docs/adr/ and GLOSSARY.md), and this run is "
         "not an installed distribution. The Runner-family gate cannot be "
         "inspected, which is an inability to gate -- reported red rather than "
         "skipped, because a pin that can silently do nothing guards nothing.",
@@ -142,12 +142,12 @@ def _missing_checkout_outcome(module_path: Path) -> tuple[str, str]:
 def _find_repo_root() -> Path | None:
     """Walk up from this file to the repo root.
 
-    The root is the first ancestor holding both ``docs/adr/`` and ``CONTEXT.md``.
+    The root is the first ancestor holding both ``docs/adr/`` and ``GLOSSARY.md``.
     Returns ``None`` when neither is found (e.g. an installed-wheel run with no
     source checkout), which the scan tests treat as "nothing to guard -> skip".
     """
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 

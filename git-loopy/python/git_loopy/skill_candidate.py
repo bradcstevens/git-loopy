@@ -234,7 +234,7 @@ def discover_repo_root(start: Path | None = None) -> Path | None:
     """The git-loopy checkout whose contracts a candidate is judged against."""
     origin = (start or Path.cwd()).resolve()
     for parent in (origin, *origin.parents):
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 
@@ -274,7 +274,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "candidate check failed: cannot find the git-loopy checkout whose "
             "contracts to judge against (a directory holding docs/adr and "
-            "CONTEXT.md). Run from that checkout, or pass --repo-root. "
+            "GLOSSARY.md). Run from that checkout, or pass --repo-root. "
             "The check reaches no network.",
             file=sys.stderr,
         )

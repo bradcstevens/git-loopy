@@ -22,9 +22,9 @@ import pytest
 
 
 def _find_repo_root() -> Path | None:
-    """The first ancestor holding both ``docs/adr/`` and ``CONTEXT.md``."""
+    """The first ancestor holding both ``docs/adr/`` and ``GLOSSARY.md``."""
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 

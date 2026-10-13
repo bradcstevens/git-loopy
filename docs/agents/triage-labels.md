@@ -32,7 +32,7 @@ issue is independent and well-scoped enough to be worked concurrently, in its ow
 as one **Lane contribution** when the runner is started in **Parallel mode**. The runner
 never infers it: an issue that lacks it runs serially even in Parallel mode. Because it is
 not a triage role it is not in the table above and is not renameable — the runner reads
-that exact string. See `CONTEXT.md` and
+that exact string. See `GLOSSARY.md` and
 `docs/adr/0008-across-issue-parallelism-via-git-worktrees.md`.
 
 ## Priority label
@@ -56,8 +56,23 @@ change eligibility, in any respect:
 - and it never lets an issue past a **Lease**.
 
 It is also orthogonal to **Task type**, which selects a **Routed pair** and never affects
-order. See `CONTEXT.md`, `docs/wrapper-contract.md` §3.2 and
+order. See `GLOSSARY.md`, `docs/wrapper-contract.md` §3.2 and
 `docs/adr/0032-the-runner-picks-the-oldest-eligible-issue.md`.
+
+## Idea label
+
+`idea` is the third human assertion. It marks an issue as the anchor of a concluded
+grilling session. Like `parallel-safe` and `priority` it is not one of the five
+canonical triage roles, is not in the table above, and is **not renameable**. No
+skill ever applies it or infers that an issue is an idea.
+
+What it asserts is that the issue records **concluded thinking, not work**, so it
+belongs in neither the triage queue nor the `ready-for-agent` queue. It does not
+itself create a spec or otherwise advance the workflow.
+
+That exclusion is a convention, not a filter. No Orchestrator reads the label, so
+an `idea` issue that also carried `ready-for-agent` would still be eligible at
+Pickup. Keep the two apart.
 
 ## Wayfinder labels
 
@@ -86,7 +101,9 @@ and the blocking edges are expressed on this tracker.
 `git-loopy init`, run inside the repository, creates whichever triage,
 `parallel-safe`, `priority`, Task-type, and
 `wayfinder:` labels are absent and leaves the ones that already exist
-untouched. Re-running it creates nothing.
+untouched. Re-running it creates nothing. `idea` is outside that vocabulary:
+`/setup-git-loopy-skills` creates it, and `git-loopy labels` neither creates
+nor reports it.
 
 That is *ensure*, not reconcile, and it runs once — at whatever moment `init`
 happened to run. So a label added to the vocabulary afterwards never lands on a

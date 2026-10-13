@@ -39,9 +39,9 @@ _ABSOLUTE_PATH_RE = re.compile(r"(?<![\w./-])(?:/[A-Za-z0-9_.-]+){2,}|[A-Za-z]:\
 
 
 def _find_repo_root() -> Path | None:
-    """First ancestor holding both ``docs/adr/`` and ``CONTEXT.md`` (else None)."""
+    """First ancestor holding both ``docs/adr/`` and ``GLOSSARY.md`` (else None)."""
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 

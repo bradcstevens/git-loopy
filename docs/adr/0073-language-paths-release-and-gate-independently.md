@@ -7,6 +7,12 @@ the TUI helper, the Rust path's only member, is a Path artifact of the Python pa
 Rust path is declared until a Rust Orchestrator starts. That Orchestrator then opens the
 path with its own manifest and consumes the Dashboard library as a released dependency.
 
+**Amended by [ADR-0091](0091-a-dormant-path-stands-at-the-last-stable-family-release-carrying-its-owed-debt-frozen.md):**
+a Path baseline carries the owed waivers it already had into dormancy, frozen, and each
+fixture records the contract version it was introduced at. The shell and PowerShell
+baselines are the last stable family Release before the split (0.11.2 today), the contract
+it shipped, and Event schema 1.
+
 **Supersedes in part:** [ADR-0013](0013-multi-language-runner-family.md),
 [ADR-0016](0016-single-distribution-release-version.md),
 [ADR-0045](0045-a-conformance-distribution-is-obliged-by-a-stream.md), and

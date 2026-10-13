@@ -6,7 +6,7 @@ ADR-0029 was written, was *every* issue in this repository. This module closes
 that gap: it reads an unlabelled issue's own content and proposes its **Task
 type**.
 
-That reverses ``CONTEXT.md``'s *"read, never inferred"* clause, on ADR-0029's
+That reverses ``GLOSSARY.md``'s *"read, never inferred"* clause, on ADR-0029's
 reading that what the invariant protected was the narrower **runtime** property —
 :func:`~git_loopy.config.resolve_iteration_model` is handed ``item.labels`` and
 nothing else, and still is. Inference happens **once, before the label exists**;

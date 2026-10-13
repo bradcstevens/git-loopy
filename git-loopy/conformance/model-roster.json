@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "contract_version": "1.18",
-  "cli_version": "1.0.92-4",
+  "cli_version": "1.0.92-5",
   "context_tiers": {
     "claude-sonnet-5": ["default", "long_context"],
     "claude-haiku-4.5": ["default"],

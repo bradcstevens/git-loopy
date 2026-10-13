@@ -415,7 +415,7 @@ Details the whole family shares are **not** duplicated here — read them once i
   view of the per-Iteration flow, and its
   [skill routing](../../docs/runners.md#skill-routing)
   (`/diagnosing-bugs`, `/prototype`, `/tdd`, `/codebase-design`).
-- [`CONTEXT.md`](../../CONTEXT.md) — the domain glossary (Run, Iteration, Pool,
+- [`GLOSSARY.md`](../../GLOSSARY.md) — the domain glossary (Run, Iteration, Pool,
   Strike, Checkpoint, Active issue, …).
 
 The contract is enforced across every port by the

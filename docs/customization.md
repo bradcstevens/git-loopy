@@ -11,7 +11,7 @@
 ```
 .
 ├── AGENTS.md                       # Repository guidance and exact feedback loops.
-├── CONTEXT.md                      # Shared loop-engineering vocabulary.
+├── GLOSSARY.md                     # Shared loop-engineering vocabulary.
 ├── LICENSE
 ├── README.md                       # git-loopy front door and complete workflow overview.
 ├── docs/                           # Loop-engineering and Runner family references.
@@ -49,7 +49,7 @@
 - **`AGENTS.md`** — fill in **Tech stack** and the **Feedback loops** table (see [Stack-agnostic defaults](#stack-agnostic-defaults) for the exact structure). The loop reads the **Feedback loops** table to know what commands to run before committing. If lint / type-check / test / build commands are wrong here, the agent guesses and CI catches the difference. The trailing **Agent skills** block is owned by `/setup-git-loopy-skills`; don't hand-edit it the first time around.
 - **[`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md)** — usually leave defaults; only change if you want different skill routing or different commit-message conventions. If you change the commit-message convention, also update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`git-loopy/python/git_loopy/wrapper.py`](../git-loopy/python/git_loopy/wrapper.py) so the auto-close backstop still matches what the agent emits.
 
-Replace the repository's [`CONTEXT.md`](../CONTEXT.md) with the adopting
+Replace the repository's [`GLOSSARY.md`](../GLOSSARY.md) with the adopting
 project's language as `/grill-with-docs` resolves real terms. For the
 `AGENTS.md` structure, see
 [Stack-agnostic defaults](#stack-agnostic-defaults); for the planning path from

@@ -337,7 +337,7 @@ The Python Orchestrator uses this exact file as its preflight check - see
 
 ## Part 3 — Make `AGENTS.md` and the domain docs yours
 
-git-loopy includes `AGENTS.md` and `CONTEXT.md` at the repo root.
+git-loopy includes `AGENTS.md` and `GLOSSARY.md` at the repo root.
 `/setup-git-loopy-skills` configures the `## Agent skills` block and
 `docs/agents/*`; make the rest describe **your** project. The load-bearing
 structure is documented here and in [`docs/customization.md`](customization.md).

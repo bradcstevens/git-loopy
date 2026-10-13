@@ -2,6 +2,12 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0089](0089-1-0-0-promises-an-explicit-stable-surface-and-removes-what-0-x-deprecated.md):**
+on the Python path, 1.0.0 ends the migration this decision provides for. The deny guards
+are refused instead of kept as deprecated final guards. Config with no `enabled_skills`
+refuses until `git-loopy update` records a policy, instead of opening a one-time picker or
+running the Minimal Skill policy with a warning.
+
 ADR-0014 made skills available to Python SDK sessions by exposing project and
 personal skill roots. That solved missing-skill failures, but it also made a Run's
 capabilities depend on whatever happened to be present on the operator's machine and

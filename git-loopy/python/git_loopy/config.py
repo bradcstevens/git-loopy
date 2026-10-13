@@ -158,7 +158,7 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
 #: differs from the CLI the SDK actually spawns, every gate verdict in the Run
 #: was reached against a description of some *other* binary, and the divergence
 #: is what the **Run readback** reports at Run start.
-MODEL_ROSTER_CLI_VERSION = "1.0.92-4"
+MODEL_ROSTER_CLI_VERSION = "1.0.92-5"
 
 #: The model ids the kit officially supports (the keys of
 #: :data:`MODEL_REASONING_EFFORTS`). :mod:`git_loopy.cli` uses this to
@@ -199,7 +199,7 @@ DEFAULT_CONTEXT_TIER = "default"
 #: "unknown": the tier passes through untouched, exactly as an off-roster model
 #: keeps its effort, because the live Copilot CLI is the authority.
 #:
-#: Captured from the SDK-pinned CLI 1.0.92-4 on 2026-10-11 (ADR-0019), not
+#: Captured from the SDK-pinned CLI 1.0.92-5 on 2026-10-12 (ADR-0019), not
 #: inferred from a model's maximum window. ``auto`` is model-dependent.
 #: Compatibility-only models have no tier row: their earlier effort data does
 #: not establish current tier support.

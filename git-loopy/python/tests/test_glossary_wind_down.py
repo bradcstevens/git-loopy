@@ -1,6 +1,6 @@
 """The glossary entry #457's shipped code earned.
 
-``CONTEXT.md`` records *shipped reality*, and #445 §J sequences it explicitly:
+``GLOSSARY.md`` records *shipped reality*, and #445 §J sequences it explicitly:
 the **Wind-down** term "lands with the code that implements it". Until this
 slice a Wind-down was Dashboard-local state that never reached the trace, so
 there was nothing shared to define; now the Run announces it, every client folds
@@ -24,9 +24,9 @@ ADR_0043 = "docs/adr/0043-a-stop-drains-before-it-cancels.md"
 
 
 def _repo_root() -> Path | None:
-    """First ancestor holding both ``docs/adr/`` and ``CONTEXT.md`` (else None)."""
+    """First ancestor holding both ``docs/adr/`` and ``GLOSSARY.md`` (else None)."""
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 
@@ -44,11 +44,11 @@ def _entry(term: str) -> str:
     """One glossary entry's body, reflowed.
 
     An entry runs from its ``**Term**:`` heading to the next blank line, which is
-    what separates entries throughout ``CONTEXT.md``. Reading the entry rather
+    what separates entries throughout ``GLOSSARY.md``. Reading the entry rather
     than the whole document is what keeps a claim asserted *about the term* —
     otherwise a sentence elsewhere in the glossary could satisfy it.
     """
-    lines = _doc("CONTEXT.md").splitlines()
+    lines = _doc("GLOSSARY.md").splitlines()
     heading = f"**{term}**:"
     for index, line in enumerate(lines):
         if line.strip() == heading:
@@ -58,7 +58,7 @@ def _entry(term: str) -> str:
                     break
                 body.append(candidate)
             return " ".join(" ".join(body).split())
-    raise AssertionError(f"CONTEXT.md has no glossary entry for **{term}**")
+    raise AssertionError(f"GLOSSARY.md has no glossary entry for **{term}**")
 
 
 def test_the_glossary_names_wind_down_as_one_latch_with_three_causes() -> None:

@@ -1342,3 +1342,29 @@ def test_legacy_route_without_lifecycle_position_remains_unchanged() -> None:
         "effort": "medium",
         "source": "routed",
     }
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [
+        ({"release_version": "0.11.2"}, "0.11.2"),
+        ({}, None),
+        ({"release_version": ""}, None),
+        ({"release_version": 7}, None),
+    ],
+)
+def test_the_header_names_the_release_version_that_started_the_run(
+    declared: dict, expected: str | None
+) -> None:
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+
+    state = LiveRunState()
+    assert project_run_view(state, None, issue=1)["dashboard"]["header"][
+        "run_release_version"
+    ] is None
+    state.render({"type": "wrapper.run.start", **declared})
+    header = project_run_view(state, None, issue=1)["dashboard"]["header"]
+    assert header["run_release_version"] == expected
+    # The Release line's advance is a different fact and stays separate.
+    assert header["release_version"] is None

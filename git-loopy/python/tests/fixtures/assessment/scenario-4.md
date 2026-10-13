@@ -8,7 +8,6 @@ Some required evidence could not be read. No conclusion either way — this does
   - [source](https://github.com/example/project/actions/runs/42); observed: failure
 
 ## Could not read
-- Open and unabsorbed work: not yet assessed by this service version — [source](https://github.com/example/project/issues)
 - Baseline and line content: not yet assessed by this service version — [source](https://github.com/example/project/tags)
 
 ## What would change this

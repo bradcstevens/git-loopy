@@ -2,6 +2,10 @@
 
 **Status:** accepted design; implementation acceptance is tracked by the delivery issues.
 
+**Amended by [ADR-0089](0089-1-0-0-promises-an-explicit-stable-surface-and-removes-what-0-x-deprecated.md):**
+from 1.0.0, `--route-policy unselected` and the non-local legacy default are deprecated and
+off the Stable surface. A 1.x minor removes both when non-local activation completes.
+
 Decided in a human-led `/grill-with-docs` session under the model-routing map
 [#280](https://github.com/bradcstevens/git-loopy/issues/280). This records the new
 policy, not a claim that the current Runner or Wrapper contract implements it.

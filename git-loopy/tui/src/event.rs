@@ -351,6 +351,9 @@ pub struct RunStart {
     /// Where the Pool comes from (`github`, `prds`), when the Run declares it.
     #[serde(default)]
     pub issue_source: Option<String>,
+    /// The **Release version** of the Orchestrator that started this Run.
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub release_version: Option<String>,
 }
 
 /// The Execution host facts announced on `wrapper.run.start`.
@@ -1456,6 +1459,17 @@ fn lenient_i64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>
     Ok(value
         .as_ref()
         .and_then(|value| value.as_i64().or_else(|| value.as_f64().map(|n| n as i64))))
+}
+
+/// A non-empty string, treating anything else as undeclared rather than
+/// discarding the rest of the payload.
+fn lenient_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value
+        .as_ref()
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string))
 }
 
 /// Parse a timestamp field, treating a malformed instant as unobserved.

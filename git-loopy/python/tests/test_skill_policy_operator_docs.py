@@ -8,7 +8,7 @@ the guidance is written once and *pinned to production* here.
 
 Every expectation is **derived**, never restated:
 
-* the vocabulary comes from ``CONTEXT.md``'s glossary, which
+* the vocabulary comes from ``GLOSSARY.md``'s glossary, which
   ``docs/agents/domain.md`` already makes the naming authority;
 * the flags, environment variables, and subcommands come from the live
   ``argparse`` surface ``git_loopy.cli`` builds;
@@ -54,7 +54,7 @@ _MARKING_WINDOW = 240
 
 #: The glossary terms this reference must carry. Membership is decided by the
 #: glossary itself: a ``**Term**:`` entry naming a Skill concept. Listing the
-#: *names* here rather than the definitions keeps CONTEXT.md the authority for
+#: *names* here rather than the definitions keeps GLOSSARY.md the authority for
 #: what each one means while still failing when a term is added to the family
 #: and the operator guidance never learns it.
 _GLOSSARY_ENTRY = re.compile(r"^\*\*(?P<term>[^*]+)\*\*:$", re.MULTILINE)
@@ -69,7 +69,7 @@ _NOT_POLICY_VOCABULARY = frozenset({"Skill"})
 def _find_repo_root() -> Path | None:
     """Walk up from this file to the repo root (``None`` on a wheel-only run)."""
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 
@@ -98,8 +98,8 @@ def _flat(text: str) -> str:
 
 
 def _glossary_skill_terms(repo_root: Path) -> frozenset[str]:
-    """The Skill-family terms CONTEXT.md defines, minus the generic **Skill**."""
-    glossary = _read(repo_root, "CONTEXT.md")
+    """The Skill-family terms GLOSSARY.md defines, minus the generic **Skill**."""
+    glossary = _read(repo_root, "GLOSSARY.md")
     return frozenset(
         term
         for match in _GLOSSARY_ENTRY.finditer(glossary)
@@ -120,7 +120,7 @@ def test_operator_reference_defines_every_skill_glossary_term() -> None:
     doc = _read(repo_root, OPERATOR_DOC)
 
     terms = _glossary_skill_terms(repo_root)
-    assert terms, "CONTEXT.md must define the Skill-family vocabulary"
+    assert terms, "GLOSSARY.md must define the Skill-family vocabulary"
 
     missing = sorted(term for term in terms if f"**{term}**" not in doc)
     assert not missing, (

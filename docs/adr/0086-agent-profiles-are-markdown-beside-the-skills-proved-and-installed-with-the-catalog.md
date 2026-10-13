@@ -7,6 +7,14 @@ the `planning` profile's body stands alone and is never layered on `PROMPT.md`, 
 profile declares `access: full`. ADR-0087 also decides how a Loop engineer's harness
 gets the Planner.
 
+**Amended by [PRD: Agent profiles](https://github.com/bradcstevens/git-loopy/issues/821):**
+no execution profile permits a merge-conflict Skill. The Skills repository is retiring
+`/resolving-merge-conflicts`
+([git-loopy-skills#87](https://github.com/bradcstevens/git-loopy-skills/issues/87)), and the
+proof below refuses a Permitted name that is not a Skill at the pinned revision. The first
+bullet of "Amendments to ADR-0078" therefore no longer holds. The Run instructions and the
+Recovery prompt carry the conflict procedure themselves, as settled with the maintainer.
+
 Decided by [Decide how Agent profiles are expressed and proved in the Skills
 repository](https://github.com/bradcstevens/git-loopy/issues/748). Builds on
 [ADR-0078](0078-one-agent-profile-per-task-type.md), which put each **Agent profile**

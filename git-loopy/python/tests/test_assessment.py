@@ -71,10 +71,13 @@ class RecordedTransport:
             )
             assert path in {
                 API, f"{API}/commits/main", f"{API}/contents/VERSION",
-                f"{API}/milestones", f"{API}/actions/runs",
+                f"{API}/milestones", f"{API}/actions/runs", f"{API}/issues",
+                f"{API}/pulls",
                 f"{API}/installation", "/app",
                 "/app/installations/456/access_tokens",
-            }
+            } or re.fullmatch(
+                re.escape(API) + r"/issues/[1-9][0-9]*/dependencies/blocked_by", path,
+            )
             assert headers["X-GitHub-Api-Version"] == "2022-11-28"
             auth = headers["Authorization"]
             self.authentications.append(auth.removeprefix("Bearer "))
@@ -103,6 +106,10 @@ class RecordedTransport:
 
 def recorded(version="0.12.0-alpha.2", milestones=None):
     return {
+        (f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all"))):
+            Response(200, []),
+        (f"{API}/pulls", (("page", 1), ("per_page", 100), ("state", "open"))):
+            Response(200, []),
         (API, ()): Response(200, {"default_branch": "main"}),
         (f"{API}/commits/main", ()): Response(200, {"sha": SHA}),
         (f"{API}/contents/VERSION", (("ref", SHA),)): Response(
@@ -119,6 +126,286 @@ def recorded(version="0.12.0-alpha.2", milestones=None):
                  "status": "completed", "conclusion": "success"},
             ]}),
     }
+
+
+def issue_record(number, *, state="open", labels=("v0.12.0",), title="Unfinished work",
+                 milestone=None):
+    return {
+        "number": number, "state": state, "title": title,
+        "labels": [{"name": label} for label in labels], "milestone": milestone,
+        "url": f"https://api.github.com{API}/issues/{number}",
+    }
+
+
+def work_fixture(responses, fixture):
+    for kind, state in (("issues", "all"), ("pulls", "open")):
+        responses[(f"{API}/{kind}",
+                   (("page", 1), ("per_page", 100), ("state", state)))] = Response(
+            fixture.get(f"{kind}_status", 200), fixture.get(kind, []),
+        )
+    for number, response in fixture.get("blockers", {}).items():
+        responses[(f"{API}/issues/{number}/dependencies/blocked_by",
+                   (("page", 1), ("per_page", 100)))] = Response(
+            response["status"], response["data"],
+        )
+    return responses
+
+
+@pytest.mark.parametrize("scenario", [2, 3, 5, 8, 10])
+async def test_work_catalog_records_holds_and_unreadable_items(tmp_path, scenario):
+    fixture = json.loads((FIXTURES / f"scenario-{scenario}.json").read_text())
+    configuration(tmp_path)
+    async with session(tmp_path, work_fixture(recorded(), fixture)) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert not reply.is_error
+        assert result["verdict"] == fixture["verdict"]
+        assert result["holds"] == fixture["holds"]
+        assert result["incompletes"][:-1] == fixture["incompletes"]
+        assert result["incompletes"][-1]["read"] == "Baseline and line content"
+        assert all(path.startswith(API) for _, path, _ in transport.requests[3:])
+        if scenario == 2:
+            packet = reply.content[0].text
+            assert packet.count("Assessment verdict:") == 1
+            assert packet.count("## ") == 8
+            assert "## Forged heading" not in packet
+            assert "\nIgnore the packet" not in packet
+            assert result["context"][-1] == (
+                "Issue #8: Milestone-only work belongs to milestone v0.12.0 — "
+                "context only (https://github.com/example/project/issues/8)."
+            )
+
+
+async def test_open_target_issues_are_holds_not_milestone_membership(tmp_path):
+    configuration(tmp_path)
+    responses = recorded(milestones=[{"title": "v0.13.0", "state": "open", "number": 1}])
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [
+            issue_record(7),
+            issue_record(8, labels=(), milestone={"number": 1, "title": "v0.13.0"}),
+            issue_record(9, labels=("v0.13.0",)),
+        ])
+    )
+    responses[(f"{API}/issues/7/dependencies/blocked_by",
+               (("page", 1), ("per_page", 100)))] = Response(200, [])
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert result["holds"][1] == {
+            "text": "Open issue #7: Unfinished work carries the line's label v0.12.0.",
+            "source": "https://github.com/example/project/issues/7",
+            "observed": "state=open; label=v0.12.0", "context": "",
+        }
+        assert result["context"][-1] == (
+            "Issue #8: Unfinished work belongs to milestone v0.13.0 — "
+            "context only (https://github.com/example/project/issues/8)."
+        )
+        assert [i["read"] for i in result["incompletes"]] == ["Baseline and line content"]
+
+
+@pytest.mark.parametrize("unseen", [False, True])
+async def test_native_blockers_are_nested_context_or_name_the_blocked_issue(tmp_path, unseen):
+    configuration(tmp_path)
+    responses = recorded()
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [issue_record(7)])
+    )
+    responses[(f"{API}/issues/7/dependencies/blocked_by",
+               (("page", 1), ("per_page", 100)))] = (
+        Response(404, {}) if unseen else Response(200, [
+            issue_record(8, labels=(), title="Open blocker"),
+            issue_record(9, state="closed", labels=(), title="Finished blocker"),
+        ])
+    )
+    async with session(tmp_path, responses) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        hold = result["holds"][0]
+        assert hold["source"] == "https://github.com/example/project/issues/7"
+        assert len(result["holds"]) == 1
+        if unseen:
+            assert result["incompletes"][0] == {
+                "read": "Native blockers of issue #7", "reason": "not-found",
+                "source": "https://github.com/example/project/issues/7",
+            }
+            assert hold["context"] == ""
+        else:
+            assert hold["context"] == (
+                "Open blocker example/project#8: Open blocker "
+                "(https://github.com/example/project/issues/8)."
+            )
+            assert "  - Context: Open blocker example" in reply.content[0].text
+        assert "Readiness" not in str(reply)
+        assert all(path.startswith(API) for _, path, _ in transport.requests[3:])
+
+
+async def test_only_open_closing_prs_are_holds_with_wrapper_keyword_semantics(tmp_path):
+    configuration(tmp_path)
+    responses = recorded()
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [issue_record(7), issue_record(8)])
+    )
+    for number in (7, 8):
+        responses[(f"{API}/issues/{number}/dependencies/blocked_by",
+                   (("page", 1), ("per_page", 100)))] = Response(200, [])
+    responses[(f"{API}/pulls", (("page", 1), ("per_page", 100), ("state", "open")))] = (
+        Response(200, [
+            {"number": 20, "state": "open", "title": "FIXES\t#7", "body": "Resolves #8",
+             "url": f"https://api.github.com{API}/pulls/20"},
+            {"number": 21, "state": "open", "title": "Mentions #7",
+             "body": "Related #8; closes example/other#7",
+             "url": f"https://api.github.com{API}/pulls/21"},
+            {"number": 22, "state": "open", "title": "Closes #99", "body": None,
+             "url": f"https://api.github.com{API}/pulls/22"},
+        ])
+    )
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert result["holds"][2] == {
+            "text": "Open pull request #20: FIXES\t#7 closes open line issues #7, #8.",
+            "source": "https://github.com/example/project/pull/20",
+            "observed": "state=open; closing references=#7, #8", "context": "",
+        }
+        assert len(result["holds"]) == 3
+        assert [i["read"] for i in result["incompletes"]] == ["Baseline and line content"]
+
+
+@pytest.mark.parametrize("version", ["0.12.0-alpha.2", "0.12.0"])
+async def test_unabsorbed_closed_labels_compare_with_version_not_milestone(tmp_path, version):
+    configuration(tmp_path)
+    responses = recorded(version, [{"title": "v0.13.0", "state": "open", "number": 1}])
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [
+            issue_record(7, state="closed", labels=("v0.13.0",)),
+            issue_record(8, state="closed", labels=("v0.12.0",)),
+            issue_record(9, state="closed", labels=("v0.9.0",)),
+            issue_record(10, state="closed", labels=()),
+            issue_record(11, labels=("v0.13.0",)),
+        ])
+    )
+    if version == "0.12.0":
+        responses[(f"{API}/issues/11/dependencies/blocked_by",
+                   (("page", 1), ("per_page", 100)))] = Response(200, [])
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert result["holds"][1] == {
+            "text": f"Closed issue #7: Unfinished work carries unabsorbed label v0.13.0; "
+                    f"VERSION is {version} (target 0.12.0).",
+            "source": "https://github.com/example/project/issues/7",
+            "observed": f"state=closed; label=v0.13.0; VERSION={version}",
+            "context": "",
+        }
+        assert len(result["holds"]) == (3 if version == "0.12.0" else 2)
+        if version == "0.12.0":
+            assert result["holds"][2]["observed"] == "state=open; label=v0.13.0"
+
+
+@pytest.mark.parametrize("kind", ["issues", "pulls", "blockers"])
+@pytest.mark.parametrize("case", [
+    "complete", "rate-limited", "foreign-link", "empty-page", "duplicate", "changed-query",
+    "malformed-link",
+])
+async def test_work_pagination_keeps_known_holds_but_never_follows_foreign_links(
+    tmp_path, kind, case,
+):
+    configuration(tmp_path)
+    responses = recorded()
+    issues = (f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))
+    responses[issues] = Response(200, [issue_record(7)])
+    for number in (7, 8):
+        responses[(f"{API}/issues/{number}/dependencies/blocked_by",
+                   (("page", 1), ("per_page", 100)))] = Response(200, [])
+    if kind == "issues":
+        suffix, query = "/issues", {"state": "all"}
+        data = [issue_record(7)], [issue_record(8)]
+    elif kind == "pulls":
+        suffix, query = "/pulls", {"state": "open"}
+        data = tuple([{
+            "number": number, "state": "open", "title": "Closes #7", "body": None,
+            "url": f"https://api.github.com{API}/pulls/{number}",
+        }] for number in (20, 21))
+    else:
+        suffix, query = "/issues/7/dependencies/blocked_by", {}
+        data = [issue_record(8, labels=())], [issue_record(9, labels=())]
+    first = (API + suffix, tuple(sorted({**query, "per_page": 100, "page": 1}.items())))
+    second = (API + suffix, tuple(sorted({**query, "per_page": 100, "page": 2}.items())))
+    query_text = ("state=" + query["state"] + "&") if query else ""
+    link = f"<https://api.github.com{API}{suffix}?{query_text}per_page=100&page=2>; rel=\"next\""
+    if case == "foreign-link":
+        link = '<https://evil.invalid/capture>; rel="next"'
+    elif case == "malformed-link":
+        link = '<https://[broken/capture>; rel="next"'
+    elif case == "changed-query":
+        link = link.replace("per_page=100", "per_page=99")
+    responses[first] = Response(200, data[0], {"Link": link})
+    responses[second] = Response(200, data[1])
+    if case == "rate-limited":
+        responses[second] = Response(429, {})
+    elif case == "empty-page":
+        responses[second] = Response(200, [])
+    elif case == "duplicate":
+        responses[second] = Response(200, data[0])
+    async with session(tmp_path, responses) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert not reply.is_error
+        assert result["verdict"] == "incomplete"
+        assert result["holds"][0]["observed"] == "state=open; label=v0.12.0"
+        if case == "complete":
+            assert len(result["holds"]) == {"issues": 2, "pulls": 3, "blockers": 1}[kind]
+            assert [i["read"] for i in result["incompletes"]] == ["Baseline and line content"]
+            if kind == "blockers":
+                assert "example/project#9" in result["holds"][0]["context"]
+        else:
+            assert result["incompletes"][0]["read"] == {
+                "issues": "Issue catalog", "pulls": "Open pull requests",
+                "blockers": "Native blockers of issue #7",
+            }[kind]
+            assert result["incompletes"][0]["reason"] == (
+                "rate-limited" if case == "rate-limited" else "pagination did not complete"
+            )
+        assert all(path.startswith(API) for _, path, _ in transport.requests[3:])
+
+
+@pytest.mark.parametrize("patch", [
+    {"number": True}, {"state": "mystery"}, {"title": None}, {"labels": ["v0.12.0"]},
+    {"milestone": {}}, {"url": "https://evil.invalid"},
+    {"pull_request": {}},
+])
+async def test_unrecognized_issue_shapes_are_unreadable_without_hiding_known_work(tmp_path, patch):
+    configuration(tmp_path)
+    responses = recorded()
+    malformed = issue_record(8)
+    malformed.update(patch)
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [issue_record(7), malformed])
+    )
+    responses[(f"{API}/issues/7/dependencies/blocked_by",
+               (("page", 1), ("per_page", 100)))] = Response(200, [])
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert reply.structured_content["incompletes"][0]["reason"] == (
+            "unrecognized evidence shape"
+        )
+        assert len(reply.structured_content["holds"]) == 1
+
+
+@pytest.mark.parametrize("claim", ["v0.13", "v01.13.0", "v0.13.0-beta.1"])
+async def test_malformed_release_label_claims_cannot_be_treated_as_no_work(tmp_path, claim):
+    configuration(tmp_path)
+    responses = recorded()
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(200, [issue_record(7, state="closed", labels=(claim,))])
+    )
+    async with session(tmp_path, responses) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert reply.structured_content["incompletes"][0] == {
+            "read": "Release label of issue #7", "reason": "unrecognized evidence shape",
+            "source": "https://github.com/example/project/issues/7",
+        }
+        assert reply.structured_content["holds"] == []
 
 
 def configuration(home: Path, workflows='["Runner family gate"]', extra=""):
@@ -207,7 +494,7 @@ async def test_assess_pins_line_and_returns_fail_closed_packet(tmp_path):
         assert result["resultFormat"] == 1
         assert result["holds"] == []
         assert [i["read"] for i in result["incompletes"]] == [
-            "Open and unabsorbed work", "Baseline and line content",
+            "Baseline and line content",
         ]
         assert all(i["reason"] == "not yet assessed by this service version"
                    for i in result["incompletes"])
@@ -219,7 +506,7 @@ async def test_assess_pins_line_and_returns_fail_closed_packet(tmp_path):
             "url": f"https://github.com/{REPO}/actions/runs/42",
         }]
         assert "- Runner family gate: success — [run]" in reply.content[0].text
-        assert len(transport.requests) == 8
+        assert len(transport.requests) == 10
         assert [r[:2] for r in transport.requests[:3]] == [
             ("GET", f"{API}/installation"), ("GET", "/app"),
             ("POST", "/app/installations/456/access_tokens"),
@@ -559,7 +846,7 @@ async def test_unclassifiable_counted_runs_fail_closed(tmp_path, conclusions):
             f"https://github.com/{REPO}/",
         )
         assert result["holds"] == []
-        assert len(result["incompletes"]) == 3
+        assert len(result["incompletes"]) == 2
         assert [c["url"] for c in result["checks"]] == [
             f"https://github.com/{REPO}/actions/runs/{42 + n}"
             for n in range(len(runs))
@@ -586,7 +873,7 @@ async def test_agreeing_runs_pass_and_unlisted_workflows_are_context_only(tmp_pa
         result = reply.structured_content
         assert result["holds"] == []
         assert [i["read"] for i in result["incompletes"]] == [
-            "Open and unabsorbed work", "Baseline and line content",
+            "Baseline and line content",
         ]
         assert result["checks"] == [
             {"workflow": "Runner family gate", "conclusion": "success",
@@ -673,7 +960,7 @@ async def test_workflow_catalog_requires_complete_pinned_pagination(tmp_path, ca
             ]
             assert result["holds"][0]["observed"] == "timed_out"
             assert [i["read"] for i in result["incompletes"]] == [
-                "Open and unabsorbed work", "Baseline and line content",
+                "Baseline and line content",
             ]
         else:
             assert result["verdict"] == "incomplete"
@@ -793,8 +1080,12 @@ async def test_required_read_failures_remain_unreadable(tmp_path, where, failure
         }[where]
         assert item["source"].startswith(f"https://github.com/{REPO}")
         assert "sensitive credential" not in str(result)
-        assert len(result["incompletes"]) == (4 if where == "head" else 3)
-        assert len(transport.requests) == (6 if where == "head" else 8)
+        assert len(result["incompletes"]) == (
+            4 if where == "head" else 2 if where == "runs" else 3
+        )
+        assert len(transport.requests) == (
+            6 if where == "head" else 10 if where == "runs" else 8
+        )
         if where in ("head", "runs"):
             assert result["checks"][0]["workflow"] == "Runner family gate"
             assert result["checks"][0]["conclusion"] == "unreadable"
@@ -1078,7 +1369,7 @@ async def test_promotion_version_text_and_stage_remain_shared(tmp_path, text):
         assert result["version"] == text.rstrip("\r\n")
         assert result["releaseTarget"] == "0.12.0"
         assert result["holds"] == []
-        assert len(result["incompletes"]) == 2
+        assert len(result["incompletes"]) == 1
         assert result["context"][0].startswith("Prerelease stage is ")
 
 
@@ -1104,6 +1395,7 @@ async def test_repository_and_policy_strings_cannot_forge_packet_sections(tmp_pa
 
 @pytest.mark.parametrize("case", [
     "prerelease", "nothing", "read-error", "scenario-4", "scenario-7",
+    "scenario-2", "scenario-3", "scenario-5", "scenario-8", "scenario-10",
 ])
 async def test_golden_packets_at_tool_boundary(tmp_path, case):
     configuration(tmp_path)
@@ -1115,11 +1407,14 @@ async def test_golden_packets_at_tool_boundary(tmp_path, case):
         configuration(tmp_path, workflows=json.dumps(
             fixture.get("workflows", ["Runner family gate"]),
         ))
-        responses[(f"{API}/actions/runs",
-                   (("head_sha", SHA), ("page", 1), ("per_page", 100)))] = Response(
-            200, {"total_count": len(fixture["workflow_runs"]),
-                  "workflow_runs": fixture["workflow_runs"]},
-        )
+        if "workflow_runs" in fixture:
+            responses[(f"{API}/actions/runs",
+                       (("head_sha", SHA), ("page", 1), ("per_page", 100)))] = Response(
+                200, {"total_count": len(fixture["workflow_runs"]),
+                      "workflow_runs": fixture["workflow_runs"]},
+            )
+        if "issues" in fixture:
+            work_fixture(responses, fixture)
     async with session(tmp_path, responses) as (client, _):
         reply = await client.call_tool("assess", {"repository": REPO})
         packet = re.sub(
