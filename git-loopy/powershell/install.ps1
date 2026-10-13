@@ -138,7 +138,7 @@ else {
     }
     catch {
         [Console]::Error.WriteLine(
-            "install.ps1: cannot determine which Release this clone pins")
+            "install.ps1: cannot determine which Release this clone pins: $($_.Exception.Message)")
         exit 1
     }
 

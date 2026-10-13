@@ -35,7 +35,9 @@ dependencies = [
 
 [project.optional-dependencies]
 assessment = [
+    "httpx>=0.24,<1",
     "mcp>=2.3,<3",
+    "PyJWT[crypto]>=2.10,<3",
 ]
 
 # Optional OpenTelemetry export. Off by default so the base install stays

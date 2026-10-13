@@ -15,7 +15,55 @@ contract.
 is retuned. Three of its seven rows changed model, five changed effort, and one property that
 ADR-0035 held for the run-wide default only now holds for the whole table.
 
+## Evidence-calibrated retune: 2026-10-12
+
+Supersedes the values of the 2026-10-09 quality-first retune below. Every rule this record
+carries forward from ADR-0035 stands, including the MUST in §14 of the Wrapper contract.
+
+| `task-type` key | model | effort |
+| --- | --- | --- |
+| `planning` | `claude-opus-5.5` | `medium` |
+| `review` | `claude-opus-5.5` | `medium` |
+| `implementation` | `gpt-6-astra` | `medium` |
+| `test` | `gpt-6-astra` | `medium` |
+| `docs` | `claude-sonnet-5.5` | `medium` |
+| `chore` | `claude-sonnet-5.5` | `low` |
+| `bugfix` | `claude-opus-5.5` | `medium` |
+
+The maintainer adopted the routes of their global Config and the tracked project Config as the
+recommended table, so the seed, the tracked Config and the maintainer's own Runs agree again.
+The routes come from a `/set-task-models` calibration: Artificial Analysis's leaderboard
+(captured and browser-verified on 2026-10-12), Arena's Agent, WebDev and Text boards (2026-10-08
+snapshot), Terminal-Bench 4.0, Bug Hunt Bench and CWE-bench v1 through BenchLM, and the
+authenticated harness's own capability and price listing (CLI `1.0.92-4` and `1.0.97-1` agree).
+This is public leaderboard evidence, not a routing measurement: no Calibration ran and no
+`routing.measured.toml` was written.
+
+- **Balanced effort replaces quality-first effort.** Every row is `medium` except `chore`
+  (`low`). Artificial Analysis puts Claude Opus 5.5 at `medium` within a point of the old `xhigh`
+  pairs' Intelligence Index (51.2 against 51.0–51.9) at a fraction of their first-answer latency
+  (25 s against 39–174 s).
+- **Implementation and test move to GPT-6 Astra.** The maintainer chose it over `gpt-6.1-sol`
+  knowing the evidence is close: Astra leads Artificial Analysis by small margins, ties
+  `gpt-6.1-sol` on Terminal-Bench 4.0 (58.18% each at `max`) and Bug Hunt Bench (45 against 44.3
+  at `max`), and costs five times as many AI credits per token. No test-authoring benchmark
+  exists on any surface consulted, so `test` rests on repository-coding proxies, as
+  [ADR-0057](0057-the-test-route-leaves-a-deprecating-model.md) also found.
+- **Docs and chores move to Claude Sonnet 5.5**, so `docs` leaves OpenAI; see the amendment to
+  the cross-vendor property below.
+- **The checkable rules still hold.** No routed pair holds `max`, no model is
+  reasoning-incapable, `review` is not `gpt-5.6-sol`, and every pair differs from the
+  `gpt-6.1-sol @ max` escalation rung, which stays the run-wide default pair (ADR-0056).
+  Planning and bugfix no longer share that pair's model.
+- **Every model offers `long_context`**, which the maintainer's presets still select run-wide.
+
+**Review trigger:** a roster change touching `claude-opus-5.5`, `gpt-6-astra` or
+`claude-sonnet-5.5`, or a price change that alters the Astra trade-off.
+
 ## Quality-first retune: 2026-10-09
+
+> **Superseded** by the [2026-10-12 evidence-calibrated retune](#evidence-calibrated-retune-2026-10-12).
+> Kept as the record of the 2026-10-09 decision, which other records link to.
 
 The maintainer selected **quality-first** models and **long context** from the
 authenticated 2026-10-08 catalog. A fresh listing through the Runner's own
@@ -112,6 +160,11 @@ metric it is documented to game.
 vendor map, no cross-entry check and no warning — the property is a consequence of the values,
 which is why it is written down where the values are.
 
+> **Amended by the 2026-10-12 retune:** the property now holds for `implementation` and `test`
+> only. `docs`, `planning` and `bugfix` share `review`'s vendor, so their Lanes are reviewed by
+> the same vendor. The maintainer accepted that cost when adopting their own routes as the
+> recommended table.
+
 **`test` sits at its model's ceiling.** `gemini-3.6-flash` offers `minimal`, `low`, `medium`,
 `high` and nothing above, so this row cannot be raised without also changing its model, and an
 operator who overrides it to `xhigh` gets a hard reject. Its floor is `minimal`, not `none` —
@@ -161,6 +214,11 @@ touching Sonnet 5 no longer reaches this table.
   with `implementation`, `docs` and `bugfix` unchanged. `test_config.py` checks these as
   explicit project overrides. This is an operator's edit, not a retune: the table above, the
   built-in default pair and `RECOMMENDED_ROUTING` are unchanged.
+- On 2026-10-12 the maintainer retuned `RECOMMENDED_ROUTING` to their own routes (see the
+  evidence-calibrated retune above) and moved `implementation` and `test` to
+  `gpt-6-astra @ medium` in both the tracked project Config and their global Config. The three
+  agree again; `test_config.py` pins the recommended core and the tracked Config's routes
+  separately, so a later operator edit can still diverge deliberately.
 - Escalation is live for every Task type, including `planning`.
 - `gemini-3.6-flash` enters the routed set as the first Google model on it, so the roster's
   `minimal` floor and `high` ceiling are now load-bearing for a shipped route rather than

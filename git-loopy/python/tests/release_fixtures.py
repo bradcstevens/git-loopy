@@ -141,6 +141,7 @@ def trunk_repository(
         "git-loopy/python/git_loopy",
         "git-loopy/shell",
         "git-loopy/powershell",
+        "git-loopy/paths",
     ):
         shutil.copytree(
             REPOSITORY_ROOT / tree,

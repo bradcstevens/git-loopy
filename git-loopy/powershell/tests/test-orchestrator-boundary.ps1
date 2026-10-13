@@ -18,6 +18,9 @@ $ReleaseFixturePath = Join-Path (
 ) "conformance/release-version.json"
 $ReleaseFixture = Get-Content -LiteralPath $ReleaseFixturePath -Raw |
     ConvertFrom-Json -AsHashtable -DateKind String
+$PathManifestPath = Join-Path (Split-Path -Parent $PortDir) "paths/powershell.json"
+$PathManifest = Get-Content -LiteralPath $PathManifestPath -Raw |
+    ConvertFrom-Json -AsHashtable
 $Pwsh = (
     Get-Command pwsh -CommandType Application |
         Select-Object -First 1
@@ -949,13 +952,11 @@ exit 97
 '@
     }
     $VersionEntrypoint = Join-Path $VersionPort "git-loopy.ps1"
-    $VersionPath = Join-Path $VersionRuntime "VERSION"
-    $ExpectedReleaseVersion = [string]$ReleaseFixture["expected_release_version"]
-    [IO.File]::WriteAllText(
-        $VersionPath,
-        "$ExpectedReleaseVersion`n",
-        [Text.UTF8Encoding]::new($false)
-    )
+    $VersionPath = Join-Path $VersionRuntime "git-loopy/paths/powershell.json"
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $VersionPath)) | Out-Null
+    $ExpectedReleaseVersion = [string]$PathManifest["baseline"]["release_version"]
+    Copy-Item -LiteralPath $PathManifestPath -Destination $VersionPath
+    [IO.File]::WriteAllText((Join-Path $VersionRuntime "VERSION"), "1.0.0-alpha.1`n")
 
     $VersionStdout = Join-Path $TempDir "version.stdout"
     $VersionStderr = Join-Path $TempDir "version.stderr"
@@ -984,7 +985,7 @@ exit 97
     foreach ($Case in $ReleaseFixture["valid_versions"]) {
         [IO.File]::WriteAllText(
             $VersionPath,
-            "$($Case["value"])`n",
+            (ConvertTo-Json @{ baseline = @{ release_version = $Case["value"] } }),
             [Text.UTF8Encoding]::new($false)
         )
         $CaseStdout = Join-Path $TempDir "version-$($Case["id"]).stdout"
@@ -1011,7 +1012,7 @@ exit 97
     foreach ($Case in $ReleaseFixture["invalid_versions"]) {
         [IO.File]::WriteAllText(
             $VersionPath,
-            [string]$Case["value"],
+            (ConvertTo-Json @{ baseline = @{ release_version = $Case["value"] } }),
             [Text.UTF8Encoding]::new($false)
         )
         $CaseStdout = Join-Path $TempDir "version-$($Case["id"]).stdout"
@@ -1095,11 +1096,7 @@ exit 97
     }
 
     Remove-Item -LiteralPath $VersionPath -Recurse -Force -ErrorAction SilentlyContinue
-    [IO.File]::WriteAllText(
-        $VersionPath,
-        "$ExpectedReleaseVersion`n",
-        [Text.UTF8Encoding]::new($false)
-    )
+    Copy-Item -LiteralPath $PathManifestPath -Destination $VersionPath
 
     $HelpStdout = Join-Path $TempDir "help.stdout"
     $HelpStderr = Join-Path $TempDir "help.stderr"
@@ -1131,12 +1128,15 @@ exit 97
 
     $EmptyStdout = Join-Path $TempDir "empty.stdout"
     $EmptyStderr = Join-Path $TempDir "empty.stderr"
+    $Entrypoint = $VersionEntrypoint
+    Remove-Item -LiteralPath (Join-Path $VersionRuntime "VERSION")
     $Status = Invoke-Entrypoint `
         -Repo $EmptyRepo `
         -FakeBin $EmptyBin `
         -StdoutPath $EmptyStdout `
         -StderrPath $EmptyStderr
     Assert-Equal 0 $Status "empty GitHub Pool exit"
+    $Entrypoint = Join-Path $PortDir "git-loopy.ps1"
 
     $Events = Read-Events -Path $EmptyStdout
     Assert-Equal (

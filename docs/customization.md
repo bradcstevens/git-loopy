@@ -32,13 +32,13 @@
 
 ```
 ├── AGENTS.md                       # Your project's agent guide — Tech stack + Feedback loops table (see below).
-├── CONTEXT.md                      # Your project's domain glossary.
+├── GLOSSARY.md                     # Your project's domain glossary.
 ├── docs/
 │   ├── adr/                        # Architecture decision records (created lazily by /grill-with-docs).
 │   └── agents/                     # Per-repo skill config — written by /setup-git-loopy-skills.
 │       ├── issue-tracker.md        #   Where issues live (GitHub / GitLab / local markdown / other).
 │       ├── triage-labels.md        #   Label vocabulary used by /triage.
-│       └── domain.md               #   Single- vs multi-context layout for CONTEXT.md / ADRs.
+│       └── domain.md               #   Single- vs multi-context layout for GLOSSARY.md / ADRs.
 ├── prds/                           # Optional legacy local-markdown PRDs (GIT_LOOPY_ISSUE_SOURCE=prds).
 ├── issues/                         # Optional legacy local-markdown issues.
 └── <your application code>
@@ -68,7 +68,7 @@ The skill walks you through three decisions one at a time:
 | --- | --- | --- |
 | **Issue tracker** | Whether downstream skills call `gh issue create`, `glab issue create`, write a markdown file under `.scratch/`, or follow custom prose. | GitHub (if a `git remote` points at GitHub), GitLab (if it points at GitLab), local markdown (no remote), or "other" (free-form). |
 | **Triage labels** | The exact strings `/triage` applies for each of the five canonical roles. | `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix` — verbatim. Override per-role if your existing tracker uses different names. |
-| **Domain docs** | Whether the repo has one global `CONTEXT.md` or a `CONTEXT-MAP.md` pointing to per-context files. | Single-context (most repos). Pick multi-context only if you actually have multiple bounded contexts. |
+| **Domain docs** | Whether the repo has one global `GLOSSARY.md` or a `GLOSSARY-MAP.md` pointing to per-context files. | Single-context (most repos). Pick multi-context only if you actually have multiple bounded contexts. |
 
 ### Skip it and downstream skills will guess
 

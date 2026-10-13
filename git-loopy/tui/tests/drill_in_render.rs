@@ -7,8 +7,8 @@
 //! draws. Nothing here reads a host clock, a zone, or a real terminal.
 
 use git_loopy_tui::{
-    draw_frame, DashboardFrame, DashboardSession, IssueRef, Key, RunInputs, Screen,
-    TerminalCapabilities, Timestamp, Zone,
+    draw_frame, DashboardFrame, DashboardSession, IssueRef, Key, Pointer, PointerAction, RunInputs,
+    Screen, TerminalCapabilities, Timestamp, Zone,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -18,6 +18,159 @@ mod common;
 use common::assert_snapshot;
 
 const DASHBOARD_INSIGHTS: &str = include_str!("../../conformance/dashboard-insights.json");
+
+fn many_attempts() -> DashboardSession {
+    let mut session =
+        DashboardSession::new(RunInputs::default(), Zone::utc(), IssueRef::number(42));
+    session.resize(240, 40);
+    session.ingest(r#"{"type":"wrapper.run.start","run_id":"attempts"}"#);
+    session.ingest(r#"{"type":"wrapper.afk_ready.collected","issues":[42,43]}"#);
+    for attempt in 1..=13 {
+        session.ingest(
+            &serde_json::json!({"type":"wrapper.iteration.start","iter":attempt}).to_string(),
+        );
+        session.ingest(r#"{"type":"wrapper.issue.activated","issue":42}"#);
+        for line in 1..=5 {
+            session.ingest(
+                &serde_json::json!({
+                    "type":"agent.output","text":format!("attempt {attempt}, output {line}")
+                })
+                .to_string(),
+            );
+        }
+        session.ingest(
+            &serde_json::json!({
+                "type":"wrapper.iteration.end", "iter":attempt,
+                "outcome":"no-progress", "duration_seconds":1,
+                "issues":[{"issue":42,"status":"no-progress","ending":"timeout"}]
+            })
+            .to_string(),
+        );
+    }
+    session.handle_key(Key::Open);
+    session
+}
+
+fn visible_attempts(session: &DashboardSession, columns: u16, rows: u16) -> Vec<String> {
+    band(
+        &render_lines(&session.frame(), columns, rows),
+        "Iteration breakdown",
+    )
+    .iter()
+    .skip(1)
+    .map(|row| cells(row)[0].clone())
+    .collect()
+}
+
+#[test]
+fn keyboard_paging_reaches_every_attempt_oldest_first_without_moving_the_log_or_issue() {
+    let mut session = many_attempts();
+    let before = serde_json::to_value(session.view()).unwrap();
+    let log = band(&render_lines(&session.frame(), 240, 40), " Log ");
+    assert!(render_lines(&session.frame(), 240, 40)
+        .join("\n")
+        .contains("Ctrl-PgUp/PgDn"));
+    assert_eq!(
+        visible_attempts(&session, 240, 40),
+        ["iter 1", "iter 2", "iter 3", "iter 4", "iter 5", "iter 6"]
+    );
+    session.handle_key(Key::ActivityPageDown);
+    assert_eq!(
+        visible_attempts(&session, 240, 40),
+        ["iter 7", "iter 8", "iter 9", "iter 10", "iter 11", "iter 12"]
+    );
+    session.handle_key(Key::ActivityPageDown);
+    assert_eq!(
+        visible_attempts(&session, 240, 40),
+        ["iter 8", "iter 9", "iter 10", "iter 11", "iter 12", "iter 13"]
+    );
+    session.handle_key(Key::ActivityPageUp);
+    session.handle_key(Key::ActivityPageUp);
+    assert_eq!(
+        visible_attempts(&session, 240, 40),
+        ["iter 1", "iter 2", "iter 3", "iter 4", "iter 5", "iter 6"]
+    );
+    assert_eq!(session.frame().selected, IssueRef::number(42));
+    assert_eq!(serde_json::to_value(session.view()).unwrap(), before);
+    assert_eq!(band(&render_lines(&session.frame(), 240, 40), " Log "), log);
+}
+
+#[test]
+fn the_account_remains_reachable_at_the_terminal_floor_and_resets_for_a_different_issue() {
+    let mut session = many_attempts();
+    session.handle_key(Key::ActivityPageDown);
+    session.resize(40, 12);
+    assert_eq!(visible_attempts(&session, 40, 12), ["iter 7"]);
+    let lines = render_lines(&session.frame(), 40, 12);
+    let row = lines
+        .iter()
+        .position(|line| line.contains("Iteration breakdown"))
+        .unwrap() as u16
+        + 2;
+    for expected in [
+        "iter 8", "iter 9", "iter 10", "iter 11", "iter 12", "iter 13",
+    ] {
+        session.handle_pointer(Pointer {
+            action: PointerAction::WheelDown,
+            column: 1,
+            row,
+        });
+        assert_eq!(visible_attempts(&session, 40, 12), [expected]);
+    }
+    session.handle_pointer(Pointer {
+        action: PointerAction::WheelUp,
+        column: 1,
+        row,
+    });
+    assert_eq!(visible_attempts(&session, 40, 12), ["iter 12"]);
+    session.resize(240, 40);
+    assert_eq!(
+        visible_attempts(&session, 240, 40),
+        ["iter 8", "iter 9", "iter 10", "iter 11", "iter 12", "iter 13"]
+    );
+    session.resize(40, 12);
+    assert_eq!(visible_attempts(&session, 40, 12), ["iter 8"]);
+    session.handle_key(Key::First);
+    assert_eq!(session.frame().selected, IssueRef::number(43));
+    assert!(visible_attempts(&session, 40, 12).is_empty());
+    session.handle_key(Key::Last);
+    assert_eq!(session.frame().selected, IssueRef::number(42));
+    assert_eq!(visible_attempts(&session, 40, 12), ["iter 1"]);
+    for expected in [
+        "iter 2", "iter 3", "iter 4", "iter 5", "iter 6", "iter 7", "iter 8", "iter 9", "iter 10",
+        "iter 11", "iter 12", "iter 13",
+    ] {
+        session.handle_key(Key::ActivityPageDown);
+        assert_eq!(visible_attempts(&session, 40, 12), [expected]);
+    }
+}
+
+#[test]
+fn the_account_names_both_endings_and_each_attempts_recorded_work() {
+    let frame = rolling_drill_in_frame("rolling-endings-stay-with-their-issue-and-attempt");
+    let lines = render_lines(&frame, 240, 40);
+    let rows = band(&lines, "Iteration breakdown");
+    let first = rows.iter().find(|row| row.contains("c-0001")).unwrap();
+    let second = rows.iter().find(|row| row.contains("c-0004")).unwrap();
+    assert!(
+        first.contains("timed out") && first.contains("1 commit"),
+        "{first}"
+    );
+    assert!(
+        second.contains("crashed") && second.contains("1 commit"),
+        "{second}"
+    );
+    assert!(rows.iter().position(|row| row == first) < rows.iter().position(|row| row == second));
+
+    let native = drill_in_frame("native-orchestrator-unavailable-capabilities", "7");
+    let lines = render_lines(&native, 240, 40);
+    let rows = band(&lines, "Iteration breakdown").join("\n");
+    assert!(
+        rows.contains("2 commits") && rows.contains("1 PR"),
+        "{rows}"
+    );
+    assert!(!rows.contains("left nothing"), "{rows}");
+}
 
 fn fixture() -> Value {
     serde_json::from_str(DASHBOARD_INSIGHTS).expect("the shared fixture is valid JSON")
@@ -239,9 +392,9 @@ fn the_detail_header_states_the_issues_whole_lifecycle() {
 #[test]
 fn the_iteration_breakdown_carries_the_locked_columns() {
     let frame = drill_in_frame("baseline-closed-iteration", "42");
-    // The full inventory, including the 34-cell Route and Drift, needs 204
-    // columns. Narrow-terminal column selection belongs to `responsive_render.rs`.
-    let lines = render_lines(&frame, 208, 40);
+    // Include room for the attempt's progress detail in Status as well as
+    // the full inventory. Responsive selection is tested separately.
+    let lines = render_lines(&frame, 240, 40);
     let breakdown = band(&lines, "Iteration breakdown");
 
     let expected_labels: Vec<String> = fixture()["semantic_contract"]
@@ -270,7 +423,7 @@ fn the_iteration_breakdown_carries_the_locked_columns() {
             "iter 1",
             "closed",
             "0:00:04",
-            "closed",
+            "closed · 1 commit",
             "—",
             "0:00:04",
             "—",
@@ -296,7 +449,7 @@ fn the_iteration_breakdown_carries_the_locked_columns() {
 #[test]
 fn the_breakdown_separates_cache_reads_from_cache_writes() {
     let frame = drill_in_frame("parallel-lanes-and-non-closure-outcomes", "310");
-    let lines = render_lines(&frame, 200, 40);
+    let lines = render_lines(&frame, 240, 40);
     let breakdown = band(&lines, "Iteration breakdown");
 
     let row = &expected_drill_in("parallel-lanes-and-non-closure-outcomes")["iteration_breakdown"]
@@ -323,7 +476,7 @@ fn the_breakdown_separates_cache_reads_from_cache_writes() {
 #[test]
 fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
     let frame = drill_in_frame("native-orchestrator-unavailable-capabilities", "7");
-    let lines = render_lines(&frame, 200, 40);
+    let lines = render_lines(&frame, 240, 40);
     let breakdown = band(&lines, "Iteration breakdown");
 
     let rows = expected_drill_in("native-orchestrator-unavailable-capabilities")
@@ -341,7 +494,7 @@ fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
     for row in &breakdown[1..] {
         let drawn = cells(row);
         assert_eq!(
-            &drawn[5..],
+            &drawn[6..],
             ["n/a", "—", "—", "—", "—", "n/a", "n/a", "—"],
             "an unavailable measurement never renders as an observed zero, and \
              an Orchestrator that resolves no Route and can report no Cost at \

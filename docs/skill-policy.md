@@ -12,9 +12,9 @@ the first-time setup path is
 
 ---
 
-## Seven words that are not synonyms
+## Six words that are not synonyms
 
-Most Skill-policy confusion is one of these seven being read as another. They are
+Most Skill-policy confusion is one of these six being read as another. They are
 defined in [`GLOSSARY.md`](../GLOSSARY.md); what follows is what each one means
 when you are holding a terminal.
 
@@ -61,25 +61,20 @@ because Required Skills come from the installed catalog.
 
 **Required Skill** — a name the active `PROMPT.md` declares in its
 `required-skills` frontmatter. The packaged prompt requires `diagnosing-bugs`,
-`prototype`, `tdd`, `codebase-design`, `resolving-merge-conflicts`, and
+`prototype`, `tdd`, `codebase-design`, `implement`, and
 `code-review`. A Run whose effective set omits one is **invalid** and stops
 before its first work session — it is never silently restored. A custom prompt
 with no `required-skills` metadata inherits the packaged list and warns until it
 declares its own (an explicitly empty list is a valid declaration).
+`implement` is required for the bound PR's conflict-resolution path, which closes
+with `code-review`; its general orchestration remains outside an Iteration.
+The catalog's `implement-spec` and `retro` are outside the unattended Run, while
+`pr` is optional body-writing guidance, usable only when the effective policy
+enables it and the bound issue calls for it. None of these three is required.
 
-**Contract-carrying Skill** — one of the twelve whose instructions invoke a
-`git-loopy` subcommand, so part of what it tells a session to do is a git-loopy
-contract rather than general engineering guidance: `code-review`,
-`grill-with-docs`, `implement`, `next`, `prototype`, `push`, `research`,
-`resolving-merge-conflicts`, `to-spec`, `to-tickets`, `triage` and `wayfinder`.
-Eleven publish a record of the transition they just made; `next` only reads those
-records back. They are ordinary members of the **installed catalog** and get no
-special treatment from the policy — leave a publisher out and a Run simply never
-records what it did, leave `next` out and nothing reads the records. What is
-special is where they are **authored**: upstream in the external Skill catalog,
-never in a consuming repository, so a local edit is a change no install can hand
-to a session
-([ADR-0034](adr/0034-contract-carrying-skills-are-authored-upstream.md)).
+Skill prompts are authored upstream and mirrored nowhere; the former
+Contract-carrying Skill category is retired
+([ADR-0064](adr/0064-a-paired-skill-change-is-published-proved-then-pinned.md)).
 
 ### Consulted Skills are a different fact entirely
 
@@ -126,8 +121,8 @@ enabled_skills = [
   "code-review",
   "codebase-design",
   "diagnosing-bugs",
+  "implement",
   "prototype",
-  "resolving-merge-conflicts",
   "tdd",
 ]
 ```
@@ -157,7 +152,7 @@ preflight failure rather than a quietly narrower Run.
 
 ```bash
 # Replace the configured base policy outright for this Run.
-GIT_LOOPY_ENABLED_SKILLS=tdd,code-review,diagnosing-bugs,prototype,codebase-design,resolving-merge-conflicts \
+GIT_LOOPY_ENABLED_SKILLS=tdd,code-review,diagnosing-bugs,prototype,codebase-design,implement \
   git-loopy
 
 # An explicitly empty value is a real empty policy, not "unset".

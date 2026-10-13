@@ -342,7 +342,7 @@ assert_equal "" "$(git_loopy_tui_libc_from_ldd 'command not found')" \
 
 # --- The installer, end to end ----------------------------------------------
 #
-# A fake clone with its own VERSION and a fake published Release served over
+# A fake clone with its own Path manifest and a fake published Release served over
 # `file://`, so the download branch is a real curl transfer and the suite still
 # never touches the network.
 
@@ -352,11 +352,13 @@ trap 'rm -rf "$checksum_dir" "$extract_dir" "$probe_dir" "$activate_dir" "$cli_d
 make_fake_clone() {
   local root="$1"
   local version="$2"
-  mkdir -p "$root/git-loopy/shell/lib" "$root/git-loopy/conformance"
+  mkdir -p "$root/git-loopy/shell/lib" "$root/git-loopy/conformance" "$root/git-loopy/paths"
   cp "$port_dir/install.sh" "$port_dir/git-loopy.sh" "$root/git-loopy/shell/"
   cp "$port_dir"/lib/*.sh "$root/git-loopy/shell/lib/"
   cp "$artifact_metadata" "$root/git-loopy/conformance/"
-  printf '%s\n' "$version" >"$root/VERSION"
+  jq --arg version "$version" '.baseline.release_version = $version' \
+    "$port_dir/../paths/shell.json" >"$root/git-loopy/paths/shell.json"
+  printf '99.0.0-alpha.1\n' >"$root/VERSION"
 }
 
 host_triple="$(git_loopy_tui_host_target "$artifact_metadata")" ||
@@ -497,6 +499,7 @@ make_fake_clone "$opt_out_clone" 4.5.6
 # 5. An air-gapped host installs from local files and never reaches for a URL.
 airgap_clone="$cli_dir/airgap"
 make_fake_clone "$airgap_clone" 4.5.6
+rm "$airgap_clone/VERSION"
 "$BASH" "$airgap_clone/git-loopy/shell/install.sh" \
   --bin-dir "$cli_dir/airgap-bin" \
   --tui-archive "$release/$host_archive" \

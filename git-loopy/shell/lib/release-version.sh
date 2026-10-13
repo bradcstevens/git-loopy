@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
 
-# The single semver authority for the shell distribution's Release version.
-#
-# The Orchestrator answers `--version` with it, stamps it onto `wrapper.run.start`,
-# and refuses a clone-local TUI helper that
-# disagrees with it. The installer stages that helper. Both read the same file
-# through this one reader, so there is no second opinion about what Release a
-# clone is (ADR-0016, Wrapper contract §16).
+# Runtime identity comes from the shell Path manifest (ADR-0091). The plain-text
+# reader below remains the repository Release-line writer's VERSION reader.
 
 if ((BASH_VERSINFO[0] < 4)); then
   printf 'git-loopy Release metadata support requires Bash 4+ (found %s).\n' \
@@ -43,6 +38,12 @@ git_loopy_read_release_version() {
   fi
   [[ "$release_version" != *$'\r' ]] || release_version="${release_version%$'\r'}"
 
+  git_loopy_validate_release_version "$release_version" "$path"
+}
+
+git_loopy_validate_release_version() {
+  local release_version="$1"
+  local path="$2"
   local numeric_identifier='(0|[1-9][0-9]*)'
   local prerelease_identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
   local semver_pattern
@@ -56,6 +57,20 @@ git_loopy_read_release_version() {
   fi
 
   printf '%s\n' "$release_version"
+}
+
+git_loopy_read_path_release_version() {
+  local path="${1:?Path manifest is required}"
+  local release_version
+  release_version="$(jq -ers '
+    if length == 1 then .[0].baseline.release_version else null end
+    | select(type == "string")
+    | select(all(explode[]; . >= 33 and . <= 126))
+  ' "$path")" || {
+    printf 'git-loopy: cannot read Release metadata from Path manifest %s\n' "$path" >&2
+    return 1
+  }
+  git_loopy_validate_release_version "$release_version" "$path"
 }
 
 if ! declare -p GIT_LOOPY_RELEASE_VERSION_PATHS >/dev/null 2>&1; then

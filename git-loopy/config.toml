@@ -7,11 +7,12 @@ reasoning_effort = "high"
 context_tier = "long_context"
 route_policy = "static"
 
-# Static preset mirroring the maintainer's global Config. Every route inherits
-# long_context. Planning/review use Claude Opus; implementation, tests, docs and
-# bugfix use GPT-6.1 Sol; chores use Claude Haiku. The built-in legacy retry rung
-# is GPT-6.1 Sol/max; static routing only changes a retry's pair with an explicit
-# [escalation] block.
+# Static preset mirroring the maintainer's global Config and the recommended
+# routing table (ADR-0048, 2026-10-12 retune). Every route inherits
+# long_context. Planning, review and bugfix use Claude Opus 5.5;
+# implementation and tests use GPT-6 Astra; docs and chores use Claude
+# Sonnet 5.5. The built-in legacy retry rung is GPT-6.1 Sol/max; static
+# routing only changes a retry's pair with an explicit [escalation] block.
 
 [routing.planning]
 model = "claude-opus-5.5"
@@ -22,11 +23,11 @@ model = "claude-opus-5.5"
 effort = "medium"
 
 [routing.implementation]
-model = "gpt-6.1-sol"
+model = "gpt-6-astra"
 effort = "medium"
 
 [routing.test]
-model = "gpt-6.1-sol"
+model = "gpt-6-astra"
 effort = "medium"
 
 [routing.docs]
