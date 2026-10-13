@@ -2,6 +2,12 @@
 
 **Status:** accepted design; implementation acceptance is tracked by the delivery issues.
 
+**Clarified by [PRD: Language paths and release](https://github.com/bradcstevens/git-loopy/issues/791):**
+the Completion proof's baseline arm is the last stable release before 1.0.0, as the
+glossary's **Completion proof** entry says. That release was 0.11.1 when this was decided.
+0.11.2 was then promoted by exception, so the arm is 0.11.2 today, and the record names the
+release it measured.
+
 Decided by [Define end-to-end completion and its quality
 guardrails](https://github.com/bradcstevens/git-loopy/issues/662), against the baseline
 from [Measure the end-to-end completion baseline from past
