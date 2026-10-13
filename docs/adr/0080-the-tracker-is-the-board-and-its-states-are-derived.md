@@ -6,6 +6,10 @@
 1.0.0 removes the local-markdown source from the Python path, so what this decision says
 about that source describes 0.x only.
 
+**Amended by [ADR-0091](0091-a-dormant-path-stands-at-the-last-stable-family-release-carrying-its-owed-debt-frozen.md):**
+once Path manifests are active, an issue owned by a dormant path is also a Pool exclusion,
+`dormant_path`, until the path resumes.
+
 Decided by [Decide the board of record and its states](https://github.com/bradcstevens/git-loopy/issues/659).
 
 git-loopy 1.0.0 keeps the issue tracker as its only board of record: GitHub
