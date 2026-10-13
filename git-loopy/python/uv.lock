@@ -324,7 +324,7 @@ wheels = [
 
 [[package]]
 name = "git-loopy"
-version = "0.11.2"
+version = "1.0.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "github-copilot-sdk" },
