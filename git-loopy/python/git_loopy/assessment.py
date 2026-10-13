@@ -9,6 +9,7 @@ import re
 import string
 import sys
 from collections.abc import Callable, Mapping
+from dataclasses import asdict
 from datetime import datetime, timezone
 from importlib.metadata import version as installed_version
 from typing import Any
@@ -71,6 +72,13 @@ def _inert(value: object) -> str:
         else f"&#{ord(c)};" if c.isprintable() else " "
         for c in str(value)
     )
+
+
+def _fault_provenance(faults: list[dict[str, str]]) -> list[str]:
+    return [
+        f"- Fault injection: {'active' if faults else 'inactive'}",
+        *(f"- {_inert(entry['read'])}: {_inert(entry['fault'])}" for entry in faults),
+    ]
 
 
 def render_packet(result: dict[str, Any]) -> str:
@@ -163,6 +171,7 @@ def render_packet(result: dict[str, Any]) -> str:
             isinstance(value, str) and value.startswith("https://github.com/")
         ) else _inert(value)
         lines.append(f"- {label}: {rendered}")
+    lines.extend(_fault_provenance(r["faults"]))
     return "\n".join(lines) + "\n"
 
 
@@ -250,13 +259,14 @@ def create_server(
         repository, milestone = validate_inputs(arguments, "assess")
         policy = policies[repository]
         token, identity = await apps[repository].installation(repository)
-        github = GitHubReads(repository, transport, token=token)
+        github = GitHubReads(repository, transport, token=token, faults=policy.faults)
         result: dict[str, Any] = {
             "repo": repository, "milestone": milestone, "milestoneState": None,
             "sha": None, "asOf": now(), "version": None, "releaseTarget": None,
             "releaseTargetState": "unreadable",
             "baseline": None, "policy": policy.revision, "service": service_version,
-            "identity": identity, "resultFormat": 1,
+            "identity": identity, "resultFormat": 2,
+            "faults": [asdict(entry) for entry in policy.faults],
             "countedWorkflows": list(policy.workflows),
             "checks": [], "holds": [], "incompletes": [], "content": [], "context": [],
             "verdict": "incomplete", "sources": {},
@@ -699,7 +709,8 @@ def create_server(
         result: dict[str, Any] = {
             "repo": repository, "milestone": milestone, "sha": sha,
             "head": None, "asOf": now(), "status": "stale",
-            "reasons": [], "resultFormat": 1,
+            "reasons": [], "resultFormat": 2,
+            "faults": [asdict(entry) for entry in policies[repository].faults],
         }
         try:
             token, _ = await apps[repository].installation(repository)
@@ -709,7 +720,9 @@ def create_server(
                 "source": f"https://github.com/{repository}",
             })
             return result
-        github = GitHubReads(repository, transport, token=token)
+        github = GitHubReads(
+            repository, transport, token=token, faults=policies[repository].faults,
+        )
         try:
             result["head"] = await github.pin_head()
             if result["head"] != sha:
@@ -755,6 +768,8 @@ def create_server(
                     f"— [source]({item['source']})\n"
                     for item in result["reasons"]
                 )
+                if result["faults"]:
+                    text += "\n".join(_fault_provenance(result["faults"])) + "\n"
             else:
                 raise ValueError("unknown tool")
         except ValueError as exc:

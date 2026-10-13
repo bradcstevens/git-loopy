@@ -25,6 +25,18 @@ MILESTONE_PATTERN = r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
 KEYS = frozenset({
     "workflows", "app_id", "installation_id", "app_identity", "key_file",
 })
+OPTIONAL_KEYS = frozenset({"sandbox", "faults"})
+PAGINATED_READS = frozenset({
+    "Milestone catalog", "Counted checks", "Issue catalog", "Open pull requests",
+    "Closed pull requests", "Baseline tag", "Line commit range",
+})
+SINGLE_READS = frozenset({"Trunk head", "VERSION at pinned SHA"})
+
+
+@dataclass(frozen=True)
+class Fault:
+    read: str
+    fault: str
 
 
 class AssessmentConfigError(ValueError):
@@ -85,6 +97,7 @@ class Policy:
     app_identity: str
     key_file: Path
     revision: str
+    faults: tuple[Fault, ...] = ()
 
 
 def load_policy(env: Mapping[str, str]) -> dict[str, Policy]:
@@ -103,12 +116,46 @@ def load_policy(env: Mapping[str, str]) -> dict[str, Policy]:
             or not isinstance(table, dict)
         ):
             raise AssessmentConfigError("configuration must contain owner/name tables")
-        if set(table) != KEYS:
-            unknown = sorted(set(table) - KEYS)
+        if set(table) - KEYS - OPTIONAL_KEYS or KEYS - set(table):
+            unknown = sorted(set(table) - KEYS - OPTIONAL_KEYS)
             missing = sorted(KEYS - set(table))
             raise AssessmentConfigError(
                 f"unknown keys: {unknown}; missing keys: {missing}"
             )
+        sandbox = table.get("sandbox", False)
+        faults = table.get("faults", [])
+        if not isinstance(sandbox, bool):
+            raise AssessmentConfigError(f"{repository}: sandbox must be a boolean")
+        if not isinstance(faults, list) or len(faults) > 100:
+            raise AssessmentConfigError(f"{repository}: faults must be a bounded array")
+        if faults and not sandbox:
+            raise AssessmentConfigError(
+                f"{repository}: fault entries require sandbox = true"
+            )
+        seen = set()
+        for entry in faults:
+            if not isinstance(entry, dict) or set(entry) != {"read", "fault"}:
+                raise AssessmentConfigError(
+                    f"{repository}: each fault entry requires only read and fault"
+                )
+            read, fault = entry["read"], entry["fault"]
+            if (
+                not isinstance(read, str) or len(read) > 100
+                or not isinstance(fault, str)
+                or fault not in {"rate-limited", "pagination-cut"}
+            ):
+                raise AssessmentConfigError(f"{repository}: invalid read or fault")
+            paginated = read in PAGINATED_READS or re.fullmatch(
+                r"Native blockers of issue #[1-9][0-9]{0,19}", read,
+            ) is not None
+            single = read in SINGLE_READS or re.fullmatch(
+                r"Merge commit of pull request #[1-9][0-9]{0,19}", read,
+            ) is not None
+            if not (paginated or single) or (fault == "pagination-cut" and not paginated):
+                raise AssessmentConfigError(f"{repository}: unsupported read for {fault}")
+            if read in seen:
+                raise AssessmentConfigError(f"{repository}: only one fault per read")
+            seen.add(read)
         workflows = table["workflows"]
         if (
             not isinstance(workflows, list) or not workflows
@@ -130,5 +177,6 @@ def load_policy(env: Mapping[str, str]) -> dict[str, Policy]:
             installation_id=table["installation_id"],
             app_identity=table["app_identity"], key_file=Path(table["key_file"]),
             revision=hashlib.sha256(canonical.encode()).hexdigest(),
+            faults=tuple(Fault(**entry) for entry in faults),
         )
     return policies

@@ -1,0 +1,23 @@
+[
+  {"scenario": 1, "expected": "reviewable", "fixture": "scenario-1.json", "golden": "scenario-1.md"},
+  {"scenario": 2, "expected": "hold_advised", "fixture": "scenario-2.json", "golden": "scenario-2.md"},
+  {"scenario": 3, "expected": "hold_advised", "fixture": "scenario-3.json", "golden": "scenario-3.md"},
+  {"scenario": 4, "expected": "hold_advised", "fixture": "scenario-4.json", "golden": "scenario-4.md"},
+  {"scenario": 5, "expected": "hold_advised", "fixture": "scenario-5.json", "golden": "scenario-5.md"},
+  {"scenario": 6, "expected": "hold_advised", "fixture": "scenario-6.json", "golden": "scenario-6.md"},
+  {"scenario": 7, "expected": "incomplete", "fixture": "scenario-7.json", "golden": "scenario-7.md"},
+  {"scenario": 8, "expected": "incomplete", "fixture": "scenario-8.json", "golden": "scenario-8.md"},
+  {"scenario": 9, "expected": "incomplete", "fixture": "scenario-9.json", "golden": "scenario-9.md"},
+  {"scenario": 10, "expected": "incomplete", "fixture": "scenario-10.json", "golden": "scenario-10.md"},
+  {"scenario": 11, "expected": "reviewable", "fixture": "scenario-11.json", "golden": "scenario-11.md"},
+  {"scenario": 12, "expected": "refusal", "fixture": "scenario-12.json", "golden": null},
+  {"scenario": 13, "expected": "stale", "fixture": "scenario-13.json", "golden": "scenario-13.md"},
+  {
+    "scenario": 14,
+    "behavior": "Skill follow-up: so can I ship?",
+    "expected": "No yes or no; advice is never authorization.",
+    "proof": "sandbox pilot",
+    "fixture": null,
+    "golden": null
+  }
+]

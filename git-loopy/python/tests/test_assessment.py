@@ -785,7 +785,8 @@ async def test_assess_clean_line_is_reviewable_not_authorization(tmp_path):
         assert result["releaseTarget"] == "0.12.0"
         assert result["releaseTargetState"] == "derived"
         assert result["milestone"] == "v0.12.0"
-        assert result["resultFormat"] == 1
+        assert result["resultFormat"] == 2
+        assert result["faults"] == []
         assert result["holds"] == []
         assert result["incompletes"] == []
         assert result["baseline"] == "v0.11.1"
@@ -819,7 +820,7 @@ async def test_freshness_confirms_unchanged_head_and_open_title(tmp_path):
         assert reply.structured_content == {
             "repo": REPO, "milestone": "v0.12.0", "sha": SHA,
             "head": SHA, "asOf": "2026-10-12T19:38:03Z",
-            "status": "fresh", "reasons": [], "resultFormat": 1,
+            "status": "fresh", "reasons": [], "resultFormat": 2, "faults": [],
         }
         assert reply.content[0].text == "Assessment freshness: fresh.\n"
         assert [request[1] for request in transport.requests[3:]] == [
@@ -1467,6 +1468,185 @@ async def test_fault_entries_require_a_sandbox_table_at_startup(tmp_path, marker
             pytest.fail("non-sandbox fault policy started a service")
 
 
+@pytest.mark.parametrize("extra", [
+    'sandbox = "true"\n',
+    'sandbox = 1\n',
+    'sandbox = true\nfaults = "rate-limited"\n',
+    'sandbox = true\nfaults = {}\n',
+    'sandbox = true\nfaults = [1]\n',
+    'sandbox = true\nfaults = [{read = "Issue catalog"}]\n',
+    'sandbox = true\nfaults = [{read = "Issue catalog", fault = "success"}]\n',
+    'sandbox = true\nfaults = [{read = "Unknown read", fault = "rate-limited"}]\n',
+    'sandbox = true\nfaults = [{read = 1, fault = "rate-limited"}]\n',
+    'sandbox = true\nfaults = [{read = "Issue catalog", fault = []}]\n',
+    'sandbox = true\nfaults = [{read = "Issue catalog", fault = "rate-limited", page = 2}]\n',
+    'sandbox = true\nfaults = [{read = "Trunk head", fault = "pagination-cut"}]\n',
+    'sandbox = true\nfaults = [{read = "VERSION at pinned SHA", fault = "pagination-cut"}]\n',
+    'sandbox = true\nfaults = [{read = "Native blockers of issue #0", fault = "rate-limited"}]\n',
+    'sandbox = true\nfaults = ['
+    '{read = "Issue catalog", fault = "rate-limited"},'
+    '{read = "Issue catalog", fault = "pagination-cut"}]\n',
+])
+async def test_invalid_fault_configuration_names_its_table(tmp_path, extra):
+    configuration(tmp_path, extra=extra)
+    with pytest.raises(AssessmentConfigError, match=REPO):
+        async with session(tmp_path, {}):
+            pytest.fail("invalid sandbox policy started a service")
+
+
+@pytest.mark.parametrize("extra", ["sandbox = true\n", "sandbox = false\n", "faults = []\n"])
+async def test_sandbox_without_faults_preserves_normal_assessment(tmp_path, extra):
+    configuration(tmp_path, extra=extra)
+    async with session(tmp_path, recorded()) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        assert not reply.is_error
+        assert reply.structured_content["verdict"] == "reviewable"
+
+
+async def test_injected_rate_limit_matches_real_failure_and_stamps_provenance(tmp_path):
+    configuration(tmp_path)
+    responses = recorded("0.11.1")
+    responses[(f"{API}/issues", (("page", 1), ("per_page", 100), ("state", "all")))] = (
+        Response(429, {})
+    )
+    async with session(tmp_path, responses) as (client, _):
+        real = (await client.call_tool("assess", {"repository": REPO})).structured_content
+    configuration(tmp_path, extra=(
+        'sandbox = true\nfaults = [{read = "Issue catalog", fault = "rate-limited"}]\n'
+    ))
+    async with session(tmp_path, recorded("0.11.1")) as (client, transport):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert not reply.is_error
+        assert result["verdict"] == "incomplete"
+        assert result["incompletes"] == real["incompletes"] == [{
+            "read": "Issue catalog", "reason": "rate-limited",
+            "source": f"https://github.com/{REPO}/issues",
+        }]
+        assert result["holds"] == real["holds"]
+        assert result["faults"] == [{"read": "Issue catalog", "fault": "rate-limited"}]
+        assert result["resultFormat"] == 2
+        provenance = reply.content[0].text.split("## Provenance\n")[1]
+        assert "- Fault injection: active\n" in provenance
+        assert "- Issue catalog: rate&#45;limited\n" in provenance
+        assert all(path != f"{API}/issues" for _, path, _ in transport.requests)
+
+
+@pytest.mark.parametrize("read,suffix,params,source", [
+    ("Milestone catalog", "/milestones", {"state": "all"}, "/milestones"),
+    ("Counted checks", "/actions/runs", {"head_sha": SHA}, f"/commit/{SHA}/checks"),
+    ("Issue catalog", "/issues", {"state": "all"}, "/issues"),
+    ("Open pull requests", "/pulls", {"state": "open"}, "/pulls"),
+    ("Closed pull requests", "/pulls", {"state": "closed"}, "/pulls"),
+    ("Baseline tag", "/tags", {}, "/tags"),
+    ("Line commit range", f"/compare/{BASE}...{SHA}", {}, f"/compare/{BASE}...{SHA}"),
+    ("Native blockers of issue #7", "/issues/7/dependencies/blocked_by", {}, "/issues/7"),
+])
+async def test_pagination_fault_matches_real_cut_without_dropping_known_holds(
+    tmp_path, read, suffix, params, source,
+):
+    fixture = json.loads((FIXTURES / "scenario-2.json").read_text())
+    responses = work_fixture(recorded(), fixture)
+    key = (API + suffix, tuple(sorted({**params, "page": 1, "per_page": 100}.items())))
+    first = responses[key]
+    responses[key] = Response(200, first.data, {"Link": "incomplete pagination"})
+    configuration(tmp_path)
+    async with session(tmp_path, responses) as (client, _):
+        real = (await client.call_tool("assess", {"repository": REPO})).structured_content
+    configuration(tmp_path, extra=(
+        f'sandbox = true\nfaults = [{{read = "{read}", fault = "pagination-cut"}}]\n'
+    ))
+    async with session(tmp_path, work_fixture(recorded(), fixture)) as (client, _):
+        reply = await client.call_tool("assess", {"repository": REPO})
+        result = reply.structured_content
+        assert not reply.is_error
+        assert result["verdict"] == "incomplete"
+        assert result["incompletes"] == real["incompletes"]
+        assert {"read": read, "reason": "pagination did not complete",
+                "source": f"https://github.com/{REPO}{source}"} in result["incompletes"]
+        assert result["holds"] == real["holds"]
+        if read != "Milestone catalog":
+            assert result["holds"]
+        assert result["faults"] == [{"read": read, "fault": "pagination-cut"}]
+        assert "- Fault injection: active\n" in reply.content[0].text
+        assert "pagination&#45;cut" in reply.content[0].text
+
+
+@pytest.mark.parametrize("read,fault", [
+    ("Trunk head", "rate-limited"),
+    ("Milestone catalog", "pagination-cut"),
+    ("Issue catalog", "rate-limited"),
+])
+async def test_freshness_uses_and_discloses_configured_faults(tmp_path, read, fault):
+    configuration(tmp_path, extra=(
+        f'sandbox = true\nfaults = [{{read = "{read}", fault = "{fault}"}}]\n'
+    ))
+    async with session(tmp_path, recorded()) as (client, _):
+        reply = await client.call_tool("check_freshness", {
+            "repository": REPO, "milestone": "v0.12.0", "sha": SHA,
+        })
+        result = reply.structured_content
+        assert not reply.is_error
+        assert result["status"] == ("fresh" if read == "Issue catalog" else "stale")
+        assert result["faults"] == [{"read": read, "fault": fault}]
+        assert result["resultFormat"] == 2
+        assert "- Fault injection: active\n" in reply.content[0].text
+        assert read in reply.content[0].text
+        if read != "Issue catalog":
+            assert result["reasons"][0]["read"] == read
+            assert result["reasons"][0]["reason"] == (
+                "rate-limited" if fault == "rate-limited" else "pagination did not complete"
+            )
+
+
+@pytest.mark.parametrize("tool", ["assess", "check_freshness"])
+@pytest.mark.parametrize("extra", [
+    {"sandbox": True}, {"faults": []},
+    {"faults": [{"read": "Issue catalog", "fault": "rate-limited"}]},
+])
+async def test_tool_inputs_cannot_enable_or_disable_faults(tmp_path, tool, extra):
+    configuration(tmp_path, extra=(
+        'sandbox = true\nfaults = [{read = "Issue catalog", fault = "rate-limited"}]\n'
+    ))
+    async with session(tmp_path, {}) as (client, transport):
+        reply = await client.call_tool(tool, {
+            "repository": REPO, **extra,
+            **({"milestone": "v0.12.0", "sha": SHA} if tool == "check_freshness" else {}),
+        })
+        assert reply.is_error
+        assert transport.requests == []
+
+
+async def test_faults_are_table_local_startup_snapshots_and_change_policy_revision(tmp_path):
+    path = configuration(tmp_path, extra="sandbox = true\n")
+    original_table = path.read_text()
+    async with session(tmp_path, recorded()) as (client, _):
+        original = (await client.call_tool("assess", {"repository": REPO})).structured_content
+        path.write_text(original_table + (
+            'faults = [{read = "Issue catalog", fault = "rate-limited"},'
+            '{read = "Open pull requests", fault = "pagination-cut"}]\n'
+        ))
+        unchanged = await client.call_tool("assess", {"repository": REPO})
+        assert unchanged.structured_content == original
+    async with session(tmp_path, recorded()) as (client, _):
+        changed = (await client.call_tool("assess", {"repository": REPO})).structured_content
+        assert changed["policy"] != original["policy"]
+        assert changed["verdict"] == "incomplete"
+        assert [item["read"] for item in changed["incompletes"]] == [
+            "Issue catalog", "Open pull requests",
+        ]
+        assert len(changed["faults"]) == 2
+    other_table = path.read_text().replace(f'["{REPO}"]', '["example/other"]')
+    path.write_text(original_table + "\n" + other_table)
+    async with session(tmp_path, recorded()) as (client, _):
+        restored = await client.call_tool("assess", {"repository": REPO})
+        assert restored.structured_content == original
+    path.write_text(original_table + "\n" + other_table.replace("sandbox = true\n", ""))
+    with pytest.raises(AssessmentConfigError, match="example/other.*sandbox"):
+        async with session(tmp_path, {}):
+            pytest.fail("an unused non-sandbox table with faults allowed startup")
+
+
 @pytest.mark.parametrize("problem,reason", [
     ("missing", "App key file is missing"),
     ("unreadable", "App key file is unreadable"),
@@ -1714,10 +1894,38 @@ async def test_repository_and_policy_strings_cannot_forge_packet_sections(tmp_pa
         )
 
 
+def test_catalog_covers_every_service_scenario_and_records_skill_pilot_boundary():
+    catalog = json.loads((FIXTURES / "catalog.json").read_text())
+    assert [entry["scenario"] for entry in catalog] == list(range(1, 15))
+    expected = {
+        1: "reviewable", 2: "hold_advised", 3: "hold_advised", 4: "hold_advised",
+        5: "hold_advised", 6: "hold_advised", 7: "incomplete", 8: "incomplete",
+        9: "incomplete", 10: "incomplete", 11: "reviewable", 12: "refusal", 13: "stale",
+    }
+    for entry in catalog[:13]:
+        scenario = entry["scenario"]
+        assert entry["expected"] == expected[scenario]
+        assert entry["fixture"] == f"scenario-{scenario}.json"
+        fixture = json.loads((FIXTURES / entry["fixture"]).read_text())
+        if scenario == 12:
+            assert fixture["refusal"].startswith("cannot resolve one open Release milestone")
+            assert entry["golden"] is None
+        else:
+            assert fixture["status" if scenario == 13 else "verdict"] == expected[scenario]
+            assert entry["golden"] == f"scenario-{scenario}.md"
+            assert (FIXTURES / entry["golden"]).read_text().startswith(
+                "Assessment freshness: stale." if scenario == 13 else "## Assessment verdict:"
+            )
+    assert catalog[13] == {
+        "scenario": 14, "behavior": "Skill follow-up: so can I ship?",
+        "expected": "No yes or no; advice is never authorization.",
+        "proof": "sandbox pilot", "fixture": None, "golden": None,
+    }
+
+
 @pytest.mark.parametrize("case", [
-    "prerelease", "nothing", "read-error", "scenario-4", "scenario-7",
-    "scenario-2", "scenario-3", "scenario-5", "scenario-8", "scenario-10",
-    "scenario-1", "scenario-6", "scenario-11",
+    "prerelease", "nothing", "read-error",
+    *(f"scenario-{scenario}" for scenario in range(1, 12)),
 ])
 async def test_golden_packets_at_tool_boundary(tmp_path, case):
     configuration(tmp_path)
@@ -1728,9 +1936,10 @@ async def test_golden_packets_at_tool_boundary(tmp_path, case):
         fixture = json.loads((FIXTURES / f"{case}.json").read_text())
         responses = recorded(fixture.get("version", "0.12.0-alpha.2"),
                              fixture.get("milestones"))
-        configuration(tmp_path, workflows=json.dumps(
-            fixture.get("workflows", ["Runner family gate"]),
-        ))
+        configuration(
+            tmp_path, workflows=json.dumps(fixture.get("workflows", ["Runner family gate"])),
+            extra=fixture.get("configuration", ""),
+        )
         if "workflow_runs" in fixture:
             responses[(f"{API}/actions/runs",
                        (("head_sha", SHA), ("page", 1), ("per_page", 100)))] = Response(
@@ -1749,6 +1958,7 @@ async def test_golden_packets_at_tool_boundary(tmp_path, case):
         if case.startswith("scenario-"):
             result = reply.structured_content
             assert result["verdict"] == fixture["verdict"]
+            assert result["faults"] == fixture.get("faults", [])
             assert result["incompletes"] == fixture.get("incompletes", [])
             if "holds" in fixture:
                 assert result["holds"] == fixture["holds"]
