@@ -27,7 +27,7 @@ _OPERATOR_DOCS = (
 
 def _repo_root() -> Path:
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     raise AssertionError("repo root not found")
 

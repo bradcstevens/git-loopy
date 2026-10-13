@@ -1503,15 +1503,17 @@ requires an explicit retirement decision.
 _Avoid_: package manifest, workflow matrix, path configuration.
 
 **Path baseline**:
-The last shared family Release and the exact contract and schema support a
-**Language path** proved when independent histories began. A path advances from
-that snapshot without rewriting or inheriting another path's later history.
+The last stable family Release a **Language path** shipped in, and the exact contract and
+schema support that Release proved, with any **Owed waivers** it already carried. A path
+advances from that snapshot without rewriting or inheriting another path's later history.
 _Avoid_: fork point, initial version, copied version.
 
 **Dormant path**:
 A **Language path** held at its last declared **Release version** and declared
 **Contract support** while another path advances. Its own or still-supported
-shared surfaces remain gated, but newer contracts create no debt for it.
+shared surfaces remain gated, but newer contracts create no debt for it. It keeps
+the **Owed waivers** its **Path baseline** carried, frozen, and gains no new one,
+and its issues are **Pool exclusions** until it resumes.
 _Avoid_: deprecated path, retired port, unsupported code.
 
 **Path artifact**:
@@ -2118,6 +2120,21 @@ A command, flag, repair or refusal whose only job is moving 0.x state forward, s
 it moves is gone. The refusal of a removed `GIT_LOOPY_*` variable is the exception, and it
 stays until 2.0.0, because an environment variable nothing refuses is silently ignored.
 _Avoid_: shim, compatibility layer.
+
+### Dormant baselines (accepted design)
+
+This term completes the vocabulary of
+[ADR-0091](docs/adr/0091-a-dormant-path-stands-at-the-last-stable-family-release-carrying-its-owed-debt-frozen.md),
+which also sharpens the **Path baseline** and **Dormant path** entries above. The existing
+**Conformance suite**, **Fixture claim**, **Owed waiver** and **Pool exclusion** entries
+describe current behavior and keep their meanings. This decision record does not establish
+delivery acceptance.
+
+**Introduction version**:
+The **Wrapper contract** version at which a **Conformance suite** fixture first appeared,
+recorded once and never edited. A member owes a **Fixture claim** or a waiver only for the
+fixtures whose introduction version is at or below its path's **Contract support**.
+_Avoid_: contract pin, fixture revision (both name a fixture's latest change).
 
 ## Relationships
 

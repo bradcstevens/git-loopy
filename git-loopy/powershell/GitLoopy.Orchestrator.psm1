@@ -5494,7 +5494,7 @@ function Invoke-GitLoopyDiscoveryLoop {
             -Iteration $Iteration `
             -Pool $Pool `
             -Commits $NewCommits
-        # Binding priority (CONTEXT.md): a Working marker from the turn wins,
+        # Binding priority (GLOSSARY.md): a Working marker from the turn wins,
         # then a wrapper closure, then a closure the Pool read observed at the
         # source, then the commit / single-member-Pool fallback.
         Register-GitLoopyObservedSourceClosures `

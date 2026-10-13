@@ -3089,7 +3089,7 @@ def test_a_clean_pool_records_a_binding_and_no_skip(tmp_path, monkeypatch) -> No
 def test_the_routed_pair_is_resolved_at_pickup(tmp_path, monkeypatch) -> None:
     """The pair the session is built with comes from the Pickup, not the config.
 
-    ``CONTEXT.md``: *"Because the issue is known first, pickup is where its
+    ``GLOSSARY.md``: *"Because the issue is known first, pickup is where its
     Routed pair resolves."* Until #394 a serial Iteration had no per-issue pair
     to resolve, because it had no per-issue anything.
 

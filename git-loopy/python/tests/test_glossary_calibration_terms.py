@@ -1,6 +1,6 @@
 """The glossary entries the Calibration arc's shipped code earned (#373).
 
-``CONTEXT.md`` records *shipped reality*, which is why ADR-0027 and ADR-0028
+``GLOSSARY.md`` records *shipped reality*, which is why ADR-0027 and ADR-0028
 deliberately fixed their five terms in the decision records instead — the
 precedent ADR-0019 set when it wrote *"`CONTEXT.md` is deliberately untouched. It
 is a glossary of shipped reality, and none of this has shipped."* Four of those
@@ -35,9 +35,9 @@ CALIBRATION_RUN = "git-loopy/python/git_loopy/calibration_run.py"
 
 
 def _repo_root() -> Path | None:
-    """First ancestor holding both ``docs/adr/`` and ``CONTEXT.md`` (else None)."""
+    """First ancestor holding both ``docs/adr/`` and ``GLOSSARY.md`` (else None)."""
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 
@@ -60,11 +60,11 @@ def _find_entry(term: str) -> str | None:
     """One glossary entry's body reflowed, or ``None`` if the term has none.
 
     An entry runs from its ``**Term**:`` heading to the next blank line, which is
-    what separates entries throughout ``CONTEXT.md``. Reading the entry rather
+    what separates entries throughout ``GLOSSARY.md``. Reading the entry rather
     than the whole document is what keeps a claim asserted *about the term* —
     otherwise a sentence elsewhere in the glossary could satisfy it.
     """
-    lines = _doc("CONTEXT.md").splitlines()
+    lines = _doc("GLOSSARY.md").splitlines()
     heading = f"**{term}**:"
     for index, line in enumerate(lines):
         if line.strip() == heading:
@@ -80,7 +80,7 @@ def _find_entry(term: str) -> str | None:
 def _entry(term: str) -> str:
     body = _find_entry(term)
     if body is None:
-        raise AssertionError(f"CONTEXT.md has no glossary entry for **{term}**")
+        raise AssertionError(f"GLOSSARY.md has no glossary entry for **{term}**")
     return body
 
 
@@ -91,7 +91,7 @@ def _flagged_ambiguity(anchor: str) -> str:
     the section is a list of independent resolutions, and a claim satisfied by
     a neighbouring bullet is not the claim.
     """
-    lines = _doc("CONTEXT.md").splitlines()
+    lines = _doc("GLOSSARY.md").splitlines()
     section = lines[lines.index("## Flagged ambiguities") + 1 :]
     bullets: list[list[str]] = []
     for line in section:

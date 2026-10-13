@@ -2,7 +2,7 @@
 
 > The language-neutral behavioural specification that **every** git-loopy **Orchestrator** — the
 > Python reference runner and the shell, PowerShell, and future Rust ports — must satisfy. This
-> is the single source of truth the [**Runner family**](../CONTEXT.md#the-runner-family)
+> is the single source of truth the [**Runner family**](../GLOSSARY.md#the-runner-family)
 > implements and the [**Conformance suite**](../git-loopy/conformance/README.md) pins. See
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
@@ -10,7 +10,7 @@
 **Contract version:** 2.27 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
-in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
+in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
 temporary tie-breaker and the discrepancy is a contract bug to be reconciled — the intent is that
 they never disagree, enforced by the Conformance suite.
 
@@ -2947,4 +2947,4 @@ the silent case.
 
 **See also:** [`docs/runners.md`](runners.md) (the operator-facing runner reference),
 [ADR-0013](adr/0013-multi-language-runner-family.md) (the family decision),
-[`CONTEXT.md`](../CONTEXT.md) (the glossary).
+[`GLOSSARY.md`](../GLOSSARY.md) (the glossary).

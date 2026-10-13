@@ -4594,7 +4594,7 @@ def test_the_contract_states_that_ordering_never_changes_eligibility() -> None:
 
 
 def test_the_contract_forbids_ordering_by_task_type() -> None:
-    """A **Task type** selects a **Routed pair** and nothing else (`CONTEXT.md`).
+    """A **Task type** selects a **Routed pair** and nothing else (`GLOSSARY.md`).
 
     ADR-0032 rejected ``(task_type_rank, created_at)`` twice over — it relocates
     starvation to the bottom tier, and the glossary already forbids it. Stating

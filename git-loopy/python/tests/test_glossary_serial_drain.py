@@ -1,6 +1,6 @@
 """The glossary entry and reopen conditions #428 decided (ADR-0074).
 
-``CONTEXT.md`` records *shipped reality*. The **Serial drain** is shipped behaviour that had no
+``GLOSSARY.md`` records *shipped reality*. The **Serial drain** is shipped behaviour that had no
 name, so it is defined now; Python Rolling dispatch's ``priority`` crossing is shipped by
 #720 and proved through complete Runs in ``test_loop_parallel.py``.
 
@@ -26,9 +26,9 @@ AMENDED = (
 
 
 def _repo_root() -> Path | None:
-    """First ancestor holding both ``docs/adr/`` and ``CONTEXT.md`` (else None)."""
+    """First ancestor holding both ``docs/adr/`` and ``GLOSSARY.md`` (else None)."""
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 
@@ -46,10 +46,10 @@ def _entry(term: str) -> str:
     """One glossary entry's body, reflowed.
 
     An entry runs from its ``**Term**:`` heading to the next blank line, which is what
-    separates entries throughout ``CONTEXT.md``. Reading the entry rather than the whole
+    separates entries throughout ``GLOSSARY.md``. Reading the entry rather than the whole
     document keeps a claim asserted *about the term*.
     """
-    lines = _doc("CONTEXT.md").splitlines()
+    lines = _doc("GLOSSARY.md").splitlines()
     heading = f"**{term}**:"
     for index, line in enumerate(lines):
         if line.strip() == heading:
@@ -59,7 +59,7 @@ def _entry(term: str) -> str:
                     break
                 body.append(candidate)
             return " ".join(" ".join(body).split())
-    raise AssertionError(f"CONTEXT.md has no glossary entry for **{term}**")
+    raise AssertionError(f"GLOSSARY.md has no glossary entry for **{term}**")
 
 
 def test_the_glossary_defines_the_serial_drain_as_a_wait_that_cancels_nothing() -> None:
