@@ -11,8 +11,9 @@ Three properties are load-bearing:
 * **It reads a directory.** A working clone is judged as it stands on disk,
   uncommitted edits included. Nothing is fetched, committed, pushed, or
   published, and the check reaches no network.
-* **It does not move the pin.** A pass says only that the three cross-repo
-  proofs pass against this checkout. The pin still moves only as a reviewed
+* **It does not move the pin.** A pass says only that the cross-repo
+  proofs pass against this checkout, including Agent profiles when present.
+  The pin still moves only as a reviewed
   edit to ``skill_source.json``.
 * **A failure names the contract.** The Required Skill that is absent, the
   Skill reference that no longer resolves, or the provisioned label the
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from git_loopy.agent_profiles import validate_profiles
 from git_loopy.labels import TRIAGE_ROLES
 from git_loopy.prompt import packaged_required_skills
 from git_loopy.skill_source import read_skill_source_pin
@@ -56,6 +58,7 @@ _DOCUMENTED_SKILL = re.compile(r"\|\s*\[`/([a-z0-9-]+)`\]\([^)]+\)\s*\|")
 #: must be reported even when parsing would fall back to the canonical default
 #: and hide the absence.
 CONTRACT_LABEL_VOCABULARY = "Label vocabulary"
+CONTRACT_AGENT_PROFILE = "Agent profile"
 _LABEL_TEMPLATE = Path("setup-git-loopy-skills") / "triage-labels.md"
 _MAPPING_ROW = re.compile(
     r"^\|\s*`(?P<role>[^`]+)`\s*\|\s*`(?P<label>[^`]+)`\s*\|",
@@ -90,6 +93,7 @@ class CandidateVerdict:
 
     checkout: Path
     breaches: tuple[ContractBreach, ...]
+    profiles_checked: bool = False
 
     @property
     def passed(self) -> bool:
@@ -222,12 +226,25 @@ def verify_candidate(checkout: Path, *, repo_root: Path) -> CandidateVerdict:
     """Judge ``checkout`` against the cross-repo proofs. Reads only; writes nothing."""
     checkout = checkout.expanduser()
     skills = _skills_root(checkout)
+    profiles = checkout / "profiles"
+    profiles_checked = profiles.exists() or profiles.is_symlink()
+    profile_breaches = (
+        validate_profiles(checkout, skills_directory=str(skills.relative_to(checkout)))
+        if profiles_checked
+        else ()
+    )
     breaches = (
         *_missing_required_skills(skills),
         *_unresolved_references(skills, repo_root),
         *_dropped_labels(skills),
+        *(
+            ContractBreach(CONTRACT_AGENT_PROFILE, str(breach))
+            for breach in profile_breaches
+        ),
     )
-    return CandidateVerdict(checkout=checkout, breaches=breaches)
+    return CandidateVerdict(
+        checkout=checkout, breaches=breaches, profiles_checked=profiles_checked
+    )
 
 
 def discover_repo_root(start: Path | None = None) -> Path | None:
@@ -285,9 +302,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"candidate check failed: {exc}", file=sys.stderr)
         return 1
     if verdict.passed:
+        proofs = "Required Skills, Skill references, Label vocabulary"
+        if verdict.profiles_checked:
+            proofs += ", Agent profiles"
         print(
             f"{verdict.checkout} satisfies the cross-repo proofs "
-            "(Required Skills, Skill references, Label vocabulary). "
+            f"({proofs}). "
             "This is not a promise about the pin."
         )
         return 0

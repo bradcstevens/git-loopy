@@ -20,6 +20,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+from dataclasses import replace
 from importlib.resources import files
 from pathlib import Path
 
@@ -151,6 +152,23 @@ def test_committed_pin_ships_inside_the_package() -> None:
     assert read_skill_source_pin(packaged).revision == read_skill_source_pin().revision
 
 
+@pytest.mark.parametrize("directory", [None, "profiles", "catalog/profiles"])
+def test_pin_optionally_names_a_profile_directory(
+    tmp_path: Path, directory: str | None
+) -> None:
+    before = skill_source.PIN_PATH.read_bytes()
+    raw = json.loads(before)
+    if directory is not None:
+        raw["profiles_directory"] = directory
+    path = tmp_path / "pin.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    pin = read_skill_source_pin(path)
+
+    assert pin.profiles_directory == directory
+    assert skill_source.PIN_PATH.read_bytes() == before
+
+
 # ---------------------------------------------------------------------------
 # The architectural and provenance guidance the pin exists to make checkable
 # ---------------------------------------------------------------------------
@@ -270,6 +288,11 @@ def test_a_pin_that_is_not_a_full_commit_sha_is_refused(
         ({"schema_version": 2}, "schema_version"),
         ({"url": "git@github.com:bradcstevens/git-loopy-skills.git"}, "https"),
         ({"skills_directory": "../skills"}, "relative path"),
+        ({"profiles_directory": "../profiles"}, "profiles_directory"),
+        ({"profiles_directory": "/profiles"}, "profiles_directory"),
+        ({"profiles_directory": ""}, "profiles_directory"),
+        ({"profiles_directory": None}, "profiles_directory"),
+        ({"profiles_directory": []}, "profiles_directory"),
         (
             {
                 "license": {
@@ -361,6 +384,31 @@ def test_acquisition_is_idempotent(
     acquire_skill_source(pin, destination)
 
     assert validate_skill_source(pin, destination).revision == pin.revision
+
+
+def test_an_optional_profile_pin_does_not_install_or_validate_profiles_yet(
+    tmp_path: Path, upstream: tuple[Path, SkillSourcePin]
+) -> None:
+    from git_loopy.skill_install import installed_catalog_dir, refresh_installed_catalog
+
+    root, pin = upstream
+    profiles = root / "profiles"
+    profiles.mkdir()
+    (profiles / "invalid.md").write_text("# Not a valid profile set\n", encoding="utf-8")
+    _git(root, "add", "profiles")
+    _git(root, "commit", "--quiet", "-m", "carry unconsumed profiles")
+    pin = replace(pin, revision=_git(root, "rev-parse", "HEAD"), profiles_directory="profiles")
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config")}
+
+    outcome = refresh_installed_catalog(pin, env=env)
+
+    assert outcome.action == "installed"
+    assert outcome.catalog is not None
+    assert outcome.catalog.skills == ("tdd", "triage")
+    installed = installed_catalog_dir(env)
+    assert not (installed.parent / "profiles").exists()
+    assert sorted(path.name for path in installed.iterdir()) == ["tdd", "triage"]
+    assert refresh_installed_catalog(pin, env=env).action == "current"
 
 
 def test_acquisition_restores_a_locally_modified_checkout(
