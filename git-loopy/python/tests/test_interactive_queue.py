@@ -336,7 +336,7 @@ def test_started_wall_is_set_once_across_revisits() -> None:
 
 def test_active_seconds_sums_across_iterations() -> None:
     """The Active duration carries across iterations and keeps ticking on the
-    revisit — the queue keeps one entry per issue (issue #33 / CONTEXT.md)."""
+    revisit — the queue keeps one entry per issue (issue #33 / GLOSSARY.md)."""
     clock = _FakeClock()
     state = _make_state(clock)
     # iter 1: #90 is active for 10s, then the iteration ends (folding 10s in).
@@ -628,7 +628,7 @@ def test_queue_row_carries_usage_tally_and_derives_cost() -> None:
 
 def test_usage_sums_across_iterations_for_one_issue() -> None:
     """Per-issue tokens sum across every iteration that worked the issue — the
-    queue keeps one entry per issue (issue #36 / CONTEXT.md)."""
+    queue keeps one entry per issue (issue #36 / GLOSSARY.md)."""
     clock = _FakeClock()
     state = _make_state(clock)
     # iter 1: #90 active, two usage events.

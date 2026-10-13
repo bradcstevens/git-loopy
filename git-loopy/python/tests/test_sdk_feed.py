@@ -296,7 +296,7 @@ def test_the_command_asks_the_corporate_feed_not_public_pypi(tmp_path: Path) -> 
 
 def _repo_root() -> Path:
     for parent in Path(__file__).resolve().parents:
-        if (parent / "AGENTS.md").is_file() and (parent / "CONTEXT.md").is_file():
+        if (parent / "AGENTS.md").is_file() and (parent / "GLOSSARY.md").is_file():
             return parent
     raise AssertionError("repo root not found")
 

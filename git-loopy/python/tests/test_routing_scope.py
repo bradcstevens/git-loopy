@@ -32,7 +32,7 @@ def _repo_root_or_skip() -> Path:
     there is nothing to check rather than something to fail.
     """
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     pytest.skip("repo root not found (installed-wheel run) — nothing to check")
 

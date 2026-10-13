@@ -10,8 +10,6 @@ Some required evidence could not be read. No conclusion either way — this does
 - Counted workflow Promote Release line: missing&#58; no run at pinned SHA — [source](https://github.com/example/project/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/checks)
 - Counted workflow Runner family gate: queued — [source](https://github.com/example/project/actions/runs/42)
 - Counted workflow Cross&#45;repo Skills proof: in&#95;progress — [source](https://github.com/example/project/actions/runs/43)
-- Open and unabsorbed work: not yet assessed by this service version — [source](https://github.com/example/project/issues)
-- Baseline and line content: not yet assessed by this service version — [source](https://github.com/example/project/tags)
 
 ## What would change this
 - Re-run the assessment once the unreadable items above can be read.
@@ -23,7 +21,7 @@ Some required evidence could not be read. No conclusion either way — this does
 - Cross&#45;repo Skills proof: in&#95;progress — [run](https://github.com/example/project/actions/runs/43)
 
 ## Line content
-- Not yet assessed by this service version; see Could not read.
+- No classified issues. See Could not read for any missing evidence.
 
 ## Context (does not change the verdict)
 - Prerelease stage is alpha&#46;2 &#8212; context only&#59; Promotion promotes from any stage&#46;
@@ -39,7 +37,8 @@ Some required evidence could not be read. No conclusion either way — this does
 - VERSION at SHA: 0&#46;12&#46;0&#45;alpha&#46;2
 - VERSION source: [source](https://github.com/example/project/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/VERSION)
 - Release target: 0&#46;12&#46;0
-- Baseline tag: not yet assessed
+- Baseline tag: v0&#46;11&#46;1
+- Baseline source: [source](https://github.com/example/project/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)
 - Assessment policy revision: <POLICY>
 - Counted workflows: Promote Release line&#44; Runner family gate&#44; Cross&#45;repo Skills proof
 - Service version: <SERVICE>

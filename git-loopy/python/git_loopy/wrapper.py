@@ -43,6 +43,7 @@ __all__ = [
     "exit_code_for",
     "CHECKPOINT_TRAILER_KEY",
     "checkpoint_message",
+    "extract_checkpoint_refs",
     "is_checkpoint_message",
 ]
 
@@ -255,3 +256,24 @@ def is_checkpoint_message(message: str) -> bool:
     return any(
         line.strip().lower().startswith(prefix) for line in message.split("\n")
     )
+
+
+def extract_checkpoint_refs(message: str) -> list[int]:
+    """Read issue attributions from the final trailer block, not prose mentions.
+
+    Non-issue values written by ``checkpoint_message`` (paths, PR refs and
+    ``unattributed``) deliberately provide no issue linkage.
+    """
+    paragraphs = re.split(r"\n[ \t]*\n", message.rstrip())
+    if len(paragraphs) < 2:
+        return []
+    trailers = paragraphs[-1].splitlines()
+    if not all(re.fullmatch(r"[ \t]*[A-Za-z0-9-]+:[^\n]*", line) for line in trailers):
+        return []
+    pattern = re.compile(
+        rf"[ \t]*{re.escape(CHECKPOINT_TRAILER_KEY)}:[ \t]*([1-9][0-9]*)[ \t]*",
+        re.IGNORECASE,
+    )
+    return list(dict.fromkeys(
+        int(match.group(1)) for line in trailers if (match := pattern.fullmatch(line))
+    ))

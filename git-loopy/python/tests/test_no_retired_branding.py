@@ -72,7 +72,7 @@ _EXEMPT_PREFIXES: tuple[str, ...] = (
 # Individual repo-relative files that are exempt for the same reason.
 _EXEMPT_FILES: frozenset[str] = frozenset(
     {
-        "CONTEXT.md",  # domain glossary: the "flagged ambiguities" narrate the renames
+        "GLOSSARY.md",  # domain glossary: the "flagged ambiguities" narrate the renames
     }
 )
 
@@ -83,12 +83,12 @@ _SKIP_SUFFIXES: tuple[str, ...] = (".lock",)
 def _find_repo_root() -> Path | None:
     """Walk up from this file to the repo root.
 
-    The root is the first ancestor holding both ``docs/adr/`` and ``CONTEXT.md``.
+    The root is the first ancestor holding both ``docs/adr/`` and ``GLOSSARY.md``.
     Returns ``None`` when neither is found (e.g. an installed-wheel run with no
     source checkout), which the scan test treats as "nothing to guard -> skip".
     """
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 

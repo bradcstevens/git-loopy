@@ -54,9 +54,9 @@ _EXEMPT_PREFIXES: tuple[str, ...] = (
 
 
 def _find_repo_root() -> Path | None:
-    """The first ancestor holding both ``docs/adr/`` and ``CONTEXT.md``."""
+    """The first ancestor holding both ``docs/adr/`` and ``GLOSSARY.md``."""
     for parent in Path(__file__).resolve().parents:
-        if (parent / "docs" / "adr").is_dir() and (parent / "CONTEXT.md").is_file():
+        if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
             return parent
     return None
 
@@ -282,7 +282,7 @@ _RETIRED_CLAIMS: tuple[str, ...] = (
 
 
 def _forbidden_catalog_vocabulary(repo_root: Path) -> tuple[str, ...]:
-    """The words CONTEXT.md's **Installed catalog** entry tells writers to avoid.
+    """The words GLOSSARY.md's **Installed catalog** entry tells writers to avoid.
 
     Read out of the glossary rather than restated here, so the guard cannot
     drift from the entry it enforces: a term added to that *Avoid* list becomes
@@ -290,7 +290,7 @@ def _forbidden_catalog_vocabulary(repo_root: Path) -> tuple[str, ...]:
     what let "vendored skills" survive in `docs/workflow.md` while a hand-rolled
     regex naming "vendored catalog" reported the whole surface clean.
     """
-    text = (repo_root / "CONTEXT.md").read_text(encoding="utf-8")
+    text = (repo_root / "GLOSSARY.md").read_text(encoding="utf-8")
     entry = text[text.index(_INSTALLED_CATALOG_ENTRY) :]
     avoid = re.search(r"(?m)^_Avoid_:\s*(.+?)\.\s*$", entry)
     assert avoid, "the **Installed catalog** glossary entry carries no _Avoid_ list"
@@ -344,7 +344,7 @@ def test_no_first_party_doc_uses_the_retired_catalog_vocabulary(
 
     missed = [claim for claim in _RETIRED_CLAIMS if not claims.search(claim)]
     assert not missed, (
-        "the vocabulary derived from CONTEXT.md's **Installed catalog** entry "
+        "the vocabulary derived from GLOSSARY.md's **Installed catalog** entry "
         "no longer catches these retired claims, so the scan below would pass "
         f"straight over them: {missed}"
     )
@@ -357,13 +357,13 @@ def test_no_first_party_doc_uses_the_retired_catalog_vocabulary(
         )
         # A glossary *Avoid* line's whole job is to write the retired
         # vocabulary down, so it is the one line exempt from it -- rather than
-        # the whole of CONTEXT.md, which is guidance like any other.
+        # the whole of GLOSSARY.md, which is guidance like any other.
         if not line.lstrip().startswith("_Avoid_:") and claims.search(line)
     ]
     assert not failures, (
         "a git-loopy distribution carries no Skills -- it carries the pin, and "
         "the catalog is installed from the external source of record "
-        f"(ADR-0025). CONTEXT.md tells writers to avoid {list(vocabulary)}. "
+        f"(ADR-0025). GLOSSARY.md tells writers to avoid {list(vocabulary)}. "
         "Offending claims:\n  " + "\n  ".join(failures)
     )
 

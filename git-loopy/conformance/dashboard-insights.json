@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.18",
+  "fixture_schema_version": "1.19",
   "wrapper_contract_version": "2.26",
   "event_schema_version": "1.7",
   "semantic_contract": {
@@ -233,6 +233,7 @@
         "context_fill",
         "release_target",
         "release_version",
+        "run_release_version",
         "cost",
         "rate_card",
         "routing",
@@ -884,6 +885,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -1048,6 +1050,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -1444,6 +1447,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "unavailable"
                 },
@@ -1622,6 +1626,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "unavailable"
                 },
@@ -2110,6 +2115,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -2318,6 +2324,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -2997,6 +3004,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -3203,6 +3211,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -3454,6 +3463,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -3763,6 +3773,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -4311,6 +4322,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "unavailable"
                 },
@@ -4491,6 +4503,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "unavailable"
                 },
@@ -4902,6 +4915,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -5097,6 +5111,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -5482,6 +5497,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -5646,6 +5662,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -6022,6 +6039,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -6219,6 +6237,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -6664,6 +6683,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -6855,6 +6875,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -7085,6 +7106,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -7325,6 +7347,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -7794,6 +7817,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -8015,6 +8039,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -8339,6 +8364,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -8453,6 +8479,7 @@
                 },
                 "release_target": "1.3.0",
                 "release_version": "1.3.0-alpha.2",
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -8701,6 +8728,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -9050,6 +9078,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -9399,6 +9428,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -9748,6 +9778,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -10097,6 +10128,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -10445,6 +10477,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -10792,6 +10825,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -11141,6 +11175,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -11491,6 +11526,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -11841,6 +11877,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -12191,6 +12228,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -12540,6 +12578,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "1.2.3",
                 "cost": {
                   "availability": "available"
                 },
@@ -14623,6 +14662,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -14802,6 +14842,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -15032,6 +15073,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -15262,6 +15304,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -15526,6 +15569,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -15888,6 +15932,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -16290,6 +16335,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -17125,6 +17171,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -17317,6 +17364,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -17496,6 +17544,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -17749,6 +17798,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -18002,6 +18052,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -18255,6 +18306,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -18508,6 +18560,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -18789,6 +18842,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -19176,6 +19230,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -19606,6 +19661,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -20050,6 +20106,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -21047,6 +21104,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -21226,6 +21284,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -21457,6 +21516,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -21688,6 +21748,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -21953,6 +22014,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -22318,6 +22380,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },
@@ -22724,6 +22787,7 @@
                 },
                 "release_target": null,
                 "release_version": null,
+                "run_release_version": "0.9.0",
                 "cost": {
                   "availability": "available"
                 },

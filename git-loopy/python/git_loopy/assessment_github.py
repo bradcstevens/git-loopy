@@ -6,6 +6,13 @@ Endpoint-to-App-read-permission matrix for this tracer:
     GET /repos/{repository}/contents/VERSION     Contents (ref = pinned SHA)
     GET /repos/{repository}/milestones           Issues (complete catalog)
     GET /repos/{repository}/actions/runs         Actions (head_sha = pinned SHA)
+    GET /repos/{repository}/issues               Issues (complete catalog)
+    GET /repos/{repository}/pulls                Pull requests (open/closed catalogs)
+    GET /repos/{repository}/tags                 Contents (stable baseline candidates)
+    GET /repos/{repository}/compare/{base}...{sha}
+                                                Contents (ancestry and commit range)
+    GET /repos/{repository}/issues/{n}/dependencies/blocked_by
+                                                Issues (native blockers)
 
 Pagination is state=all, per_page=100 and a monotonic page number. It never
 follows a caller-provided or foreign URL. The only API version is 2022-11-28.
@@ -54,8 +61,13 @@ class GitHubReads:
 
     async def _get(self, suffix, params, read, source) -> Response:
         # No caller-provided URL is ever followed, including pagination links.
-        if suffix not in ("", "/contents/VERSION", "/milestones", "/actions/runs") and not (
+        if suffix not in (
+            "", "/contents/VERSION", "/milestones", "/actions/runs", "/issues", "/pulls",
+            "/tags",
+        ) and not (
             re.fullmatch(r"/commits/[A-Za-z0-9%_.-]+", suffix)
+            or re.fullmatch(rf"/compare/{SHA_PATTERN}\.\.\.{SHA_PATTERN}", suffix)
+            or re.fullmatch(r"/issues/[1-9][0-9]*/dependencies/blocked_by", suffix)
         ):
             raise Unreadable(read, "endpoint is not allowed", source)
         try:
@@ -139,6 +151,7 @@ class GitHubReads:
                       for p in parts]
             if any(m is None for m in parsed):
                 raise Unreadable(read, "pagination did not complete", source)
+
             next_links = [m.group(1) for m in parsed if m and m.group(2) == "next"]
             if not next_links:
                 return found
@@ -149,6 +162,154 @@ class GitHubReads:
                 or target.path != self.api + "/milestones" or target.fragment
                 or parse_qs(target.query) != {
                     "state": ["all"], "per_page": ["100"], "page": [str(page + 1)],
+                }
+            ):
+                raise Unreadable(read, "pagination did not complete", source)
+        raise Unreadable(read, "pagination did not complete", source)
+
+    async def work_records(self, kind: str, number: int | None = None):
+        """Yield observed records while requiring the entire fixed-endpoint read."""
+        if kind == "issues":
+            suffix, params, read = "/issues", {"state": "all"}, "Issue catalog"
+            source = self.web + "/issues"
+        elif kind == "pulls":
+            suffix, params, read = "/pulls", {"state": "open"}, "Open pull requests"
+            source = self.web + "/pulls"
+        elif kind == "closed_pulls":
+            suffix, params, read = "/pulls", {"state": "closed"}, "Closed pull requests"
+            source = self.web + "/pulls"
+        elif kind == "tags":
+            suffix, params, read = "/tags", {}, "Baseline tag"
+            source = self.web + "/tags"
+        elif kind == "blockers" and (
+            isinstance(number, int) and not isinstance(number, bool) and number > 0
+        ):
+            suffix = f"/issues/{number}/dependencies/blocked_by"
+            params, read = {}, f"Native blockers of issue #{number}"
+            source = f"{self.web}/issues/{number}"
+        else:
+            raise ValueError("unknown work read")
+        seen = set()
+        for page in range(1, 1001):
+            query = {**params, "per_page": 100, "page": page}
+            response = await self._get(suffix, query, read, source)
+            if not isinstance(response.data, list):
+                raise Unreadable(read, "unrecognized evidence shape", source)
+            if len(response.data) > 100 or (page > 1 and not response.data):
+                raise Unreadable(read, "pagination did not complete", source)
+            for record in response.data:
+                identity = record.get("name" if kind == "tags" else "url") if (
+                    isinstance(record, dict)
+                ) else None
+                if isinstance(identity, str):
+                    if identity in seen:
+                        raise Unreadable(read, "pagination did not complete", source)
+                    seen.add(identity)
+                yield record
+            link = next(
+                (v for k, v in response.headers.items() if k.lower() == "link"), "",
+            )
+            parsed = [
+                re.fullmatch(r'\s*<([^>]+)>;\s*rel="([^"]+)"\s*', part)
+                for part in link.split(",")
+            ] if link else []
+            if any(match is None for match in parsed):
+                raise Unreadable(read, "pagination did not complete", source)
+            next_links = [
+                match.group(1) for match in parsed if match and match.group(2) == "next"
+            ]
+            if not next_links:
+                return
+            try:
+                target = urlsplit(next_links[0])
+            except ValueError as exc:
+                raise Unreadable(read, "pagination did not complete", source) from exc
+            if (
+                len(next_links) != 1 or not response.data
+                or target.scheme != "https" or target.netloc != "api.github.com"
+                or target.path != self.api + suffix or target.fragment
+                or parse_qs(target.query) != {
+                    key: [str(value)] for key, value in {**query, "page": page + 1}.items()
+                }
+            ):
+                raise Unreadable(read, "pagination did not complete", source)
+        raise Unreadable(read, "pagination did not complete", source)
+
+    async def comparison(
+        self, base: str, sha: str, *, read: str, complete: bool = True,
+    ) -> tuple[bool, list[dict]]:
+        """Prove ancestry and consume the complete range, never the API's default cap."""
+        source = f"{self.web}/compare/{base}...{sha}"
+        suffix = f"/compare/{base}...{sha}"
+        found = []
+        total = None
+        for page in range(1, 1001):
+            response = await self._get(
+                suffix, {"per_page": 100, "page": page}, read, source,
+            )
+            data = response.data
+            if not isinstance(data, dict) or (
+                data.get("status") not in ("ahead", "behind", "identical", "diverged")
+                or not isinstance(data.get("merge_base_commit"), dict)
+                or not isinstance(data["merge_base_commit"].get("sha"), str)
+                or re.fullmatch(SHA_PATTERN, data["merge_base_commit"]["sha"]) is None
+                or not isinstance(data.get("total_commits"), int)
+                or isinstance(data["total_commits"], bool) or data["total_commits"] < 0
+                or not isinstance(data.get("commits"), list)
+                or not all(
+                    isinstance(c, dict) and isinstance(c.get("sha"), str)
+                    and re.fullmatch(SHA_PATTERN, c["sha"])
+                    and isinstance(c.get("commit"), dict)
+                    and isinstance(c["commit"].get("message"), str)
+                    for c in data["commits"]
+                )
+            ):
+                raise Unreadable(read, "unrecognized evidence shape", source)
+            if data["status"] in ("behind", "diverged"):
+                if page != 1:
+                    raise Unreadable(read, "pagination did not complete", source)
+                return False, []
+            if data["merge_base_commit"]["sha"] != base or (
+                data["status"] == "identical" and (base != sha or data["total_commits"] != 0)
+            ):
+                raise Unreadable(read, "unrecognized evidence shape", source)
+            if not complete:
+                return True, []
+            if total is None:
+                total = data["total_commits"]
+            found.extend(data["commits"])
+            if (
+                data["total_commits"] != total or len(found) > total
+                or len(data["commits"]) > 100
+                or len({c["sha"] for c in found}) != len(found)
+                or any(c["sha"] == base for c in found)
+                or (page > 1 and not data["commits"])
+            ):
+                raise Unreadable(read, "pagination did not complete", source)
+            link = next((v for k, v in response.headers.items() if k.lower() == "link"), "")
+            parsed = [
+                re.fullmatch(r'\s*<([^>]+)>;\s*rel="([^"]+)"\s*', part)
+                for part in link.split(",")
+            ] if link else []
+            if any(match is None for match in parsed):
+                raise Unreadable(read, "pagination did not complete", source)
+            next_links = [
+                match.group(1) for match in parsed if match and match.group(2) == "next"
+            ]
+            if not next_links:
+                if len(found) == total and (base == sha or any(c["sha"] == sha for c in found)):
+                    return True, found
+                raise Unreadable(read, "pagination did not complete", source)
+            try:
+                target = urlsplit(next_links[0])
+            except ValueError as exc:
+                raise Unreadable(read, "pagination did not complete", source) from exc
+            if (
+                len(next_links) != 1 or not data["commits"] or len(found) >= total
+                or target.scheme != "https" or target.netloc != "api.github.com"
+                or target.path != self.api + suffix or target.fragment
+                or parse_qs(target.query) != {
+                    "per_page": ["100"], "page": [str(page + 1)],
                 }
             ):
                 raise Unreadable(read, "pagination did not complete", source)

@@ -112,7 +112,7 @@ __all__ = [
 ]
 
 # The two human triage assertions Rolling dispatch reads. Both are labels and
-# neither is ever inferred (ADR-0008, CONTEXT.md "Parallel-safe").
+# neither is ever inferred (ADR-0008, GLOSSARY.md "Parallel-safe").
 LABEL_READY_FOR_AGENT: str = "ready-for-agent"
 LABEL_PARALLEL_SAFE: str = "parallel-safe"
 # The Wayfinder map artifact. A planning document by the same argument as a

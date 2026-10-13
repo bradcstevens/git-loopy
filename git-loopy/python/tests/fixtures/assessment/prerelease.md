@@ -1,5 +1,5 @@
-## Assessment verdict: incomplete — v0.12.0 at aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-Some required evidence could not be read. No conclusion either way — this does not mean probably fine. As of 2026-10-12T19:38:03Z.
+## Assessment verdict: reviewable — v0.12.0 at aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Evidence is complete and none argues for holding. Sufficient for your review — not authorization. As of 2026-10-12T19:38:03Z.
 
 > Advice only. Whether to close the milestone is your decision. Closing it triggers Promotion, and Rehearsal and Release smoke still prove the snapshot afterwards. This assessment changes nothing.
 
@@ -7,18 +7,17 @@ Some required evidence could not be read. No conclusion either way — this does
 - None.
 
 ## Could not read
-- Open and unabsorbed work: not yet assessed by this service version — [source](https://github.com/example/project/issues)
-- Baseline and line content: not yet assessed by this service version — [source](https://github.com/example/project/tags)
+- Nothing — every required read completed.
 
 ## What would change this
-- Re-run the assessment once the unreadable items above can be read.
+- Review the line content below, then decide yourself whether to close the milestone in GitHub.
 - Any new trunk commit makes this assessment stale — re-run before deciding.
 
 ## Counted checks
 - Runner family gate: success — [run](https://github.com/example/project/actions/runs/42)
 
 ## Line content
-- Not yet assessed by this service version; see Could not read.
+- No classified issues. See Could not read for any missing evidence.
 
 ## Context (does not change the verdict)
 - Prerelease stage is alpha&#46;2 &#8212; context only&#59; Promotion promotes from any stage&#46;
@@ -34,7 +33,8 @@ Some required evidence could not be read. No conclusion either way — this does
 - VERSION at SHA: 0&#46;12&#46;0&#45;alpha&#46;2
 - VERSION source: [source](https://github.com/example/project/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/VERSION)
 - Release target: 0&#46;12&#46;0
-- Baseline tag: not yet assessed
+- Baseline tag: v0&#46;11&#46;1
+- Baseline source: [source](https://github.com/example/project/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)
 - Assessment policy revision: <POLICY>
 - Counted workflows: Runner family gate
 - Service version: <SERVICE>

@@ -165,13 +165,24 @@ candidate is the Iteration's own step (ADR-0064).
 
 ### Chain hook
 
-`.github/hooks/git-loopy-chain.json` registers the `subagentStop` hook used by
-`/next` to run `chain.sh complete`, closing the finished chain hop in the
-per-clone `.git-loopy/` ledger. The committed hook resolves the `/next` script
-from `$HOME/.copilot/skills/next/chain.sh`; operators with a different install
-location can set `GIT_LOOPY_NEXT_CHAIN`. If the script is missing, the hook
-fails with an actionable diagnostic instead of silently leaving the ledger row
-open.
+`.github/hooks/git-loopy-chain.json` registers two hooks for `/next`, both
+through the repository-relative resolver `.github/hooks/git-loopy-chain.sh`.
+`subagentStop` runs `chain.sh complete`, closing the finished chain hop in the
+per-clone `.git-loopy/` ledger. `agentStop` runs `reenter`
+(`.github/hooks/git-loopy-agent-stop.py`), which holds the parent agent open
+with "Run /next now" while a completed hop is still unrouted, and gives up on a
+hop after three unconfirmed requests.
+
+The resolver finds the `/next` script at
+`${COPILOT_HOME:-$HOME/.copilot}/skills/next/scripts/chain.sh`. If it is
+missing, the resolver reports `no chain.sh found` on stderr and exits `0`,
+rather than failing an agent that has nothing to do with the chain.
+`.github/hooks/git-loopy-hook-log.sh` appends every invocation, including that
+stand-down, to `.git-loopy/hook-invocations.jsonl`, so a chain that closes
+nothing still leaves a record. Copilot runs repository hooks only in trusted
+folders. All four files are written by `/setup-git-loopy-skills`; the
+`agentStop` helper is a copy of the one bundled with that Skill, so re-run it
+rather than editing the copy.
 
 ### Issue tracker
 
@@ -199,5 +210,5 @@ ones that exist. See `docs/releases/README.md#release-target-and-promotion`.
 
 ### Domain docs
 
-Single-context layout: one `CONTEXT.md` and `docs/adr/` at the repo root. See
+Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. See
 `docs/agents/domain.md`.

@@ -10,7 +10,7 @@ event dicts (``render``) and message-delta strings (``stream_message``), exactly
 what the sink fan-out delivers, so the run model stays unit-testable without a
 terminal (issue #25 acceptance criterion; ADR-0001 import-guard convention).
 
-Status vocabulary under test (CONTEXT.md glossary):
+Status vocabulary under test (GLOSSARY.md glossary):
 queued / active / closed / advanced / no-progress / gone.
 """
 
