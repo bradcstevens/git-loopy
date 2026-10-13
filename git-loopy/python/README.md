@@ -52,13 +52,34 @@ without guessing. Repository-sourced Markdown syntax is neutralized.
 The hand-edited allowlist/policy is snapshotted at startup and content-hashed
 in each result. Unknown configuration keys refuse startup.
 
-**Not yet operational:** the entry point fails closed until the dedicated App
-authentication transport lands in #760; it never borrows `gh` credentials.
-Tests run the same MCP protocol in-process with recorded responses. Counted
-checks (#762), open and unabsorbed work (#763), and baseline and line content
-(#764) remain explicit unreadable placeholders, so this version always returns
-`incomplete`, retaining any nothing-to-promote finding. Freshness (#761),
-fault injection (#765), and operator documentation (#766) are separate tickets.
+The entry point authenticates only as the configured GitHub App: it signs an
+RS256 JWT in-process, verifies the repository's installation against the policy,
+and exchanges the JWT for a token scoped to that repository and read permissions.
+Provenance names the App observed from GitHub and its installation, never a token.
+Every request uses GitHub.com's REST API version `2022-11-28`; the token exchange
+is the only POST. There is no `gh`, `GH_TOKEN` or `GITHUB_TOKEN` fallback.
+
+Each repository table names `app_id`, `installation_id`, `app_identity` (the
+operator's configured name), `key_file`, and `workflows`. The App's name in
+Provenance comes from GitHub, not `app_identity`. The PEM RSA private key must be
+readable only by its owner. On POSIX, startup checks the opened regular file's
+owner and permissions (use mode `0600`); missing, unreadable, over-permissive or
+invalid keys refuse startup even when a test transport is supplied. On macOS,
+the opened key file must also have no extended ACL, even one that grants no
+additional read access; remove it with `chmod -N <key-file>`, then use mode `0600`.
+If the ACL cannot be inspected, startup refuses the key. On Windows,
+operators must grant access only to their account using the file's ACL: this
+version does not enforce Windows ACLs.
+
+Tests run the same MCP protocol in-process with a generated throwaway key and
+recorded responses; authentication uses the same substituted transport for both
+`assess` and `check_freshness(repository, milestone, sha)`. The freshness tool
+returns `stale` if App authentication fails, without reading evidence.
+Counted workflow runs, open and unabsorbed work, and line content from the newest
+reachable stable baseline are read at the pinned SHA. Complete evidence yields
+`reviewable` or `hold_advised`; an unreadable item yields `incomplete`, retaining
+any known hold findings. A reviewable verdict is advice, never authorization.
+Fault injection (#765) and operator documentation (#766) are separate tickets.
 
 ## Installation lifecycle
 
