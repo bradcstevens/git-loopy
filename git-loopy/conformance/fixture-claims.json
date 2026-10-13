@@ -5,8 +5,8 @@
   "fixtures": {
     "status-endings.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_iteration_end_to_end.py drives every case through a serial session and asserts the emitted issue outcome; python/tests/test_loop_parallel.py covers all five Lane terminations and retries."},
-      "shell": {"kind": "waived_owed", "reason": "Ending emission from native session terminations is not yet implemented; generic Event serialization still covers the additive wire field.", "issue": 732},
-      "powershell": {"kind": "waived_owed", "reason": "Ending emission from native session terminations is not yet implemented; generic Event serialization still covers the additive wire field.", "issue": 732},
+      "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator emits no Ending. This implementation debt is carried frozen at its dormant Path baseline, not covered by generic Event serialization.", "issue": 834},
+      "powershell": {"kind": "waived_owed", "reason": "The PowerShell Orchestrator emits no Ending. This implementation debt is carried frozen at its dormant Path baseline, not covered by generic Event serialization.", "issue": 835},
       "rust": {"kind": "waived_out_of_scope", "reason": "Session termination and producer emission belong to Orchestrators; Dashboard Ending consumption is pinned in dashboard-insights.json."}
     },
     "rolling-priority.json": {
@@ -17,8 +17,8 @@
     },
     "attempt-lifecycle.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives AttemptLedger and EscalationLedger with fixture cases."},
-      "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator owns the contract Attempt lifecycle but its suite does not exercise this fixture.", "issue": 553},
-      "powershell": {"kind": "waived_owed", "reason": "The PowerShell Orchestrator owns the contract Attempt lifecycle but its suite does not exercise this fixture.", "issue": 554},
+      "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator implements no Attempt lifecycle. It binds a serial Pickup and keeps a Run-wide consecutive Strike; this implementation debt is carried frozen at its dormant Path baseline.", "issue": 553},
+      "powershell": {"kind": "waived_owed", "reason": "The PowerShell Orchestrator implements no Attempt lifecycle. It binds a serial Pickup and keeps a Run-wide consecutive Strike; this implementation debt is carried frozen at its dormant Path baseline.", "issue": 554},
       "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard renders Orchestrator state and does not own Pickup or Attempt lifecycle transitions."}
     },
     "awaiting-merge.json": {

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "key": "shell",
+  "state": "dormant",
+  "release_authority": {
+    "file": "git-loopy/paths/shell.json",
+    "field": "baseline.release_version"
+  },
+  "tag_namespace": "shell/vX.Y.Z",
+  "contract_support": "2.26",
+  "event_schema_support": [1],
+  "members": ["shell"],
+  "artifacts": [],
+  "owned_files": ["git-loopy/shell/**", "git-loopy/paths/shell.json"],
+  "gate_rows": ["Shell syntax", "Shell Orchestrator suites"],
+  "baseline": {
+    "release_version": "0.11.2",
+    "source_tag": "v0.11.2",
+    "source_commit": "a0f912b57c222f2525238d37ae268b0adb4c764f",
+    "owed_waivers": [
+      {"fixture": "attempt-lifecycle.json", "issue": 553},
+      {"fixture": "status-endings.json", "issue": 834}
+    ]
+  }
+}

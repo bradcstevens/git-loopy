@@ -194,10 +194,13 @@ plain mode without it.
 
 ### Upgrading
 
-Pull the clone and re-run `install.sh`. The Release version the helper must
-report comes from the clone's `VERSION`, so a clone that moved to a new Release
-refuses the old helper until you re-run the installer — which is also what the
-Orchestrator's own startup diagnostic tells you.
+Pull the clone and re-run `install.sh`. After the Language-path split, runtime
+identity and the installer's helper ceiling come from
+[`../paths/shell.json`](../paths/shell.json), not root `VERSION`. This path is
+dormant at **0.11.2**, contract **2.26**, Event schema **1**; a Python prerelease
+does not advance it. No helper has been published at or below this baseline,
+so use `--no-tui` for a launcher-only installation. A compatible helper already
+on `PATH` may still attach. See the [baseline audit](../paths/README.md).
 
 ### Diagnosing a helper that isn't used
 
@@ -235,6 +238,8 @@ git-loopy --version
 (Without the PATH launcher, prefix each with `bash /path/to/git-loopy/shell/`.)
 `git-loopy --version` prints exactly `git-loopy <VERSION>` and does not require
 a repository, Config, GitHub, Copilot, network access, or an Event sink.
+It reads the shell Path manifest using `jq`; missing or malformed identity
+fails explicitly rather than borrowing Python's Release version.
 
 ---
 

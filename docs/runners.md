@@ -12,9 +12,12 @@ host language that fits their operating system and comfort level
 
 The **Python Orchestrator** at [`git-loopy/python/`](../git-loopy/python/),
 built on the GitHub Copilot Python SDK, is the **reference implementation**.
-Alongside it, the **shell** (Bash) and **PowerShell** ports are now **shippable
-phase-1 members** — each runs the complete autonomous loop with plain streamed
-output. A **Rust** Orchestrator is still planned.
+Alongside it, the **shell** (Bash) and **PowerShell** paths are **dormant at
+Release 0.11.2**, contract 2.26 and Event schema 1. Each runs its existing serial
+loop, with carried Attempt-lifecycle and Ending debt. Their Orchestrators and
+installers read their own [Path manifests](../git-loopy/paths/README.md), never
+Python's root Release version. The Rust Dashboard helper belongs to Python;
+no Rust path exists until a Rust Orchestrator starts.
 
 | Orchestrator            | Language                     | Platforms              | Quickstart                                                        |
 | ----------------------- | ---------------------------- | ---------------------- | ---------------------------------------------------------------- |
@@ -23,9 +26,10 @@ output. A **Rust** Orchestrator is still planned.
 | **PowerShell**          | PowerShell 7+ (no `jq`)      | Windows, Linux, macOS  | [`git-loopy/powershell/README.md`](../git-loopy/powershell/README.md) |
 
 Pick the member that matches your OS and the language you're comfortable with;
-all implement the same [Wrapper contract](wrapper-contract.md) and are held in
-lockstep by the [Conformance suite](../git-loopy/conformance/README.md) in CI
-([ADR-0013](adr/0013-multi-language-runner-family.md)). Each port's quickstart is
+compatibility is limited to their declared common
+[Wrapper contract](wrapper-contract.md) surface. CI still runs all existing
+[Conformance suites](../git-loopy/conformance/README.md); per-path gate selection
+is a later slice of #791. Each port's quickstart is
 self-contained (prerequisites, install, skills onboarding, a runnable example,
 the phase-1 environment surface, replay artifacts, and exit codes); the shared
 contract, the per-Iteration flow, and skill routing live once in `docs/` and are

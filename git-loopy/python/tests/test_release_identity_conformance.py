@@ -1,4 +1,4 @@
-"""Family-level terminal Conformance for the shared Release identity."""
+"""Terminal Conformance for each path's Release identity."""
 
 from __future__ import annotations
 
@@ -20,6 +20,15 @@ RELEASE_FIXTURE: dict[str, Any] = json.loads(
 )
 
 
+def _expected_release(family: str) -> str:
+    if family == "python":
+        return RELEASE_FIXTURE["expected_release_version"]
+    manifest = json.loads(
+        (REPOSITORY_ROOT / f"git-loopy/paths/{family}.json").read_text(encoding="utf-8")
+    )
+    return manifest["baseline"]["release_version"]
+
+
 def _python_entrypoint() -> Path:
     for name in ("git-loopy", "git-loopy.exe"):
         candidate = Path(sys.executable).parent / name
@@ -37,9 +46,7 @@ def _required_executable(name: str) -> Path:
 
 def _write_failing_tool(path: Path) -> None:
     path.write_text(
-        "#!/bin/sh\n"
-        'printf "%s\\n" "$0" >>"$VERSION_TOOL_LOG"\n'
-        "exit 97\n",
+        '#!/bin/sh\nprintf "%s\\n" "$0" >>"$VERSION_TOOL_LOG"\nexit 97\n',
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -71,7 +78,7 @@ def _prepare_family_member(
     for tool in ("git", "gh", "copilot"):
         _write_failing_tool(fake_bin / tool)
 
-    expected = RELEASE_FIXTURE["expected_release_version"]
+    expected = _expected_release(family)
     env = os.environ.copy()
     env.update(
         {
@@ -97,7 +104,7 @@ def _prepare_family_member(
     elif family == "shell":
         port = runtime / "git-loopy/shell"
         shutil.copytree(REPOSITORY_ROOT / "git-loopy/shell", port)
-        metadata = runtime / "VERSION"
+        metadata = runtime / "git-loopy/paths/shell.json"
         bash = _required_executable("bash")
         jq = _required_executable("jq")
         command = [str(bash), str(port / "git-loopy.sh"), "--version"]
@@ -107,7 +114,7 @@ def _prepare_family_member(
     elif family == "powershell":
         port = runtime / "git-loopy/powershell"
         shutil.copytree(REPOSITORY_ROOT / "git-loopy/powershell", port)
-        metadata = runtime / "VERSION"
+        metadata = runtime / "git-loopy/paths/powershell.json"
         pwsh = _required_executable("pwsh")
         command = [
             str(pwsh),
@@ -121,7 +128,15 @@ def _prepare_family_member(
     else:
         raise AssertionError(f"unsupported family member: {family}")
 
-    metadata.write_text(f"{expected}\n", encoding="utf-8")
+    metadata.parent.mkdir(parents=True, exist_ok=True)
+    metadata.write_text(
+        f"{expected}\n"
+        if family == "python"
+        else json.dumps(
+            {"baseline": {"release_version": expected}},
+        ),
+        encoding="utf-8",
+    )
     return command, workdir, env, metadata, tool_log
 
 
@@ -141,6 +156,63 @@ def _run(
     )
 
 
+@pytest.mark.parametrize("family", ["shell", "powershell"])
+@pytest.mark.parametrize("root_version", ["1.0.0-alpha.1\n", None])
+def test_dormant_identity_comes_from_its_manifest_not_the_python_release(
+    tmp_path: Path,
+    family: str,
+    root_version: str | None,
+) -> None:
+    command, workdir, env, _metadata, tool_log = _prepare_family_member(
+        tmp_path, family
+    )
+    runtime = tmp_path / "runtime"
+    manifests = runtime / "git-loopy/paths"
+    manifests.mkdir(parents=True, exist_ok=True)
+    (manifests / f"{family}.json").write_text(
+        json.dumps({"baseline": {"release_version": "0.11.2"}}),
+        encoding="utf-8",
+    )
+    root = runtime / "VERSION"
+    if root_version is None:
+        root.unlink(missing_ok=True)
+    else:
+        root.write_text(root_version, encoding="utf-8")
+
+    result = _run(command, workdir, env)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "git-loopy 0.11.2\n"
+    assert result.stderr == ""
+    assert not tool_log.exists()
+
+
+@pytest.mark.parametrize("family", ["shell", "powershell"])
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        [{"baseline": {"release_version": "0.11.2"}}],
+        {},
+        {"baseline": {"release_version": 112}},
+        {"baseline": {"release_version": "0.11.2\n"}},
+        {"baseline": {"release_version": "0.11.2\u0000"}},
+        {"baseline": {"release_version": "01.11.2"}},
+    ],
+)
+def test_dormant_entrypoint_refuses_invalid_manifest_identity(
+    tmp_path: Path,
+    family: str,
+    manifest: object,
+) -> None:
+    command, workdir, env, metadata, tool_log = _prepare_family_member(tmp_path, family)
+    metadata.write_text(json.dumps(manifest), encoding="utf-8")
+    result = _run(command, workdir, env)
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "Release" in result.stderr
+    assert not tool_log.exists()
+
+
 @pytest.mark.parametrize("family", ["python", "shell", "powershell"])
 def test_family_entrypoint_reports_release_identity_before_run_preflight(
     tmp_path: Path,
@@ -155,9 +227,7 @@ def test_family_entrypoint_reports_release_identity_before_run_preflight(
     result = _run(command, workdir, env)
 
     assert result.returncode == 0
-    assert result.stdout == (
-        f"git-loopy {RELEASE_FIXTURE['expected_release_version']}\n"
-    )
+    assert result.stdout == (f"git-loopy {_expected_release(family)}\n")
     assert result.stderr == ""
     assert _path_snapshot(workdir) == before
     assert not tool_log.exists()

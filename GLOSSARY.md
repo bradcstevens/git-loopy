@@ -1538,12 +1538,11 @@ _Avoid_: driver, engine; wrapper (the *contract* is the Wrapper contract — the
 Orchestrator).
 
 **TUI helper**:
-The single shared live-interface renderer — one Rust/ratatui codebase
-compiled to the standalone `git-loopy-tui` binary that the **shell** and **PowerShell**
-Orchestrators launch and feed over the **Event schema**, and embedded in-process by the **Rust**
-port. The Python runner hands it the terminal as well: a TTY **Run** detaches its worker and
-the helper owns the live interface, so it is the one live renderer every port shares, with no
-hand-rolled TUI per language.
+The live-interface renderer owned and versioned by the Python **Language path**.
+The Python Runner hands it the terminal for a TTY **Run**. The dormant **shell**
+and **PowerShell** paths may consume a compatible helper through the **Event
+schema**, without inheriting its Release identity. It is one **Path artifact**
+used across paths, not a Rust Language path or a separate renderer per Orchestrator.
 _Avoid_: "the TUI" (ambiguous with the Python Textual app), frontend, renderer (collides with the
 Python `Renderer`).
 

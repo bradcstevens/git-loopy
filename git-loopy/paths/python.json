@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "key": "python",
+  "state": "active",
+  "release_authority": {
+    "file": "VERSION",
+    "copies": [
+      "git-loopy/python/git_loopy/__init__.py",
+      "git-loopy/python/git_loopy/VERSION",
+      "git-loopy/python/pyproject.toml",
+      "git-loopy/python/uv.lock",
+      "git-loopy/tui/Cargo.toml",
+      "git-loopy/tui/Cargo.lock",
+      "git-loopy/tui/README.md",
+      "git-loopy/conformance/release-version.json"
+    ]
+  },
+  "tag_namespace": "vX.Y.Z",
+  "contract_support": "2.26",
+  "event_schema_support": [1],
+  "members": ["python", "tui"],
+  "artifacts": ["git-loopy", "git-loopy-tui"],
+  "owned_files": [
+    "VERSION",
+    "git-loopy/PROMPT.md",
+    "git-loopy/python/**",
+    "git-loopy/tui/**",
+    "git-loopy/paths/python.json"
+  ],
+  "gate_rows": ["Python suite", "Rust Dashboard core"]
+}

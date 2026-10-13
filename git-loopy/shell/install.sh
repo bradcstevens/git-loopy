@@ -161,7 +161,7 @@ printf '  -> %s\n' "$launcher"
 # that has to work: a Run without a helper is a Run in plain mode, while a helper
 # without a launcher is nothing at all.
 if ((install_tui == 1)); then
-  release_version="$(git_loopy_read_release_version "$repository_root/VERSION")" || {
+  release_version="$(git_loopy_read_path_release_version "$repository_root/git-loopy/paths/shell.json")" || {
     printf 'install.sh: cannot determine which Release this clone pins\n' >&2
     exit 1
   }
