@@ -8,6 +8,11 @@ installed with the catalog. `/resolving-merge-conflicts` is Permitted on the fiv
 execution profiles. Required Skills come only from the profiles, and `required-skills`
 in custom Run instructions is retired.
 
+**Amended by [PRD: Agent profiles](https://github.com/bradcstevens/git-loopy/issues/821):**
+no execution profile permits `/resolving-merge-conflicts` after all. The Skills repository
+is retiring it, and the Run instructions and the Recovery prompt carry the conflict
+procedure instead.
+
 **Amended by [ADR-0087](0087-the-planner-is-generated-from-the-pin-and-launched-into-the-loop-engineers-harness.md):**
 the Planner's agent is generated from `profiles/planning.md` into git-loopy's own config
 scope, and `git-loopy plan` launches it into the Loop engineer's harness. No in-Run
