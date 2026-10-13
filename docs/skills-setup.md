@@ -308,7 +308,7 @@ Answer the three questions it walks you through, one at a time.
 | --- | --- | --- |
 | **Issue tracker** | Whether downstream skills call `gh issue create`, `glab issue create`, write a markdown file under `.scratch/`, or follow custom prose. This is the "#1 FAQ" — you do not need a plugin for Jira/Linear/Beads; just tell the skill what you use and it adapts. | GitHub if a `git remote` points at GitHub, GitLab if it points at GitLab, local markdown if there's no remote, or "other" (free-form prose). |
 | **Triage labels** | The exact strings `/triage` applies for each of the five canonical roles. | `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix` — verbatim. Accept these unless your tracker already uses different names. |
-| **Domain docs** | Whether the repo has one global `CONTEXT.md` or a `CONTEXT-MAP.md` pointing at per-context files. | Single-context — correct for ~99% of repos. Pick multi-context only if you genuinely have multiple bounded contexts (large monorepo). |
+| **Domain docs** | Whether the repo has one global `GLOSSARY.md` or a `GLOSSARY-MAP.md` pointing at per-context files. | Single-context — correct for ~99% of repos. Pick multi-context only if you genuinely have multiple bounded contexts (large monorepo). |
 
 For the last two, **accepting the defaults is the right move** unless you have a concrete reason not to.
 

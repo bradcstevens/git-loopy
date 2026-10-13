@@ -1,0 +1,246 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]: THROWAWAY PROTOTYPE
+      - generic [ref=e5]: "Web Board & Card Drawer · Issue #663"
+      - generic [ref=e6]: Derived states over ADR-0080 · Parent context for planning docs · Hermes-referenced
+    - button "Guided Walkthroughs" [ref=e8] [cursor=pointer]
+  - generic [ref=e9]:
+    - generic [ref=e10]:
+      - generic [ref=e11]: git-loopy board
+      - generic [ref=e12]: "Run: run-20261012-0814-par (Parallel)"
+    - 'textbox "Filter cards (title, #id, profile)..." [ref=e14]'
+  - main [ref=e15]:
+    - generic [ref=e16]:
+      - generic [ref=e17]:
+        - generic [ref=e18]:
+          - generic [ref=e19]: Done
+          - generic [ref=e20]: "2"
+        - 'generic "Precedence 1: Issue closed in tracker (completed or wontfix)" [ref=e21]': ℹ️
+      - generic [ref=e22]:
+        - generic [ref=e196] [cursor=pointer]:
+          - generic [ref=e197]:
+            - generic [ref=e198]: "#751"
+            - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e199]': "parent: #648"
+          - heading "Upgrade github-copilot-sdk to 1.0.17rc4 (corporate feed)" [level=3] [ref=e200]
+          - generic [ref=e201]:
+            - generic [ref=e202]: "profile: chore"
+            - generic [ref=e203]: gpt-5.4-mini @ low
+          - generic [ref=e204]:
+            - generic [ref=e205]: Closed
+            - generic [ref=e206]: 1 att
+        - generic [ref=e207] [cursor=pointer]:
+          - generic [ref=e208]:
+            - generic [ref=e209]: "#730"
+            - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e210]': "parent: #648"
+          - heading "An issue's Ending reaches the wire and the Queue explains a Status" [level=3] [ref=e211]
+          - generic [ref=e212]:
+            - generic [ref=e213]: "profile: implementation"
+            - generic [ref=e214]: gpt-6.1-sol @ med
+          - generic [ref=e215]:
+            - generic [ref=e216]: Closed
+            - generic [ref=e217]: 1 att
+    - generic [ref=e45]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - generic [ref=e48]: Review
+          - generic [ref=e49]: "1"
+        - 'generic "Precedence 2: Live Run Queue shows reviewing" [ref=e50]': ℹ️
+      - generic [ref=e218] [cursor=pointer]:
+        - generic [ref=e219]:
+          - generic [ref=e220]: "#734"
+          - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e221]': "parent: #648"
+        - heading "The Dashboard-fault terminal test lets its killed client exit" [level=3] [ref=e222]
+        - generic [ref=e223]:
+          - generic [ref=e224]: "profile: test"
+          - generic [ref=e225]: gpt-5.4 @ med
+        - generic [ref=e226]:
+          - generic [ref=e227]: Independent Reviewer
+          - generic [ref=e228]: 1 att
+    - generic [ref=e63]:
+      - generic [ref=e64]:
+        - generic [ref=e65]:
+          - generic [ref=e66]: Running
+          - generic [ref=e67]: "1"
+        - 'generic "Precedence 3: Live lease held, or Status active/parked/admitted/integrating/recovering" [ref=e68]': ℹ️
+      - generic [ref=e229] [cursor=pointer]:
+        - generic [ref=e230]:
+          - generic [ref=e231]: "#732"
+          - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e232]': "parent: #648"
+        - heading "The shell and PowerShell Orchestrators emit the endings they observe" [level=3] [ref=e233]
+        - generic [ref=e234]:
+          - generic [ref=e235]: "profile: implementation"
+          - generic [ref=e236]: gpt-6.1-sol @ max
+        - generic [ref=e237]:
+          - generic [ref=e238]: Active in Lane
+          - generic [ref=e240]: 1 att
+    - generic [ref=e82]:
+      - generic [ref=e83]:
+        - generic [ref=e84]:
+          - generic [ref=e85]: Blocked
+          - generic [ref=e86]: "3"
+        - 'generic "Precedence 4: Needs a human! (needs-info, ready-for-human, pool exclusion, unresolved readiness, or review-handoff)" [ref=e87]': ℹ️
+      - generic [ref=e88]:
+        - generic [ref=e241] [cursor=pointer]:
+          - generic [ref=e242]:
+            - generic [ref=e243]: "#748"
+            - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e244]': "parent: #648"
+          - heading "Decide how Agent profiles are expressed and proved in the Skills repository" [level=3] [ref=e245]
+          - generic [ref=e246]:
+            - generic [ref=e247]: "profile: planning"
+            - generic [ref=e248]: gpt-6-astra @ high
+          - generic [ref=e249]:
+            - generic [ref=e250]: blocked
+            - generic [ref=e251]: 0 att
+        - generic [ref=e252] [cursor=pointer]:
+          - generic [ref=e253]:
+            - generic [ref=e254]: "#731"
+            - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e255]': "parent: #648"
+          - heading "The drill-in accounts for every attempt, and a Skipped issue is named in its Queue row" [level=3] [ref=e256]
+          - generic [ref=e257]:
+            - generic [ref=e258]: "profile: implementation"
+            - generic [ref=e259]: gpt-6.1-sol @ med
+          - generic [ref=e260]:
+            - generic [ref=e261]: "last Run: review handoff"
+            - generic [ref=e262]: 3 att
+        - generic [ref=e263] [cursor=pointer]:
+          - generic [ref=e264]:
+            - generic [ref=e265]: "#676"
+            - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e266]': "parent: #648"
+          - heading "An account-level failure is blamed on individual issues instead of stopping the Run" [level=3] [ref=e267]
+          - generic [ref=e268]:
+            - generic [ref=e269]: "profile: bugfix"
+            - generic [ref=e270]: gpt-5.4 @ med
+          - generic [ref=e271]:
+            - generic [ref=e272]: Pool exclusion
+            - generic [ref=e273]: 0 att
+    - generic [ref=e122]:
+      - generic [ref=e123]:
+        - generic [ref=e124]:
+          - generic [ref=e125]: Todo
+          - generic [ref=e126]: "2"
+        - 'generic "Precedence 5: ready-for-agent, waiting on open dependency (Blocked) or Awaiting merge" [ref=e127]': ℹ️
+      - generic [ref=e128]:
+        - generic [ref=e274] [cursor=pointer]:
+          - generic [ref=e275]:
+            - generic [ref=e276]: "#663"
+            - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e277]': "parent: #648"
+          - heading "Prototype the web board and card drawer" [level=3] [ref=e278]
+          - generic [ref=e279]:
+            - generic [ref=e280]: "profile: planning"
+            - generic [ref=e281]: gpt-5.4 @ med
+          - generic [ref=e282]:
+            - generic [ref=e283]: Blocked by dep
+            - generic [ref=e284]: 0 att
+        - generic [ref=e285] [cursor=pointer]:
+          - generic [ref=e286]:
+            - generic [ref=e287]: "#753"
+            - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e288]': "parent: #648"
+          - heading "Pickup never writes an inferred major Release-target label" [level=3] [ref=e289]
+          - generic [ref=e290]:
+            - generic [ref=e291]: "profile: implementation"
+            - generic [ref=e292]: gpt-6.1-sol @ med
+          - generic [ref=e293]:
+            - generic [ref=e294]: Awaiting merge (#754)
+            - generic [ref=e295]: 0 att
+    - generic [ref=e151]:
+      - generic [ref=e152]:
+        - generic [ref=e153]:
+          - generic [ref=e154]: Ready
+          - generic [ref=e155]: "1"
+        - 'generic "Precedence 6: ready-for-agent, Pickup-admissible, and no Lease held elsewhere" [ref=e156]': ℹ️
+      - generic [ref=e296] [cursor=pointer]:
+        - generic [ref=e297]:
+          - generic [ref=e298]: "#719"
+          - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e299]': "parent: #648"
+        - heading "The Serial drain Header derives its cohort, oldest Lane age, and elapsed wait" [level=3] [ref=e300]
+        - generic [ref=e301]:
+          - generic [ref=e302]: "profile: implementation"
+          - generic [ref=e303]: gpt-5.4-mini @ low
+        - generic [ref=e304]:
+          - generic [ref=e305]: ready
+          - generic [ref=e306]: 0 att
+    - generic [ref=e169]:
+      - generic [ref=e170]:
+        - generic [ref=e171]:
+          - generic [ref=e172]: Triage
+          - generic [ref=e173]: "1"
+        - 'generic "Precedence 7: Any other open issue (needs-triage, or unassigned role)" [ref=e174]': ℹ️
+      - generic [ref=e307] [cursor=pointer]:
+        - generic [ref=e308]:
+          - generic [ref=e309]: "#738"
+          - 'generic "Wayfinder: git-loopy 1.0.0 on the Python path" [ref=e310]': "parent: #648"
+        - heading "Update the runner prompt before moving the skill pin past git-loopy-skills' upstream sync" [level=3] [ref=e311]
+        - generic [ref=e312]:
+          - generic [ref=e313]: "profile: implementation"
+          - generic [ref=e314]: gpt-5.4-mini (unclassified default)
+        - generic [ref=e315]:
+          - generic [ref=e316]: triage
+          - generic [ref=e317]: 0 att
+  - generic [ref=e319]:
+    - generic [ref=e320]:
+      - generic [ref=e321]:
+        - generic [ref=e322]:
+          - generic [ref=e323]: "#731"
+          - generic [ref=e324]: "Column: BLOCKED"
+        - button "×" [ref=e325] [cursor=pointer]
+      - heading "The drill-in accounts for every attempt, and a Skipped issue is named in its Queue row" [level=2] [ref=e326]
+      - generic [ref=e327]:
+        - generic [ref=e328]: "Parent Planning Doc:"
+        - generic [ref=e329]: "#648 Wayfinder: git-loopy 1.0.0 on the Python path"
+    - generic [ref=e330]:
+      - generic [ref=e331]:
+        - generic [ref=e332]: Agent Profile
+        - generic [ref=e333]: implementation
+      - generic [ref=e334]:
+        - generic [ref=e335]: Routed Pair
+        - generic [ref=e336]: gpt-6.1-sol @ med
+      - generic [ref=e337]:
+        - generic [ref=e338]: Readiness
+        - generic [ref=e339]: admissible
+      - generic [ref=e340]:
+        - generic [ref=e341]: Lease Status
+        - generic [ref=e342]: None
+    - generic [ref=e343]:
+      - button "Overview & Dependencies" [ref=e344] [cursor=pointer]
+      - button "Attempts & Review 3" [ref=e345] [cursor=pointer]:
+        - text: Attempts & Review
+        - generic [ref=e346]: "3"
+      - button "Activity 1" [ref=e347] [cursor=pointer]:
+        - text: Activity
+        - generic [ref=e348]: "1"
+      - button "Live Log" [ref=e349] [cursor=pointer]
+    - generic [ref=e351]:
+      - generic [ref=e352]: "⚠️ Last Run: review handoff — 3 consecutive Reviewer verdicts requested changes. Remains Blocked (needs human attention) for this Run; reverts to Ready on next Run."
+      - generic [ref=e353]:
+        - heading "What to build" [level=4] [ref=e354]
+        - paragraph [ref=e355]: Queue row drill-in showing each attempt's ending, tokens, and cost breakdown.
+        - heading "Acceptance criteria" [level=4] [ref=e356]
+        - list [ref=e357]:
+          - listitem [ref=e358]: Attempt count displayed accurately.
+          - listitem [ref=e359]: Skipped status rendered inline with ending explanation.
+      - generic [ref=e360]:
+        - 'heading "Dependencies (Hermes: Blocked by / Blocks)" [level=4] [ref=e361]'
+        - generic [ref=e362]:
+          - text: BLOCKED BY (prerequisites)
+          - generic [ref=e364]:
+            - generic [ref=e365]:
+              - generic [ref=e366]: "#730"
+              - generic [ref=e367]: An issue's Ending reaches the wire and the Queue explains a Status
+            - generic [ref=e368]: Closed
+        - generic [ref=e369]:
+          - text: BLOCKS (dependents)
+          - generic [ref=e371]: None
+      - generic [ref=e372]:
+        - heading "Triage & Routing Facts" [level=4] [ref=e373]
+        - generic [ref=e374]:
+          - generic [ref=e375]: ready-for-agent
+          - generic [ref=e376]: task-type:implementation
+  - generic [ref=e187]:
+    - generic [ref=e188]:
+      - generic [ref=e189]: "Active Scenario:"
+      - button "1. Realistic Live Set" [ref=e190] [cursor=pointer]
+      - button "2. Awaiting Merge Edge" [ref=e191] [cursor=pointer]
+      - button "3. Review Handoff Edge" [ref=e192] [cursor=pointer]
+      - button "4. Pool Exclusion Edge" [ref=e193] [cursor=pointer]
+    - button "📖 Guided Scenarios" [ref=e195] [cursor=pointer]
