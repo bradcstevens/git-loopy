@@ -101,6 +101,9 @@ interrupted install never leaves half a catalog.
 - The pin **ships inside the wheel**, beside `THIRD_PARTY_LICENSES.txt`. A
   released artifact can always say which upstream revision it installs, with no
   source checkout and no network.
+- An optional `profiles_directory` names a relative directory inside the
+  checkout. The current pin omits it. Loading this field does not yet install
+  profiles or change what a Run reads.
 
 ---
 
@@ -164,7 +167,8 @@ reads that directory. It reaches no network, and it does not edit the pin or
 any tracked file.
 
 A pass means the same three proofs CI runs against the pinned catalog pass
-against this checkout. It is not a promise about the pin. The pin still moves
+against this checkout, plus the Agent profile proof when the candidate carries
+`profiles/`. It is not a promise about the pin. The pin still moves
 only as a reviewed edit to `skill_source.json`.
 
 | Proof | A failure names |
@@ -172,6 +176,25 @@ only as a reviewed edit to `skill_source.json`.
 | **Required Skills** | the Required Skill the candidate does not carry (`Required Skill absent: tdd`) |
 | **Skill references** | the front-door reference that no longer resolves (`Skill reference does not resolve: grill-me`) |
 | **Label vocabulary** | the provisioned label the candidate's `setup-git-loopy-skills/triage-labels.md` stopped providing (`Label vocabulary stopped providing: ready-for-agent`) |
+| **Agent profiles** (when `profiles/` is present) | each profile and broken rule, for example `Agent profile: review.md [review]: must be read-only and require code-review` |
+
+The profile validator requires exactly one `<task-type>.md` for each of the
+seven Task types and refuses symlinks, unknown or repeated frontmatter keys,
+unresolved or repeated Skill names (including Required/Permitted overlap),
+invalid `access`, an unsafe `review` profile, and an empty role body
+([ADR-0086](adr/0086-agent-profiles-are-markdown-beside-the-skills-proved-and-installed-with-the-catalog.md)).
+Only `required-skills`, `permitted-skills`, and `access` are allowed.
+Skill lists use the existing Run-instructions syntax: two-space-indented block
+sequences or explicit `[]`; omitted lists are empty. Every profile declares
+`access: read-only` or `access: full`. The Reviewer must be read-only and
+require `code-review`, not merely permit it.
+
+The candidate command detects the top-level `profiles/` independently of the
+current pin, so a working clone can prove profiles before `profiles_directory`
+is pinned. A successful check names **Agent profiles** only when it judged
+them; a candidate without that directory keeps the three existing proofs.
+A file or dangling symlink named `profiles` is a refusal, not an absent profile
+set. This check neither installs profiles nor changes the Run's Required Skills.
 
 A dropped triage-label row is a failure even when the canonical default would
 have filled that label back in. The template is what a consumer repository

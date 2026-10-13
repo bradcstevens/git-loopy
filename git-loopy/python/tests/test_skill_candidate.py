@@ -362,3 +362,90 @@ def test_the_operator_command_is_documented_beside_the_pin() -> None:
     assert VERIFY_COMMAND in guidance
     assert "not a promise about the pin" in guidance
     assert "uncommitted" in guidance
+    assert "profiles/" in guidance
+    assert "profiles_directory" in guidance
+
+
+def _write_profiles(checkout: Path) -> Path:
+    profiles = checkout / "profiles"
+    profiles.mkdir()
+    for key in ("planning", "review", "implementation", "test", "docs", "chore", "bugfix"):
+        access = "read-only" if key == "review" else "full"
+        (profiles / f"{key}.md").write_text(
+            "---\nrequired-skills:\n  - code-review\n"
+            f"permitted-skills: []\naccess: {access}\n---\n# Role\n",
+            encoding="utf-8",
+        )
+    return profiles
+
+
+def test_the_candidate_command_reports_a_valid_profile_set_without_moving_the_pin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo_root()
+    checkout = _satisfying_checkout(tmp_path, repo)
+    _write_profiles(checkout)
+    before = PIN_PATH.read_bytes()
+
+    code = main([str(checkout), "--repo-root", str(repo)])
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "Agent profiles" in captured.out
+    assert captured.err == ""
+    assert PIN_PATH.read_bytes() == before
+
+
+def test_the_candidate_command_reports_every_profile_breach(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo_root()
+    checkout = _satisfying_checkout(tmp_path, repo)
+    profiles = _write_profiles(checkout)
+    (profiles / "docs.md").unlink()
+    (profiles / "review.md").write_text(
+        "---\nmodel: forbidden\naccess: full\n---\n", encoding="utf-8"
+    )
+
+    code = main([str(checkout), "--repo-root", str(repo)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    for diagnostic in (
+        "docs.md [profile-set]",
+        "review.md [frontmatter-key]",
+        "review.md [review]",
+        "review.md [body]",
+    ):
+        assert diagnostic in captured.err
+    assert captured.out == ""
+
+
+@pytest.mark.parametrize("kind", ["file", "dangling-symlink"])
+def test_a_candidate_cannot_hide_invalid_profiles_behind_an_unusable_root(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    repo = _repo_root()
+    checkout = _satisfying_checkout(tmp_path, repo)
+    profiles = checkout / "profiles"
+    if kind == "file":
+        profiles.write_text("not profiles\n", encoding="utf-8")
+    else:
+        profiles.symlink_to(checkout / "absent")
+
+    code = main([str(checkout), "--repo-root", str(repo)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "profiles [" in captured.err
+
+
+def test_a_candidate_without_profiles_reports_only_the_existing_proofs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo_root()
+    checkout = _satisfying_checkout(tmp_path, repo)
+
+    assert main([str(checkout), "--repo-root", str(repo)]) == 0
+
+    assert "Agent profiles" not in capsys.readouterr().out

@@ -132,6 +132,7 @@ class SkillSourcePin:
     skills_directory: str
     license: LicensePin
     provenance_paths: tuple[str, ...]
+    profiles_directory: str | None = None
 
     @property
     def short_revision(self) -> str:
@@ -209,6 +210,14 @@ def read_skill_source_pin(path: Path = PIN_PATH) -> SkillSourcePin:
     skills_directory = _relative_path(
         _text(raw, "skills_directory", where=where), where=where
     )
+    profiles_directory = (
+        _relative_path(
+            _text(raw, "profiles_directory", where=where),
+            where=f"{where} profiles_directory",
+        )
+        if "profiles_directory" in raw
+        else None
+    )
 
     license_raw = raw.get("license")
     if not isinstance(license_raw, dict):
@@ -255,6 +264,7 @@ def read_skill_source_pin(path: Path = PIN_PATH) -> SkillSourcePin:
         skills_directory=skills_directory,
         license=license_pin,
         provenance_paths=tuple(provenance_paths),
+        profiles_directory=profiles_directory,
     )
 
 
