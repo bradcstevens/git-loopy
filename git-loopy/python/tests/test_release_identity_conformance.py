@@ -46,7 +46,9 @@ def _required_executable(name: str) -> Path:
 
 def _write_failing_tool(path: Path) -> None:
     path.write_text(
-        '#!/bin/sh\nprintf "%s\\n" "$0" >>"$VERSION_TOOL_LOG"\nexit 97\n',
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$0" >>"$VERSION_TOOL_LOG"\n'
+        "exit 97\n",
         encoding="utf-8",
     )
     path.chmod(0o755)

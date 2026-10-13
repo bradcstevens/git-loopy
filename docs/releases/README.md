@@ -283,8 +283,9 @@ that exact snapshot:
   the `VERSION` bump — a nearby repair commit is refused however green it is;
 - the committed release notes are non-empty UTF-8 in the tagged tree, and stable
   notes a human already wrote are what gets published;
-- the generated archive extracts to `git-loopy-<version>/` and every
-  Orchestrator in it reports that Release version;
+- the generated archive extracts to `git-loopy-<version>/`, Python reports that
+  Release, and each dormant Orchestrator reports its own manifest's Release
+  (historical archives without manifests retain the shared identity);
 - every runnable `AGENTS.md` feedback loop is green **on the candidate**, not on
   its ancestor.
 

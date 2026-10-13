@@ -133,7 +133,7 @@ The clone command above is a **v0.9.0 Release** install, so
 `git-loopy --version` reports `git-loopy 0.9.0`. To install another named
 Release, replace `v0.9.0` with its published tag. Pinning a full unreleased
 commit SHA instead is an **Edge install**: identify it by that SHA, not by the
-source `VERSION` value. See the root
+declared Release value. See the root
 [installation channels](../../README.md#installation-identity-and-channels).
 
 ```bash
