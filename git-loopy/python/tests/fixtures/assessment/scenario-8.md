@@ -9,7 +9,6 @@ Some required evidence could not be read. No conclusion either way — this does
 
 ## Could not read
 - Native blocker private&#47;project&#35;9 of issue &#35;7: unrecognized evidence shape — [source](https://github.com/example/project/issues/7)
-- Baseline and line content: not yet assessed by this service version — [source](https://github.com/example/project/tags)
 
 ## What would change this
 - Re-run the assessment once the unreadable items above can be read.
@@ -20,7 +19,7 @@ Some required evidence could not be read. No conclusion either way — this does
 - Runner family gate: success — [run](https://github.com/example/project/actions/runs/42)
 
 ## Line content
-- Not yet assessed by this service version; see Could not read.
+- No classified issues. See Could not read for any missing evidence.
 
 ## Context (does not change the verdict)
 - Prerelease stage is alpha&#46;2 &#8212; context only&#59; Promotion promotes from any stage&#46;
@@ -36,7 +35,8 @@ Some required evidence could not be read. No conclusion either way — this does
 - VERSION at SHA: 0&#46;12&#46;0&#45;alpha&#46;2
 - VERSION source: [source](https://github.com/example/project/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/VERSION)
 - Release target: 0&#46;12&#46;0
-- Baseline tag: not yet assessed
+- Baseline tag: v0&#46;11&#46;1
+- Baseline source: [source](https://github.com/example/project/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)
 - Assessment policy revision: <POLICY>
 - Counted workflows: Runner family gate
 - Service version: <SERVICE>

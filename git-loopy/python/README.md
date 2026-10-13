@@ -72,11 +72,11 @@ Tests run the same MCP protocol in-process with a generated throwaway key and
 recorded responses; authentication uses the same substituted transport for both
 `assess` and `check_freshness(repository, milestone, sha)`. The freshness tool
 returns `stale` if App authentication fails, without reading evidence.
-Counted workflow runs are read at the pinned SHA. Open and unabsorbed work
-(#763), and baseline and line content
-(#764) remain explicit unreadable placeholders, so this version always returns
-`incomplete`, retaining any hold findings. Fault injection (#765) and operator
-documentation (#766) are separate tickets.
+Counted workflow runs, open and unabsorbed work, and line content from the newest
+reachable stable baseline are read at the pinned SHA. Complete evidence yields
+`reviewable` or `hold_advised`; an unreadable item yields `incomplete`, retaining
+any known hold findings. A reviewable verdict is advice, never authorization.
+Fault injection (#765) and operator documentation (#766) are separate tickets.
 
 ## Installation lifecycle
 
