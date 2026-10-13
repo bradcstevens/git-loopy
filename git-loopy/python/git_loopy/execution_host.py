@@ -38,7 +38,7 @@ Six refusals every implementation must honour (spec #445 §A):
 A host receives no credentials; it authenticates itself. The one commit a
 host may author on its own initiative is a **Checkpoint**, carrying the
 Checkpoint trailer and free of closing keywords (see
-:func:`git_loopy.persist.checkpoint_message`) — :class:`LocalExecutionHost`'s
+:func:`git_loopy.wrapper.checkpoint_message`) — :class:`LocalExecutionHost`'s
 production runner is exactly today's Checkpoint-on-dirty-tree mechanic,
 unchanged, now reached through the seam.
 
@@ -302,6 +302,14 @@ class ExecutionHost(Protocol):
     *reports*, never a policy git-loopy applies. A host also declares its
     *capacity* — never scheduling or deciding utilization itself, one of the
     six refusals.
+
+    A host's only commit on its own initiative is a **Checkpoint**, built by
+    :func:`git_loopy.wrapper.checkpoint_message`: it carries the Checkpoint
+    trailer and no closing keyword. This is an implementation obligation with
+    no runtime check (ADR-0090), pinned by a structural test of the code
+    git-loopy ships. The first host whose commit-making code git-loopy does
+    not ship must reopen enforcement: authorship, returned-branch validation,
+    and the disposition of a violation can no longer rely on construction.
 
     :class:`LocalExecutionHost` is the production adapter; a test substitutes
     an in-memory fake satisfying this Protocol structurally — no subclassing

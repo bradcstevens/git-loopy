@@ -271,8 +271,11 @@ def test_wrapper_module_imports_only_stdlib() -> None:
 
 @pytest.mark.parametrize("ref", [32, None, "prds/featA/001-ready.md"])
 def test_checkpoint_message_is_close_keyword_free(ref) -> None:
-    """A Checkpoint must never trip the auto-close backstop / GitHub on push."""
-    assert extract_close_refs(checkpoint_message(ref)) == []
+    """ADR-0090: every ref kind carries the trailer and cannot auto-close."""
+    message = checkpoint_message(ref)
+    assert is_checkpoint_message(message) is True
+    assert CLOSE_KEYWORD_RE.search(message) is None
+    assert extract_close_refs(message) == []
 
 
 def test_checkpoint_message_carries_trailer_with_int_ref() -> None:
