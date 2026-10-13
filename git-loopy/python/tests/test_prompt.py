@@ -459,3 +459,23 @@ def test_packaged_prompt_makes_the_working_marker_a_confirmation() -> None:
     assert "CONFIRM YOUR ACTIVE ISSUE" in prompt
     assert "rebinds nothing" in prompt
     assert "attribution and not selection" in prompt
+
+
+def test_packaged_prompt_bounds_deliberate_load() -> None:
+    """#818: every bound on deliberate host load is pinned in the Run instructions."""
+    text = (Path(git_loopy.__file__).parent / "PROMPT.md").read_text(encoding="utf-8")
+    start = text.index("# DELIBERATE LOAD")
+    section = text[start : text.index("# FEEDBACK LOOPS", start)]
+    for bound in (
+        "taskpolicy -c utility",
+        "`nice` is not a substitute",
+        "2× the logical CPUs",
+        "the issue's own cap",
+        "30 minutes",
+        "inconclusive, never as a pass",
+        "Never escalate",
+        "Never raise the priority",
+        "`pgrep`",
+        "Ordinary feedback loops",
+    ):
+        assert bound in section

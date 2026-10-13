@@ -86,6 +86,20 @@ Explore the repo for your issue. Stay within the area the issue touches; don't g
 
 Use `/tdd` to complete the task. Vertical slices only — one test, one minimal implementation, repeat. No horizontal slicing (don't write all tests then all code).
 
+# DELIBERATE LOAD
+
+Any tool command that deliberately generates load — stress loops, CPU burners, or many parallel copies of a test — is bounded, because it runs on the operator's own host:
+
+- On macOS, run it under the `utility` QoS clamp (`taskpolicy -c utility <command>`); children inherit it. `nice` is not a substitute.
+- Keep it at or below about 2× the logical CPUs.
+- Give each invocation a wall-clock cap: the issue's own cap when it sets one, otherwise 30 minutes.
+- When an invocation hits that cap, report the result as inconclusive, never as a pass.
+- Never escalate past these bounds to force a reproduction; record what you observed and stop.
+- Never raise the priority you inherited.
+- Leave no load process behind, whether or not the invocation was interrupted; check afterwards with `pgrep`.
+
+This covers deliberate load only. Ordinary feedback loops keep running as AGENTS.md declares them.
+
 # FEEDBACK LOOPS
 
 Before committing, run the feedback loops defined in `AGENTS.md` that are relevant to what you changed. AGENTS.md is loaded into your context — read its **Feedback loops** table for the exact commands for this repo.
