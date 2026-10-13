@@ -1,0 +1,70 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Throwaway prototype: sandbox faults</title>
+<style>
+body { font: 18px system-ui; max-width: 850px; margin: 3rem auto; }
+button { margin: .4rem; padding: .6rem; }
+dt { font-weight: bold; margin-top: 1rem; }
+</style>
+<h1>Throwaway prototype: sandbox faults</h1>
+<p>Question: can configuration-only faults make an assessment less conclusive
+without hiding a hold or looking like real evidence? This models the startup
+snapshot, not GitHub transport. An unmarked table must refuse startup.</p>
+<dl id="state"></dl>
+<h2>Free play</h2>
+<div id="actions"></div>
+<h2>Guided walkthroughs</h2>
+<div id="tabs"></div>
+<p id="guide"></p>
+<div id="steps"></div>
+<script>
+const initial = () => ({sandbox: false, fault: "", hold: false, started: false});
+function reduce(state, action) {
+  if (action === "Reset") return initial();
+  if (action === "Mark sandbox") return {...state, sandbox: true};
+  if (action === "Configure rate limit") return {...state, fault: "rate-limited"};
+  if (action === "Configure pagination cut") return {...state, fault: "pagination did not complete"};
+  if (action === "Add hold finding") return {...state, hold: true};
+  if (action === "Start service") return {...state, started: true};
+  return state;
+}
+function observe(state) {
+  const refused = state.started && state.fault && !state.sandbox;
+  return {
+    "Repository table": state.sandbox ? "Sandbox" : "Ordinary",
+    "Configured fault (Milestone catalog)": state.fault || "None",
+    "Startup": refused ? "Refused: example/project" : state.started ? "Started" : "Not started",
+    "Verdict": !state.started || refused ? "No result" : state.fault ? "incomplete" : state.hold ? "hold_advised" : "reviewable",
+    "Hold finding": state.hold ? "Counted workflow failed (retained)" : "None",
+    "Unreadable": state.started && !refused && state.fault ? "Milestone catalog: " + state.fault + " (source: repository milestones)" : "None",
+    "Provenance": state.fault ? "Injection configured: Milestone catalog / " + state.fault : "No injection"
+  };
+}
+let state = initial();
+const button = (label, action) => {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.onclick = action;
+  return b;
+};
+function dispatch(action) {
+  state = reduce(state, action);
+  document.querySelector("#state").replaceChildren(...Object.entries(observe(state)).flatMap(([key, value]) => {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = key; dd.textContent = value;
+    return [dt, dd];
+  }));
+}
+for (const action of ["Reset", "Mark sandbox", "Configure rate limit", "Configure pagination cut", "Add hold finding", "Start service"])
+  document.querySelector("#actions").append(button(action, () => dispatch(action)));
+for (const [title, description, actions] of [
+  ["Clean", "No fault: complete evidence remains reviewable.", ["Start service"]],
+  ["Sandbox", "A synthetic failure retains an independent hold.", ["Mark sandbox", "Configure rate limit", "Add hold finding", "Start service"]],
+  ["Forbidden", "A pagination cut on an ordinary table refuses startup.", ["Configure pagination cut", "Start service"]]
+]) document.querySelector("#tabs").append(button(title, () => {
+  dispatch("Reset");
+  document.querySelector("#guide").textContent = description;
+  document.querySelector("#steps").replaceChildren(...actions.map(action => button(action, () => dispatch(action))));
+}));
+dispatch("Reset");
+</script>
