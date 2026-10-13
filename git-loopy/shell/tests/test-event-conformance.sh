@@ -11,7 +11,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 port_dir="$(cd "$script_dir/.." && pwd)"
 fixture="$port_dir/../conformance/event-schema.json"
 dashboard_fixture="$port_dir/../conformance/dashboard-insights.json"
-release_fixture="$port_dir/../conformance/release-version.json"
+path_manifest="$port_dir/../paths/shell.json"
 skill_consultation_fixture="$port_dir/../conformance/skill-consultation.json"
 
 # shellcheck disable=SC1091
@@ -172,11 +172,11 @@ done
 # event-schema.json's `release_version` sites are synthetic (#487): the wire
 # form doesn't disagree with itself on a value it merely copies. The live
 # value is asserted here against the shell distribution's own production
-# decision seam instead, against the one fixture allowed to name it.
+# decision seam instead, against its Path manifest.
 assert_equal \
-  "$(jq -r '.expected_release_version' "$release_fixture")" \
-  "$(git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH")" \
-  "shell Release version seam drifted from the shared Release version authority"
+  "$(jq -r '.baseline.release_version' "$path_manifest")" \
+  "$(git_loopy_read_path_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH")" \
+  "shell Release version seam drifted from its Path manifest"
 
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"

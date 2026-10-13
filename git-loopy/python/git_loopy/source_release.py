@@ -23,6 +23,7 @@ from git_loopy.distribution_mode import (
 from git_loopy.release_version import (
     ReleaseVersionError,
     is_prerelease,
+    parse_release_version,
     validate_repository_release_version,
 )
 
@@ -265,6 +266,26 @@ def _run_identity_command(
     return result.stdout
 
 
+def _source_member_release_version(
+    source_root: Path, member: str, python_version: str,
+) -> str:
+    manifests = source_root / "git-loopy/paths"
+    # Historical source distributions predate the split and share one identity.
+    if member == "python" or not manifests.exists():
+        return python_version
+    path = manifests / f"{member.lower()}.json"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        value = manifest["baseline"]["release_version"]
+        if not isinstance(value, str) or parse_release_version(value) != value:
+            raise ReleaseVersionError("baseline.release_version must be a Semantic Versioning string")
+        return value
+    except (OSError, UnicodeError, json.JSONDecodeError, ReleaseVersionError, KeyError, TypeError) as exc:
+        raise SourceReleaseError(
+            f"cannot read Release identity from Path manifest {path}: {exc}"
+        ) from exc
+
+
 def verify_source_tree_identity(source_root: Path, expected_version: str) -> None:
     """Verify package metadata and every public identity surface in a source tree."""
     source_root = source_root.resolve()
@@ -300,8 +321,9 @@ def verify_source_tree_identity(source_root: Path, expected_version: str) -> Non
             str(source_root / "git-loopy/powershell/git-loopy.ps1"),
         ],
     }
-    expected_output = f"git-loopy {version}\n"
     for family, command in commands.items():
+        member_version = _source_member_release_version(source_root, family, version)
+        expected_output = f"git-loopy {member_version}\n"
         output = _run_identity_command(
             family,
             "--version",

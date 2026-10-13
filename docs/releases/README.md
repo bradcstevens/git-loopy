@@ -1,5 +1,14 @@
 # Source Release notes
 
+Root `VERSION` and the unqualified `vX.Y.Z` history belong to the active Python
+path, including its Rust `git-loopy-tui` artifact. The dormant shell and
+PowerShell Orchestrators and installers read their own
+[Path manifests](../../git-loopy/paths/README.md): **0.11.2**, contract **2.26**,
+Event schema **1**. Their reserved `shell/vX.Y.Z` and `powershell/vX.Y.Z`
+namespaces have no publication workflow. A Python prerelease does not change
+either baseline. Path-aware publication and gate selection are subsequent
+PRD #791 slices; the release gates below still run family-wide.
+
 Each Release-line advance writes an agent-authored prerelease fragment at
 `docs/releases/v<VERSION>.md`. A **Promotion** composes the fragments for its
 target into the stable draft at the same conventional location; a stable note a
@@ -274,8 +283,9 @@ that exact snapshot:
   the `VERSION` bump — a nearby repair commit is refused however green it is;
 - the committed release notes are non-empty UTF-8 in the tagged tree, and stable
   notes a human already wrote are what gets published;
-- the generated archive extracts to `git-loopy-<version>/` and every
-  Orchestrator in it reports that Release version;
+- the generated archive extracts to `git-loopy-<version>/`, Python reports that
+  Release, and each dormant Orchestrator reports its own manifest's Release
+  (historical archives without manifests retain the shared identity);
 - every runnable `AGENTS.md` feedback loop is green **on the candidate**, not on
   its ancestor.
 

@@ -10,7 +10,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 
 | Fixture | Contract decision |
 | --- | --- |
-| `status-endings.json` | Real-session producer obligations for ADR-0075, contract 2.26: all five Endings, ordinary advancement omission, declarations refuted by progress, and timeout/crash beside advanced or closed. Python claims emission; shell and PowerShell owe #732; Rust consumes the resulting facts through the Dashboard fixture |
+| `status-endings.json` | Real-session producer obligations for ADR-0075, contract 2.26: all five Endings, ordinary advancement omission, declarations refuted by progress, and timeout/crash beside advanced or closed. Python claims emission; shell owes #834 and PowerShell owes #835 (carried dormant debt split from #732); Rust consumes the resulting facts through the Dashboard fixture |
 | `rolling-priority.json` | Python-only **Rolling dispatch** Priority crossing (§3.2, contract 2.25, #720): complete one-unit Runs pin Priority serial-first, ordinary Lane-first, Priority Parallel-safe Lane work, stronger serial and Parallel-safe Pins, and creation-instant ordering among Priority serial candidates. `python/tests/test_loop_parallel.py` consumes every case through the production Run and observes actual bindings, first-work Events and verified closures; its further regressions prove admission refusals, full drain, serial/refill alternation and retries. Shell, PowerShell and Rust are explicitly waived as out of scope in `fixture-claims.json` |
 | `discriminator.json` | Required issue headings, optional parent metadata, and the Pool-exclusion reason each rejection carries |
 | `issue-ordering.json` | The **total order** over eligible issues (§3.2): `priority` rank ahead of age, `created_at` ascending, issue number as the tie-break that makes the order total, the narrow timestamp grammar and the `absent`/`malformed` defect an undated issue is reported with, and the head of the order each case selects — plus the **read schedule** (§2.1) the order is computed over: the shared first ask and ceiling, the `complete`/`continue`/`incomplete` decision each page forces, the walk each backlog produces, and the page boundary falling mid-order that a member stopping one page early would select the wrong head from. Eligibility is deliberately absent — that is `discriminator.json`'s decision, and a second home for it is a second place it can drift |
@@ -43,6 +43,13 @@ Orchestrator's production decision seams rather than reproduce their logic.
 records each member's claimed or waived exercise of every fixture above. The
 Python Integration gate globs the directory and rejects a missing verdict, an
 unexplained waiver, or owed work without its tracking issue.
+
+The [Path baselines](../paths/README.md) carry the shell and PowerShell owed
+rows frozen at contract 2.26: neither implements an Attempt lifecycle (#553,
+#554) or emits an Ending (#834, #835). `release-version.json`'s root expectation
+stays Python's; the dormant runtime identity suites read their own manifests.
+The manifest member `tui` still uses the legacy register name `rust` until the
+dependent support-scoped register migration lands.
 
 Event fixture revision 1.5 (contract 2.23, #418) adds the contribution-stamped
 `wrapper.integration.push_failed` and pins a rejected upstream publication stream.

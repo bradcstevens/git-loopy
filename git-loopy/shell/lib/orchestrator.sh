@@ -12,7 +12,7 @@ fi
 _git_loopy_orchestrator_dir="$(
   cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 )"
-_GIT_LOOPY_RELEASE_VERSION_PATH="$_git_loopy_orchestrator_dir/../../../VERSION"
+_GIT_LOOPY_RELEASE_VERSION_PATH="$_git_loopy_orchestrator_dir/../../paths/shell.json"
 
 # shellcheck disable=SC1091
 source "$_git_loopy_orchestrator_dir/release-version.sh"
@@ -103,7 +103,7 @@ EOF
 git_loopy_print_release_version() {
   local release_version
   release_version="$(
-    git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
+    git_loopy_read_path_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
   )" || return 1
   printf 'git-loopy %s\n' "$release_version"
 }
@@ -3580,7 +3580,7 @@ git_loopy_ensure_gitignore_entry() {
 git_loopy_run_discovery() {
   local release_version
   release_version="$(
-    git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
+    git_loopy_read_path_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH"
   )" || return 1
 
   git_loopy_events_init "$GIT_LOOPY_REPO_ROOT" || return 1
