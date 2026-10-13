@@ -2541,7 +2541,8 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.18 adds optional Ending/progress to Status (ADR-0075). 1.17 pins
+    # 1.19 adds the Header's run_release_version from Run start. 1.18 adds
+    # optional Ending/progress to Status (ADR-0075). 1.17 pins
     # observed zero wait, Lane activation during setup, and a Queue phase
     # that agrees with the drain after admission followed by parking.
     # 1.16 derives the Header's Serial drain (ADR-0074, #719): its cohort,
@@ -2552,7 +2553,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.18"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.19"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]

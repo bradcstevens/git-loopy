@@ -126,6 +126,8 @@ pub struct Header {
     pub context_fill: ContextFill,
     pub release_target: Option<String>,
     pub release_version: Option<String>,
+    /// The Release version that started this Run, as its Run start declared it.
+    pub run_release_version: Option<String>,
     pub cost: Declaration,
     pub rate_card: Declaration,
     pub routing: Declaration,
@@ -705,6 +707,7 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
             .release_line
             .as_ref()
             .and_then(|advance| advance.release_version.clone()),
+        run_release_version: state.run_release_version.clone(),
         cost: Declaration::from_capability(state.capabilities.cost),
         rate_card: Declaration::from_capability(state.capabilities.rate_card),
         routing: Declaration::from_capability(state.capabilities.routing),
