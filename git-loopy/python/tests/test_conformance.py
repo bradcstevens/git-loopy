@@ -1308,7 +1308,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.7"
-    assert _EVENT_SCHEMA["contract_version"] == "2.26"
+    assert _EVENT_SCHEMA["contract_version"] == "2.27"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1815,6 +1815,9 @@ def test_an_ending_is_additive_for_a_consumer_that_ignores_it(case) -> None:
             for row in projection["dashboard"]["queue"]["rows"]:
                 for field in case["ignored_queue_fields"]:
                     row.pop(field, None)
+            # The same ignored outcome fact now reaches each attempt's account.
+            for row in projection["drill_in"]["iteration_breakdown"]["rows"]:
+                row.pop("ending", None)
             projections.append(projection)
         assert projections[0] == projections[1], case_id
         assert summaries[0] == summaries[1], case_id
@@ -2541,6 +2544,7 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
+    # 1.20 accounts for each attempt and marks Skipped inline.
     # 1.19 adds the Header's run_release_version from Run start. 1.18 adds
     # optional Ending/progress to Status (ADR-0075). 1.17 pins
     # observed zero wait, Lane activation during setup, and a Queue phase
@@ -2553,7 +2557,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.19"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.20"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -2962,7 +2966,9 @@ def _sweep_snapshot_inventory(
         assert list(row) == fields["summary_row"], where
         counted["summary_rows"] += 1
     for row in expected["drill_in"]["iteration_breakdown"]["rows"]:
-        assert list(row) == fields["iteration_breakdown_row"], where
+        required = fields["iteration_breakdown_row"]
+        optional = contract["optional_projection_fields"]["iteration_breakdown_row"]
+        assert list(row) == [*required, *(key for key in optional if key in row)], where
         assert list(row["consumption"]) == fields["consumption"], where
         if row["route"] is not None:
             _assert_route_fields(row["route"], fields, where)
@@ -3085,28 +3091,38 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     sample_queue = _dashboard_case("ending-advanced-timeout")["snapshots"][-1][
         "expected"
     ]["dashboard"]["queue"]["rows"][0]
-    sample_breakdown = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
+    sample_breakdown = _dashboard_case("ending-advanced-timeout")["snapshots"][-1][
         "expected"
     ]["drill_in"]["iteration_breakdown"]["rows"][0]
     for column in contract["queue_columns"]:
         for path in column["fields"]:
+            sample_case = {
+                "pr_advances": "advanced-explains-a-pr-without-inventing-a-commit",
+                "skipped": "ending-no-progress-content_filtered",
+            }.get(path)
             sample = (
-                _dashboard_case("advanced-explains-a-pr-without-inventing-a-commit")[
+                _dashboard_case(sample_case)[
                     "snapshots"
                 ][-1]["expected"]["dashboard"]["queue"]["rows"][0]
-                if path == "pr_advances" else sample_queue
+                if sample_case is not None else sample_queue
             )
             _resolve_field(sample, path)
     for column in contract["iteration_breakdown_columns"]:
         for path in column["fields"]:
-            _resolve_field(sample_breakdown, path)
+            sample = (
+                _dashboard_case("advanced-explains-a-pr-without-inventing-a-commit")[
+                    "snapshots"
+                ][-1]["expected"]["drill_in"]["iteration_breakdown"]["rows"][0]
+                if path == "pr_advances" else sample_breakdown
+            )
+            _resolve_field(sample, path)
     # Every declared queue field is rendered by exactly one column; the
     # breakdown additionally carries `consumption.model`, which names the model
     # behind the token counts rather than occupying a column of its own. The
     # cache-read/cache-write split reaches columns of its own (#333).
     assert sorted(
         path for column in contract["queue_columns"] for path in column["fields"]
-    ) == sorted([*fields["queue_row"], "ending", "commits", "pr_advances"])
+    ) == sorted([*fields["queue_row"], "ending", "commits", "pr_advances", "skipped"])
     breakdown_paths = {
         path
         for column in contract["iteration_breakdown_columns"]
@@ -3117,7 +3133,40 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
         "consumption.model",
     } == set(fields["iteration_breakdown_row"]) | {
         f"consumption.{name}" for name in fields["consumption"]
-    }
+    } | set(contract["optional_projection_fields"]["iteration_breakdown_row"])
+
+
+def test_dashboard_fixture_pins_the_attempt_account_and_skip_without_changing_header() -> None:
+    """Keep the new account's ambiguous cases in the shared replay oracle."""
+    retry = _dashboard_case("dynamic-retry-reprices-an-issue-between-contributions")
+    open_attempt = retry["snapshots"][2]["expected"]
+    assert open_attempt["drill_in"]["detail_header"]["status"] == "active"
+    assert "ending" not in open_attempt["dashboard"]["queue"]["rows"][0]
+    rows = open_attempt["drill_in"]["iteration_breakdown"]["rows"]
+    assert len(rows) == 1
+    assert rows[0]["ending"] == "crash"
+    assert rows[0]["route"]["model"] == "gpt-5.4-mini"
+    final = retry["snapshots"][-1]["expected"]["drill_in"]["iteration_breakdown"]["rows"]
+    assert [row["iteration"] for row in final] == [1, 2]
+    assert final[1]["route"]["model"] == "claude-opus-5"
+    assert final[1]["commits"] == 1
+    assert "ending" not in final[1]
+
+    rolling = next(
+        case for case in _DASHBOARD_INSIGHTS["rolling_dashboard_cases"]
+        if case["id"] == "rolling-endings-stay-with-their-issue-and-attempt"
+    )["snapshots"][-1]["expected"]
+    attempts = rolling["drill_in"]["iteration_breakdown"]["rows"]
+    assert [row["ending"] for row in attempts] == ["timeout", "crash"]
+    queue = {row["issue"]: row for row in rolling["dashboard"]["queue"]["rows"]}
+    assert queue[47]["skipped"] is True
+    assert queue[47]["ending"] == "content_filtered"
+    assert all("skipped" not in row for issue, row in queue.items() if issue != 47)
+    assert rolling["dashboard"]["header"]["strikes"] == {"current": 1, "limit": 3}
+    absent = _dashboard_case("ending-no-progress-absent")["snapshots"][-1]["expected"]
+    assert absent["dashboard"]["queue"]["rows"][0]["skipped"] is True
+    assert "ending" not in absent["dashboard"]["queue"]["rows"][0]
+    assert "ending" not in absent["drill_in"]["iteration_breakdown"]["rows"][0]
 
 
 def test_dashboard_fixture_covers_every_family_semantic_dimension() -> None:

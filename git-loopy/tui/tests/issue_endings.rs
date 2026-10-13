@@ -57,6 +57,12 @@ fn event_fixture_pins_field_unaware_compatibility_for_both_carriers() {
                             row.as_object_mut().unwrap().remove(field.as_str().unwrap());
                         }
                     }
+                    for row in projection["drill_in"]["iteration_breakdown"]["rows"]
+                        .as_array_mut()
+                        .unwrap()
+                    {
+                        row.as_object_mut().unwrap().remove("ending");
+                    }
                     projection
                 })
                 .collect();
@@ -364,8 +370,10 @@ fn serial_retry_clears_latest_facts_without_rewriting_finished_attempts() {
     assert!(queue_row(&projected, 42).get("ending").is_none());
     assert!(queue_row(&projected, 42).get("commits").is_none());
     let attempts = serde_json::to_value(attempts).unwrap();
-    assert!(attempts[0].get("ending").is_none());
-    assert!(attempts[0].get("commits").is_none());
+    assert_eq!(attempts[0]["ending"], "crash");
+    assert_eq!(attempts[0]["commits"], 1);
+    assert!(attempts[1].get("ending").is_none());
+    assert!(attempts[1].get("commits").is_none());
 }
 
 #[test]

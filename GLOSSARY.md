@@ -516,8 +516,9 @@ shows it inline in Status. It is absent when the attempt reached none or the
 member could not observe it, and never defaulted. An advance has none unless its
 session timed out or crashed, which progress does not hide. Distinct from a
 **Strike**, which accounts for the same ending without supplying the Queue cell.
-Shell and PowerShell emission remains owed by #732; the per-attempt drill-in
-and inline Skipped marker remain owed by #731.
+The drill-in accounts for each attempt, oldest first, with its Routed pair,
+Ending and recorded work; a Skipped issue is marked beside its defeating Ending
+in its own Queue row. Shell and PowerShell emission remains owed by #732.
 _Avoid_: status reason, failure reason, sub-status.
 
 **Issue elapsed**:

@@ -57,7 +57,7 @@ from __future__ import annotations
 import re
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Mapping
 
@@ -318,6 +318,7 @@ class IssueLedgerEntry:
     first_seen_iter: int
     status: str = STATUS_QUEUED
     ending: str | None = None
+    skipped: bool = False
     commits: int | None = None
     pr_advances: int | None = None
     started_at: float | None = None
@@ -623,6 +624,9 @@ class IssueContribution:
     usage_observed: bool
     peak_context_window: ContextWindowSnapshot | None
     drift: int | None = None
+    ending: str | None = None
+    commits: int | None = None
+    pr_advances: int | None = None
 
 
 def _default_wall_clock() -> datetime:
@@ -1129,6 +1133,13 @@ class LiveRunState:
                     self._issue_strikes = {}
                 self._issue_strikes[issue] = event["strikes"]
                 self._strike_focus = issue
+                if event.get("outcome") == "skip":
+                    entry = self.ledger.setdefault(
+                        issue, IssueLedgerEntry(
+                            ref=issue, first_seen_at=now, first_seen_iter=self.iteration,
+                        ),
+                    )
+                    entry.skipped = True
             else:
                 self._run_strikes = _coerce_int(event.get("strikes"), self._run_strikes)
             self.max_strikes = _coerce_int(event.get("max_strikes"), self.max_strikes)
@@ -2664,6 +2675,14 @@ class LiveRunState:
                 pr_advances = _optional_nonnegative_int(summary.get("pr_advances"))
                 if pr_advances is not None:
                     entry.pr_advances = pr_advances or None
+            # Freeze this attempt's facts before a later Pickup replaces the
+            # Queue's latest reading. Absence is never a default Ending.
+            entry.contributions[-1] = replace(
+                contribution,
+                ending=entry.ending,
+                commits=entry.commits,
+                pr_advances=entry.pr_advances,
+            )
             entry.phase_since = None
             if contribution_end is not None:
                 if entry.status == STATUS_CLOSED:
@@ -3246,6 +3265,7 @@ class QueueRow:
     route: ResolvedRoute | None = None
     phase_age_seconds: float | None = None
     ending: str | None = None
+    skipped: bool = False
     commits: int | None = None
     pr_advances: int | None = None
 
@@ -3294,6 +3314,7 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
                 route=entry.route,
                 phase_age_seconds=entry.phase_age_seconds(base),
                 ending=entry.ending,
+                skipped=entry.skipped,
                 commits=entry.commits,
                 pr_advances=entry.pr_advances,
             )

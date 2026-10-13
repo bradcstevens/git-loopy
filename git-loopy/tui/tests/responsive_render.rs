@@ -200,15 +200,8 @@ fn the_drill_in_gives_up_its_own_least_decisive_columns() {
 
     assert_eq!(
         drawn,
-        [
-            "Contribution",
-            "Outcome",
-            "Duration",
-            "Status",
-            "Active",
-            "Tokens in"
-        ],
-        "the contribution's identity and lifecycle survive a narrow terminal"
+        ["Contribution", "Outcome", "Duration", "Status", "Active"],
+        "identity and lifecycle, including the attempt's work in Status, survive narrowing"
     );
     assert!(
         lines.iter().any(|line| line.contains(" Log ")),
