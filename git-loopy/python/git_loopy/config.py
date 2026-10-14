@@ -51,6 +51,7 @@ __all__ = [
     "DEFAULT_SEND_TIMEOUT_SECONDS",
     "TASK_TYPE_LABEL_PREFIX",
     "TASK_TYPE_KEYS",
+    "EXECUTION_TASK_TYPE_KEYS",
     "RECOMMENDED_ROUTING",
     "TaskTypeError",
     "validate_task_type_key",
@@ -290,6 +291,11 @@ RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
 
 #: The closed task-type taxonomy in its stable presentation order.
 TASK_TYPE_KEYS: tuple[str, ...] = tuple(RECOMMENDED_ROUTING)
+
+# ADR-0088: Planning and Review never act as an issue's own Agent.
+EXECUTION_TASK_TYPE_KEYS: tuple[str, ...] = tuple(
+    key for key in TASK_TYPE_KEYS if key not in ("planning", "review")
+)
 
 
 class TaskTypeError(ValueError):

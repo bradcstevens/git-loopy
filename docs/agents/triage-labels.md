@@ -162,7 +162,9 @@ Task type is a closed routing taxonomy. The only valid labels are
 
 Unlike `parallel-safe` and `priority`, a `task-type:` label **may be machine-set**:
 the **Task-type classifier** reads an unlabelled issue's own content and proposes
-its key (ADR-0029), because zero closed issues carried one and routing could not
+one of the five execution keys: `implementation`, `bugfix`, `test`, `docs`, or
+`chore` (ADR-0029, ADR-0088). Only a human asserts `planning` or `review`.
+The classifier exists because zero closed issues carried a key and routing could not
 otherwise apply to anything. Three consequences follow, and none of them is an
 oversight:
 
@@ -177,7 +179,8 @@ oversight:
   classifying the issue still wins.
 - **The taxonomy stays closed for exactly this reason.** An unattended writer
   plus `gh label create --force` would make an invented key permanent, so a
-  proposal outside the seven is refused rather than warned about.
+  proposal outside the five execution keys is refused rather than warned about.
+  The labels and Routing still retain all seven keys.
 
 The write is not gated on a human, because a ratification step would reintroduce
 the recurring cost ADR-0029 exists to remove. It is idempotent, so re-running
@@ -187,4 +190,10 @@ label and not the work.
 The labels differ in blast radius, which is why only one of the three opened: a
 wrong `parallel-safe` guess lets unsafe work run concurrently and a wrong
 `priority` guess reorders somebody's backlog, while a wrong `task-type:` guess
-picks a suboptimal model.
+picks a suboptimal execution profile and model, never a non-execution profile.
+
+A `ready-for-agent` issue carrying exact `task-type:planning` or
+`task-type:review` is excluded as `non_execution_task_type`, even when it also
+carries an execution key. It remains in the Board's Blocked column until a human retypes it or removes
+`ready-for-agent` and hands it to the Planner. The Runner never relabels it;
+`git-loopy labels` neither reports nor repairs this conflict.

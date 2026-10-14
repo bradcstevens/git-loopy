@@ -30,7 +30,7 @@ Design notes:
   unrecognised ``task-type:`` key and falls back. Under an unattended writer that
   compounds badly — ``gh label create --force`` would mint the invented label in
   the tracker permanently and corrupt the **Proving set**'s strata — so a
-  proposal outside :data:`~git_loopy.config.TASK_TYPE_KEYS` is
+  proposal outside :data:`~git_loopy.config.EXECUTION_TASK_TYPE_KEYS` is
   :attr:`~ClassificationOutcome.REFUSED_KEY` here, not a warning.
 * **Every failure is non-fatal, and each is its own outcome.** A classification
   that cannot happen must never end an **Iteration**: failing real work over a
@@ -48,10 +48,8 @@ from enum import Enum
 from typing import Awaitable, Callable, Protocol, runtime_checkable
 
 from git_loopy.config import (
-    TASK_TYPE_KEYS,
+    EXECUTION_TASK_TYPE_KEYS,
     TASK_TYPE_LABEL_PREFIX,
-    TaskTypeError,
-    validate_task_type_key,
 )
 from git_loopy.sources import AfkReadyItem
 from git_loopy.staircase import PriceStaircase
@@ -129,9 +127,9 @@ class ClassificationOutcome(Enum):
     #: The issue already carries a ``task-type:`` label. Nothing was proposed and
     #: nothing was spent — inference happens once, before the label exists.
     ALREADY_LABELLED = "already_labelled"
-    #: The classifier proposed a key inside the closed taxonomy.
+    #: The classifier proposed an execution Task type.
     CLASSIFIED = "classified"
-    #: The classifier proposed a key outside :data:`~git_loopy.config.TASK_TYPE_KEYS`.
+    #: The classifier proposed a key outside the five execution Task types.
     #: Refused rather than warned about: an unattended writer plus
     #: ``gh label create --force`` makes an invented key permanent (ADR-0029).
     REFUSED_KEY = "refused_key"
@@ -222,15 +220,13 @@ async def classify_task_type(
     proposal = parse_task_type_proposal(answer)
     if proposal is None:
         return Classification(outcome=ClassificationOutcome.NO_PROPOSAL)
-    try:
-        validate_task_type_key(proposal)
-    except TaskTypeError:
+    if proposal not in EXECUTION_TASK_TYPE_KEYS:
         return Classification(
             outcome=ClassificationOutcome.REFUSED_KEY,
             refused_key=proposal,
             detail=(
-                f"proposed task type {proposal!r} is outside the closed taxonomy; "
-                f"permitted keys: {', '.join(TASK_TYPE_KEYS)}"
+                f"proposed task type {proposal!r} is not an execution Task type; "
+                f"permitted keys: {', '.join(EXECUTION_TASK_TYPE_KEYS)}"
             ),
         )
     return Classification(
@@ -272,8 +268,8 @@ def classifier_prompt(item: AfkReadyItem) -> str:
     an override can quietly rewrite is the open taxonomy ADR-0029 closed. This is
     the same choice ``_resolution_prompt`` already makes for auto-resolution.
     """
-    keys = "\n".join(f"- {key}" for key in TASK_TYPE_KEYS)
-    example = TASK_TYPE_MARKER_TEMPLATE.format(key=TASK_TYPE_KEYS[0])
+    keys = "\n".join(f"- {key}" for key in EXECUTION_TASK_TYPE_KEYS)
+    example = TASK_TYPE_MARKER_TEMPLATE.format(key=EXECUTION_TASK_TYPE_KEYS[0])
     return (
         "Classify the task type of the issue below.\n\n"
         "Read only the issue's own content. Do not explore the repository, do "

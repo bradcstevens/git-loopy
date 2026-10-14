@@ -270,7 +270,10 @@ _Avoid_: batch, backlog.
 
 **Pool exclusion**:
 A `ready-for-agent` candidate the AFK-ready discriminator rejected because its body
-lacks `## What to build`, `## Acceptance criteria`, or both. A human deliberately
+lacks `## What to build`, `## Acceptance criteria`, or both, it is a planning
+document, or it carries exact `task-type:planning` or `task-type:review`. The
+last is `non_execution_task_type`, after `planning_document` and before heading
+reasons; the issue stays in the Board's Blocked column (ADR-0088). A human deliberately
 triaged the issue; only a human can fix it, so every exclusion is named to the operator
 and carried as a `wrapper.pool.excluded` **Event** with its reason. A candidate the
 source could not *read* is not an exclusion — it was never discriminated against.
@@ -1044,12 +1047,14 @@ The classification an issue carries as a `task-type:<key>` label. Either set by 
 inferred from the issue's own content by the **Task-type classifier** and written back to the
 tracker, where the two are thereafter indistinguishable (ADR-0029). The taxonomy is **closed**:
 only the seven shipped keys are valid, and a classifier proposing or a label carrying any other
-value is refused rather than warned about, even when a run-wide override suppresses routing. A
-task type selects a **Routed pair** and nothing else: it does not order or prioritise work.
+value is refused rather than warned about, even when a run-wide override suppresses routing.
+Only a human asserts `planning` or `review`; either excludes the issue from a Run
+(ADR-0088). A task type selects a **Routed pair**; it does not order or prioritise work.
 _Avoid_: category, priority, issue kind.
 
 **Task-type classifier**:
-The agent call that reads an unlabelled issue's own content and proposes its **Task type**.
+The agent call that reads an unlabelled issue's own content and proposes one of the five
+**Execution Task types**. It never proposes or writes `planning` or `review` (ADR-0088).
 Runs at every **Pickup**, serial and **Lane** alike, on the issue that Pickup bound and on no
 other, so the spend buys the pair this **Iteration** runs on. Runs on its own configured pair —
 defaulting to the cheapest pair on the live roster, never the run-wide default, so the prior it

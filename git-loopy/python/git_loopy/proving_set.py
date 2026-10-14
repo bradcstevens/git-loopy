@@ -43,6 +43,7 @@ from git_loopy.sources import (
     EXCLUSION_MISSING_BOTH_SECTIONS,
     EXCLUSION_MISSING_WHAT_TO_BUILD,
     EXCLUSION_PLANNING_DOCUMENT,
+    EXCLUSION_NON_EXECUTION_TASK_TYPE,
     afk_ready_exclusion,
 )
 from git_loopy.task_type_classifier import ClassifierPair, labelled_task_type
@@ -97,6 +98,7 @@ class ExclusionReason(Enum):
     #: The body lacks both required sections.
     MISSING_BOTH_SECTIONS = EXCLUSION_MISSING_BOTH_SECTIONS
     PLANNING_DOCUMENT = EXCLUSION_PLANNING_DOCUMENT
+    NON_EXECUTION_TASK_TYPE = EXCLUSION_NON_EXECUTION_TASK_TYPE
     #: No commit reachable from the default branch closes it, so there is no fix
     #: to replay. A fix that landed on a side branch reads as this, correctly:
     #: what did not ship cannot be the commit that shipped.
@@ -123,6 +125,7 @@ _BODY_REASONS: Mapping[str, ExclusionReason] = {
     ),
     EXCLUSION_MISSING_BOTH_SECTIONS: ExclusionReason.MISSING_BOTH_SECTIONS,
     EXCLUSION_PLANNING_DOCUMENT: ExclusionReason.PLANNING_DOCUMENT,
+    EXCLUSION_NON_EXECUTION_TASK_TYPE: ExclusionReason.NON_EXECUTION_TASK_TYPE,
 }
 
 

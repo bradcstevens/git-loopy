@@ -199,6 +199,24 @@ def test_a_malformed_body_is_excluded_by_the_section_it_lacks(
     assert mined.exclusions == (ProvingExclusion(issue=7, reason=reason),)
 
 
+@pytest.mark.parametrize("key", ["planning", "review"])
+@pytest.mark.parametrize("body", [WELL_FORMED_BODY, "No headings"])
+def test_non_execution_task_type_has_its_own_mining_exclusion(
+    tmp_path: Path, key: str, body: str
+) -> None:
+    _init_repo(tmp_path)
+    _commit(tmp_path, "groundwork", {"src.py": "value = 1\n"})
+    mined = mine_proving_set(
+        [_issue(7, labels=["task-type:bugfix", f"task-type:{key}"], body=body)],
+        SubprocessGitClient(tmp_path),
+        default_branch="main",
+    )
+    assert mined.candidates == ()
+    assert [(e.issue, e.reason.value) for e in mined.exclusions] == [
+        (7, "non_execution_task_type")
+    ]
+
+
 def test_an_issue_no_commit_closes_is_excluded(tmp_path: Path) -> None:
     """Without a closing commit there is no fix to replay and no base to start at."""
     _init_repo(tmp_path)
@@ -624,6 +642,7 @@ def test_the_body_reasons_are_the_pool_exclusion_vocabulary() -> None:
             ExclusionReason.MISSING_ACCEPTANCE_CRITERIA,
             ExclusionReason.MISSING_BOTH_SECTIONS,
             ExclusionReason.PLANNING_DOCUMENT,
+            ExclusionReason.NON_EXECUTION_TASK_TYPE,
         )
     } == set(EXCLUSION_REASONS)
 

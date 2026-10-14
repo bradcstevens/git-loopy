@@ -153,7 +153,10 @@ _DISCRIMINATOR = _load_fixture("discriminator.json")
 
 @pytest.mark.parametrize(
     "case",
-    _DISCRIMINATOR["cases"],
+    [
+        case for case in _DISCRIMINATOR["cases"]
+        if "python" in case.get("distributions", _DISCRIMINATOR["distributions"])
+    ],
     ids=lambda case: case["id"],
 )
 def test_discriminator_fixture(case: dict[str, Any]) -> None:
@@ -166,6 +169,28 @@ def test_discriminator_fixture(case: dict[str, Any]) -> None:
         afk_ready_exclusion(case["body"], title=title, labels=labels)
         == case["exclusion_reason"]
     )
+
+
+def test_discriminator_reason_vocabulary_and_dormant_baseline() -> None:
+    from git_loopy.sources import EXCLUSION_REASONS
+
+    assert tuple(_DISCRIMINATOR["exclusion_reasons"]) == EXCLUSION_REASONS
+    assert _DISCRIMINATOR["baseline_exclusion_reasons"] == [
+        "missing_what_to_build", "missing_acceptance_criteria",
+        "missing_both_sections", "planning_document",
+    ]
+    for distribution in _DISCRIMINATOR["distributions"]:
+        reasons = {
+            case["exclusion_reason"]
+            for case in _DISCRIMINATOR["cases"]
+            if distribution in case.get("distributions", _DISCRIMINATOR["distributions"])
+            and case["exclusion_reason"] is not None
+        }
+        vocabulary = (
+            "exclusion_reasons" if distribution == "python"
+            else "baseline_exclusion_reasons"
+        )
+        assert reasons == set(_DISCRIMINATOR[vocabulary])
 
 
 _ISSUE_ORDERING = _load_fixture("issue-ordering.json")

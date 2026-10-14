@@ -1,13 +1,103 @@
 {
   "schema_version": 1,
-  "contract_version": "2.10",
+  "contract_version": "2.29",
+  "distributions": ["python", "shell", "powershell"],
+  "note": "Cases without distributions apply family-wide. Python-only cases and reasons above contract 2.26 do not change the dormant shell and PowerShell Path baselines. Those adapters use baseline_exclusion_reasons.",
   "exclusion_reasons": [
+    "missing_what_to_build",
+    "missing_acceptance_criteria",
+    "missing_both_sections",
+    "planning_document",
+    "non_execution_task_type"
+  ],
+  "baseline_exclusion_reasons": [
     "missing_what_to_build",
     "missing_acceptance_criteria",
     "missing_both_sections",
     "planning_document"
   ],
   "cases": [
+    {
+      "id": "planning-task-type-is-excluded",
+      "distributions": ["python"],
+      "labels": ["task-type:planning"],
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "review-task-type-is-excluded",
+      "distributions": ["python"],
+      "labels": ["task-type:review"],
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "non-execution-task-type-with-execution-key-and-priority",
+      "distributions": ["python"],
+      "labels": ["ready-for-agent", "priority", "parallel-safe", "task-type:implementation", "task-type:review", "task-type:planning"],
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "planning-document-precedes-non-execution-task-type",
+      "distributions": ["python"],
+      "title": "PRD: The plan",
+      "labels": ["task-type:planning"],
+      "body": "",
+      "eligible": false,
+      "exclusion_reason": "planning_document"
+    },
+    {
+      "id": "map-precedes-non-execution-task-type",
+      "distributions": ["python"],
+      "labels": ["wayfinder:map", "task-type:review"],
+      "body": "",
+      "eligible": false,
+      "exclusion_reason": "planning_document"
+    },
+    {
+      "id": "planning-task-type-precedes-missing-both-headings",
+      "distributions": ["python"],
+      "labels": ["task-type:planning"],
+      "body": "",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "review-task-type-precedes-missing-what-to-build",
+      "distributions": ["python"],
+      "labels": ["task-type:review"],
+      "body": "## Acceptance criteria\n- It works.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "review-task-type-precedes-missing-acceptance-criteria",
+      "distributions": ["python"],
+      "labels": ["task-type:review"],
+      "body": "## What to build\nImplement the slice.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "non-execution-task-type-match-is-exact-and-case-sensitive",
+      "distributions": ["python"],
+      "labels": ["Task-type:planning", "task-type:Planning", "task-type:Review", "task-type:planning-extra", "task-type:review-extra"],
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true,
+      "exclusion_reason": null
+    },
+    {
+      "id": "execution-task-types-remain-eligible",
+      "distributions": ["python"],
+      "labels": ["task-type:implementation", "task-type:bugfix", "task-type:test", "task-type:docs", "task-type:chore"],
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true,
+      "exclusion_reason": null
+    },
     {
       "id": "prd-title-with-task-headings",
       "title": "PRD: One issue, one run",
