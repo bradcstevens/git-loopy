@@ -1365,6 +1365,13 @@ class GitHubIssueSource:
         **Lane** never dispatches from membership that a cheap refresh happened
         to observe some seconds ago.
 
+        **Ready** here means what it means to the **Pool**: both the
+        ``blockedBy`` connection *and* the open closing pull requests, so a
+        candidate the Pool skips as ``awaiting_pull_request_merge`` is not
+        handed back as dispatchable by this read. The two decisions ran on
+        different inputs until #841, and a **Lane** reserving what the Pool
+        refused spent that issue's **Strikes** on work already in flight.
+
         Returns:
             A :class:`Pickup` whose ``outcome`` is ``"validated"`` (dispatchable),
             ``"stale"`` (no longer qualifies — drop it from the cache), or
@@ -1390,8 +1397,25 @@ class GitHubIssueSource:
             or not is_afk_ready(
                 full.body or "", title=full.title, labels=labels
             )
-            or not decide_readiness(full.blocked_by).admissible
         ):
+            return Pickup(outcome=PICKUP_STALE)
+
+        # The same **Readiness** the **Pool** decided, from the same two reads,
+        # in the shape :meth:`refresh_for_preparation` already uses. The
+        # references rode this `issue_view`; resolving their states is the one
+        # round-trip this adds, and `_closing_states` makes no request when the
+        # issue carries no reference. Deferred past the cheap discriminators so
+        # a candidate refused above never pays it.
+        states = self._closing_states((full.closing_references,))
+        closing = gh_module.closing_pull_request_read(
+            full.closing_references, states
+        )
+        readiness = decide_readiness(full.blocked_by, closing)
+        if readiness_unresolved(readiness):
+            # A read that did not happen is not a disqualification: quarantine
+            # and retry rather than dropping the candidate from the cache.
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+        if not readiness.admissible:
             return Pickup(outcome=PICKUP_STALE)
 
         return Pickup(
@@ -1403,6 +1427,7 @@ class GitHubIssueSource:
                 labels=labels,
                 created_at=full.created_at,
                 blocked_by=full.blocked_by,
+                closing_pull_requests=closing,
             ),
         )
 
