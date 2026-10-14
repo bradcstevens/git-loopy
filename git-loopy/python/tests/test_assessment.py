@@ -35,7 +35,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "assessment"
 TOKEN = "installation-secret-never-in-output"
 PERMISSIONS = {
     name: "read" for name in (
-        "metadata", "issues", "pull_requests", "contents", "checks", "statuses", "actions",
+        "metadata", "issues", "pull_requests", "contents", "actions",
     )
 }
 

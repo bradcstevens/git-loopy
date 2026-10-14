@@ -856,6 +856,32 @@ event rather than a judgement. It promotes from any prerelease stage, and it is 
 trigger: a `major` **Bump class** is a prerelease like any other.
 _Avoid_: release cut, graduation, publish.
 
+**Release assessment**:
+A read-only, advisory reading of one repository's **Release line** that tells a Loop engineer
+whether the evidence is sufficient to review closing the `vX.Y.Z` **milestone**. It decides
+nothing and changes nothing: closing the milestone, and so **Promotion**, stays the human's
+act ([guide](docs/release-assessment.md)).
+_Avoid_: release readiness, ready to release, go/no-go, approval, release gate.
+
+**Assessment verdict**:
+The one conclusion a **Release assessment** reaches: `reviewable` (complete evidence, no
+finding, and explicitly not authorization), `hold_advised` (complete evidence with at least one
+finding) or `incomplete` (some evidence could not be read, which outranks `hold_advised` while
+still listing every finding already made).
+_Avoid_: release readiness, ready to release, go/no-go, approval, release gate.
+
+**Assessment policy**:
+The per-repository configuration a **Release assessment** reads once at start: which workflows
+count, whether the repository is a sandbox, and any injected faults. The set of repositories it
+covers is the allowlist, and its revision is a content hash that changes only on restart.
+_Avoid_: release readiness, ready to release, go/no-go, approval, release gate.
+
+**Review packet**:
+The deterministic Markdown a **Release assessment** renders for a human to read, in a fixed
+section order, beginning with the **Assessment verdict**. It is shown verbatim and never
+reordered, summarized or softened.
+_Avoid_: release readiness, ready to release, go/no-go, approval, release gate.
+
 **Rehearsal**:
 Constructing the complete proposed stable commit, its annotated **candidate tag** and
 its generated source archive in a throwaway clone with no remote, and proving *that*
