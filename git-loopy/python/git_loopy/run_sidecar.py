@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
+from git_loopy.host_yield import default_host_yield, host_yield_command, parse_host_yield
 from git_loopy.rate_card import ModelPrices, ModelRate, RateCard, TierPrices
 from git_loopy.run_control import (
     advisory_locking_available,
@@ -89,6 +90,7 @@ def _config_to_payload(config: RunConfig) -> dict[str, Any]:
         "render_reasoning": config.render_reasoning,
         "otel_enabled": config.otel_enabled,
         "execution_host": config.execution_host,
+        "host_yield": config.host_yield,
         "send_timeout_seconds": config.send_timeout_seconds,
         "routing": {
             key: [model, effort]
@@ -153,6 +155,7 @@ def _config_from_payload(payload: dict[str, Any]) -> RunConfig:
         render_reasoning=bool(payload.get("render_reasoning", True)),
         otel_enabled=bool(payload.get("otel_enabled", False)),
         execution_host=str(payload.get("execution_host", "local")),
+        host_yield=parse_host_yield(payload.get("host_yield", default_host_yield())),
         send_timeout_seconds=float(payload.get("send_timeout_seconds", 7200.0)),
         routing=routing,
         context_tier=str(payload.get("context_tier", "default")),
@@ -367,16 +370,20 @@ def spawn_detached_child(
     cwd: Path,
 ) -> subprocess.Popen[Any]:
     """Start the worker in its own process session with stdout/stderr logged."""
+    command = host_yield_command(
+        [
+            sys.executable,
+            "-m",
+            "git_loopy.run_child",
+            encode_detached_run_spec(spec),
+        ],
+        spec.config.host_yield,
+    )
     diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
     stdout = diagnostics_path.open("a", encoding="utf-8")
     try:
         process = popen_detached(
-            [
-                sys.executable,
-                "-m",
-                "git_loopy.run_child",
-                encode_detached_run_spec(spec),
-            ],
+            command,
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
             stdout=stdout,

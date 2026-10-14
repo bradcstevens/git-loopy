@@ -109,6 +109,13 @@ the integrated result. A serial **Iteration** binds no host, and running the
 Orchestrator inside Actions does not itself change the host's placement.
 _Avoid_: Run host, Orchestrator deployment, Dashboard host.
 
+**Host yield policy**:
+The scheduling policy that makes a **Run**'s local work yield CPU to the
+operator's foreground work, without constraining its foreground **Dashboard**
+client. It covers the Run's Agent tools and **Integration** feedback loops,
+not a CPU quota or a Lane ceiling.
+_Avoid_: background mode, load budget, concurrency limit.
+
 **Isolation grade**:
 The Execution host's declared isolation boundary: **workspace separation only**
 (separate worktrees with the operator's authority) or **machine boundary** (a

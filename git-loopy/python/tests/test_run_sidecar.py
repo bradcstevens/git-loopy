@@ -26,6 +26,7 @@ def _config() -> RunConfig:
         model="claude-opus-5",
         reasoning_effort="high",
         issue_source="github",
+        host_yield="none",
     )
 
 

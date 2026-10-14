@@ -36,6 +36,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Iterable, Literal, Mapping
 
 from git_loopy.static_route import RoutePolicy
+from git_loopy.host_yield import default_host_yield
 
 __all__ = [
     "RunConfig",
@@ -706,6 +707,9 @@ class RunConfig:
             Run. ``"local"`` is the default; a distribution refuses an
             unsupported placement during preflight rather than silently falling
             back to local.
+        host_yield: The local **Host yield policy**: ``utility`` on macOS by
+            default, ``none`` elsewhere. Inherited by Run work, not its
+            foreground Dashboard client.
         issue_pin: The invocation-scoped **Pin** (#396, ADR-0032): the single
             issue ``--issue N`` named, or ``None``. It bypasses the §3.2
             selection **order** and nothing else — an issue pinned here still
@@ -852,6 +856,7 @@ class RunConfig:
     render_reasoning: bool = True
     otel_enabled: bool = False
     execution_host: str = "local"
+    host_yield: str = field(default_factory=default_host_yield)
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     context_tier: str = DEFAULT_CONTEXT_TIER

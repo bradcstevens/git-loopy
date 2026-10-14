@@ -206,6 +206,15 @@ def _coerce_issue_source(raw: str) -> str:
     return value
 
 
+def _coerce_host_yield(raw: str) -> str:
+    from git_loopy.host_yield import parse_host_yield
+
+    try:
+        return parse_host_yield(raw)
+    except ValueError as exc:
+        raise ConfigCommandError(str(exc)) from exc
+
+
 def _coerce_bool(raw: str) -> bool:
     value = raw.strip().lower()
     if value in _TRUTHY:
@@ -339,6 +348,7 @@ _KEYS: dict[str, _Key] = {
         ),
         _Key("include_prs", _coerce_bool, lambda rc: rc.run.include_prs),
         _Key("otel_enabled", _coerce_bool, lambda rc: rc.run.otel_enabled),
+        _Key("host_yield", _coerce_host_yield, lambda rc: rc.run.host_yield),
         _Key(
             "send_timeout_seconds",
             _coerce_timeout,

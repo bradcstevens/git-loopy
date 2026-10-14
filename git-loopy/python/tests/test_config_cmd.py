@@ -82,6 +82,7 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
         "demotion_threshold",
         "include_prs",
         "otel_enabled",
+        "host_yield",
         "send_timeout_seconds",
         "deny_tools",
         "deny_skills",
