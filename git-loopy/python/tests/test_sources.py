@@ -2560,6 +2560,93 @@ class TestPickup:
         assert pickup.outcome == sources_module.PICKUP_STALE
         assert pickup.item is None
 
+    def test_an_open_closing_pull_request_makes_pickup_stale(self) -> None:
+        """The authoritative read must refuse what the **Pool** skips (#841).
+
+        The Pool reports ``awaiting_pull_request_merge`` from the closing
+        connection; this read decided from ``blockedBy`` alone, so a **Lane**
+        re-bound an issue whose work already sat in an open pull request and
+        spent its **Strikes** producing nothing.
+        """
+        impl = self._source(
+            issues=[
+                _make_issue(
+                    31,
+                    labels=["ready-for-agent", "parallel-safe"],
+                    closing_references=_closing(("PR_840", "x/y#840")),
+                )
+            ],
+            pull_request_states_by_id={"PR_840": "open"},
+        )
+
+        # The Pool's own verdict, for the contrast this guards.
+        [item] = impl.collect_pool().items
+        verdict = impl.readiness(item)
+        assert verdict.admissible is False
+        assert verdict.skip_reason == "awaiting_pull_request_merge"
+
+        pickup = impl.pickup(31)
+
+        assert pickup.outcome == sources_module.PICKUP_STALE
+        assert pickup.item is None
+
+    def test_a_merged_closing_pull_request_still_picks_up(self) -> None:
+        """Only an *open* closing pull request is a wait; a merged one is not."""
+        impl = self._source(
+            issues=[
+                _make_issue(
+                    31,
+                    labels=["ready-for-agent", "parallel-safe"],
+                    closing_references=_closing(("PR_840", "x/y#840")),
+                )
+            ],
+            pull_request_states_by_id={"PR_840": "merged"},
+        )
+
+        pickup = impl.pickup(31)
+
+        assert pickup.outcome == sources_module.PICKUP_VALIDATED
+        assert pickup.item is not None
+        assert pickup.item.ref == 31
+
+    def test_an_unread_closing_state_does_not_admit_at_pickup(self) -> None:
+        """A failed state read decides nothing, and must not silently admit.
+
+        It is also not a disqualification: like
+        :meth:`GitHubIssueSource.refresh_for_preparation`, an unresolved
+        **Readiness** quarantines the candidate for retry rather than dropping
+        it from the cache, which ``stale`` would do.
+        """
+        impl = self._source(
+            issues=[
+                _make_issue(
+                    31,
+                    labels=["ready-for-agent", "parallel-safe"],
+                    closing_references=_closing(("PR_840", "x/y#840")),
+                )
+            ],
+            pull_request_states_error=gh_module.GhError(
+                ["gh", "api", "graphql"], 1, "timeout"
+            ),
+        )
+
+        pickup = impl.pickup(31)
+
+        assert pickup.outcome == sources_module.PICKUP_UNAVAILABLE
+        assert pickup.item is None
+
+    def test_an_issue_with_no_closing_reference_costs_no_state_read(self) -> None:
+        """The added read is paid only by candidates that carry a reference."""
+        gh = FakeGitHubClient(
+            issues=[_make_issue(31, labels=["ready-for-agent", "parallel-safe"])]
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        pickup = impl.pickup(31)
+
+        assert pickup.outcome == sources_module.PICKUP_VALIDATED
+        assert gh.pull_request_state_calls == []
+
     def test_priority_does_not_excuse_a_missing_parallel_safe(self) -> None:
         """**Priority** reorders; it does not admit (#395, contract §3.2).
 
