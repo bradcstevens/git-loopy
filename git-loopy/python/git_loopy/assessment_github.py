@@ -39,9 +39,43 @@ API_VERSION = "2022-11-28"
 SHA_PATTERN = r"[0-9a-f]{40}"
 READ_PERMISSIONS = {
     name: "read" for name in (
-        "metadata", "issues", "pull_requests", "contents", "checks", "statuses", "actions",
+        "metadata", "issues", "pull_requests", "contents", "actions",
     )
 }
+
+
+# The service's fixed endpoint list: (method, path template, App permission).
+# Repository reads are matched by `_get`; the first three need only the App JWT.
+ENDPOINT_PERMISSIONS = (
+    ("GET", "/repos/{repository}/installation", "App JWT"),
+    ("GET", "/app", "App JWT"),
+    ("POST", "/app/installations/{id}/access_tokens", "App JWT"),
+    ("GET", "/repos/{repository}", "Metadata"),
+    ("GET", "/repos/{repository}/commits/{ref}", "Contents"),
+    ("GET", "/repos/{repository}/contents/VERSION", "Contents"),
+    ("GET", "/repos/{repository}/milestones", "Issues"),
+    ("GET", "/repos/{repository}/actions/runs", "Actions"),
+    ("GET", "/repos/{repository}/issues", "Issues"),
+    ("GET", "/repos/{repository}/pulls", "Pull requests"),
+    ("GET", "/repos/{repository}/tags", "Contents"),
+    ("GET", "/repos/{repository}/compare/{base}...{sha}", "Contents"),
+    ("GET", "/repos/{repository}/issues/{n}/dependencies/blocked_by", "Issues"),
+)
+
+
+_PLACEHOLDERS = {
+    "{ref}": r"[A-Za-z0-9%_.-]+", "{n}": r"[1-9][0-9]*",
+    "{base}": SHA_PATTERN, "{sha}": SHA_PATTERN,
+}
+_REPOSITORY_READ_PATTERNS = tuple(
+    "".join(
+        _PLACEHOLDERS.get(part, re.escape(part))
+        for part in re.split(r"(\{[a-z]+\})", path.removeprefix("/repos/{repository}"))
+    )
+    for method, path, _ in ENDPOINT_PERMISSIONS
+    if method == "GET" and path.startswith("/repos/{repository}")
+    and path != "/repos/{repository}/installation"
+)
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -184,13 +218,8 @@ class GitHubReads:
 
     async def _get(self, suffix, params, read, source) -> Response:
         # No caller-provided URL is ever followed, including pagination links.
-        if suffix not in (
-            "", "/contents/VERSION", "/milestones", "/actions/runs", "/issues", "/pulls",
-            "/tags",
-        ) and not (
-            re.fullmatch(r"/commits/[A-Za-z0-9%_.-]+", suffix)
-            or re.fullmatch(rf"/compare/{SHA_PATTERN}\.\.\.{SHA_PATTERN}", suffix)
-            or re.fullmatch(r"/issues/[1-9][0-9]*/dependencies/blocked_by", suffix)
+        if not any(
+            re.fullmatch(pattern, suffix) for pattern in _REPOSITORY_READ_PATTERNS
         ):
             raise Unreadable(read, "endpoint is not allowed", source)
         try:
