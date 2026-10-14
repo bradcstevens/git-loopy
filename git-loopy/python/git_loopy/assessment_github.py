@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import parse_qs, quote, urlsplit
 
-from .assessment_config import AssessmentConfigError, Policy, read_app_key
+from .assessment_config import AssessmentConfigError, Fault, Policy, read_app_key
 
 
 API_VERSION = "2022-11-28"
@@ -172,11 +172,15 @@ class Unreadable(ValueError):
 
 
 class GitHubReads:
-    def __init__(self, repository: str, transport: Transport, *, token: str):
+    def __init__(
+        self, repository: str, transport: Transport, *, token: str,
+        faults: tuple[Fault, ...] = (),
+    ):
         self.api = f"/repos/{repository}"
         self.web = f"https://github.com/{repository}"
         self.transport = transport
         self._token = token
+        self._faults = {entry.read: entry.fault for entry in faults}
 
     async def _get(self, suffix, params, read, source) -> Response:
         # No caller-provided URL is ever followed, including pagination links.
@@ -190,9 +194,11 @@ class GitHubReads:
         ):
             raise Unreadable(read, "endpoint is not allowed", source)
         try:
-            response = await self.transport.request(
-                "GET", self.api + suffix, params=params,
-                headers=_headers(self._token),
+            response = Response(429, None) if self._faults.get(read) == "rate-limited" else (
+                await self.transport.request(
+                    "GET", self.api + suffix, params=params,
+                    headers=_headers(self._token),
+                )
             )
         except Exception:
             # Transport exception text may carry credentials; never echo it.
@@ -203,6 +209,12 @@ class GitHubReads:
                 404: "not-found", 429: "rate-limited",
             }.get(response.status, f"read errored (HTTP {response.status})")
             raise Unreadable(read, reason, source)
+        if self._faults.get(read) == "pagination-cut":
+            # Retain the observed page; the normal reader rejects its continuation.
+            response = Response(response.status, response.data, {
+                **{k: v for k, v in response.headers.items() if k.lower() != "link"},
+                "Link": "incomplete pagination",
+            })
         return response
 
     async def pin_head(self) -> str:

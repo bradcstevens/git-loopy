@@ -40,5 +40,6 @@ Some required evidence could not be read. No conclusion either way — this does
 - Assessment policy revision: <POLICY>
 - Counted workflows: Runner family gate
 - Service version: <SERVICE>
-- Result-format version: 1
+- Result-format version: 2
 - Read identity: GitHub App release&#45;review&#45;app &#40;app 123&#44; installation 456&#41;
+- Fault injection: inactive

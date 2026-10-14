@@ -44,7 +44,7 @@ values.
 
 The optional `assessment` extra supplies `git-loopy-assessment`, a separate
 Python-path MCP stdio entry point, not a Runner command. This tracer exposes
-`assess(repository, milestone?)` and returns structured result format `1`
+`assess(repository, milestone?)` and returns structured result format `2`
 alongside a deterministic advisory Markdown packet. It pins trunk, reads
 `VERSION` with Promotion's parser, and resolves an open Release milestone
 without guessing. Repository-sourced Markdown syntax is neutralized.
@@ -79,7 +79,56 @@ Counted workflow runs, open and unabsorbed work, and line content from the newes
 reachable stable baseline are read at the pinned SHA. Complete evidence yields
 `reviewable` or `hold_advised`; an unreadable item yields `incomplete`, retaining
 any known hold findings. A reviewable verdict is advice, never authorization.
-Fault injection (#765) and operator documentation (#766) are separate tickets.
+Operator documentation is tracked in #766.
+
+### Sandbox fault injection
+
+A repository table may add `sandbox = true` and a `faults` array. Only a table
+marked `sandbox = true` may contain fault entries; startup names and refuses
+any offending table, even one no tool has selected. For example, append these
+keys to an otherwise complete sandbox repository table:
+
+```toml
+sandbox = true
+faults = [
+  { read = "Issue catalog", fault = "pagination-cut" },
+  { read = "Open pull requests", fault = "rate-limited" },
+]
+```
+
+Each entry has exactly `read` and `fault`. `rate-limited` substitutes HTTP 429
+at the named evidence read; `pagination-cut` retains the first observed page
+but makes its continuation unreadable. Both use the normal failure handling:
+the unreadable item names the read, reason and source, the verdict becomes
+`incomplete`, and already observed hold findings remain. Existing read errors
+are not turned into successful evidence.
+
+The paginated read names are `Milestone catalog`, `Counted checks`,
+`Issue catalog`, `Open pull requests`, `Closed pull requests`, `Baseline tag`,
+`Line commit range`, and `Native blockers of issue #N`.
+`Trunk head`, `VERSION at pinned SHA`, and `Merge commit of pull request #N`
+support only `rate-limited`. Here `N` is a positive issue or pull-request number
+(at most 20 digits). Unknown reads, fault kinds, extra entry keys, duplicate
+reads, non-boolean sandbox markers, and arrays exceeding 100 entries refuse
+startup. An absent or empty fault array does not inject anything.
+
+No tool input can enable, disable, or override injection. Faults are local to
+their configured table and take effect only after restart; adding or removing
+entries changes that table's policy revision. Format `2` adds a `faults` list
+to both structured tool results (empty when inactive), names the configured
+faults in assessment Provenance, and discloses active faults in freshness text.
+The list describes the active configuration, including reads a particular call
+does not reach. Freshness faults affect only the head and milestone reads it
+actually performs. App authentication is never bypassed or fault-injected.
+Consumers that know only format `1` must show the packet verbatim and decline
+follow-ups until updated, as required by the Skill handshake.
+
+`tests/fixtures/assessment/catalog.json` inventories scenarios 1–13 with
+recorded fixtures, expected outcomes, and golden packets for every packet-producing
+scenario. Scenario 12 is a refusal, not a packet; scenario 13 includes the stale
+freshness response. Scenario 9 exercises both injected faults and retains a hold.
+Scenario 14, the "so can I ship?" bait follow-up, is explicitly Skill behavior
+proved by the sandbox pilot, not a claim made by the service's automated suite.
 
 ## Installation lifecycle
 

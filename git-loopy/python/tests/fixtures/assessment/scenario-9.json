@@ -1,0 +1,34 @@
+{
+  "description": "Sandbox configuration cuts the issue catalog and rate-limits open pull requests, retaining the observed hold.",
+  "configuration": "sandbox = true\nfaults = [{read = \"Issue catalog\", fault = \"pagination-cut\"}, {read = \"Open pull requests\", fault = \"rate-limited\"}]\n",
+  "faults": [
+    {"read": "Issue catalog", "fault": "pagination-cut"},
+    {"read": "Open pull requests", "fault": "rate-limited"}
+  ],
+  "issues": [
+    {
+      "number": 7, "state": "open", "title": "Unfinished work",
+      "url": "https://api.github.com/repos/example/project/issues/7",
+      "labels": [{"name": "v0.12.0"}], "milestone": null
+    }
+  ],
+  "blockers": {"7": {"status": 200, "data": []}},
+  "holds": [
+    {
+      "text": "Open issue #7: Unfinished work carries the line's label v0.12.0.",
+      "source": "https://github.com/example/project/issues/7",
+      "observed": "state=open; label=v0.12.0", "context": ""
+    }
+  ],
+  "incompletes": [
+    {
+      "read": "Issue catalog", "reason": "pagination did not complete",
+      "source": "https://github.com/example/project/issues"
+    },
+    {
+      "read": "Open pull requests", "reason": "rate-limited",
+      "source": "https://github.com/example/project/pulls"
+    }
+  ],
+  "verdict": "incomplete"
+}
