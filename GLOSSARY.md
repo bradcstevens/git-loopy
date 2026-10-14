@@ -119,12 +119,19 @@ _Avoid_: Sandbox, security score, host placement.
 **Agent**:
 One live harness session doing work in a **Run**, bound to a single **Routed pair** for
 its lifetime: a serial **Iteration**'s session, a **Lane**'s session, or a
-**Recovery** session. It is the unit a **Run** has several of at once
+**Recovery** session. Every Agent starts without **Agent memory**. It is the unit a **Run** has several of at once
 in **Parallel mode**, and the unit an **Activity window** shows. Distinct from the
 `ready-for-agent` label, which describes an issue's triage state rather than anything
 live.
 _Avoid_: session (the harness's word), worker, lane (a Lane is a slot, and an Agent may
 outlive it).
+
+**Agent memory**:
+Anything an **Agent** could recall from an earlier issue other than what the issue
+tracker and the repository's history record. In-Run Agents and their **Subagents**
+have none; the **Planner** outside a Run is exempt, but its approved graph must
+not depend on its memory (ADR-0076).
+_Avoid_: profile memory, learnings, scratchpad.
 
 **Subagent**:
 An agent an **Agent** spawns inside its own session, on its own model. Its lifecycle —
@@ -1924,21 +1931,6 @@ It may still represent a previous resolution or be absent after failed replaceme
 and exhausted delivery retries, so the canonical local resolution and delivery status
 describe the current assignment, never the label as authority to choose, override, or pin a route.
 _Avoid_: model pin, routing input.
-
-### Agent memory (accepted design)
-
-This constraint completes the vocabulary of
-[ADR-0076](docs/adr/0076-in-run-agents-carry-no-memory-across-issues.md). The existing
-**Agent** entry above describes current behavior; this decision record does not
-establish delivery acceptance.
-
-**Agent memory**:
-Anything an **Agent** could recall from an earlier issue other than what the issue
-tracker and the repository's history record. No in-Run **Agent profile** has any: every
-**Agent** starts fresh. A lesson that goes beyond its issue leaves the **Run** as a
-Follow-up on the tracker. The **Planner**, which works outside a Run, is not bound by
-this rule, but its approved graph must not depend on its memory.
-_Avoid_: profile memory, learnings, scratchpad.
 
 ### Agent profiles (accepted design)
 

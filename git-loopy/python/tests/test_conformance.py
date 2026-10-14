@@ -4746,7 +4746,7 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
 def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
     fixture: str, expected: str,
 ) -> None:
-    """Only an affected fixture advances with its decision (§18).
+    """Only an affected fixture advances with its decision (§19).
 
     Both gained measured-tier obligations at 2.5. Routing also owns 2.9's
     staged migration and preflight deadlines, and 2.10's Python-local Dynamic
