@@ -35,10 +35,11 @@ import hashlib
 import json
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Literal, Mapping
 
+from .agent_profiles import validate_profiles
 from .settings import global_dir
 from .skill_source import (
     SkillSourceError,
@@ -52,6 +53,9 @@ from .skill_source import (
 #: nothing else, so no arithmetic stands between the config scope and a lookup.
 CATALOG_DIRNAME = "skills"
 
+#: Agent profiles are not Skills and are never placed in the Skill root.
+PROFILES_DIRNAME = "profiles"
+
 #: The checkout the catalog is cut from. Machinery — a git working tree — kept
 #: out of the Skill root so nothing in there can be mistaken for a Skill.
 CHECKOUT_DIRNAME = "skill-catalog"
@@ -59,8 +63,9 @@ CHECKOUT_DIRNAME = "skill-catalog"
 #: What is installed and where it came from, beside the Skill root rather than
 #: inside it, for the same reason.
 RECORD_FILENAME = "skill-catalog.json"
+_PENDING_RECORD_FILENAME = f".{RECORD_FILENAME}.incoming"
 
-_RECORD_SCHEMA_VERSION = 1
+_RECORD_SCHEMA_VERSION = 2
 
 #: Named in failures so an operator never has to reconstruct it from a module path.
 SETUP_COMMAND = "git-loopy init"
@@ -88,6 +93,10 @@ class InstalledCatalog:
     revision: str
     skills: tuple[str, ...]
     sha256: str
+    profile_root: Path | None = None
+    profiles_sha256: str | None = None
+    profiles_directory: str | None = None
+    schema_version: int = _RECORD_SCHEMA_VERSION
 
     @property
     def short_revision(self) -> str:
@@ -102,6 +111,9 @@ class CatalogInstallStatus:
     state: Literal["absent", "drifted", "matching"]
     installed: InstalledCatalog | None
     pin: SkillSourcePin
+    skills_state: Literal["absent", "drifted", "matching"]
+    profiles_state: Literal["absent", "drifted", "matching", "not pinned"]
+    profile_root: Path
 
 
 @dataclass(frozen=True)
@@ -136,6 +148,11 @@ def installed_catalog_dir(env: Mapping[str, str]) -> Path:
 def catalog_checkout_dir(env: Mapping[str, str]) -> Path:
     """The private checkout the installed catalog is cut from."""
     return global_dir(env) / CHECKOUT_DIRNAME
+
+
+def installed_profiles_dir(env: Mapping[str, str]) -> Path:
+    """The profile root, beside (never inside) the installed Skill root."""
+    return global_dir(env) / PROFILES_DIRNAME
 
 
 def install_record_path(env: Mapping[str, str]) -> Path:
@@ -197,6 +214,15 @@ def read_install_record(env: Mapping[str, str]) -> InstalledCatalog | None:
     revision = raw.get("revision")
     repository = raw.get("repository")
     digest = raw.get("sha256")
+    schema = raw.get("schema_version", 1)
+    if schema not in (1, _RECORD_SCHEMA_VERSION):
+        return None
+    profiles_digest = raw.get("profiles_sha256") if schema == 2 else None
+    profiles_directory = raw.get("profiles_directory") if schema == 2 else None
+    if profiles_digest is not None and not isinstance(profiles_digest, str):
+        return None
+    if profiles_directory is not None and not isinstance(profiles_directory, str):
+        return None
     if not all(isinstance(v, str) for v in (revision, repository, digest)):
         return None
     root = installed_catalog_dir(env)
@@ -208,6 +234,10 @@ def read_install_record(env: Mapping[str, str]) -> InstalledCatalog | None:
         revision=str(revision),
         skills=_catalog_skills(root),
         sha256=str(digest),
+        profile_root=installed_profiles_dir(env) if profiles_digest is not None else None,
+        profiles_sha256=profiles_digest,
+        profiles_directory=profiles_directory,
+        schema_version=schema,
     )
 
 
@@ -216,29 +246,101 @@ def inspect_installed_catalog(
 ) -> CatalogInstallStatus:
     """Compare the local install to the pin without reaching its upstream."""
     installed = read_install_record(env)
-    if installed is None:
-        return CatalogInstallStatus(state="absent", installed=None, pin=pin)
-    if installed.revision == pin.revision and _still_matches_record(installed):
-        return CatalogInstallStatus(state="matching", installed=installed, pin=pin)
-    return CatalogInstallStatus(state="drifted", installed=installed, pin=pin)
+    interrupted = (global_dir(env) / _PENDING_RECORD_FILENAME).exists()
+    skills_state: Literal["absent", "drifted", "matching"]
+    profiles_state: Literal["absent", "drifted", "matching", "not pinned"]
+    same_revision = (
+        installed is not None
+        and installed.revision == pin.revision
+        and installed.repository == pin.repository
+    )
+    if interrupted:
+        skills_state = "drifted"
+    elif installed is None:
+        skills_state = "absent"
+    else:
+        skills_state = (
+            "matching"
+            if same_revision and _root_matches(installed.root, installed.sha256)
+            else "drifted"
+        )
+    if pin.profiles_directory is None:
+        profiles_state = "not pinned"
+    elif interrupted:
+        profiles_state = "drifted"
+    elif installed is None:
+        profiles_state = "absent"
+    else:
+        profiles_state = (
+            "matching"
+            if same_revision
+            and installed.profiles_directory == pin.profiles_directory
+            and _root_matches(installed_profiles_dir(env), installed.profiles_sha256)
+            else "drifted"
+        )
+    state: Literal["absent", "drifted", "matching"] = "drifted"
+    if not interrupted:
+        if installed is None:
+            state = "absent"
+        elif _matches_pin(installed, pin) and _still_matches_record(installed):
+            state = "matching"
+    return CatalogInstallStatus(
+        state=state,
+        installed=installed,
+        pin=pin,
+        skills_state=skills_state,
+        profiles_state=profiles_state,
+        profile_root=installed_profiles_dir(env),
+    )
 
 
-def _write_install_record(env: Mapping[str, str], catalog: InstalledCatalog) -> None:
+def _stage_install_record(env: Mapping[str, str], catalog: InstalledCatalog) -> Path:
+    """The pending record marks an uncommitted replacement until renamed last."""
     payload = {
         "schema_version": _RECORD_SCHEMA_VERSION,
         "repository": catalog.repository,
         "revision": catalog.revision,
         "sha256": catalog.sha256,
         "skills": list(catalog.skills),
+        "profiles_sha256": catalog.profiles_sha256,
+        "profiles_directory": catalog.profiles_directory,
     }
-    path = install_record_path(env)
+    path = global_dir(env) / _PENDING_RECORD_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        path.unlink()
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 def _still_matches_record(record: InstalledCatalog) -> bool:
-    """True when the Skill root still holds exactly what the record claims."""
-    return catalog_digest(record.root) == record.sha256
+    """True only when both roots still hold exactly what the record claims."""
+    return not (record.root.parent / _PENDING_RECORD_FILENAME).exists() and (
+        _root_matches(record.root, record.sha256)
+    ) and (
+        record.profile_root is None
+        or _root_matches(record.profile_root, record.profiles_sha256)
+    )
+
+
+def _matches_pin(record: InstalledCatalog, pin: SkillSourcePin) -> bool:
+    return (
+        record.repository == pin.repository
+        and record.revision == pin.revision
+        and record.profiles_directory == pin.profiles_directory
+        and (record.profile_root is not None) == (pin.profiles_directory is not None)
+    )
+
+
+def _root_matches(root: Path, digest: str | None) -> bool:
+    try:
+        return (
+            root.is_dir()
+            and not root.is_symlink()
+            and catalog_digest(root) == digest
+        )
+    except OSError:
+        return False
 
 
 def _install(
@@ -255,47 +357,92 @@ def _install(
     checkout_dir = catalog_checkout_dir(env)
     acquire(pin, checkout_dir)
     checkout = validate_skill_source(pin, checkout_dir)
+    if pin.profiles_directory is not None:
+        breaches = validate_profiles(
+            checkout.root,
+            profiles_directory=pin.profiles_directory,
+            skills_directory=pin.skills_directory,
+        )
+        if breaches:
+            raise SkillSourceError(
+                "invalid Agent profiles: " + "; ".join(str(breach) for breach in breaches)
+            )
     source = checkout.root / pin.skills_directory
 
     root = installed_catalog_dir(env)
-    staged = root.with_name(f".{root.name}.incoming")
+    profile_root = installed_profiles_dir(env)
+    roots = [(root, source)]
+    if pin.profiles_directory is not None:
+        roots.append((profile_root, checkout.root / pin.profiles_directory))
+    staged_roots: dict[Path, Path] = {}
+    # Finish validation and copying for *both* roots before displacing either.
+    # Copy links as links so nothing outside the pin is read, then refuse them.
+    for destination, origin in roots:
+        staged = destination.with_name(f".{destination.name}.incoming")
+        _remove_root(staged)
+        shutil.copytree(origin, staged, symlinks=True)
+        _reject_symlinks(staged, pin)
+        staged_roots[destination] = staged
+    catalog = InstalledCatalog(
+        root=root,
+        repository=pin.repository,
+        revision=checkout.revision,
+        skills=_catalog_skills(staged_roots[root]),
+        sha256=catalog_digest(staged_roots[root]),
+        profile_root=profile_root if pin.profiles_directory is not None else None,
+        profiles_sha256=(
+            catalog_digest(staged_roots[profile_root])
+            if pin.profiles_directory is not None else None
+        ),
+        profiles_directory=pin.profiles_directory,
+    )
+    previous = read_install_record(env)
+    previous_intact = previous is not None and _still_matches_record(previous)
+    pending = _stage_install_record(env, catalog)
+    for index, (destination, staged) in enumerate(staged_roots.items()):
+        try:
+            _replace_root(destination, staged)
+        except OSError:
+            # A failed *first* rename that restored the old tree changed no
+            # root. Preserve the existing intact fallback in that one case.
+            # Once any replacement succeeded, keep the interruption marker.
+            if (
+                index == 0
+                and previous_intact
+                and previous is not None
+                and _root_matches(root, previous.sha256)
+            ):
+                pending.unlink()
+            raise
+    if pin.profiles_directory is None:
+        _remove_root(profile_root)
+    # A pending record survives every interruption, even when the two revisions
+    # have identical Skill contents. Only this final atomic commit clears it.
+    pending.replace(install_record_path(env))
+    return catalog
+
+
+def _remove_root(path: Path) -> None:
+    """Remove only this managed path, never a linked directory's target."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def _replace_root(root: Path, staged: Path) -> None:
     superseded = root.with_name(f".{root.name}.superseded")
-    for scratch in (staged, superseded):
-        if scratch.exists():
-            shutil.rmtree(scratch)
-
-    # Build beside the Skill root and swap, so an interrupted install cannot
-    # leave a Run reading half a catalog. `symlinks=True` copies links rather
-    # than their targets, so nothing outside the checkout is ever read here;
-    # the staged tree is then rejected outright if it contains any, because a
-    # Skill root is documents and an escaping link is the one way an upstream
-    # revision could reach a path this machine never pinned.
-    shutil.copytree(source, staged, symlinks=True)
-    _reject_symlinks(staged, pin)
-
-    # Move the old catalog aside rather than deleting it, so the window in
-    # which this machine has no catalog is one rename wide and recoverable.
-    displaced = False
-    if root.exists():
+    _remove_root(superseded)
+    displaced = root.exists() or root.is_symlink()
+    if displaced:
         root.replace(superseded)
-        displaced = True
     try:
         staged.replace(root)
-        catalog = InstalledCatalog(
-            root=root,
-            repository=pin.repository,
-            revision=checkout.revision,
-            skills=_catalog_skills(root),
-            sha256=catalog_digest(root),
-        )
-        _write_install_record(env, catalog)
     except OSError:
-        if displaced and not root.exists():
+        if displaced:
             superseded.replace(root)
         raise
-    if displaced:
-        shutil.rmtree(superseded, ignore_errors=True)
-    return catalog
+    _remove_root(superseded)
 
 
 def _reject_symlinks(staged: Path, pin: SkillSourcePin) -> None:
@@ -338,7 +485,13 @@ def refresh_installed_catalog(
     installed = read_install_record(environ)
     intact = installed is not None and _still_matches_record(installed)
 
-    if intact and installed is not None and installed.revision == resolved_pin.revision:
+    if intact and installed is not None and _matches_pin(installed, resolved_pin):
+        if installed.schema_version == 1:
+            installed = replace(installed, schema_version=_RECORD_SCHEMA_VERSION)
+            try:
+                _stage_install_record(environ, installed).replace(install_record_path(environ))
+            except OSError as exc:
+                raise SkillInstallError(f"could not upgrade the catalog install record: {exc}") from exc
         return RefreshOutcome(catalog=installed, action=ACTION_CURRENT)
 
     if installed is None:
@@ -359,7 +512,7 @@ def refresh_installed_catalog(
                 f"{installed_catalog_dir(environ)}, so a Run cannot start without "
                 f"it; restore network access and run `{SETUP_COMMAND}`"
             ) from exc
-        if not intact:
+        if not _still_matches_record(installed):
             raise SkillInstallError(
                 f"the Skill catalog in {installed_catalog_dir(environ)} no longer "
                 f"matches the revision {installed.short_revision} it records, and "

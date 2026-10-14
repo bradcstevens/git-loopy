@@ -405,6 +405,8 @@ def _machine_removals(env: Mapping[str, str]) -> list[_Removal]:
     scope = global_dir(env)
     candidates = (
         _plan("installed Skill catalog", skill_install.installed_catalog_dir(env)),
+        _plan("installed Agent profiles", skill_install.installed_profiles_dir(env)),
+        _plan("Planner roots", scope / "planner"),
         _plan(
             "installed Skill catalog record",
             skill_install.install_record_path(env),

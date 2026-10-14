@@ -386,10 +386,15 @@ def test_acquisition_is_idempotent(
     assert validate_skill_source(pin, destination).revision == pin.revision
 
 
-def test_an_optional_profile_pin_does_not_install_or_validate_profiles_yet(
-    tmp_path: Path, upstream: tuple[Path, SkillSourcePin]
+@pytest.mark.parametrize("profiles_pinned", [False, True])
+def test_only_a_pin_naming_profiles_requires_them_to_validate_before_install(
+    tmp_path: Path, upstream: tuple[Path, SkillSourcePin], profiles_pinned: bool
 ) -> None:
-    from git_loopy.skill_install import installed_catalog_dir, refresh_installed_catalog
+    from git_loopy.skill_install import (
+        SkillInstallError,
+        installed_catalog_dir,
+        refresh_installed_catalog,
+    )
 
     root, pin = upstream
     profiles = root / "profiles"
@@ -397,8 +402,19 @@ def test_an_optional_profile_pin_does_not_install_or_validate_profiles_yet(
     (profiles / "invalid.md").write_text("# Not a valid profile set\n", encoding="utf-8")
     _git(root, "add", "profiles")
     _git(root, "commit", "--quiet", "-m", "carry unconsumed profiles")
-    pin = replace(pin, revision=_git(root, "rev-parse", "HEAD"), profiles_directory="profiles")
+    pin = replace(
+        pin,
+        revision=_git(root, "rev-parse", "HEAD"),
+        profiles_directory="profiles" if profiles_pinned else None,
+    )
     env = {"XDG_CONFIG_HOME": str(tmp_path / "config")}
+
+    if profiles_pinned:
+        with pytest.raises(SkillInstallError, match="invalid Agent profiles"):
+            refresh_installed_catalog(pin, env=env)
+        assert not installed_catalog_dir(env).exists()
+        assert not (installed_catalog_dir(env).parent / "profiles").exists()
+        return
 
     outcome = refresh_installed_catalog(pin, env=env)
 

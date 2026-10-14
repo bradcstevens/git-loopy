@@ -102,6 +102,11 @@ _CONFIG_HOME_ASSETS = (
         provenance_name=None,
     ),
     _ConfigHomeAsset(
+        name="Agent profiles",
+        locate=lambda env: (skill_install.installed_profiles_dir(env),),
+        provenance_name=None,
+    ),
+    _ConfigHomeAsset(
         name="TUI helper",
         locate=_tui_helper_paths,
         provenance_name=None,

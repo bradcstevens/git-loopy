@@ -907,6 +907,8 @@ def test_main_info_classifies_the_running_operators_own_config_home(
         previous=None,
     )
     prompt.write_text("# scaffolded\n\nMy own Run instructions.\n", encoding="utf-8")
+    (scope / "profiles").mkdir()
+    (scope / "profiles" / "review.md").write_text("# Installed profile\n", encoding="utf-8")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config-home"))
 
     assert cli_module.main(["info", "--json"]) == 0
@@ -918,6 +920,7 @@ def test_main_info_classifies_the_running_operators_own_config_home(
         ("config.toml", str(config), True, "untouched"),
         ("PROMPT.md", str(prompt), True, "customized"),
         ("installed catalog", str(scope / "skills"), False, "unrecorded"),
+        ("Agent profiles", str(scope / "profiles"), True, "unrecorded"),
         ("TUI helper", str(scope / "bin" / "git-loopy-tui"), False, "unrecorded"),
     ]
 
