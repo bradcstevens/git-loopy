@@ -755,6 +755,7 @@ def test_unbound_pool_fixture(case: dict[str, Any]) -> None:
 
 
 _EVENT_SCHEMA = _load_fixture("event-schema.json")
+_HOST_YIELD = _load_fixture("host-yield.json")
 _DASHBOARD_INSIGHTS = _load_fixture("dashboard-insights.json")
 
 
@@ -1346,10 +1347,16 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.30 selects execution profiles and narrows Skill exposure; 2.31 enforces
     Reviewer read-only access. Permission
     reasons remain open strings, so Event revision 1.8 and schema 1 stay intact.
+
+    2.32 discloses the **Host yield policy** the Run applied (#817). The additive
+    ``host_yield`` sibling on ``wrapper.run.start`` advances the Event fixture
+    revision to 1.9; compatibility schema stays 1, no envelope key or Event-type
+    literal is added, and a trace without the disclosure stays readable as
+    ``unknown``.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.8"
-    assert _EVENT_SCHEMA["contract_version"] == "2.31"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.9"
+    assert _EVENT_SCHEMA["contract_version"] == "2.32"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1450,6 +1457,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
             ],
             "run_start_disclosures_optional": [
                 "host_metering",
+                "host_yield",
                 "ci_trigger_identity",
             ],
             # #642: the Unbound-Run notice words an empty or refused Pool by
@@ -2102,12 +2110,17 @@ def test_event_fixture_pins_execution_host_event_provenance() -> None:
 def test_event_fixture_pins_run_start_host_disclosures() -> None:
     """Host metering and CI identity are Run facts, not host-object members."""
     disclosures = _EVENT_SCHEMA["run_start_disclosures"]
-    assert disclosures["keys"] == ["host_metering", "ci_trigger_identity"]
+    assert disclosures["keys"] == [
+        "host_metering",
+        "host_yield",
+        "ci_trigger_identity",
+    ]
     assert disclosures["host_metering_states"] == [
         "not_applicable",
         "free",
         "metered",
     ]
+    assert disclosures["host_yield_states"] == ["utility", "none", "unsupported"]
     assert disclosures["producers"] == ["python"]
     assert disclosures["non_producers"] == ["shell", "powershell"]
     assert (
@@ -2599,7 +2612,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.23"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.24"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -6653,3 +6666,99 @@ def test_a_lane_scheduling_distribution_emits_the_membership_read(
     ]
     for key in contract["required_when_present"]:
         assert key in membership_reads[0], key
+
+
+# ---------------------------------------------------------------------------
+# host-yield.json: the Host yield policy and what the Run discloses (#817)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "case", _HOST_YIELD["cases"], ids=lambda case: case["id"]
+)
+def test_host_yield_fixture_pins_the_policy_and_the_state_disclosed(
+    case: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The resolved policy and the disclosed state are two facts, not one.
+
+    A port that published its resolved Config value would pass every ``darwin``
+    case here and still be wrong, because off macOS the Config resolves to
+    ``none`` while the contract requires ``unsupported`` (§12). The fixture
+    carries both columns so that collapse cannot hide.
+    """
+    from git_loopy.host_yield import (
+        default_host_yield,
+        host_yield_disclosure,
+        parse_host_yield,
+    )
+
+    monkeypatch.setattr("sys.platform", case["platform"])
+    policy = (
+        default_host_yield()
+        if case["configured"] is None
+        else parse_host_yield(case["configured"])
+    )
+    assert policy == case["expected_policy"]
+    assert host_yield_disclosure(policy) == case["expected_disclosure"]
+
+
+@pytest.mark.parametrize("value", _HOST_YIELD["refused_values"])
+def test_host_yield_fixture_pins_what_the_contract_refuses(value: str) -> None:
+    """`nice` and the background clamp are refused, never silently downgraded."""
+    from git_loopy.host_yield import parse_host_yield
+
+    with pytest.raises(ValueError):
+        parse_host_yield(value)
+
+
+def test_host_yield_fixture_pins_what_the_contract_normalizes() -> None:
+    from git_loopy.host_yield import parse_host_yield
+
+    for raw, expected in _HOST_YIELD["normalized_values"].items():
+        assert parse_host_yield(raw) == expected
+
+
+def test_host_yield_fixture_and_event_schema_declare_one_vocabulary() -> None:
+    """Two files naming the disclosure's states drift invisibly."""
+    assert (
+        _HOST_YIELD["disclosure_states"]
+        == _EVENT_SCHEMA["run_start_disclosures"]["host_yield_states"]
+    )
+    assert _HOST_YIELD["contract_version"] == _EVENT_SCHEMA["contract_version"]
+
+
+def test_host_yield_fixture_pins_which_platforms_declare_a_policy() -> None:
+    """`clamped_platforms` is answered by the code, not merely asserted in prose.
+
+    Without this the key reads as normative while pinning nothing: a port could
+    contradict it and still pass, which is the "green for never having heard of
+    it" the Conformance rule exists to prevent (§13).
+    """
+    from git_loopy.host_yield import platform_declares_a_policy
+
+    clamped = _HOST_YIELD["clamped_platforms"]
+    assert clamped
+    for platform in ("darwin", "linux", "win32"):
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr("sys.platform", platform)
+            assert platform_declares_a_policy() is (platform in clamped)
+
+    # The same list, read off the cases: a platform that declares a policy is
+    # exactly one whose disclosure is something other than `unsupported`.
+    for case in _HOST_YIELD["cases"]:
+        declares = case["expected_disclosure"] != "unsupported"
+        assert declares is (case["platform"] in clamped), case["id"]
+
+
+def test_host_yield_fixture_pins_the_mechanisms_that_do_not_qualify() -> None:
+    """§4 names `nice` and the background clamp; both must be refused, not taken.
+
+    The binding that gives this key weight is the containment: a mechanism §4
+    disqualifies must also appear in the values the parser refuses, so the two
+    keys cannot drift into disagreeing about the same word. The refusals
+    themselves are proved once, by the `refused_values` test above; repeating
+    them here would only restate it.
+    """
+    disqualified = set(_HOST_YIELD["disqualified_mechanisms"])
+    assert disqualified
+    assert disqualified <= set(_HOST_YIELD["refused_values"])

@@ -45,6 +45,7 @@ import itertools
 import json
 import os
 import shutil
+import sys
 from decimal import Decimal
 from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
@@ -515,6 +516,18 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
     )
     assert run_start["schema_version"] == 1
     assert run_start["release_version"] == EXPECTED_RELEASE_VERSION
+    # The **Host yield policy** disclosure (#817). The expected state is the
+    # contract's rule restated here rather than read back from the producer, so
+    # this disagrees with the code when the code is wrong. It is the *wiring*
+    # that is under test: a Run that published its raw Config value instead of
+    # the disclosure says `none` on a host that was never offered the choice,
+    # which this catches wherever `sys.platform` is not `darwin`. The mapping
+    # itself is pinned by `host-yield.json` and driven exhaustively in
+    # `test_conformance.py::test_host_yield_fixture_pins_the_policy_and_the_state_disclosed`.
+    expected_yield = "utility" if sys.platform == "darwin" else "unsupported"
+    assert run_start["host_yield"]["state"] == expected_yield
+    assert isinstance(run_start["host_yield"]["message"], str)
+    assert run_start["host_yield"]["message"]
     assert run_start["insight_capabilities"] == {
         "agent_output": True,
         "structured_agent_events": True,

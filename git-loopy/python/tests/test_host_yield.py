@@ -298,3 +298,43 @@ def test_line_printer_emits_config_warnings_once_across_reexec(
     assert result.returncode != 0
     assert result.stderr.count("GIT_LOOPY_PRICING_FILE is set") == 1
     assert result.stderr.count("unknown-host-yield-test-model") == 1
+
+
+# ---------------------------------------------------------------------------
+# The Run-start disclosure (#817): what the Run says it applied
+#
+# The platform-to-state mapping itself is pinned by `host-yield.json` and driven
+# in `test_conformance.py`; it is the family's contract, not this module's. What
+# belongs here is the composition this file exists for: that a Config resolved
+# through any tier reaches the disclosure.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("env", "project", "global_"),
+    [
+        ({"GIT_LOOPY_HOST_YIELD": "none"}, {}, {}),
+        ({}, {"host_yield": "none"}, {}),
+        ({}, {}, {"host_yield": "none"}),
+    ],
+    ids=["env-var", "project-config", "global-config"],
+)
+def test_every_opt_out_tier_reaches_the_disclosure_as_none(
+    monkeypatch: pytest.MonkeyPatch,
+    env: dict[str, str],
+    project: dict[str, object],
+    global_: dict[str, object],
+) -> None:
+    """Each tier an operator can opt out in must reach `wrapper.run.start`.
+
+    The resolution order is proved above and the mapping beside it; this is the
+    composition, which neither proves on its own. A disclosure wired to one tier
+    would report `utility` on a Run the operator had switched off in another.
+    """
+    from git_loopy.host_yield import host_yield_disclosure
+
+    monkeypatch.setattr("sys.platform", "darwin")
+    config = cli.resolve_config(
+        cli.build_parser().parse_args([]), env, project=project, global_=global_
+    ).run
+    assert host_yield_disclosure(config.host_yield) == "none"

@@ -10,6 +10,7 @@ def test_a_local_host_says_host_metering_is_not_applicable() -> None:
         host_placement="local",
         repository_visibility=None,
         inside_ci=False,
+        host_yield="utility",
     )
 
     assert disclosures["host_metering"] == {
@@ -26,6 +27,7 @@ def test_a_public_target_says_the_standard_actions_runner_is_free() -> None:
         host_placement="github-actions",
         repository_visibility="PUBLIC",
         inside_ci=False,
+        host_yield="utility",
     )
 
     assert disclosures["host_metering"] == {
@@ -42,6 +44,7 @@ def test_a_private_target_discloses_unreported_actions_spend() -> None:
         host_placement="github-actions",
         repository_visibility="PRIVATE",
         inside_ci=False,
+        host_yield="utility",
     )
 
     assert disclosures["host_metering"] == {
@@ -59,6 +62,7 @@ def test_a_ci_run_discloses_its_non_triggering_publishing_identity() -> None:
         host_placement="local",
         repository_visibility=None,
         inside_ci=True,
+        host_yield="utility",
     )
 
     assert disclosures["ci_trigger_identity"] == {
@@ -76,6 +80,63 @@ def test_a_non_ci_run_omits_the_ci_trigger_identity_disclosure() -> None:
         host_placement="local",
         repository_visibility=None,
         inside_ci=False,
+        host_yield="utility",
     )
 
     assert "ci_trigger_identity" not in disclosures
+
+
+# ---------------------------------------------------------------------------
+# The Host yield policy disclosure (#817)
+# ---------------------------------------------------------------------------
+
+
+def test_an_applied_clamp_discloses_that_the_run_yields() -> None:
+    disclosures = run_start_disclosures(
+        host_placement="local",
+        repository_visibility=None,
+        inside_ci=False,
+        host_yield="utility",
+    )
+
+    assert disclosures["host_yield"] == {
+        "state": "utility",
+        "message": (
+            "This Run yields to your foreground work: it and every process it "
+            "starts run under the macOS utility QoS clamp."
+        ),
+    }
+
+
+def test_an_operator_opt_out_discloses_that_the_run_does_not_yield() -> None:
+    disclosures = run_start_disclosures(
+        host_placement="local",
+        repository_visibility=None,
+        inside_ci=False,
+        host_yield="none",
+    )
+
+    assert disclosures["host_yield"] == {
+        "state": "none",
+        "message": (
+            "The Host yield policy is off by operator request, so this Run "
+            "competes with your foreground work at normal priority."
+        ),
+    }
+
+
+def test_a_platform_with_no_declared_policy_discloses_unsupported() -> None:
+    disclosures = run_start_disclosures(
+        host_placement="local",
+        repository_visibility=None,
+        inside_ci=False,
+        host_yield="unsupported",
+    )
+
+    assert disclosures["host_yield"] == {
+        "state": "unsupported",
+        "message": (
+            "This platform declares no Host yield policy, so this Run makes no "
+            "yield guarantee."
+        ),
+    }

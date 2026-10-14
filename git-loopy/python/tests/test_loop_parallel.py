@@ -102,6 +102,7 @@ import json
 import logging
 import re
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -5151,6 +5152,10 @@ def test_run_start_discloses_host_metering_and_ci_identity_once(
     assert starts[0]["execution_host"]["placement"] == "github-actions"
     assert starts[0]["host_metering"]["state"] == "free"
     assert starts[0]["ci_trigger_identity"]["can_trigger_downstream_ci"] is False
+    # The Parallel path emits its own `wrapper.run.start` (#817): a disclosure
+    # wired on only one of the two call sites is the drift this catches.
+    expected_yield = "utility" if sys.platform == "darwin" else "unsupported"
+    assert starts[0]["host_yield"]["state"] == expected_yield
 
 
 def test_parallel_loop_materializes_remote_contributions_before_integration(

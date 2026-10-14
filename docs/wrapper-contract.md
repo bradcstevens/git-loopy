@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.31 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.32 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -710,6 +710,16 @@ casing. The Orchestrator MUST capture the agent process's real exit status
 turn. Streaming/live output is rendered per port (plain text in phase 1; the **TUI helper** from
 phase 2).
 
+**Host yield policy (contract 2.32).** Every process that does a Run's work — the agent turn and
+every tool command it starts — MUST run under the host's declared **Host yield policy**, so an
+unattended Run does not take the operator's machine away from them. On macOS that policy is the
+`utility` QoS clamp, applied at launch and inherited by children. `nice` and the `background`
+clamp do not qualify: `nice` leaves the foreground a fraction of the cores the clamp leaves it,
+and the `background` clamp starves the Run itself (#788). A platform that declares no policy is
+`unsupported`, and the Orchestrator starts the turn unchanged there rather than substituting a
+mechanism this clause rejects. An operator opts out with `GIT_LOOPY_HOST_YIELD=none` (§11), and
+the Run discloses what it actually applied on `wrapper.run.start` (§12).
+
 ## 5. Auto-close backstop (phase 1, MUST)
 
 After the agent turn, the Orchestrator MUST walk the Iteration's **new** commit messages for
@@ -896,6 +906,7 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_OTEL_ENABLED`       | 4     | off              | `1` enables OTLP export (or `OTEL_EXPORTER_OTLP_ENDPOINT`).    |
 | `GIT_LOOPY_MAX_PARALLEL`       | 5     | `1`              | MUST be honoured only by a member whose declared parallel capability manifest exposes an operator-selected Lane count; Python refuses it because its Execution host declares the ceiling. |
 | `GIT_LOOPY_WORKTREE_SETUP`     | 5     | none             | Per-worktree setup command for **Parallel mode**.             |
+| `GIT_LOOPY_HOST_YIELD`         | 1     | `utility` on macOS, otherwise nothing to apply | The **Host yield policy** (§4). `utility` applies the macOS QoS clamp; `none` opts out. Any other value is refused with the preflight-failure exit code — a policy this contract does not define is never silently downgraded. On a platform that declares no policy there is nothing to apply, and the Run discloses `unsupported` (§12) rather than an opt-out the operator never made. |
 
 ## 12. Event schema (phase 1, MUST)
 
@@ -1207,6 +1218,18 @@ once per Run and MUST NOT be repeated per contribution. Shell and PowerShell emi
 neither payload because they emit no contribution lifecycle Event. Consumers MUST
 read an absent declaration or stamp in a historical trace as `unknown`, never as
 an inferred local placement. These are additive payload fields within Event schema
+compatibility 1; no envelope key or Event-type literal is added.
+
+**Host yield policy (contract 2.32, #817).** `wrapper.run.start` MUST carry `host_yield`, a
+sibling of `host_metering`, naming the **Host yield policy** (§4) the Run actually applied. Its
+states are `utility` when the macOS QoS clamp was applied, `none` when the operator opted out
+with `GIT_LOOPY_HOST_YIELD=none`, and `unsupported` on a platform that declares no policy. It is
+the policy in force, **not** the resolved Config value: a host with no declared policy resolves
+its Config to `none` because there is nothing to apply, yet MUST disclose `unsupported`, because
+`none` is an operator's opt-out and a host that was never offered the choice has not opted out of
+anything. Consumers MUST read an absent `host_yield` in a historical trace as `unknown`, never as
+an inferred value — in particular never as `none`, which would report a declined clamp on a Run
+that predates the disclosure. This is an additive payload field within Event schema
 compatibility 1; no envelope key or Event-type literal is added.
 
 **Run-start issue source (contract 2.11, #642).** `wrapper.run.start` MAY carry
@@ -2308,14 +2331,15 @@ and 2.26 with per-issue Endings and inline Queue explanations (ADR-0075),
 and 2.27 with the per-attempt account and inline Skipped marker (ADR-0075),
 and 2.29 with the Python-only non-execution Task-type exclusion (ADR-0088),
 and 2.30 with execution profile selection and Skill exposure (ADR-0078),
-and 2.31 with Reviewer read-only access (ADR-0078/0086).
+and 2.31 with Reviewer read-only access (ADR-0078/0086),
+and 2.32 with the Host yield disclosure (§4, §12, #817).
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
 it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1), then 2.29 with the Python-only non-execution Task-type exclusion.
-Event revision 1.8 and Dashboard revision 1.23 record current provenance;
+Event revision 1.9 and Dashboard revision 1.24 record current provenance;
 the Dashboard projection is unchanged. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;
 the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility

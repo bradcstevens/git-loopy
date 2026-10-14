@@ -2796,3 +2796,28 @@ fn parking_after_admission_preserves_queue_and_drain_phase() {
         assert_eq!(posture["parked_count"], 0);
     }
 }
+
+#[test]
+fn a_run_start_carrying_the_host_yield_disclosure_still_reads() {
+    // Contract 2.32 (#817): `host_yield` is an additive Run-start disclosure the
+    // Dashboard does not consume, like `host_metering` before it. The proof that
+    // matters is equivalence, not mere absence of a panic: a trace that discloses
+    // its Host yield policy must reduce to exactly what the same trace without the
+    // disclosure reduces to, so an additive contract field never costs a reader.
+    let with_yield = r#"{"type":"wrapper.run.start","run_id":"r1","max_nmt_strikes":3,"host_yield":{"state":"utility","message":"This Run yields to your foreground work: it and every process it starts run under the macOS utility QoS clamp."}}"#;
+    let without_yield = r#"{"type":"wrapper.run.start","run_id":"r1","max_nmt_strikes":3}"#;
+    let charge = r#"{"type":"wrapper.strike","run_id":"r1","iter":1,"issue":7,"ending":"no_more_tasks","strikes":2,"max_strikes":3,"outcome":"warn"}"#;
+
+    let header = |events: &[&str]| {
+        reduce_jsonl(events, IssueRef::number(7))["dashboard"]["header"]["strikes"].clone()
+    };
+
+    assert_eq!(
+        header(&[with_yield, charge]),
+        header(&[without_yield, charge])
+    );
+    assert_eq!(
+        header(&[with_yield, charge]),
+        serde_json::json!({"current": 2, "limit": 3})
+    );
+}

@@ -267,6 +267,7 @@ from git_loopy.skill_install import (
 from git_loopy.rolling_pool import RollingPool, is_parallel_safe
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.run_readback import run_start_payload
+from git_loopy.host_yield import host_yield_disclosure
 from git_loopy.run_start_disclosures import run_start_disclosures
 from git_loopy.issue_pin import (
     PIN_READ_BOUND,
@@ -4225,6 +4226,7 @@ class _Loop:
                 host_placement=execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT,
                 repository_visibility=_repository_visibility(self._source),
                 inside_ci=_publishing_from_ci(os.environ),
+                host_yield=host_yield_disclosure(self._config.host_yield),
             ),
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
@@ -4957,6 +4959,7 @@ class _ParallelLoop:
                 host_placement=host_placement,
                 repository_visibility=_repository_visibility(self._source),
                 inside_ci=_publishing_from_ci(os.environ),
+                host_yield=host_yield_disclosure(self._config.host_yield),
             )
         )
         self._serial._emit(

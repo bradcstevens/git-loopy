@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.32",
+  "note": "Contract 2.32 (#817), building on the Host yield policy #816 gave the Python Runner. Two different things are pinned here and they must not be collapsed: the policy a host resolves, and the state the Run discloses. On macOS the policy is the utility QoS clamp, and nice and the background clamp do not qualify as one -- #788's measurements put foreground throughput at 2.62 of 12 cores under nice -n 10 against 10.52 under the utility clamp, and the background clamp starves the Run itself. A platform with no declared policy resolves its Config to none, because there is nothing to apply, but discloses unsupported: none is an operator's opt-out, and a host that was never offered the choice has not opted out of anything. A consumer reads an absent disclosure on an old trace as unknown, never as an inferred value.",
+  "disclosure_states": ["utility", "none", "unsupported"],
+  "clamped_platforms": ["darwin"],
+  "disqualified_mechanisms": ["nice", "background"],
+  "cases": [
+    {
+      "id": "macos-defaults-to-the-utility-clamp",
+      "platform": "darwin",
+      "configured": null,
+      "expected_policy": "utility",
+      "expected_disclosure": "utility"
+    },
+    {
+      "id": "macos-operator-opt-out-is-disclosed-as-none",
+      "platform": "darwin",
+      "configured": "none",
+      "expected_policy": "none",
+      "expected_disclosure": "none"
+    },
+    {
+      "id": "macos-explicit-utility-matches-the-default",
+      "platform": "darwin",
+      "configured": "utility",
+      "expected_policy": "utility",
+      "expected_disclosure": "utility"
+    },
+    {
+      "id": "linux-declares-no-policy-and-never-reports-an-opt-out",
+      "platform": "linux",
+      "configured": null,
+      "expected_policy": "none",
+      "expected_disclosure": "unsupported"
+    },
+    {
+      "id": "windows-declares-no-policy-and-never-reports-an-opt-out",
+      "platform": "win32",
+      "configured": null,
+      "expected_policy": "none",
+      "expected_disclosure": "unsupported"
+    },
+    {
+      "id": "a-utility-request-off-macos-is-still-unsupported",
+      "platform": "linux",
+      "configured": "utility",
+      "expected_policy": "utility",
+      "expected_disclosure": "unsupported"
+    }
+  ],
+  "refused_values": ["background", "nice", "", "1"],
+  "normalized_values": {
+    "utility ": "utility",
+    "UTILITY": "utility",
+    " None ": "none"
+  }
+}

@@ -3,6 +3,12 @@
   "contract_version": "2.0",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
+    "host-yield.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives every case through default_host_yield, parse_host_yield and host_yield_disclosure under a patched platform, and python/tests/test_host_yield.py proves the Config resolution and the process boundary that applies the clamp."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "ADR-0091: this fixture is introduced at contract 2.32, above the dormant shell Path baseline's Contract support 2.26; no new implementation debt is owed."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "ADR-0091: this fixture is introduced at contract 2.32, above the dormant PowerShell Path baseline's Contract support 2.26; no new implementation debt is owed."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The TUI helper consumes Events and starts no agent turn; applying a Host yield policy belongs to Orchestrators. That it still reads a trace carrying the disclosure is proved by tui/tests/semantic_view.rs::a_run_start_carrying_the_host_yield_disclosure_still_reads."}
+    },
     "agent-profiles.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_session.py drives every memory, permission, selection, exposure and access case through IterationSession and its registered SDK permission handler, asserting creation options and persisted per-request decisions for the Reviewer and every execution profile, for Agents and Subagents. It also executes an approved feedback loop and proves its authorization is snapshotted. test_iteration_end_to_end.py, test_loop_parallel.py and test_github_actions_worker.py prove Pickup, Lane and Recovery profile binding."},
       "shell": {"kind": "waived_out_of_scope", "reason": "ADR-0091: this fixture is introduced at contract 2.28, above the dormant shell Path baseline's Contract support 2.26; no new implementation debt is owed."},
