@@ -14,10 +14,14 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Mapping
+from unittest.mock import create_autospec
 
 import pytest
+from copilot import CopilotClient, CopilotSession
 
+from git_loopy.config import RunConfig
 from git_loopy.dynamic_route import (
     AssessmentCandidate,
     AssessmentRequest,
@@ -31,7 +35,9 @@ from git_loopy.dynamic_route import (
     SupportingEvidenceStatus,
 )
 from git_loopy import selector_session
+from git_loopy.persist import EventLogWriter
 from git_loopy.selector_session import SessionRouteSelector
+from git_loopy.sinks import SinkFanout
 
 
 def _usage_event(credits: Decimal) -> dict[str, Any]:
@@ -140,6 +146,29 @@ def _selector(answer: str | None, billing: tuple[dict[str, Any], ...], **overrid
     )
     base.update(overrides)
     return SessionRouteSelector(**base)
+
+
+async def test_selector_disables_memory_through_the_production_session(
+    tmp_path: Path,
+) -> None:
+    client = create_autospec(CopilotClient, instance=True, spec_set=True)
+    client.create_session.return_value = create_autospec(
+        CopilotSession, instance=True, spec_set=True
+    )
+    with EventLogWriter(tmp_path / "events.jsonl") as event_log:
+        selector = SessionRouteSelector(
+            client=client,
+            config=RunConfig(),
+            event_log=event_log,
+            sinks=SinkFanout(()),
+            run_id="01HXR0000000000000000000AA",
+            working_directory=str(tmp_path),
+            send_timeout_seconds=30.0,
+        )
+        await selector(_settings(), _request())
+
+    client.create_session.assert_awaited_once()
+    assert client.create_session.call_args.kwargs["memory"] == {"enabled": False}
 
 
 def test_the_selector_session_runs_on_the_elected_settings() -> None:

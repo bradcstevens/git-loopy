@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.28",
+  "description": "Agent profiles: every session the Orchestrator opens is isolated from harness memory and cross-session history (ADR-0076).",
+  "memory_cases": [
+    {
+      "id": "serial-iteration",
+      "session": {"run_id": "01ABCDEFGHJKMNPQRSTVWXYZ12", "iter_num": 1},
+      "expected_memory": {"enabled": false}
+    },
+    {
+      "id": "local-lane",
+      "session": {"run_id": "01ABCDEFGHJKMNPQRSTVWXYZ12", "iter_num": 2, "issue_ref": 822, "working_directory": "lane"},
+      "expected_memory": {"enabled": false}
+    },
+    {
+      "id": "remote-lane",
+      "session": {"run_id": "01ABCDEFGHJKMNPQRSTVWXYZ12", "iter_num": null, "issue_ref": 822, "working_directory": "remote-lane"},
+      "expected_memory": {"enabled": false}
+    },
+    {
+      "id": "recovery",
+      "session": {"run_id": "01ABCDEFGHJKMNPQRSTVWXYZ12", "iter_num": 3, "issue_ref": 822, "working_directory": "integration"},
+      "expected_memory": {"enabled": false}
+    },
+    {
+      "id": "trial",
+      "session": {"run_id": null, "iter_num": null, "event_identity": {"calibration_id": "calibration-1", "trial_id": "trial-1"}, "working_directory": "trial"},
+      "expected_memory": {"enabled": false}
+    },
+    {
+      "id": "task-type-classifier",
+      "session": {"run_id": "01ABCDEFGHJKMNPQRSTVWXYZ12", "iter_num": null},
+      "expected_memory": {"enabled": false}
+    },
+    {
+      "id": "route-selector",
+      "session": {"run_id": "01ABCDEFGHJKMNPQRSTVWXYZ12", "iter_num": null, "working_directory": "selector"},
+      "expected_memory": {"enabled": false}
+    }
+  ],
+  "permission_cases": [
+    {
+      "id": "agent-and-subagents-cannot-read-history",
+      "deny_tools": [],
+      "requests": [
+        {"kind": "custom-tool", "tool_name": "session_store_sql", "tool_call_id": "agent-history-1"},
+        {"kind": "custom-tool", "tool_name": "session_store_sql", "tool_call_id": "subagent-history-1"},
+        {"kind": "hook", "tool_name": "session_store_sql", "tool_call_id": "subagent-history-2"},
+        {"kind": "custom-tool", "tool_name": "session_store_sql", "tool_call_id": "agent-history-2"}
+      ],
+      "expected_decision": "reject",
+      "expected_event": "tool.permission_denied",
+      "expected_reason": "cross_session_history_disabled"
+    },
+    {
+      "id": "history-refusal-is-not-an-operator-deny",
+      "deny_tools": ["session_store_sql"],
+      "requests": [
+        {"kind": "custom-tool", "tool_name": "session_store_sql", "tool_call_id": "history-also-denied"}
+      ],
+      "expected_decision": "reject",
+      "expected_event": "tool.permission_denied",
+      "expected_reason": "cross_session_history_disabled"
+    },
+    {
+      "id": "ordinary-tool-stays-approved",
+      "deny_tools": [],
+      "requests": [
+        {"kind": "custom-tool", "tool_name": "edit", "tool_call_id": "ordinary-edit"}
+      ],
+      "expected_decision": "approve-once",
+      "expected_event": "tool.permission_requested",
+      "expected_reason": null
+    }
+  ]
+}

@@ -415,6 +415,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
     assert fake_client.start_call_count == 1
     assert fake_client.stop_call_count == 1, "client.stop() must be called once at end"
     assert fake_client.create_calls[0]["enable_skills"] is True
+    assert fake_client.create_calls[0]["memory"] == {"enabled": False}
     disabled_skills = fake_client.create_calls[0]["disabled_skills"]
     assert disabled_skills == sorted(disabled_skills)
     assert len(fake_client.create_calls[0]["skill_directories"]) == 1

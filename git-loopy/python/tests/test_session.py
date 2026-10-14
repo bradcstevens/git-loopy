@@ -42,6 +42,7 @@ from copilot.generated.session_events import (
     AssistantReasoningDeltaData,
     PermissionRequest,
     PermissionRequestCustomTool,
+    PermissionRequestHook,
     SessionEvent,
     SessionEventType,
     SessionStartData,
@@ -85,6 +86,10 @@ from git_loopy.sinks import SinkFanout
 from git_loopy.ui import IterationSnapshot, Renderer, RunSummary  # noqa: F401
 
 _FIXED_RUN_ID = "01ABCDEFGHJKMNPQRSTVWXYZ12"
+_AGENT_PROFILES = json.loads(
+    (Path(__file__).resolve().parents[2] / "conformance" / "agent-profiles.json")
+    .read_text(encoding="utf-8")
+)
 
 
 # ---------------------------------------------------------------------------
@@ -716,6 +721,79 @@ async def test_iteration_session_creates_sdk_session_on_aenter(
         ) as sdk_session:
             assert sdk_session is fake_client.created[-1]
             assert len(fake_client.create_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "case", _AGENT_PROFILES["memory_cases"], ids=lambda case: case["id"]
+)
+async def test_every_session_scope_disables_harness_memory(
+    case: dict[str, Any],
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+) -> None:
+    with event_log:
+        async with IterationSession(
+            fake_client,
+            config=_StubConfig(),
+            event_log=event_log,
+            sinks=SinkFanout(()),
+            **case["session"],
+        ):
+            pass
+
+    assert fake_client.create_calls[0].get("memory") == case["expected_memory"]
+
+
+@pytest.mark.parametrize(
+    "scope", _AGENT_PROFILES["memory_cases"], ids=lambda case: case["id"]
+)
+@pytest.mark.parametrize(
+    "case", _AGENT_PROFILES["permission_cases"], ids=lambda case: case["id"]
+)
+async def test_session_history_permissions_are_recorded_per_request(
+    scope: dict[str, Any],
+    case: dict[str, Any],
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+) -> None:
+    with event_log:
+        async with IterationSession(
+            fake_client,
+            config=_StubConfig(deny_tools=frozenset(case["deny_tools"])),
+            event_log=event_log,
+            sinks=SinkFanout(()),
+            **scope["session"],
+        ):
+            handler = fake_client.created[0].on_permission_request
+            for request in case["requests"]:
+                if request["kind"] == "hook":
+                    req = PermissionRequestHook(
+                        tool_name=request["tool_name"],
+                        tool_call_id=request["tool_call_id"],
+                    )
+                else:
+                    assert request["kind"] == "custom-tool"
+                    req = PermissionRequestCustomTool(
+                        tool_description="test tool",
+                        tool_name=request["tool_name"],
+                        tool_call_id=request["tool_call_id"],
+                    )
+                decision = handler(req, {"session_id": "fake-session-id"})
+                assert decision.kind == case["expected_decision"]
+
+    recorded = [
+        json.loads(line) for line in event_log.path.read_text().splitlines()
+    ]
+    assert len(recorded) == len(case["requests"])
+    for event, request in zip(recorded, case["requests"], strict=True):
+        assert event["type"] == case["expected_event"]
+        assert event.get("reason") == case["expected_reason"]
+        assert event["tool_name"] == request["tool_name"]
+        assert event["tool_call_id"] == request["tool_call_id"]
+        assert event["run_id"] == scope["session"]["run_id"]
+        assert event["iter"] == scope["session"]["iter_num"]
+        for key, value in scope["session"].get("event_identity", {}).items():
+            assert event[key] == value
 
 
 async def test_iteration_session_passes_model_through(

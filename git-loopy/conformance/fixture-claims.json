@@ -3,6 +3,12 @@
   "contract_version": "2.0",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
+    "agent-profiles.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_session.py drives every memory and permission case through IterationSession and its registered SDK permission handler, asserting creation options and persisted per-request decisions for Run and Calibration scopes."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "ADR-0091: this fixture is introduced at contract 2.28, above the dormant shell Path baseline's Contract support 2.26; no new implementation debt is owed."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "ADR-0091: this fixture is introduced at contract 2.28, above the dormant PowerShell Path baseline's Contract support 2.26; no new implementation debt is owed."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The TUI helper consumes Events and opens no Agent session; session isolation belongs to Orchestrators."}
+    },
     "status-endings.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_iteration_end_to_end.py drives every case through a serial session and asserts the emitted issue outcome; python/tests/test_loop_parallel.py covers all five Lane terminations and retries."},
       "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator emits no Ending. This implementation debt is carried frozen at its dormant Path baseline, not covered by generic Event serialization.", "issue": 834},

@@ -717,6 +717,7 @@ def test_the_session_runs_the_pair_the_search_chose_in_the_trials_worktree(
     assert len(client.create_calls) == 1
     call = client.create_calls[0]
     assert call["model"] == "claude-haiku-4.5"
+    assert call["memory"] == {"enabled": False}
     assert call["reasoning_effort"] is None
     assert Path(call["working_directory"]).name.endswith("slot-3")
 

@@ -100,5 +100,6 @@ async def test_iteration_session_accepts_locked_sdk_signatures(tmp_path: Path) -
             await active.send_and_wait("Offline contract probe", timeout=120)
 
     client.create_session.assert_awaited_once()
+    assert client.create_session.call_args.kwargs["memory"] == {"enabled": False}
     session.send_and_wait.assert_awaited_once_with("Offline contract probe", timeout=120)
     session.disconnect.assert_awaited_once_with()

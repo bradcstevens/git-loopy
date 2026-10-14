@@ -9,10 +9,16 @@ every way it can fail is non-fatal.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+from unittest.mock import create_autospec
 
 import pytest
+from copilot import CopilotClient, CopilotSession
 
+from git_loopy.config import RunConfig
+from git_loopy.persist import EventLogWriter
+from git_loopy.sinks import SinkFanout
 from git_loopy.sources import AfkReadyItem
 from git_loopy.task_type_classifier import ClassifierPair
 from git_loopy.task_type_session import SessionTaskTypeProposer
@@ -97,6 +103,29 @@ def _proposer(
         cost_meter=cost_meter,
         session_factory=factory,
     )
+
+
+async def test_classifier_disables_memory_through_the_production_session(
+    tmp_path: Path,
+) -> None:
+    client = create_autospec(CopilotClient, instance=True, spec_set=True)
+    client.create_session.return_value = create_autospec(
+        CopilotSession, instance=True, spec_set=True
+    )
+    with EventLogWriter(tmp_path / "events.jsonl") as event_log:
+        proposer = SessionTaskTypeProposer(
+            client=client,
+            config=RunConfig(),
+            event_log=event_log,
+            sinks=SinkFanout(()),
+            run_id="01HXR0000000000000000000AA",
+            working_directory=str(tmp_path),
+            send_timeout_seconds=30.0,
+        )
+        await proposer(ClassifierPair(model="gpt-5-mini", effort="low"), _item())
+
+    client.create_session.assert_awaited_once()
+    assert client.create_session.call_args.kwargs["memory"] == {"enabled": False}
 
 
 @pytest.mark.asyncio

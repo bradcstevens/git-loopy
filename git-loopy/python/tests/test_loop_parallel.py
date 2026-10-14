@@ -835,6 +835,9 @@ def test_parallel_auto_resolution_session_reuses_lane_routed_model(
         if c["working_directory"] and "/integrate/" in c["working_directory"]
     ]
     assert resolution_calls, "expected an auto-resolution session for the Lane"
+    assert all(
+        call["memory"] == {"enabled": False} for call in fake_client.create_calls
+    ), "Lane and Recovery sessions must both disable harness memory"
     for c in resolution_calls:
         assert c["working_directory"].endswith("/issue-42")
         assert c["model"] == "gpt-5-mini"

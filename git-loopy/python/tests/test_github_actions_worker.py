@@ -426,11 +426,7 @@ def test_the_job_session_spends_the_transported_timeout_not_the_sdk_default(
         def __init__(self, _client: Any, **kwargs: Any) -> None:
             recorded.update(kwargs)
 
-        async def __aenter__(self) -> "_Session":
-            return self
-
-        async def __aexit__(self, *_exc: Any) -> bool:
-            return False
+        async def disconnect(self) -> None: ...
 
         async def send_and_wait(self, prompt: str, **kwargs: Any) -> None:
             recorded["prompt"] = prompt
@@ -441,8 +437,10 @@ def test_the_job_session_spends_the_transported_timeout_not_the_sdk_default(
 
         async def stop(self) -> None: ...
 
+        async def create_session(self, **kwargs: Any) -> _Session:
+            return _Session(self, **kwargs)
+
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(session_module, "IterationSession", _Session)
     monkeypatch.setattr(
         copilot_client_module, "make_copilot_client", lambda **_kw: _Client()
     )
@@ -464,6 +462,7 @@ def test_the_job_session_spends_the_transported_timeout_not_the_sdk_default(
 
     assert observed.termination is SessionTermination.COMPLETED
     assert recorded["send_kwargs"] == {"timeout": 21600.0}
+    assert recorded["memory"] == {"enabled": False}
 
 
 def test_the_transported_skill_policy_hides_denied_skills_not_merely_gates_them(

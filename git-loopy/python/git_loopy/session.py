@@ -28,7 +28,8 @@ Public surface
   :class:`PermissionHandlerFn` closing over the closed-world Skill policy,
   deny lists, and a ``record_event`` callback. The handler approves requests by
   default; denies tools in ``deny_tools``; approves ``skill`` only for a
-  canonical name in the Effective Skill policy; and always denies
+  canonical name in the Effective Skill policy; always denies cross-session
+  history (``session_store_sql``); and always denies
   ``ask_user`` (emitting :data:`WRAPPER_ASK_USER_ATTEMPTED` so the
   operator can spot un-triaged issues).
 * :data:`ASK_USER_TOOL_NAME`, :data:`SKILL_TOOL_NAME` — string literals
@@ -38,12 +39,12 @@ Public surface
 Permission posture
 ------------------
 
-Keeps the approve-all tool posture while enforcing a closed-world Skill boundary:
+Approves tools by default while enforcing session isolation and the Skill boundary:
 
 ================  ==================================================
 Posture           Behaviour
 ================  ==================================================
-Default           Every non-Skill request is approved (``approve-once``); a
+Default           Other non-Skill requests are approved (``approve-once``); a
                   :data:`TOOL_PERMISSION_REQUESTED` JSONL event is
                   emitted with tool name and scrubbed arguments.
 ``--deny-tool``   The named tool is rejected with reason
@@ -55,6 +56,9 @@ Default           Every non-Skill request is approved (``approve-once``); a
 Effective policy  Only a canonical, catalogued, enabled Skill name is
                   approved. Invalid, unknown, outside-policy, and
                   legacy-denied requests are rejected distinctly.
+Session history   ``session_store_sql`` is always rejected with reason
+                  ``"cross_session_history_disabled"``, for Agents and
+                  Subagents alike, regardless of the operator's deny list.
 ``ask_user``      Always rejected. The wrapper emits
                   :data:`WRAPPER_ASK_USER_ATTEMPTED` (**not**
                   :data:`TOOL_PERMISSION_DENIED`) so the operator can
@@ -74,6 +78,9 @@ defence-in-depth paths exist because:
 2. If the agent attempts ``ask_user`` via the regular tool/permission
    pathway (e.g. by name-spoofing), the permission handler catches it
    on ``tool_name``.
+
+Every session also passes ``memory={"enabled": False}``, so the harness cannot
+inject persistent memory before the permission handler runs (ADR-0076).
 
 Design notes
 ------------
@@ -172,6 +179,7 @@ _REASON_SKILL_OUTSIDE_POLICY: str = "skill_outside_policy"
 _REASON_SKILL_UNKNOWN: str = "skill_unknown"
 _REASON_SKILL_INVALID: str = "skill_invalid_request"
 _REASON_SKILL_LEGACY_DENY: str = "skill_legacy_denied"
+_REASON_SESSION_HISTORY: str = "cross_session_history_disabled"
 
 
 def _skill_directories(working_directory: str | None) -> list[str]:
@@ -357,7 +365,8 @@ def build_permission_handler(
     decoupled from concrete I/O.
 
     Args:
-        deny_tools: Tool names to reject. Empty set means "approve all".
+        deny_tools: Additional tool names to reject. Empty keeps the mandatory
+            session-history, user-input and Skill-policy guards.
         deny_skills: ``skill``-tool ``arguments.skill`` values to reject.
         skill_policy: Frozen Effective Skill policy, or ``None`` for the
             temporary legacy open-world caller path.
@@ -392,6 +401,20 @@ def build_permission_handler(
         tool_name, tool_args, tool_call_id = _request_identity(req)
         iter_num = iter_provider()
         scrubbed_args = _scrub_permission_args(tool_args, tool_name)
+
+        if tool_name == "session_store_sql":
+            envelope = events.make_event(
+                type=events.TOOL_PERMISSION_DENIED,
+                run_id=run_id,
+                iter=iter_num,
+                **identity,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                arguments=scrubbed_args,
+                reason=_REASON_SESSION_HISTORY,
+            )
+            _safe_record(record_event, envelope)
+            return PermissionDecisionReject()
 
         # 1) ask_user — always deny; emit wrapper.ask_user.attempted
         #    (not tool.permission_denied) so the operator can
@@ -730,6 +753,7 @@ class IterationSession:
         session = await self._client.create_session(
             on_permission_request=handler,
             on_event=self._on_sdk_event,
+            memory={"enabled": False},
             model=self._model,
             reasoning_effort=self._reasoning_effort,
             context_tier=self._context_tier,

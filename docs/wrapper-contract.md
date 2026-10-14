@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.27 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.28 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -1687,6 +1687,8 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
 - **Skill policy** — base-scope selection, explicit empty policy, environment replacement, Run
   overlays, disable-wins, legacy subtraction, Minimal fallback, the four validation failures, and
   the redacted resolved-policy projection (§17).
+- **Agent profiles and session isolation** — harness memory disabled at session creation and
+  cross-session history refused and recorded for Agents and Subagents (§18).
 
 The suite is the generalized successor to the cross-runner parity test ADR-0002 deleted. A
 conformance fixture change is the canonical way to evolve the contract.
@@ -2928,7 +2930,37 @@ prevent.
 which Skills a Run *may* use. A consulted name is per-Iteration observed behaviour, a policy name
 is Run-level availability, and neither may be derived from the other.
 
-## 18. Changing this contract
+## 18. Agent profiles and session isolation (contract 2.28, MUST)
+
+Every session an Orchestrator opens MUST begin without **Agent memory**
+(ADR-0076). The shared session seam MUST explicitly disable harness memory at
+creation (`memory={"enabled": False}` in the Copilot SDK), rather than rely on
+a runtime default or a prompt instruction. This applies to serial
+**Iterations**, local and remote **Lanes**, **Recovery**, **Task-type
+classifiers**, **Route selectors**, and calibration **Trials**. Every in-Run
+**Agent profile**, including a **Reviewer**, is bound by the same isolation.
+
+The session's permission handler MUST refuse the cross-session history tool,
+`session_store_sql`, for the **Agent** and every **Subagent** it starts.
+Every request MUST produce its own `tool.permission_denied` record with
+`reason: "cross_session_history_disabled"` and the request's tool name and
+tool-call identity, under the session's existing Run or Calibration attribution.
+This mandatory reason takes precedence over an operator deny-list match;
+neither an empty deny list nor a Subagent request may bypass it. Ordinary
+tool permissions and the closed-world Skill policy remain unchanged.
+
+The **Planner** works in the Loop engineer's harness outside every Run and is
+exempt. Continuity for an in-Run Agent comes only from the issue tracker and
+repository history, not the Planner's or another Agent's private memory.
+
+`agent-profiles.json` pins both isolation obligations through the production
+session seam. The TUI helper opens no session and is role-waived. The fixture
+is introduced above the dormant shell and PowerShell paths' Contract support
+2.26, so they owe no implementation (ADR-0091). Until the support-scoped register
+lands, their entries are `waived_out_of_scope` with that ADR as the reason.
+This section does not yet require profile installation or selection.
+
+## 19. Changing this contract
 
 1. Update this document and bump the **Contract version**.
 2. Add or update the corresponding **Conformance** fixture(s).
