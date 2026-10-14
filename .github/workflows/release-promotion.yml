@@ -101,14 +101,14 @@ jobs:
             exit 1
           fi
           if ! [[ "$RELEASE_SMOKE_DEADLINE_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
-             awk -v d="$RELEASE_SMOKE_DEADLINE_SECONDS" 'BEGIN { exit !(d > 0 && d <= 6000) }'; then
+             ! awk -v d="$RELEASE_SMOKE_DEADLINE_SECONDS" 'BEGIN { exit !(d > 0 && d <= 6000) }'; then
             echo "::error::RELEASE_SMOKE_DEADLINE_SECONDS must be finite, positive," \
               "and at most 6000 so the smoke can reclaim its work, got" \
               "'$RELEASE_SMOKE_DEADLINE_SECONDS'. See docs/releases/README.md." >&2
             exit 1
           fi
           if ! [[ "$RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
-             awk -v s="$RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS" 'BEGIN { exit !(s > 0) }'; then
+             ! awk -v s="$RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS" 'BEGIN { exit !(s > 0) }'; then
             echo "::error::RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS must be a" \
               "positive number, got '$RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS'." \
               "See docs/releases/README.md." >&2
