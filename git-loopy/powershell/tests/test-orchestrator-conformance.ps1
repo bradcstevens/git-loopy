@@ -49,7 +49,10 @@ $Discriminator = Get-Content `
     -LiteralPath (Join-Path $ConformanceDir "discriminator.json") `
     -Raw |
     ConvertFrom-Json -AsHashtable
-foreach ($Case in $Discriminator["cases"]) {
+$DiscriminatorCases = @($Discriminator["cases"] | Where-Object {
+    -not $_.ContainsKey("distributions") -or "powershell" -cin $_["distributions"]
+})
+foreach ($Case in $DiscriminatorCases) {
     $Labels = @($Case["labels"])
     $Actual = Test-GitLoopyAfkReady `
         -Body $Case["body"] `
@@ -67,8 +70,12 @@ foreach ($Case in $Discriminator["cases"]) {
         $ActualReason `
         "discriminator exclusion reason: $($Case["id"])"
 }
-foreach ($Reason in @($Discriminator["exclusion_reasons"])) {
-    if (@($Discriminator["cases"] | Where-Object {
+Assert-Equal `
+    "missing_acceptance_criteria,missing_both_sections,missing_what_to_build,planning_document" `
+    (($Discriminator["baseline_exclusion_reasons"] | Sort-Object) -join ",") `
+    "discriminator baseline reason vocabulary"
+foreach ($Reason in @($Discriminator["baseline_exclusion_reasons"])) {
+    if (@($DiscriminatorCases | Where-Object {
             $_["exclusion_reason"] -ceq $Reason
         }).Count -eq 0) {
         throw "FAIL: no discriminator case covers exclusion reason $Reason"

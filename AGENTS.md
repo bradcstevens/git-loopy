@@ -199,6 +199,12 @@ labelled `wayfinder:map`, are planning documents, not executable tickets. Never
 apply `ready-for-agent` to them; remove that label if present. Work their
 implementation tickets instead.
 
+Only a human asserts `task-type:planning` or `task-type:review`. A
+`ready-for-agent` issue carrying either exact label is excluded as
+`non_execution_task_type` until a human retypes it to an execution Task type or
+removes `ready-for-agent` and hands it to the Planner. The Runner never relabels
+these issues, and `git-loopy labels` neither reports nor repairs them.
+
 ### Release milestones
 
 A `vX.Y.Z` GitHub milestone is solely the **Promotion** trigger: closing it

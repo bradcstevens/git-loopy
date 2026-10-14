@@ -59,8 +59,8 @@
     },
     "discriminator.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py supplies fixture issue bodies to the production readiness discriminator."},
-      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh supplies fixture cases to the production readiness discriminator."},
-      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 supplies fixture cases to the production readiness discriminator."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh supplies baseline-scoped fixture cases to the production readiness discriminator; Python-only additions above Contract support 2.26 are out of scope (ADR-0091)."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 supplies baseline-scoped fixture cases to the production readiness discriminator; Python-only additions above Contract support 2.26 are out of scope (ADR-0091)."},
       "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard consumes Run Events and never reads an issue body to decide Pickup eligibility."}
     },
     "effort-gate.json": {

@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.28 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.29 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -162,11 +162,20 @@ closed vocabulary:
 | `missing_what_to_build` | `## Acceptance criteria` present, `## What to build` absent |
 | `missing_acceptance_criteria` | `## What to build` present, `## Acceptance criteria` absent |
 | `missing_both_sections` | Neither required heading present |
-| `planning_document` | Issue title begins with `PRD:` or `Spec:`, or labels include exact `wayfinder:map` (contract 2.10); takes precedence over missing headings |
+| `planning_document` | Issue title begins with `PRD:` or `Spec:`, or labels include exact `wayfinder:map` (contract 2.10); takes precedence over non-execution Task types and missing headings |
+| `non_execution_task_type` | Exact `task-type:planning` or `task-type:review` label, whatever other labels it carries; ranks after `planning_document` and before missing headings (Python, contract 2.29, ADR-0088) |
 
 The reason MUST be derived from the same discriminator pass that decides membership, so the
 reported reason and the membership decision cannot disagree. `discriminator.json` pins the
 vocabulary and the reason for every case.
+
+Python MUST apply `non_execution_task_type` at Pool collection, the Membership read,
+the Pickup re-read, an explicit `--issue` pin, and Proving-set mining. Mining maps
+it to its own exclusion reason. The issue stays in the Board's Blocked column; a
+human must retype it to an execution Task type or hand it to the Planner. The
+Runner MUST NOT relabel it, and `git-loopy labels` neither reports nor repairs it.
+The dormant shell and PowerShell Paths retain their baseline cases and four-reason
+vocabulary; `discriminator.json` scopes the new cases to Python.
 
 A candidate the source could **not read** (a failed per-issue view, an unreadable file) is NOT an
 exclusion — it was never discriminated against, and reporting it as one would send the operator to
@@ -175,7 +184,7 @@ fix headings that are probably fine. The existing warn-and-skip path continues t
 A candidate that is not **ready** — one carrying an open native `blocked_by` dependency, one an
 open pull request will close when merged (**Awaiting merge**, contract 2.17, #692), or one whose
 Readiness could not be read — is likewise NOT an exclusion (contract 2.0). The exclusion
-vocabulary above is **closed at those four reasons**, and readiness MUST NOT be added to it. An
+vocabulary above is **closed at those five reasons** (four on dormant Paths), and readiness MUST NOT be added to it. An
 exclusion is an authoring mistake a human must fix; a Blocked or Awaiting-merge candidate is
 correctly authored work whose turn has not come, and it clears itself when its last blocker closes
 or its closing pull request merges or closes. A candidate that is not ready MUST remain in the
@@ -2036,6 +2045,11 @@ classifier MUST satisfy all four of the following (contract 1.23):
   rather than written, because attaching a `task-type:` label to an issue creates that label in
   the tracker: an invented key is not a bad routing decision that expires with the Run, it is a
   permanent addition to the vocabulary §14 closed.
+  Python's classifier MUST offer and write only the five execution keys
+  `implementation`, `bugfix`, `test`, `docs`, and `chore` (contract 2.29,
+  ADR-0088), with an execution key as its example marker. A `planning` or `review`
+  proposal MUST be refused without a write. Only a human asserts either label;
+  the label taxonomy and Routing retain all seven keys.
 - **No classification failure may cost the Iteration or tick a Strike.** Every way of not
   producing a Task type — a refused proposal, an unreadable answer, a failed session, a rejected
   tracker write — MUST leave the issue on the **Default pair** and leave the **Iteration**
@@ -2290,7 +2304,8 @@ in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
 it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
-(§3.1). The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
+and 2.29 with the Python-only non-execution Task-type exclusion (§3.1).
+The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;
 the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility
 schema remains 1 and historical streams' interpretation is unchanged.

@@ -227,7 +227,9 @@ class TestTheDuplicatedLiteralsAreHeldToOneDeclaration:
 
     def test_every_discriminator_reason_has_a_specific_diagnostic(self) -> None:
         """A new exclusion reason must not silently degrade to "check both"."""
-        assert set(issue_pin._MISSING_SECTIONS) | {"planning_document"} == set(
+        assert set(issue_pin._MISSING_SECTIONS) | {
+            "planning_document", "non_execution_task_type"
+        } == set(
             EXCLUSION_REASONS
         )
         refusal = issue_pin.PinRefusal(390, "not_afk_ready", "planning_document")

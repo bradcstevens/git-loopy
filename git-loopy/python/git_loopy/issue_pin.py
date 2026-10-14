@@ -166,6 +166,12 @@ class PinRefusal:
                 f"--issue {self.issue}: {ref} is a planning document "
                 "(PRD:, Spec:, or wayfinder:map), not executable work"
             )
+        if self.detail == "non_execution_task_type":
+            return (
+                f"--issue {self.issue}: {ref} is excluded as non_execution_task_type "
+                "(task-type:planning or task-type:review); a human must retype it "
+                "to an execution Task type or hand it to the Planner"
+            )
         sections = _MISSING_SECTIONS.get(self.detail or "", _BOTH_SECTIONS)
         return (
             f"--issue {self.issue}: {ref} is not AFK-ready; its body is missing "

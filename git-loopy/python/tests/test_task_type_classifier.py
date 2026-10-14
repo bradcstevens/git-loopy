@@ -22,7 +22,6 @@ from pathlib import Path
 import pytest
 
 from git_loopy import task_type_classifier, task_type_session
-from git_loopy.config import TASK_TYPE_KEYS
 from git_loopy.sources import AfkReadyItem
 from git_loopy.staircase import Candidate, PriceStaircase, StaircaseRefusal
 from git_loopy.task_type_classifier import (
@@ -104,7 +103,8 @@ async def test_an_unlabelled_issue_is_classified_from_its_own_content() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_proposal_outside_the_seven_keys_is_refused_and_names_the_key() -> None:
+@pytest.mark.parametrize("key", ["refactor", "planning", "review"])
+async def test_a_non_execution_proposal_is_refused_and_names_the_key(key: str) -> None:
     """Refused, not warned about (ADR-0029).
 
     ``config.py``'s routing resolver warns once on an unknown key and falls back,
@@ -113,7 +113,7 @@ async def test_a_proposal_outside_the_seven_keys_is_refused_and_names_the_key() 
     closes at this seam. The refusal names the key because #378 has to report
     what it declined to write.
     """
-    proposer = _ScriptedProposer("refactor")
+    proposer = _ScriptedProposer(key)
 
     result = await classify_task_type(
         _item("ready-for-agent"), pair=_PAIR, propose=proposer.propose
@@ -121,8 +121,8 @@ async def test_a_proposal_outside_the_seven_keys_is_refused_and_names_the_key() 
 
     assert result.outcome is ClassificationOutcome.REFUSED_KEY
     assert result.task_type is None
-    assert result.refused_key == "refactor"
-    assert "refactor" in str(result.detail)
+    assert result.refused_key == key
+    assert key in str(result.detail)
 
 
 @pytest.mark.asyncio
@@ -248,7 +248,9 @@ def test_the_marker_the_prompt_asks_for_is_the_marker_the_parser_reads() -> None
         for line in prompt.splitlines()
         if line.strip().startswith("<task-type>")
     )
-    assert parse_task_type_proposal(shown) in TASK_TYPE_KEYS
+    assert parse_task_type_proposal(shown) in {
+        "implementation", "bugfix", "test", "docs", "chore"
+    }
     assert (
         parse_task_type_proposal(TASK_TYPE_MARKER_TEMPLATE.format(key="docs")) == "docs"
     )
@@ -267,8 +269,9 @@ def test_the_prompt_carries_the_issue_content_and_the_closed_taxonomy() -> None:
     prompt = classifier_prompt(item)
 
     assert "A docs overhaul." in prompt
-    for key in TASK_TYPE_KEYS:
-        assert key in prompt
+    assert {line[2:] for line in prompt.splitlines() if line.startswith("- ")} == {
+        "implementation", "bugfix", "test", "docs", "chore"
+    }
 
 
 # ---------------------------------------------------------------------------
