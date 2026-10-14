@@ -27,6 +27,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -135,6 +136,188 @@ def config_home(tmp_path: Path) -> Path:
 def _env(config_home: Path) -> dict[str, str]:
     return {"XDG_CONFIG_HOME": str(config_home), "HOME": str(config_home.parent)}
 
+
+def _profile_pin(upstream: Path) -> SkillSourcePin:
+    """Publish a synthetic catalog with all seven validated profiles."""
+    _build_upstream(upstream, skills=("tdd", "code-review"))
+    profiles = upstream / "roles"
+    profiles.mkdir()
+    for key in ("planning", "review", "implementation", "bugfix", "test", "docs", "chore"):
+        required = "code-review" if key == "review" else "tdd"
+        access = "read-only" if key == "review" else "full"
+        (profiles / f"{key}.md").write_text(
+            f"---\nrequired-skills:\n  - {required}\npermitted-skills: []\n"
+            f"access: {access}\n---\n\n# {key} role\n",
+            encoding="utf-8",
+        )
+    _git(upstream, "add", "-A")
+    _git(upstream, "commit", "--quiet", "-m", "publish profiles")
+    return dataclasses.replace(
+        _pin_for(upstream, _git(upstream, "rev-parse", "HEAD")),
+        profiles_directory="roles",
+    )
+
+
+def test_a_profile_pin_installs_both_roots_and_records_their_digests(
+    tmp_path: Path, config_home: Path
+) -> None:
+    upstream = tmp_path / "profile-upstream"
+    pin = _profile_pin(upstream)
+    env = _env(config_home)
+
+    outcome = refresh_installed_catalog(pin, env=env)
+
+    profiles = config_home / "git-loopy" / "profiles"
+    assert (profiles / "review.md").read_text() == (upstream / "roles/review.md").read_text()
+    assert outcome.catalog.profile_root == profiles
+    assert len(list(profiles.iterdir())) == 7
+    assert inspect_installed_catalog(pin, env).state == "matching"
+    record = json.loads(skill_install.install_record_path(env).read_text())
+    assert record["schema_version"] == 2
+    assert record["sha256"] == outcome.catalog.sha256
+    assert record["profiles_sha256"] == outcome.catalog.profiles_sha256
+    assert len(record["profiles_sha256"]) == 64
+
+
+def test_invalid_profiles_are_refused_before_either_installed_root_changes(
+    tmp_path: Path, config_home: Path
+) -> None:
+    upstream = tmp_path / "profile-upstream"
+    pin = _profile_pin(upstream)
+    env = _env(config_home)
+    first = refresh_installed_catalog(pin, env=env)
+    record = skill_install.install_record_path(env).read_bytes()
+    (upstream / "roles/review.md").write_text(
+        "---\nrequired-skills: []\npermitted-skills: []\naccess: full\n---\nWrong role\n"
+    )
+    bumped = dataclasses.replace(pin, revision=_publish(upstream, "prototype"))
+
+    outcome = refresh_installed_catalog(bumped, env=env)
+
+    assert outcome.action == "kept"
+    assert "review.md" in (outcome.warning or "")
+    assert outcome.catalog == first.catalog
+    assert skill_install.install_record_path(env).read_bytes() == record
+    assert not (outcome.catalog.root / "prototype").exists()
+    assert inspect_installed_catalog(pin, env).state == "matching"
+
+
+@pytest.mark.parametrize("damage", ["edit", "missing", "symlink", "extra"])
+def test_profile_drift_is_detected_and_repaired(
+    tmp_path: Path, config_home: Path, damage: str
+) -> None:
+    upstream = tmp_path / "profile-upstream"
+    pin = _profile_pin(upstream)
+    env = _env(config_home)
+    refresh_installed_catalog(pin, env=env)
+    profiles = config_home / "git-loopy/profiles"
+    if damage == "missing":
+        shutil.rmtree(profiles)
+    elif damage == "symlink":
+        shutil.rmtree(profiles)
+        profiles.symlink_to(upstream / "roles", target_is_directory=True)
+    else:
+        (profiles / ("review.md" if damage == "edit" else "extra.md")).write_text("edit\n")
+
+    assert inspect_installed_catalog(pin, env).state == "drifted"
+    outcome = refresh_installed_catalog(pin, env=env)
+
+    assert outcome.action == "repaired"
+    assert inspect_installed_catalog(pin, env).state == "matching"
+    assert not profiles.is_symlink()
+    assert (profiles / "review.md").read_text() == (upstream / "roles/review.md").read_text()
+    assert len(list(profiles.iterdir())) == 7
+
+
+@pytest.mark.parametrize("previous_install", [False, True])
+@pytest.mark.parametrize("interrupt_at", ["profiles", "skill-catalog.json"])
+def test_an_interrupted_replacement_is_drifted_until_both_roots_are_committed(
+    tmp_path: Path,
+    config_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    previous_install: bool,
+    interrupt_at: str,
+) -> None:
+    upstream = tmp_path / "profile-upstream"
+    pin = _profile_pin(upstream)
+    env = _env(config_home)
+    record_path = skill_install.install_record_path(env)
+    if previous_install:
+        refresh_installed_catalog(pin, env=env)
+    original_record = record_path.read_bytes() if record_path.exists() else None
+    # Only the profile changes: equal Skill digests must not hide the interruption.
+    with (upstream / "roles/docs.md").open("a") as profile:
+        profile.write("\nA new pinned role delta.\n")
+    _git(upstream, "add", "-A")
+    _git(upstream, "commit", "--quiet", "-m", "update only a profile")
+    bumped = dataclasses.replace(pin, revision=_git(upstream, "rev-parse", "HEAD"))
+    replace = Path.replace
+
+    def interrupt(source: Path, target: Path) -> Path:
+        if Path(target).name == interrupt_at:
+            raise OSError("simulated interrupted replacement")
+        return replace(source, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "replace", interrupt)
+        with pytest.raises(SkillInstallError, match="simulated interrupted replacement"):
+            refresh_installed_catalog(bumped, env=env)
+
+    assert (record_path.read_bytes() if record_path.exists() else None) == original_record
+    assert inspect_installed_catalog(bumped, env).state == "drifted"
+    if previous_install:
+        assert inspect_installed_catalog(pin, env).state == "drifted"
+    refresh_installed_catalog(bumped, env=env)
+    assert inspect_installed_catalog(bumped, env).state == "matching"
+    assert json.loads(record_path.read_text())["revision"] == bumped.revision
+    assert (config_home / "git-loopy/profiles/docs.md").read_text().endswith(
+        "A new pinned role delta.\n"
+    )
+
+
+def test_a_schema_one_record_is_read_and_upgraded_without_acquisition(
+    upstream: tuple[Path, SkillSourcePin], config_home: Path
+) -> None:
+    _, pin = upstream
+    env = _env(config_home)
+    refresh_installed_catalog(pin, env=env)
+    record_path = skill_install.install_record_path(env)
+    legacy = json.loads(record_path.read_text())
+    legacy["schema_version"] = 1
+    legacy.pop("profiles_sha256")
+    record_path.write_text(json.dumps(legacy))
+    assert read_install_record(env).revision == pin.revision
+    assert inspect_installed_catalog(pin, env).state == "matching"
+
+    def refuse(*_args: object, **_kwargs: object) -> Path:
+        raise AssertionError("an intact legacy install needs no network")
+
+    outcome = refresh_installed_catalog(pin, env=env, acquire=refuse)
+
+    assert outcome.action == "current"
+    assert json.loads(record_path.read_text())["schema_version"] == 2
+    assert json.loads(record_path.read_text())["profiles_sha256"] is None
+    assert not (config_home / "git-loopy/profiles").exists()
+
+
+def test_adding_or_removing_profiles_from_the_pin_replaces_the_install(
+    tmp_path: Path, config_home: Path
+) -> None:
+    pin = _profile_pin(tmp_path / "profile-upstream")
+    no_profiles = dataclasses.replace(pin, profiles_directory=None)
+    env = _env(config_home)
+    refresh_installed_catalog(no_profiles, env=env)
+    assert not (config_home / "git-loopy/profiles").exists()
+    assert inspect_installed_catalog(pin, env).state == "drifted"
+
+    refresh_installed_catalog(pin, env=env)
+    assert inspect_installed_catalog(pin, env).state == "matching"
+    assert (config_home / "git-loopy/profiles/review.md").exists()
+    assert inspect_installed_catalog(no_profiles, env).state == "drifted"
+
+    refresh_installed_catalog(no_profiles, env=env)
+    assert not (config_home / "git-loopy/profiles").exists()
+    assert inspect_installed_catalog(no_profiles, env).state == "matching"
 
 # ---------------------------------------------------------------------------
 # Where the catalog is installed

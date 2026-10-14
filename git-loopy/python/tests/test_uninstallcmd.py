@@ -118,6 +118,38 @@ def test_uninstall_removes_the_helper_beside_its_resolved_release_record(
     assert str(record) in "\n".join(output)
 
 
+def test_uninstall_names_the_profile_root_and_removes_every_planner_root(
+    tmp_path: Path,
+) -> None:
+    from git_loopy import uninstallcmd
+
+    env, executable = _uv_tool_executable(tmp_path)
+    scope = Path(env["XDG_CONFIG_HOME"]) / "git-loopy"
+    profiles = scope / "profiles"
+    profiles.mkdir(parents=True)
+    (profiles / "planning.md").write_text("# Planner\n", encoding="utf-8")
+    planner = scope / "planner"
+    for pid in ("123", "456"):
+        agent = planner / pid / ".github/agents/git-loopy-planner.agent.md"
+        agent.parent.mkdir(parents=True)
+        agent.write_text("# Generated Planner\n", encoding="utf-8")
+    output: list[str] = []
+
+    code = uninstallcmd.run_uninstall(
+        env=env,
+        executable_path=executable,
+        confirm=lambda _: True,
+        channel_uninstaller=lambda _: executable.unlink(),
+        output_fn=output.append,
+    )
+
+    assert code == 0
+    assert f"Will remove installed Agent profiles: {profiles}" in output
+    assert f"Will remove Planner roots: {planner}" in output
+    assert not profiles.exists()
+    assert not planner.exists()
+
+
 def test_uninstall_all_removes_project_scope_and_logs_after_confirmation(
     tmp_path: Path,
 ) -> None:

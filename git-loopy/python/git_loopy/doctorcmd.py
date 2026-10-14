@@ -120,21 +120,45 @@ class SkillPolicyRepairPlan:
 def _render_catalog_install_status(
     status: CatalogInstallStatus, *, output_fn: Callable[[str], None]
 ) -> None:
+    """Render each installed root's own verdict, not the aggregate state twice."""
+    _render_skill_install_status(status, output_fn=output_fn)
+    if status.profiles_state == "not pinned":
+        output_fn("Agent profiles | not pinned | current pin names no profile directory.")
+    else:
+        remedy = (
+            ""
+            if status.profiles_state == "matching"
+            else "; refresh with `git-loopy doctor --apply`."
+        )
+        output_fn(
+            f"Agent profiles | {status.profiles_state} | {status.profile_root} | "
+            f"pinned revision {status.pin.revision}{remedy}"
+        )
+
+
+def _render_skill_install_status(
+    status: CatalogInstallStatus, *, output_fn: Callable[[str], None]
+) -> None:
     """Report the local install before using it to judge any policy name."""
-    if status.state == "matching":
+    if status.skills_state == "matching":
         output_fn(
             "Skill catalog | matching | "
             f"installed revision {status.pin.revision} matches the pinned revision."
         )
         return
-    if status.state == "absent":
+    if status.skills_state == "absent":
         output_fn(
             "Skill catalog | absent | "
             f"no catalog is installed for pinned revision {status.pin.revision}; "
             "refresh with `git-loopy doctor --apply`."
         )
         return
-    assert status.installed is not None
+    if status.installed is None:
+        output_fn(
+            "Skill catalog | drifted | interrupted install without a committed record; "
+            "refresh with `git-loopy doctor --apply`."
+        )
+        return
     if status.installed.revision == status.pin.revision:
         output_fn(
             "Skill catalog | drifted | "
@@ -239,7 +263,15 @@ def run_doctor(
             refreshed_status = inspect_installed_catalog(
                 install_status.pin, environment
             )
-            if refreshed_status.state != install_status.state:
+            if (
+                refreshed_status.state,
+                refreshed_status.skills_state,
+                refreshed_status.profiles_state,
+            ) != (
+                install_status.state,
+                install_status.skills_state,
+                install_status.profiles_state,
+            ):
                 _render_catalog_install_status(refreshed_status, output_fn=output_fn)
             install_status = refreshed_status
         bound_git = git or SubprocessGitClient(repo_root)

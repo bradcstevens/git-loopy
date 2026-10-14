@@ -336,6 +336,13 @@ def test_inventory_classifies_config_home_assets_from_scaffold_provenance(
             release_version=None,
         ),
         installation.InstalledAsset(
+            name="Agent profiles",
+            path=scope / "profiles",
+            present=False,
+            classification="unrecorded",
+            release_version=None,
+        ),
+        installation.InstalledAsset(
             name="TUI helper",
             path=helper,
             present=True,
@@ -511,6 +518,7 @@ def test_inventory_reports_an_absent_asset_as_unrecorded(tmp_path: Path) -> None
         "unrecorded",
         "unrecorded",
         "unrecorded",
+        "unrecorded",
     ]
 
 
@@ -536,6 +544,7 @@ def test_inventory_separates_an_absent_asset_from_one_it_cannot_prove(
         "config.toml": False,
         "PROMPT.md": False,
         "installed catalog": True,
+        "Agent profiles": False,
         "TUI helper": False,
     }
 
@@ -655,6 +664,13 @@ def test_inventory_json_shape_is_stable(tmp_path: Path) -> None:
             {
                 "name": "installed catalog",
                 "path": str(tmp_path / "home/.config/git-loopy/skills"),
+                "present": False,
+                "classification": "unrecorded",
+                "release_version": None,
+            },
+            {
+                "name": "Agent profiles",
+                "path": str(tmp_path / "home/.config/git-loopy/profiles"),
                 "present": False,
                 "classification": "unrecorded",
                 "release_version": None,
