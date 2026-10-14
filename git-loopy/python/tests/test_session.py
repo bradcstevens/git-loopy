@@ -30,6 +30,9 @@ import ast
 import io
 import json
 import os
+import shlex
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -43,6 +46,11 @@ from copilot.generated.session_events import (
     PermissionRequest,
     PermissionRequestCustomTool,
     PermissionRequestHook,
+    PermissionRequestMcp,
+    PermissionRequestRead,
+    PermissionRequestShell,
+    PermissionRequestShellCommand,
+    PermissionRequestWrite,
     SessionEvent,
     SessionEventType,
     SessionUsageInfoData,
@@ -93,6 +101,229 @@ _AGENT_PROFILES = json.loads(
 )
 
 
+@pytest.fixture
+def reviewer_exposure(tmp_path: Path) -> SkillExposure:
+    root = installed_profiles_dir(os.environ)
+    root.mkdir(parents=True)
+    (root / "review.md").write_text(
+        "---\nrequired-skills:\n  - code-review\npermitted-skills: []\n"
+        "access: read-only\n---\nReview the exact head.\n",
+        encoding="utf-8",
+    )
+    for key in ("implementation", "bugfix", "test", "docs", "chore"):
+        (root / f"{key}.md").write_text(
+            "---\nrequired-skills: []\npermitted-skills: []\n"
+            f"access: full\n---\n{key} role.\n",
+            encoding="utf-8",
+        )
+    catalog_root = installed_catalog_dir(os.environ)
+    skill = catalog_root / "code-review"
+    skill.mkdir(parents=True, exist_ok=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: code-review\ndescription: Review.\n---\nReview.\n",
+        encoding="utf-8",
+    )
+    catalog = build_skill_catalog((), repo_root=tmp_path, installed_skills_dir=catalog_root)
+    return SkillExposure(
+        EffectiveSkillPolicy(
+            enabled=("code-review",), required=("code-review",), legacy_denied=(),
+            source_kinds={}, base_scope=SkillPolicyScope.PROJECT,
+        ), catalog, catalog_root,
+    )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_starts_without_edit_tools(
+    tmp_path: Path, reviewer_exposure: SkillExposure,
+) -> None:
+    client = FakeCopilotClient()
+    with EventLogWriter(tmp_path / "events.jsonl") as log:
+        async with IterationSession(
+            client, config=_StubConfig(), event_log=log, sinks=SinkFanout(()),
+            run_id=_FIXED_RUN_ID, iter_num=1, profile_key="review",
+            skill_exposure=reviewer_exposure, working_directory=str(tmp_path),
+        ):
+            pass
+    call = client.create_calls[0]
+    assert call["agent"] == "review"
+    assert call["custom_agents"] == [{
+        "name": "review", "prompt": "Review the exact head.",
+        "infer": False, "skills": ["code-review"],
+    }]
+    assert set(call["excluded_tools"]) >= {"edit", "create", "apply_patch"}
+    assert not (set(call["excluded_tools"]) & {"view", "grep", "glob", "bash", "task"})
+
+
+def _access_request(request: dict[str, Any], call_id: str) -> PermissionRequest:
+    fields = {k: v for k, v in request.items() if k != "kind"}
+    fields["tool_call_id"] = call_id
+    if request["kind"] == "write":
+        return PermissionRequestWrite(
+            can_offer_session_approval=False, intention="test write", **fields,
+        )
+    if request["kind"] == "read":
+        return PermissionRequestRead(intention="test read", **fields)
+    if request["kind"] == "hook":
+        return PermissionRequestHook(**fields)
+    if request["kind"] == "shell":
+        fields["commands"] = [PermissionRequestShellCommand(**c) for c in fields["commands"]]
+        fields.setdefault("has_write_file_redirection", False)
+        return PermissionRequestShell(
+            can_offer_session_approval=False, intention="test shell",
+            possible_paths=[], possible_urls=[], **fields,
+        )
+    if request["kind"] == "mcp":
+        return PermissionRequestMcp(server_name="github", tool_title="test", **fields)
+    assert request["kind"] == "custom-tool"
+    return PermissionRequestCustomTool(tool_description="test tool", **fields)
+
+
+@pytest.mark.parametrize("case", _AGENT_PROFILES["access_cases"], ids=lambda c: c["id"])
+@pytest.mark.parametrize("actor", ["agent", "subagent"])
+@pytest.mark.parametrize("profile", ["review", "implementation", "bugfix", "test", "docs", "chore"])
+async def test_profile_access_through_registered_permission_handler(
+    tmp_path: Path, reviewer_exposure: SkillExposure, case: dict[str, Any], actor: str,
+    profile: str,
+) -> None:
+    commands = case.get("feedback_loops", [])
+    rows = "\n".join(
+        f"| Loop | `{command.replace('|', chr(92) + '|')}` | Always |"
+        for command in commands
+    )
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n| Loop | Command | When |\n| --- | --- | --- |\n" + rows,
+        encoding="utf-8",
+    )
+    client = FakeCopilotClient()
+    call_id = f"{actor}-{case['id']}"
+    expected = case["expected_decision"] if profile == "review" else "approve-once"
+    with EventLogWriter(tmp_path / "events.jsonl") as log:
+        async with IterationSession(
+            client, config=_StubConfig(
+                deny_tools=frozenset({"edit"}) if profile == "review" else frozenset(),
+            ), event_log=log, sinks=SinkFanout(()),
+            run_id=_FIXED_RUN_ID, iter_num=1, issue_ref=828, profile_key=profile,
+            skill_exposure=reviewer_exposure, working_directory=str(tmp_path),
+        ) as session:
+            decision = session.on_permission_request(
+                _access_request(case["request"], call_id), {"session_id": actor},
+            )
+            assert decision.kind == expected
+    recorded = [json.loads(line) for line in log.path.read_text().splitlines()]
+    assert len(recorded) == 1
+    event = recorded[0]
+    denied = expected == "reject"
+    assert event["type"] == (TOOL_PERMISSION_DENIED if denied else TOOL_PERMISSION_REQUESTED)
+    assert event.get("reason") == ("profile_read_only" if denied else None)
+    assert event["tool_call_id"] == call_id
+    assert event["run_id"] == _FIXED_RUN_ID
+    assert event["iter"] == 1
+    if denied:
+        assert "private source" not in log.path.read_text()
+    if profile != "review":
+        assert "excluded_tools" not in client.create_calls[0]
+
+
+async def test_reviewer_feedback_commands_are_snapshotted_and_run(
+    tmp_path: Path, reviewer_exposure: SkillExposure,
+) -> None:
+    command = f"{shlex.quote(sys.executable)} -c 'print(\"feedback-ok\")'"
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text(
+        "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n"
+        f"| Proof | `{command}` |\n", encoding="utf-8",
+    )
+    client = FakeCopilotClient()
+    with EventLogWriter(tmp_path / "events.jsonl") as log:
+        async with IterationSession(
+            client, config=_StubConfig(), event_log=log, sinks=SinkFanout(()),
+            run_id=_FIXED_RUN_ID, iter_num=1, profile_key="review",
+            skill_exposure=reviewer_exposure, working_directory=str(tmp_path),
+        ) as session:
+            agents.write_text(agents.read_text().replace(command, "git push"), encoding="utf-8")
+            for actor in ("agent", "subagent"):
+                allowed = session.on_permission_request(
+                    _access_request({
+                        "kind": "shell", "full_command_text": command,
+                        "resolved_working_directory": str(tmp_path),
+                        "commands": [{"identifier": "python", "read_only": False}],
+                    }, f"{actor}-loop"), {"session_id": actor},
+                )
+                assert allowed.kind == "approve-once"
+                assert subprocess.check_output(
+                    command, shell=True, cwd=tmp_path, text=True,
+                ).strip() == "feedback-ok"
+                denied = session.on_permission_request(
+                    _access_request({
+                        "kind": "shell", "full_command_text": "git push",
+                        "commands": [{"identifier": "git push", "read_only": False}],
+                    }, f"{actor}-push"), {"session_id": actor},
+                )
+                assert denied.kind == "reject"
+    recorded = [json.loads(line) for line in log.path.read_text().splitlines()]
+    assert [e["tool_call_id"] for e in recorded] == [
+        "agent-loop", "agent-push", "subagent-loop", "subagent-push",
+    ]
+    assert [e.get("reason") for e in recorded] == [
+        None, "profile_read_only", None, "profile_read_only",
+    ]
+    assert recorded[1]["tool_name"] == "shell"
+    assert recorded[1]["arguments"] == {"command": "git push"}
+
+
+@pytest.mark.parametrize("problem", ["no-root", "missing", "full", "disabled", "no-policy"])
+async def test_reviewer_never_falls_back_to_unrestricted_access(
+    tmp_path: Path, reviewer_exposure: SkillExposure, problem: str,
+) -> None:
+    root = installed_profiles_dir(os.environ)
+    if problem == "no-root":
+        root.rename(root.with_name("saved-profiles"))
+    elif problem == "missing":
+        (root / "review.md").unlink()
+    elif problem == "full":
+        path = root / "review.md"
+        path.write_text(path.read_text().replace("read-only", "full"), encoding="utf-8")
+    elif problem == "disabled":
+        reviewer_exposure = SkillExposure(
+            EffectiveSkillPolicy(
+                enabled=(), required=(), legacy_denied=(), source_kinds={},
+                base_scope=SkillPolicyScope.PROJECT,
+            ), reviewer_exposure.catalog, reviewer_exposure.directory,
+        )
+    client = FakeCopilotClient()
+    with EventLogWriter(tmp_path / "events.jsonl") as log:
+        with pytest.raises(AgentProfileError):
+            async with IterationSession(
+                client, config=_StubConfig(), event_log=log, sinks=SinkFanout(()),
+                run_id=_FIXED_RUN_ID, iter_num=1, profile_key="review",
+                skill_exposure=None if problem == "no-policy" else reviewer_exposure,
+                working_directory=str(tmp_path),
+            ):
+                pytest.fail("An invalid Reviewer started")
+    assert client.create_calls == []
+
+
+@pytest.mark.parametrize("problem", ["invalid-text", "directory"])
+async def test_reviewer_reports_unreadable_feedback_loop_source(
+    tmp_path: Path, reviewer_exposure: SkillExposure, problem: str,
+) -> None:
+    path = tmp_path / "AGENTS.md"
+    if problem == "invalid-text":
+        path.write_bytes(b"\xff")
+    else:
+        path.mkdir()
+    client = FakeCopilotClient()
+    with EventLogWriter(tmp_path / "events.jsonl") as log:
+        with pytest.raises(AgentProfileError, match="Cannot read Reviewer feedback loops"):
+            async with IterationSession(
+                client, config=_StubConfig(), event_log=log, sinks=SinkFanout(()),
+                run_id=_FIXED_RUN_ID, iter_num=1, profile_key="review",
+                skill_exposure=reviewer_exposure, working_directory=str(tmp_path),
+            ):
+                pytest.fail("Unreadable feedback-loop source was silently ignored")
+    assert client.create_calls == []
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", _AGENT_PROFILES["exposure_cases"], ids=lambda c: c["id"])
 async def test_execution_profile_registers_delta_preload_and_exact_exposure(
@@ -102,9 +333,10 @@ async def test_execution_profile_registers_delta_preload_and_exact_exposure(
     root.mkdir(parents=True)
     required = "\n" + "".join(f"  - {n}\n" for n in case["required"]) if case["required"] else " []\n"
     permitted = "\n" + "".join(f"  - {n}\n" for n in case["permitted"]) if case["permitted"] else " []\n"
+    access = "read-only" if case["profile"] == "review" else "full"
     (root / f"{case['profile']}.md").write_text(
         f"---\nrequired-skills:{required}permitted-skills:{permitted}"
-        "access: full\n---\nRole delta.\n"
+        f"access: {access}\n---\nRole delta.\n"
     )
     catalog_root = installed_catalog_dir(os.environ)
     winners = {}
@@ -803,7 +1035,8 @@ def test_build_permission_handler_envelope_carries_call_id_and_iter() -> None:
     assert ev["run_id"] == _FIXED_RUN_ID
 
 
-def test_build_permission_handler_swallows_record_event_exceptions() -> None:
+@pytest.mark.parametrize("read_only", [False, True])
+def test_build_permission_handler_swallows_record_event_exceptions(read_only: bool) -> None:
     """A recording failure inside the handler must NOT raise — otherwise
     the SDK turns the raised exception into user-not-available, silently
     demoting our intended approve/reject."""
@@ -814,12 +1047,13 @@ def test_build_permission_handler_swallows_record_event_exceptions() -> None:
         record_event=broken_recorder,
         run_id=_FIXED_RUN_ID,
         iter_provider=_make_iter_provider(),
+        read_only=read_only,
     )
     req = _make_permission_request(tool_name="bash", tool_args={"cmd": "ls"})
 
     result = handler(req, {})
 
-    assert result.kind == "approve-once"  # would be user-not-available without isolation
+    assert result.kind == ("reject" if read_only else "approve-once")
 
 
 # ---------------------------------------------------------------------------
@@ -2053,6 +2287,7 @@ def test_session_module_imports_are_constrained() -> None:
         # with. NO loop / cli / config / gh / git / wrapper.
         "git_loopy",
         "git_loopy.emit",
+        "git_loopy.gate",
         "git_loopy.agent_profiles",
         "git_loopy.events",
         "git_loopy.persist",

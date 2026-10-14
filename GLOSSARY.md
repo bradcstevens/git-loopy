@@ -51,6 +51,9 @@ finishes any result the Orchestrator would publish and close. It uses the `revie
 **Spec** and **Standards** axes through the required `/code-review` Skill, and
 returns findings to a fresh implementation Agent without charging a **Strike**
 or changing the **Attempt lifecycle**.
+Its session is read-only: edit tools are excluded and the same permission handler
+refuses writes for it and its Subagents, recording `profile_read_only`. Reads and
+the exact trusted **Feedback loops** snapshotted from `AGENTS.md` remain available.
 _Avoid_: self-review, feedback-loop gate.
 
 **Review stage**:
@@ -1986,7 +1989,8 @@ The existing **Required Skill**, **Skill policy**, **Minimal Skill policy**, **I
 catalog**, **Task type**, **Task-type classifier** and **Pool exclusion** entries above
 describe current behavior; these decision records do not establish delivery acceptance.
 With an installed profile root, execution-profile selection, preload and exposure
-are implemented by Wrapper contract §18.1–18.2. The remaining profile lifecycle
+are implemented by Wrapper contract §18.1–18.2; §18.3 makes the Reviewer startable
+with read-only access. The Review stage and remaining profile lifecycle
 and preflight changes remain accepted design until their delivery issues close.
 
 **Permitted Skill**:

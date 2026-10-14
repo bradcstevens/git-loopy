@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.30 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.31 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -2307,14 +2307,15 @@ and 2.24 with Subagent lifecycle telemetry and Activity totals (ADR-0022),
 and 2.26 with per-issue Endings and inline Queue explanations (ADR-0075),
 and 2.27 with the per-attempt account and inline Skipped marker (ADR-0075),
 and 2.29 with the Python-only non-execution Task-type exclusion (ADR-0088),
-and 2.30 with execution profile selection and Skill exposure (ADR-0078).
+and 2.30 with execution profile selection and Skill exposure (ADR-0078),
+and 2.31 with Reviewer read-only access (ADR-0078/0086).
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
 it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1), then 2.29 with the Python-only non-execution Task-type exclusion.
-Event revision 1.8 and Dashboard revision 1.22 record current provenance;
+Event revision 1.8 and Dashboard revision 1.23 record current provenance;
 the Dashboard projection is unchanged. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;
 the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility
@@ -3019,6 +3020,54 @@ a Permitted Skill disabled by the policy remains `skill_outside_policy`.
 Preloads are not observed on-demand calls and MUST NOT be counted as consulted
 Skills. `agent-profiles.json` pins selection and exposure through the Python
 production session seam.
+
+### 18.3 Reviewer read-only access (Python, contract 2.31)
+
+The shared session seam MUST accept an explicitly requested `review` profile
+from the installed root. It MUST refuse a missing root, missing or invalid
+profile, or unavailable Required Skill; it MUST NOT fall back to an unrestricted
+session. Registration and Skill exposure follow §18.1–18.2, including the
+Required `/code-review` preload. This does not admit review-typed issues to the
+Pool or introduce the Review stage, which remains separate Task-graph work.
+
+For `access: read-only`, the pinned SDK's `edit`, `create` and `apply_patch`
+tools MUST be excluded at session level, for the selected Agent and built-in
+Subagents alike. Execution profiles MUST retain their previous full toolset.
+The session permission handler MUST enforce the same access for every request,
+without trusting a Subagent's prompt or an operator deny list:
+
+- Native file writes, edit tools, non-read-only MCP requests and unrecognized
+  access MUST be refused. Native reads, URL reads and the pinned read/search,
+  Skill and Subagent-coordination tools remain available.
+- Shell commands MUST have a nonempty harness classification in which every
+  parsed command is read-only, and no file-write redirection. A push, commit,
+  any other ref-moving git command, tracker writes through `gh`, mixed
+  read/write compounds, and unclassified commands are refused. The classification
+  is supplied by the pinned harness, never inferred from an Agent's intention.
+  Shell-stdin tools and unclassified shell hooks cannot bypass the gate.
+- Feedback loops are the deliberate exception for trusted project code: the
+  session snapshots runnable commands from its working directory's `AGENTS.md`
+  using the same parser as Integration. A complete, exact command match may run
+  there even when its commands are not classified read-only. Appended commands,
+  a different resolved working directory, file-write redirection and sandbox
+  bypass/permissive requests MUST NOT gain that exception. No `AGENTS.md` means
+  no exceptions; an unreadable file is an explicit startup error. Later edits to
+  that file cannot authorize new commands in the open session.
+
+Every refused access request MUST record `tool.permission_denied` with
+`reason: "profile_read_only"` and its tool-call identity under the session's
+existing attribution. This reason precedes operator tool denials; the mandatory
+history and user-input refusals and Skill-policy reasons retain their meanings.
+Native write records name only the path, never the diff or new contents; shell
+refusals carry the scrubbed command. Permission reasons remain open strings, so
+Event revision 1.8 and compatibility schema 1 are unchanged.
+
+These are defence-in-depth permissions, not a sandbox: trusted feedback-loop
+programs can create build/test artifacts and run project code. They do not
+replace the Orchestrator's obligation to publish only the exact reviewed head
+(ADR-0072). `agent-profiles.json` access cases are claimed by Python through the
+registered production permission handler; dormant adapter obligations do not
+change (ADR-0091).
 
 ## 19. Changing this contract
 

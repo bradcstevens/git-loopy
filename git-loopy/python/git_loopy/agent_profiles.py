@@ -50,13 +50,13 @@ def execution_profile_key(task_type_keys: tuple[str, ...]) -> str:
     return "implementation"
 
 
-def load_execution_profile(
+def load_session_profile(
     root: Path, key: str, *, skills: Path, required: bool = False,
 ) -> AgentProfile | None:
-    """Read only the installed root; an explicitly requested remote profile must exist."""
-    if key not in EXECUTION_TASK_TYPE_KEYS:
-        raise AgentProfileError(f"Not an execution profile: {key!r}")
-    if not root.exists() and not root.is_symlink() and not required:
+    """Read the installed in-Run profile; Reviewers and remote requests fail closed."""
+    if key not in (*EXECUTION_TASK_TYPE_KEYS, "review"):
+        raise AgentProfileError(f"Not an in-Run profile: {key!r}")
+    if not root.exists() and not root.is_symlink() and not required and key != "review":
         return None
     path = root / f"{key}.md"
     if root.is_symlink() or path.is_symlink() or not path.is_file():
@@ -65,7 +65,7 @@ def load_execution_profile(
     if breaches:
         raise AgentProfileError("; ".join(str(breach) for breach in breaches))
     assert profile is not None
-    if profile.access != "full":
+    if key in EXECUTION_TASK_TYPE_KEYS and profile.access != "full":
         raise AgentProfileError(f"Execution profile {key!r} must declare full access")
     return profile
 

@@ -59,6 +59,9 @@ Effective policy  Only a canonical, catalogued, enabled Skill name is
 Session history   ``session_store_sql`` is always rejected with reason
                   ``"cross_session_history_disabled"``, for Agents and
                   Subagents alike, regardless of the operator's deny list.
+Reviewer          Edit tools are excluded session-wide. Only reads and exact
+                  snapshotted feedback loops are approved; other access is
+                  rejected as ``"profile_read_only"`` for Agents and Subagents.
 ``ask_user``      Always rejected. The wrapper emits
                   :data:`WRAPPER_ASK_USER_ATTEMPTED` (**not**
                   :data:`TOOL_PERMISSION_DENIED`) so the operator can
@@ -123,6 +126,7 @@ Design notes
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, TypedDict, runtime_checkable
 
 from copilot import CopilotClient, CopilotSession
@@ -132,6 +136,11 @@ from copilot.generated.rpc import (
 )
 from copilot.generated.session_events import (
     PermissionRequest,
+    PermissionRequestMcp,
+    PermissionRequestRead,
+    PermissionRequestShell,
+    PermissionRequestUrl,
+    PermissionRequestWrite,
     SessionEvent,
     SessionEventType,
 )
@@ -139,10 +148,11 @@ from copilot.session import CustomAgentConfig, PermissionRequestResult
 
 from git_loopy import events
 from git_loopy.emit import EventEmitter
+from git_loopy.gate import parse_feedback_loops
 from git_loopy.persist import EventLogWriter
 from git_loopy.sinks import SinkFanout
 from git_loopy.skill_exposure import SessionSkillExposure
-from git_loopy.agent_profiles import AgentProfileError, load_execution_profile
+from git_loopy.agent_profiles import AgentProfileError, load_session_profile
 from git_loopy.skill_install import installed_catalog_dir, installed_profiles_dir
 from git_loopy.skill_policy import (
     EffectiveSkillPolicy,
@@ -182,6 +192,52 @@ _REASON_SKILL_UNKNOWN: str = "skill_unknown"
 _REASON_SKILL_INVALID: str = "skill_invalid_request"
 _REASON_SKILL_LEGACY_DENY: str = "skill_legacy_denied"
 _REASON_SESSION_HISTORY: str = "cross_session_history_disabled"
+_REASON_PROFILE_READ_ONLY: str = "profile_read_only"
+
+_EDIT_TOOLS = ("edit", "create", "apply_patch")
+_REVIEW_READ_TOOLS = frozenset({
+    "view", "glob", "grep", "rg", "web_search", "web_fetch",
+    "read_bash", "read_powershell", "list_bash",
+    "task", "read_agent", "list_agents", "write_agent", "skill", "ask_user",
+})
+
+
+def _review_feedback_loops(working_directory: Path) -> frozenset[str]:
+    path = working_directory / "AGENTS.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return frozenset()
+    except (OSError, UnicodeError) as exc:
+        raise AgentProfileError(f"Cannot read Reviewer feedback loops at {path}: {exc}") from exc
+    return frozenset(loop.command for loop in parse_feedback_loops(text) if loop.runnable)
+
+
+def _reviewer_allows(
+    req: PermissionRequest, tool_name: str, feedback_loops: frozenset[str],
+    working_directory: Path,
+) -> bool:
+    if (
+        getattr(req, "request_sandbox_bypass", False)
+        or getattr(req, "request_sandbox_permissive", False)
+    ):
+        return False
+    if isinstance(req, (PermissionRequestRead, PermissionRequestUrl)):
+        return True
+    if isinstance(req, PermissionRequestMcp):
+        return req.read_only
+    if isinstance(req, PermissionRequestShell):
+        if req.has_write_file_redirection:
+            return False
+        if req.full_command_text in feedback_loops:
+            return (
+                req.resolved_working_directory is None
+                or Path(req.resolved_working_directory) == working_directory
+            )
+        # The pinned harness classifies every parsed command, including compounds.
+        # Missing classification is not evidence of read-only access.
+        return bool(req.commands) and all(command.read_only for command in req.commands)
+    return tool_name in _REVIEW_READ_TOOLS
 
 
 def _skill_directories(working_directory: str | None) -> list[str]:
@@ -249,6 +305,7 @@ class _IssueBinding(Protocol):
 class _ProfileOptions(TypedDict, total=False):
     agent: str
     custom_agents: list[CustomAgentConfig]
+    excluded_tools: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +413,9 @@ def build_permission_handler(
     skill_policy: EffectiveSkillPolicy | None = None,
     skill_catalog: SkillCatalog | None = None,
     profile_skills: frozenset[str] | None = None,
+    read_only: bool = False,
+    feedback_loops: frozenset[str] = frozenset(),
+    working_directory: str | None = None,
     record_event: Callable[[dict[str, Any]], None],
     run_id: str | None,
     identity: Mapping[str, Any] | None = None,
@@ -380,6 +440,9 @@ def build_permission_handler(
             temporary legacy open-world caller path.
         skill_catalog: Resolved catalog paired with ``skill_policy``.
         profile_skills: Optional per-profile exposure within the Effective Skill policy.
+        read_only: Enforce Reviewer access for the Agent and all its Subagents.
+        feedback_loops: Exact trusted commands snapshotted from AGENTS.md at session start.
+        working_directory: Session directory in which feedback loops are authorized.
         record_event: Callback invoked with the envelope for every
             permission decision. Recording failures are swallowed
             (see :func:`_safe_record`) so a bad writer cannot demote
@@ -403,6 +466,7 @@ def build_permission_handler(
     if (skill_policy is None) != (skill_catalog is None):
         raise ValueError("skill_policy and skill_catalog must be supplied together")
     identity = dict(identity or {})
+    review_directory = Path(working_directory or Path.cwd()).resolve() if read_only else None
 
     def handler(
         req: PermissionRequest, _invocation: dict[str, str]
@@ -421,6 +485,33 @@ def build_permission_handler(
                 tool_name=tool_name,
                 arguments=scrubbed_args,
                 reason=_REASON_SESSION_HISTORY,
+            )
+            _safe_record(record_event, envelope)
+            return PermissionDecisionReject()
+
+        if review_directory is not None and not _reviewer_allows(
+            req, tool_name, feedback_loops, review_directory,
+        ):
+            arguments = (
+                {"path": req.file_name} if isinstance(req, PermissionRequestWrite) else {}
+            )
+            request_name = tool_name or (
+                "write" if isinstance(req, PermissionRequestWrite) else "unknown"
+            )
+            if isinstance(req, PermissionRequestShell):
+                request_name = "shell"
+                arguments = _scrub_permission_args(
+                    {"command": req.full_command_text}, "bash",
+                )
+            envelope = events.make_event(
+                type=events.TOOL_PERMISSION_DENIED,
+                run_id=run_id,
+                iter=iter_num,
+                **identity,
+                tool_call_id=tool_call_id,
+                tool_name=request_name,
+                arguments=arguments,
+                reason=_REASON_PROFILE_READ_ONLY,
             )
             _safe_record(record_event, envelope)
             return PermissionDecisionReject()
@@ -672,11 +763,13 @@ class IterationSession:
         skill_exposure: Optional Run-scoped closed-world projection. When
             supplied, the session exposes only its enabled catalog winners and
             sends the exact disabled catalog complement to the SDK.
-        profile_key: The issue's execution profile, resolved at Pickup. Without
+        profile_key: The issue's execution profile, resolved at Pickup, or ``review``
+            for a Reviewer explicitly started by the Orchestrator. Without
             an installed root the legacy session options remain unchanged.
             Classifiers, selectors and calibration Trials leave this unset.
         require_profile: A remote request must find its named installed profile,
-            even when the worker has no profile root at all.
+            even when the worker has no profile root at all. A Reviewer always
+            requires an installed profile, regardless of this flag.
     """
 
     def __init__(
@@ -755,7 +848,7 @@ class IterationSession:
         are delivered.
         """
         profile = (
-            load_execution_profile(
+            load_session_profile(
                 installed_profiles_dir(os.environ), self._profile_key,
                 skills=installed_catalog_dir(os.environ),
                 required=self._require_profile,
@@ -785,6 +878,12 @@ class IterationSession:
             profile_skills = profile.exposure(policy.enabled)
         handler = build_permission_handler(
             profile_skills=profile_skills,
+            read_only=profile is not None and profile.access == "read-only",
+            feedback_loops=(
+                _review_feedback_loops(Path(self._working_directory or Path.cwd()).resolve())
+                if profile is not None and profile.access == "read-only" else frozenset()
+            ),
+            working_directory=self._working_directory,
             deny_tools=self._config.deny_tools,
             deny_skills=self._config.deny_skills,
             skill_policy=(
@@ -830,6 +929,8 @@ class IterationSession:
                     "skills": list(profile.required),
                 }],
             }
+            if profile.access == "read-only":
+                profile_options["excluded_tools"] = list(_EDIT_TOOLS)
         session = await self._client.create_session(
             **profile_options,
             on_permission_request=handler,

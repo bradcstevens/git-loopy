@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "contract_version": "2.30",
-  "description": "Agent isolation (ADR-0076) and Python execution profile selection, registration and Skill exposure (ADR-0078).",
+  "contract_version": "2.31",
+  "description": "Agent isolation (ADR-0076), Python profile selection, registration and Skill exposure (ADR-0078), and Reviewer read-only access (ADR-0086).",
   "selection_cases": [
     {"id": "implementation", "distributions": ["python"], "keys": ["implementation"], "expected": "implementation"},
     {"id": "bugfix", "distributions": ["python"], "keys": ["bugfix"], "expected": "bugfix"},
@@ -18,7 +18,40 @@
     {"id": "test", "distributions": ["python"], "profile": "test", "required": ["tdd"], "permitted": [], "enabled": ["tdd", "prototype", "other"], "expected_disabled": ["code-review", "codebase-design", "diagnosing-bugs", "other", "prototype"], "request": "prototype", "expected_reason": "skill_outside_profile"},
     {"id": "docs", "distributions": ["python"], "profile": "docs", "required": [], "permitted": [], "enabled": ["tdd", "prototype", "other"], "expected_disabled": ["code-review", "codebase-design", "diagnosing-bugs", "other", "prototype", "tdd"], "request": "tdd", "expected_reason": "skill_outside_profile"},
     {"id": "chore", "distributions": ["python"], "profile": "chore", "required": [], "permitted": [], "enabled": ["tdd", "prototype", "other"], "expected_disabled": ["code-review", "codebase-design", "diagnosing-bugs", "other", "prototype", "tdd"], "request": "other", "expected_reason": "skill_outside_profile"},
-    {"id": "permitted-but-disabled", "distributions": ["python"], "profile": "implementation", "required": ["tdd"], "permitted": ["prototype"], "enabled": ["tdd"], "expected_disabled": ["code-review", "codebase-design", "diagnosing-bugs", "other", "prototype"], "request": "prototype", "expected_reason": "skill_outside_policy"}
+    {"id": "permitted-but-disabled", "distributions": ["python"], "profile": "implementation", "required": ["tdd"], "permitted": ["prototype"], "enabled": ["tdd"], "expected_disabled": ["code-review", "codebase-design", "diagnosing-bugs", "other", "prototype"], "request": "prototype", "expected_reason": "skill_outside_policy"},
+    {"id": "review", "distributions": ["python"], "profile": "review", "required": ["code-review"], "permitted": [], "enabled": ["code-review", "tdd", "other"], "expected_disabled": ["codebase-design", "diagnosing-bugs", "other", "prototype", "tdd"], "request": "tdd", "expected_reason": "skill_outside_profile"}
+  ],
+  "access_cases": [
+    {"id": "native-file-write", "distributions": ["python"], "request": {"kind": "write", "file_name": "src/example.py", "diff": "private source", "new_file_contents": "private source"}, "expected_decision": "reject"},
+    {"id": "edit-tool", "distributions": ["python"], "request": {"kind": "custom-tool", "tool_name": "edit", "args": {"path": "src/example.py", "new_str": "private source"}}, "expected_decision": "reject"},
+    {"id": "create-hook", "distributions": ["python"], "request": {"kind": "hook", "tool_name": "create", "tool_args": {"path": "src/example.py", "file_text": "private source"}}, "expected_decision": "reject"},
+    {"id": "patch-tool", "distributions": ["python"], "request": {"kind": "custom-tool", "tool_name": "apply_patch", "args": {"patch": "private source"}}, "expected_decision": "reject"},
+    {"id": "native-read", "distributions": ["python"], "request": {"kind": "read", "path": "src/example.py"}, "expected_decision": "approve-once"},
+    {"id": "search-tool", "distributions": ["python"], "request": {"kind": "custom-tool", "tool_name": "grep", "args": {"pattern": "Reviewer"}}, "expected_decision": "approve-once"},
+    {"id": "git-push", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "git push origin HEAD", "commands": [{"identifier": "git push", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "git-commit", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "git commit -m checkpoint", "commands": [{"identifier": "git commit", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "git-update-ref", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "git update-ref refs/heads/main HEAD", "commands": [{"identifier": "git update-ref", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "git-switch", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "git switch -c changed", "commands": [{"identifier": "git switch", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "git-reset", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "git reset HEAD~1", "commands": [{"identifier": "git reset", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "git-tag", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "git tag changed", "commands": [{"identifier": "git tag", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "git-fetch", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "git fetch origin", "commands": [{"identifier": "git fetch", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "tracker-close", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "gh issue close 828", "commands": [{"identifier": "gh issue close", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "tracker-api-write", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "gh api repos/example/repo/issues/828 -f state=closed", "commands": [{"identifier": "gh api", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "compound-write", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "git status && git push", "commands": [{"identifier": "git status", "read_only": true}, {"identifier": "git push", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "shell-file-write", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "printf changed > src/example.py", "has_write_file_redirection": true, "commands": [{"identifier": "printf", "read_only": true}]}, "expected_decision": "reject"},
+    {"id": "unclassified-shell", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "unknown-command", "commands": []}, "expected_decision": "reject"},
+    {"id": "interpreter-write", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "python -c 'open(\"src/example.py\", \"w\").write(\"changed\")'", "commands": [{"identifier": "python", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "shell-hook-without-classification", "distributions": ["python"], "request": {"kind": "hook", "tool_name": "bash", "tool_args": {"command": "git push"}}, "expected_decision": "reject"},
+    {"id": "shell-stdin", "distributions": ["python"], "request": {"kind": "custom-tool", "tool_name": "write_bash", "args": {"chars": "git push\n"}}, "expected_decision": "reject"},
+    {"id": "mcp-tracker-write", "distributions": ["python"], "request": {"kind": "mcp", "tool_name": "issue_write", "read_only": false}, "expected_decision": "reject"},
+    {"id": "mcp-tracker-read", "distributions": ["python"], "request": {"kind": "mcp", "tool_name": "issue_read", "read_only": true}, "expected_decision": "approve-once"},
+    {"id": "git-and-tracker-reads", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "git diff && gh issue view 828", "commands": [{"identifier": "git diff", "read_only": true}, {"identifier": "gh issue view", "read_only": true}]}, "expected_decision": "approve-once"},
+    {"id": "declared-feedback-loop", "distributions": ["python"], "feedback_loops": ["python -m pytest -q"], "request": {"kind": "shell", "full_command_text": "python -m pytest -q", "commands": [{"identifier": "python", "read_only": false}]}, "expected_decision": "approve-once"},
+    {"id": "declared-compound-feedback-loop", "distributions": ["python"], "feedback_loops": ["cargo fmt --check && cargo test"], "request": {"kind": "shell", "full_command_text": "cargo fmt --check && cargo test", "commands": [{"identifier": "cargo fmt", "read_only": false}, {"identifier": "cargo test", "read_only": false}]}, "expected_decision": "approve-once"},
+    {"id": "declared-shell-feedback-loop", "distributions": ["python"], "feedback_loops": ["for t in tests/test-*.sh; do bash \"$t\" || exit 1; done"], "request": {"kind": "shell", "full_command_text": "for t in tests/test-*.sh; do bash \"$t\" || exit 1; done", "commands": []}, "expected_decision": "approve-once"},
+    {"id": "feedback-loop-suffix-is-not-authorized", "distributions": ["python"], "feedback_loops": ["python -m pytest -q"], "request": {"kind": "shell", "full_command_text": "python -m pytest -q; git push", "commands": [{"identifier": "python", "read_only": false}, {"identifier": "git push", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "feedback-loop-other-directory", "distributions": ["python"], "feedback_loops": ["python -m pytest -q"], "request": {"kind": "shell", "full_command_text": "python -m pytest -q", "resolved_working_directory": "elsewhere", "commands": [{"identifier": "python", "read_only": false}]}, "expected_decision": "reject"},
+    {"id": "sandbox-bypass", "distributions": ["python"], "request": {"kind": "shell", "full_command_text": "git status", "commands": [{"identifier": "git status", "read_only": true}], "request_sandbox_bypass": true}, "expected_decision": "reject"}
   ],
   "memory_cases": [
     {
