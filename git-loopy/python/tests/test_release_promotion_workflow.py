@@ -8,7 +8,9 @@ green and still publish nothing.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
 from typing import Any
 
 import pytest
@@ -115,6 +117,89 @@ def test_a_promotion_is_refused_before_it_mutates_anything_without_its_token(
 def test_the_workflows_own_token_stays_read_only(workflow: dict[Any, Any]) -> None:
     assert workflow["permissions"] == {"contents": "read"}
     assert "permissions" not in workflow["jobs"]["promote"]
+
+
+def _run_preflight(
+    workflow: dict[Any, Any], overrides: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", _steps(workflow)[0]["run"]],
+        env={
+            **os.environ,
+            "RELEASE_PUBLICATION_TOKEN": "publication-placeholder",
+            "RELEASE_SMOKE_TOKEN": "smoke-placeholder",
+            "RELEASE_SMOKE_REPOSITORY": "example/disposable-smoke",
+            "RELEASE_SMOKE_MAX_RUNS": "2",
+            "RELEASE_SMOKE_DEADLINE_SECONDS": "3600",
+            "RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS": "20",
+            **overrides,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+
+@pytest.mark.parametrize(
+    ("deadline", "spend"),
+    [("3600", "20"), ("6000", "1"), ("0.1", "0.1")],
+)
+def test_preflight_accepts_valid_smoke_limits(
+    workflow: dict[Any, Any], deadline: str, spend: str
+) -> None:
+    result = _run_preflight(
+        workflow,
+        {
+            "RELEASE_SMOKE_DEADLINE_SECONDS": deadline,
+            "RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS": spend,
+        },
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "RELEASE_PUBLICATION_TOKEN",
+        "RELEASE_SMOKE_TOKEN",
+        "RELEASE_SMOKE_REPOSITORY",
+        "RELEASE_SMOKE_MAX_RUNS",
+        "RELEASE_SMOKE_DEADLINE_SECONDS",
+        "RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS",
+    ],
+)
+def test_preflight_refuses_each_missing_input(
+    workflow: dict[Any, Any], setting: str
+) -> None:
+    result = _run_preflight(workflow, {setting: ""})
+    assert result.returncode == 1
+    assert f"cannot finish without {setting}" in result.stderr
+    assert "publication-placeholder" not in result.stdout + result.stderr
+    assert "smoke-placeholder" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [
+        ("RELEASE_SMOKE_MAX_RUNS", value)
+        for value in ("0", "-1", "1.5", "abc")
+    ]
+    + [
+        ("RELEASE_SMOKE_DEADLINE_SECONDS", value)
+        for value in ("0", "0.0", "-1", "6000.1", "6001", "NaN", "inf", "abc")
+    ]
+    + [
+        ("RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS", value)
+        for value in ("0", "0.0", "-1", "NaN", "inf", "abc")
+    ],
+)
+def test_preflight_refuses_invalid_smoke_limits(
+    workflow: dict[Any, Any], setting: str, value: str
+) -> None:
+    result = _run_preflight(workflow, {setting: value})
+    assert result.returncode == 1
+    assert f"{setting} must be" in result.stderr
 
 
 def test_a_promotion_commits_and_tags_with_a_committer_git_will_accept(

@@ -365,6 +365,21 @@ unbounded; a missing value blocks the smoke before any service is touched.
 | Time limit, seconds | `--deadline-seconds` | `GIT_LOOPY_SMOKE_DEADLINE_SECONDS` | variable `RELEASE_SMOKE_DEADLINE_SECONDS` |
 | Spend limit, premium requests | `--spend-limit-premium-requests` | `GIT_LOOPY_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS` | variable `RELEASE_SMOKE_SPEND_LIMIT_PREMIUM_REQUESTS` |
 
+The Promotion preflight requires a positive integer Run limit, a positive
+deadline of at most **6000 seconds**, and a positive premium-request limit.
+Decimal deadlines and spend limits are accepted. The example below illustrates
+values; it does not authorize spending them.
+
+After configuring these inputs, rerun a failed **push** run of **Promote Release
+line** and inspect its new attempt's **Require the publication token and smoke
+limits a Promotion cannot finish without** step. Do not use **Run workflow**
+(`workflow_dispatch`) for this check: that advances the prerelease stage instead.
+A rerun uses the original run's workflow revision; if the workflow was repaired,
+choose a push run created after that repair landed. Passing the preflight proves
+the inputs are present and the limits valid, not that the token can perform the
+smoke or that publication succeeded. The rest of the job can perform real smoke
+work and publish previously untagged stable Releases.
+
 An ambient `GH_TOKEN`, `GITHUB_TOKEN` or stored `gh` login is never
 authorization. The token needs repository contents, issues and Actions write on
 the sandbox and Copilot requests for the Agent. The sandbox must be a
