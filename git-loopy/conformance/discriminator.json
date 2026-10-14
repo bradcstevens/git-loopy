@@ -1,13 +1,109 @@
 {
-  "schema_version": 1,
-  "contract_version": "2.10",
+  "schema_version": 2,
+  "contract_version": "2.29",
   "exclusion_reasons": [
+    "missing_what_to_build",
+    "missing_acceptance_criteria",
+    "missing_both_sections",
+    "planning_document",
+    "non_execution_task_type"
+  ],
+  "baseline_exclusion_reasons": [
     "missing_what_to_build",
     "missing_acceptance_criteria",
     "missing_both_sections",
     "planning_document"
   ],
   "cases": [
+    {
+      "id": "planning-task-type-is-excluded",
+      "distributions": ["python"],
+      "labels": ["ready-for-agent", "task-type:planning"],
+      "body": "## What to build\nPlan.\n## Acceptance criteria\nDone.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "review-task-type-is-excluded",
+      "distributions": ["python"],
+      "labels": ["ready-for-agent", "task-type:review"],
+      "body": "## What to build\nReview.\n## Acceptance criteria\nDone.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "conflicting-execution-label-does-not-admit-planning",
+      "distributions": ["python"],
+      "labels": ["task-type:implementation", "task-type:planning", "priority", "parallel-safe"],
+      "body": "## What to build\nPlan.\n## Acceptance criteria\nDone.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "conflicting-execution-label-does-not-admit-review",
+      "distributions": ["python"],
+      "labels": ["task-type:review", "task-type:bugfix"],
+      "body": "## What to build\nReview.\n## Acceptance criteria\nDone.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "planning-document-precedes-non-execution-type",
+      "distributions": ["python"],
+      "title": "Spec: The plan",
+      "labels": ["task-type:planning"],
+      "body": "",
+      "eligible": false,
+      "exclusion_reason": "planning_document"
+    },
+    {
+      "id": "map-precedes-non-execution-type",
+      "distributions": ["python"],
+      "labels": ["wayfinder:map", "task-type:review"],
+      "body": "",
+      "eligible": false,
+      "exclusion_reason": "planning_document"
+    },
+    {
+      "id": "planning-type-precedes-missing-both-headings",
+      "distributions": ["python"],
+      "labels": ["task-type:planning"],
+      "body": "",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "review-type-precedes-missing-what-to-build",
+      "distributions": ["python"],
+      "labels": ["task-type:review"],
+      "body": "## Acceptance criteria\nDone.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "planning-type-precedes-missing-acceptance-criteria",
+      "distributions": ["python"],
+      "labels": ["task-type:planning"],
+      "body": "## What to build\nPlan.",
+      "eligible": false,
+      "exclusion_reason": "non_execution_task_type"
+    },
+    {
+      "id": "non-execution-labels-match-exactly",
+      "distributions": ["python"],
+      "labels": ["Task-type:planning", "task-type:Planning", "task-type:Review", "task-type:planning-extra", "task-type:review-extra"],
+      "body": "## What to build\nImplement.\n## Acceptance criteria\nDone.",
+      "eligible": true,
+      "exclusion_reason": null
+    },
+    {
+      "id": "execution-types-remain-eligible",
+      "distributions": ["python"],
+      "labels": ["task-type:implementation", "task-type:bugfix", "task-type:test", "task-type:docs", "task-type:chore"],
+      "body": "## What to build\nImplement.\n## Acceptance criteria\nDone.",
+      "eligible": true,
+      "exclusion_reason": null
+    },
     {
       "id": "prd-title-with-task-headings",
       "title": "PRD: One issue, one run",

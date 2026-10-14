@@ -269,8 +269,12 @@ called empty only once both have been seen.
 _Avoid_: batch, backlog.
 
 **Pool exclusion**:
-A `ready-for-agent` candidate the AFK-ready discriminator rejected because its body
-lacks `## What to build`, `## Acceptance criteria`, or both. A human deliberately
+A `ready-for-agent` candidate the AFK-ready discriminator rejected because it is a
+planning document, carries exact `task-type:planning` or `task-type:review` (Python),
+or its body lacks `## What to build`, `## Acceptance criteria`, or both. The Python
+reason `non_execution_task_type` ranks after `planning_document` and before missing
+headings; a human retypes that issue or hands it to the **Planner**, and the Runner
+never relabels it. A human deliberately
 triaged the issue; only a human can fix it, so every exclusion is named to the operator
 and carried as a `wrapper.pool.excluded` **Event** with its reason. A candidate the
 source could not *read* is not an exclusion — it was never discriminated against.
@@ -1069,13 +1073,17 @@ _Avoid_: local (ambiguous), workspace.
 The classification an issue carries as a `task-type:<key>` label. Either set by an operator or
 inferred from the issue's own content by the **Task-type classifier** and written back to the
 tracker, where the two are thereafter indistinguishable (ADR-0029). The taxonomy is **closed**:
-only the seven shipped keys are valid, and a classifier proposing or a label carrying any other
-value is refused rather than warned about, even when a run-wide override suppresses routing. A
-task type selects a **Routed pair** and nothing else: it does not order or prioritise work.
+only the seven shipped keys are valid, and a label carrying any other value is
+refused rather than warned about by Routing, even when a run-wide override suppresses
+routing. Only a human asserts `planning`
+or `review`; the classifier proposes only the five **Execution Task types**. A Task type
+selects a **Routed pair** and does not order or prioritise work. The Python discriminator
+excludes a planning- or review-typed issue from the **Pool**.
 _Avoid_: category, priority, issue kind.
 
 **Task-type classifier**:
-The agent call that reads an unlabelled issue's own content and proposes its **Task type**.
+The agent call that reads an unlabelled issue's own content and proposes one of the five
+**Execution Task types**. A `planning` or `review` proposal is refused and writes nothing.
 Runs at every **Pickup**, serial and **Lane** alike, on the issue that Pickup bound and on no
 other, so the spend buys the pair this **Iteration** runs on. Runs on its own configured pair —
 defaulting to the cheapest pair on the live roster, never the run-wide default, so the prior it

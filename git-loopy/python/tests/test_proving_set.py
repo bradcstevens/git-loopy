@@ -215,6 +215,26 @@ def test_an_issue_no_commit_closes_is_excluded(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("key", ["planning", "review"])
+def test_non_execution_task_type_has_its_own_proving_exclusion(
+    tmp_path: Path, key: str
+) -> None:
+    _init_repo(tmp_path)
+    _commit(tmp_path, "groundwork", {"src.py": "value = 1\n"})
+    _commit(tmp_path, "fix: the fix\n\nCloses #7", {"tests/test_x.py": "assert True\n"})
+
+    mined = mine_proving_set(
+        [_issue(7, labels=["task-type:implementation", f"task-type:{key}"])],
+        SubprocessGitClient(tmp_path),
+        default_branch="main",
+    )
+
+    assert mined.candidates == ()
+    [exclusion] = mined.exclusions
+    assert exclusion.issue == 7
+    assert exclusion.reason.value == "non_execution_task_type"
+
+
 def test_two_closing_commits_are_ambiguous_and_the_reason_names_them(
     tmp_path: Path,
 ) -> None:
@@ -624,6 +644,7 @@ def test_the_body_reasons_are_the_pool_exclusion_vocabulary() -> None:
             ExclusionReason.MISSING_ACCEPTANCE_CRITERIA,
             ExclusionReason.MISSING_BOTH_SECTIONS,
             ExclusionReason.PLANNING_DOCUMENT,
+            ExclusionReason.NON_EXECUTION_TASK_TYPE,
         )
     } == set(EXCLUSION_REASONS)
 

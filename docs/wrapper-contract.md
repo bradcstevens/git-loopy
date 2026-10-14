@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.28 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.29 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -162,7 +162,21 @@ closed vocabulary:
 | `missing_what_to_build` | `## Acceptance criteria` present, `## What to build` absent |
 | `missing_acceptance_criteria` | `## What to build` present, `## Acceptance criteria` absent |
 | `missing_both_sections` | Neither required heading present |
-| `planning_document` | Issue title begins with `PRD:` or `Spec:`, or labels include exact `wayfinder:map` (contract 2.10); takes precedence over missing headings |
+| `planning_document` | Issue title begins with `PRD:` or `Spec:`, or labels include exact `wayfinder:map` (contract 2.10); takes precedence over every other discriminator reason |
+| `non_execution_task_type` | Exact `task-type:planning` or `task-type:review` label, whatever other labels are present; ranks after `planning_document` and before missing headings (Python, contract 2.29, ADR-0088) |
+
+The Python discriminator applies `non_execution_task_type` at Pool collection, the
+Membership read, the Pickup re-read, an explicit `--issue` pin and Proving-set mining.
+Only `implementation`, `bugfix`, `test`, `docs` and `chore` are execution Task types.
+The classifier proposes only those five, and its label writer refuses every other key.
+Labels and Routing retain all seven Task types; only a human asserts `planning` or
+`review`. An excluded ticket remains Blocked on the Board until a human retypes it
+or hands it to the Planner. The Runner never relabels it, and `git-loopy labels`
+neither reports nor repairs this conflict. Dormant shell and PowerShell paths keep
+their baseline discriminator vocabulary and cases (ADR-0091).
+Event fixture revision 1.8 adds this Python-only reason to
+`wrapper.pool.excluded`; compatibility schema 1 and the Dashboard projection
+remain unchanged. The Dashboard fixture tracks the Event revision it consumes.
 
 The reason MUST be derived from the same discriminator pass that decides membership, so the
 reported reason and the membership decision cannot disagree. `discriminator.json` pins the
@@ -333,7 +347,8 @@ The pin **bypasses the order and nothing else** (ADR-0032), which is four separa
 3. **It does not bypass eligibility, and an ineligible pin FAILS the invocation.** A pinned issue
    that is closed, missing, unreadable, lacks `ready-for-agent`, or fails the §3.1 AFK-ready
    discriminator MUST end the invocation with the `preflight_failed` exit code, naming what is
-   wrong — and for a discriminator failure, naming the **planning document** or **specific missing section**, so the
+   wrong — and for a discriminator failure, naming the **planning document**,
+   **non-execution Task type** or **specific missing section**, so the
    operator can fix the issue rather than guess. It MUST NOT fall back to the head of the order:
    §3.3 makes a candidate the runner cannot take a *skip* precisely because a serial Run merely
    walked past it, whereas a pin is an operator naming an issue, and there is no next candidate
@@ -2284,13 +2299,16 @@ the refill turn (§12, #686), 2.22 with the per-issue Strike record (§6,
 ADR-0070), 2.23 with upstream-durable Integration publication (§12, #418),
 and 2.24 with Subagent lifecycle telemetry and Activity totals (ADR-0022),
 and 2.26 with per-issue Endings and inline Queue explanations (ADR-0075),
-and 2.27 with the per-attempt account and inline Skipped marker (ADR-0075).
+and 2.27 with the per-attempt account and inline Skipped marker (ADR-0075),
+and 2.29 with the Python-only non-execution Task-type exclusion (ADR-0088).
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
 it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
-(§3.1). The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
+(§3.1), then 2.29 with the Python-only non-execution Task-type exclusion.
+Event revision 1.8 and Dashboard revision 1.21 record the latter's provenance;
+the Dashboard projection is unchanged. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;
 the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility
 schema remains 1 and historical streams' interpretation is unchanged.

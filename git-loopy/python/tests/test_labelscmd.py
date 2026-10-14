@@ -511,6 +511,27 @@ def test_a_planning_document_without_the_role_and_ordinary_work_are_correct(
     assert err == []
 
 
+@pytest.mark.parametrize("key", ["planning", "review"])
+def test_non_execution_task_type_is_not_a_label_repair(
+    tmp_path: Path, sinks: tuple[list[str], list[str]], key: str
+) -> None:
+    out, err = sinks
+    client = _tracker_matching(tmp_path)
+    client.issues = [
+        _issue(7, "A typed ticket", (LABEL_READY_FOR_AGENT, f"task-type:{key}")),
+    ]
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path, client=client, apply=True,
+        output_fn=out.append, warn=err.append,
+    )
+
+    assert rc == 0
+    assert "correct   #7 A typed ticket" in out
+    assert client.removed == []
+    assert err == []
+
+
 def test_apply_removes_only_the_role_and_leaves_the_document_open(
     tmp_path: Path, sinks: tuple[list[str], list[str]]
 ) -> None:

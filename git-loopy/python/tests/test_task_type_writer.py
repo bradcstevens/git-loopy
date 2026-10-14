@@ -135,7 +135,8 @@ def test_an_inferred_task_type_is_applied_to_the_issue_as_a_task_type_label() ->
     assert tracker.labels == {7: {"task-type:docs"}}
 
 
-def test_a_key_outside_the_closed_taxonomy_never_reaches_the_tracker() -> None:
+@pytest.mark.parametrize("key", ["refactor", "planning", "review"])
+def test_a_non_execution_key_never_reaches_the_tracker(key: str) -> None:
     """The closure (#375) is re-asked *at the write*, not inherited from the caller.
 
     :func:`~git_loopy.task_type_classifier.classify_task_type` already refuses an
@@ -150,13 +151,14 @@ def test_a_key_outside_the_closed_taxonomy_never_reaches_the_tracker() -> None:
     tracker = _FakeTracker()
     item = _item("ready-for-agent")
     invented = Classification(
-        outcome=ClassificationOutcome.CLASSIFIED, task_type="refactor"
+        outcome=ClassificationOutcome.CLASSIFIED, task_type=key
     )
 
     write = write_task_type_label(item, invented, client=tracker)
 
     assert write.outcome is LabelWriteOutcome.REFUSED_KEY
-    assert write.detail is not None and "refactor" in write.detail
+    assert write.detail is not None and key in write.detail
+    assert tracker.reads == []
     assert tracker.calls == []
 
 
@@ -192,22 +194,38 @@ def test_only_a_classified_outcome_is_written(
     assert tracker.calls == []
 
 
-def test_the_writable_labels_are_exactly_the_closed_taxonomy() -> None:
-    """The vocabulary a machine may write is the vocabulary ``init`` creates.
-
-    A structure pin, not a behaviour: the writable set is *derived* from
-    :data:`git_loopy.labels.TASK_TYPE_LABELS`, so this fails the day the two
-    drift — which is the day an unattended writer either mints a label setup
-    never created or cannot attach one routing accepts.
-    """
-    assert {key for key in TASK_TYPE_KEYS} == {
+def test_the_writable_labels_are_exactly_the_execution_task_types() -> None:
+    assert {"implementation", "bugfix", "test", "docs", "chore"} == {
         key for key in TASK_TYPE_KEYS if task_type_label_spec(key) is not None
     }
-    for key in TASK_TYPE_KEYS:
+    for key in ("implementation", "bugfix", "test", "docs", "chore"):
         spec = task_type_label_spec(key)
         assert spec is not None
         assert spec.name == f"{TASK_TYPE_LABEL_PREFIX}{key}"
     assert task_type_label_spec("refactor") is None
+
+
+@pytest.mark.parametrize("key", ["planning", "review"])
+async def test_a_non_execution_proposal_is_refused_without_writing(key: str) -> None:
+    tracker = _FakeTracker()
+
+    async def propose(_pair: ClassifierPair, _item: AfkReadyItem) -> str:
+        return f"<task-type>{key}</task-type>"
+
+    assignment = await classify_and_persist(
+        _item("ready-for-agent"),
+        pair=ClassifierPair(model="cheap-model", effort="low"),
+        propose=propose,
+        client=tracker,
+    )
+
+    assert assignment.classification.outcome is ClassificationOutcome.REFUSED_KEY
+    assert assignment.classification.refused_key == key
+    assert assignment.task_type is None
+    assert assignment.write.outcome is LabelWriteOutcome.NOT_CLASSIFIED
+    assert tracker.reads == []
+    assert tracker.calls == []
+    assert tracker.labels == {}
 
 
 def test_a_failed_tracker_write_is_non_fatal() -> None:

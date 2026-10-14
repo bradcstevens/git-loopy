@@ -3538,8 +3538,8 @@ def test_escalation_is_a_no_op_when_the_routed_pair_is_already_the_rung(
 ) -> None:
     """There is nowhere to escalate to, so nothing is claimed to have happened.
 
-    ``planning`` routes to the rung by design (ADR-0035), so it gets one shot
-    and the retry is the same pair. Reporting that as ``escalated`` would state
+    An execution Task type explicitly routed to the rung retries on the same
+    pair. Reporting that as ``escalated`` would state
     a change that did not occur — the source stays the one that chose the pair,
     while the **lifecycle position** records that this is a second attempt.
     """
@@ -3550,7 +3550,7 @@ def test_escalation_is_a_no_op_when_the_routed_pair_is_already_the_rung(
             _dated(
                 7,
                 "2026-01-01T00:00:00Z",
-                labels=["ready-for-agent", "task-type:planning"],
+                labels=["ready-for-agent", "task-type:implementation"],
             )
         ],
     )
@@ -3560,7 +3560,7 @@ def test_escalation_is_a_no_op_when_the_routed_pair_is_already_the_rung(
             RunConfig(
                 issue_source="github",
                 max_iterations=2,
-                routing={"planning": ("claude-opus-5", "max")},
+                routing={"implementation": ("claude-opus-5", "max")},
                 escalation_rung=("claude-opus-5", "max"),
             )
         )

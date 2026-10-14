@@ -131,7 +131,7 @@ class PinRefusal:
         reason: One of :data:`PIN_REFUSALS`.
         detail: For :data:`PIN_REFUSAL_NOT_AFK_READY`, the
             :data:`git_loopy.sources.EXCLUSION_REASONS` entry naming a planning
-            document or absent section. ``None`` for every other reason,
+            document, non-execution Task type or absent section. ``None`` for every other reason,
             which carries its whole meaning in ``reason``.
     """
 
@@ -165,6 +165,12 @@ class PinRefusal:
             return (
                 f"--issue {self.issue}: {ref} is a planning document "
                 "(PRD:, Spec:, or wayfinder:map), not executable work"
+            )
+        if self.detail == "non_execution_task_type":
+            return (
+                f"--issue {self.issue}: {ref} is excluded as non_execution_task_type "
+                "(task-type:planning or task-type:review); a human must retype "
+                "it to an execution Task type or hand it to the Planner"
             )
         sections = _MISSING_SECTIONS.get(self.detail or "", _BOTH_SECTIONS)
         return (

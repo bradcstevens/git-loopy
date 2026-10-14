@@ -20,6 +20,13 @@ the implementation tickets derived from the document instead. Pickup refuses the
 documents even when mislabelled, prioritized, marked `parallel-safe`, or explicitly
 pinned; a map is recognised by the `wayfinder:map` label, not by a `Wayfinder:` title.
 
+**Planning- and review-typed issues are excluded.** A `ready-for-agent` issue
+carrying exact `task-type:planning` or `task-type:review` is excluded as
+`non_execution_task_type`, even alongside an execution Task type. It stays
+Blocked until a human retypes it or hands it to the Planner. Only a human
+asserts these two labels. The Runner never relabels the issue, and
+`git-loopy labels` neither reports nor repairs this conflict.
+
 Edit the right-hand column to match whatever vocabulary you actually use. `git-loopy init`
 reads this table when it ensures the labels exist in the tracker, so a renamed role is
 created under *your* string, not the canonical one — the two cannot silently desynchronise.
@@ -162,9 +169,9 @@ Task type is a closed routing taxonomy. The only valid labels are
 
 Unlike `parallel-safe` and `priority`, a `task-type:` label **may be machine-set**:
 the **Task-type classifier** reads an unlabelled issue's own content and proposes
-its key (ADR-0029), because zero closed issues carried one and routing could not
-otherwise apply to anything. Three consequences follow, and none of them is an
-oversight:
+only an execution key: `implementation`, `bugfix`, `test`, `docs` or `chore`
+(ADR-0029, ADR-0088). Only a human asserts `planning` or `review`; labels and
+Routing still retain all seven keys. Three consequences follow:
 
 - **Provenance is gone.** A human-set and a classifier-set label are the same
   string on the same issue, and nothing afterwards distinguishes them. What the
@@ -177,7 +184,8 @@ oversight:
   classifying the issue still wins.
 - **The taxonomy stays closed for exactly this reason.** An unattended writer
   plus `gh label create --force` would make an invented key permanent, so a
-  proposal outside the seven is refused rather than warned about.
+  proposal outside the five execution keys is refused and writes nothing,
+  including a `planning` or `review` proposal.
 
 The write is not gated on a human, because a ratification step would reintroduce
 the recurring cost ADR-0029 exists to remove. It is idempotent, so re-running
@@ -186,5 +194,6 @@ label and not the work.
 
 The labels differ in blast radius, which is why only one of the three opened: a
 wrong `parallel-safe` guess lets unsafe work run concurrently and a wrong
-`priority` guess reorders somebody's backlog, while a wrong `task-type:` guess
-picks a suboptimal model.
+`priority` guess reorders somebody's backlog, while a wrong execution
+`task-type:` guess picks a suboptimal execution profile or model. The classifier
+cannot guess a type that would exclude the issue.

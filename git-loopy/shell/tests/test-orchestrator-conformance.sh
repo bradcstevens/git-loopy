@@ -55,7 +55,17 @@ while IFS= read -r case_json; do
   actual_reason="$(git_loopy_afk_ready_exclusion "$body" "$title" "$labels")"
   assert_equal "$expected_reason" "$actual_reason" \
     "discriminator exclusion reason: $case_id"
-done < <(jq -c '.cases[]' "$conformance_dir/discriminator.json")
+done < <(
+  jq -c '.cases[] | select((.distributions // ["shell"]) | index("shell"))' \
+    "$conformance_dir/discriminator.json"
+)
+jq -e '
+  [.cases[] | select((.distributions // ["shell"]) | index("shell"))] as $cases
+  | ($cases | length) > 0
+    and ([$cases[].exclusion_reason | select(. != null)] | unique)
+        == (.baseline_exclusion_reasons | sort)
+' "$conformance_dir/discriminator.json" >/dev/null ||
+  fail "discriminator cases must cover exactly the dormant baseline reasons"
 
 # Wrapper contract §3.3.1 — Readiness is decided at Pickup from the `blockedBy`
 # connection the collection already carried. Transform the language-neutral

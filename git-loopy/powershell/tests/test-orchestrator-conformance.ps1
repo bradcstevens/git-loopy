@@ -49,7 +49,16 @@ $Discriminator = Get-Content `
     -LiteralPath (Join-Path $ConformanceDir "discriminator.json") `
     -Raw |
     ConvertFrom-Json -AsHashtable
-foreach ($Case in $Discriminator["cases"]) {
+$DiscriminatorCases = @(
+    $Discriminator["cases"] | Where-Object {
+        $Selector = $_["distributions"]
+        if ($null -eq $Selector) { $true } else { @($Selector) -contains "powershell" }
+    }
+)
+if ($DiscriminatorCases.Count -lt 1) {
+    throw "discriminator fixture retains no case for the powershell distribution"
+}
+foreach ($Case in $DiscriminatorCases) {
     $Labels = @($Case["labels"])
     $Actual = Test-GitLoopyAfkReady `
         -Body $Case["body"] `
@@ -67,11 +76,17 @@ foreach ($Case in $Discriminator["cases"]) {
         $ActualReason `
         "discriminator exclusion reason: $($Case["id"])"
 }
-foreach ($Reason in @($Discriminator["exclusion_reasons"])) {
-    if (@($Discriminator["cases"] | Where-Object {
+foreach ($Reason in @($Discriminator["baseline_exclusion_reasons"])) {
+    if (@($DiscriminatorCases | Where-Object {
             $_["exclusion_reason"] -ceq $Reason
         }).Count -eq 0) {
         throw "FAIL: no discriminator case covers exclusion reason $Reason"
+    }
+    foreach ($Case in $DiscriminatorCases) {
+        if ($null -ne $Case["exclusion_reason"] -and
+            @($Discriminator["baseline_exclusion_reasons"]) -cnotcontains $Case["exclusion_reason"]) {
+            throw "FAIL: discriminator case exceeds dormant baseline: $($Case["id"])"
+        }
     }
 }
 

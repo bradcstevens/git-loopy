@@ -183,6 +183,26 @@ class TestAfkReadyExclusion:
         body = "## What to build\nthing\n\n## Acceptance criteria\n- foo"
         assert sources_module.afk_ready_exclusion(body) is None
 
+    @pytest.mark.parametrize("key", ["planning", "review"])
+    @pytest.mark.parametrize(
+        "body",
+        ["", "## What to build\nthing", "## What to build\nthing\n## Acceptance criteria\nOK"],
+    )
+    def test_non_execution_task_type_precedes_missing_headings(
+        self, key: str, body: str
+    ) -> None:
+        labels = ("task-type:implementation", f"task-type:{key}")
+        assert sources_module.afk_ready_exclusion(
+            body, labels=labels
+        ) == "non_execution_task_type"
+        assert not is_afk_ready(body, labels=labels)
+        assert sources_module.afk_ready_exclusion(
+            body, title="Spec: Design", labels=labels
+        ) == "planning_document"
+        assert sources_module.afk_ready_exclusion(
+            body, labels=(*labels, "wayfinder:map")
+        ) == "planning_document"
+
     def test_map_label_names_a_planning_document(self) -> None:
         """A Wayfinder map is a planning document by its label, not its title."""
         body = "## What to build\nthing\n\n## Acceptance criteria\n- foo"
@@ -236,6 +256,7 @@ class TestAfkReadyExclusion:
             sources_module.EXCLUSION_MISSING_ACCEPTANCE_CRITERIA,
             sources_module.EXCLUSION_MISSING_BOTH_SECTIONS,
             sources_module.EXCLUSION_PLANNING_DOCUMENT,
+            sources_module.EXCLUSION_NON_EXECUTION_TASK_TYPE,
         )
 
     def test_names_the_missing_what_to_build_section(self) -> None:
@@ -1699,6 +1720,7 @@ class TestModuleStructure:
             "EXCLUSION_MISSING_BOTH_SECTIONS",
             "EXCLUSION_MISSING_WHAT_TO_BUILD",
             "EXCLUSION_PLANNING_DOCUMENT",
+            "EXCLUSION_NON_EXECUTION_TASK_TYPE",
             "EXCLUSION_REASONS",
             "PoolCollection",
             "PoolExclusion",
@@ -2965,17 +2987,26 @@ class TestRateLimitReporting:
 
 
 @pytest.mark.parametrize(
-    ("title", "document_labels"),
+    ("title", "document_labels", "reason", "diagnostic"),
     [
-        ("PRD: One issue, one run", []),
-        ("Spec: A design", []),
-        ("sPeC: Mixed", []),
-        ("Architecture decision record", ["wayfinder:map"]),
+        ("PRD: One issue, one run", [], "planning_document", "planning document"),
+        ("Spec: A design", [], "planning_document", "planning document"),
+        ("sPeC: Mixed", [], "planning_document", "planning document"),
+        ("Architecture decision record", ["wayfinder:map"],
+         "planning_document", "planning document"),
+        ("Plan the change", ["task-type:planning"],
+         "non_execution_task_type", "non_execution_task_type"),
+        ("Review the change", ["task-type:review"],
+         "non_execution_task_type", "non_execution_task_type"),
+        ("Conflicting types", ["task-type:implementation", "task-type:planning"],
+         "non_execution_task_type", "non_execution_task_type"),
+        ("Conflicting review", ["task-type:review", "task-type:bugfix"],
+         "non_execution_task_type", "non_execution_task_type"),
     ],
 )
-class TestPlanningDocumentsAreNotWork:
-    def test_list_and_rolling_membership_exclude_planning_documents(
-        self, title: str, document_labels: list[str]
+class TestPoolExclusionsAreNotPickedUp:
+    def test_list_and_rolling_membership_exclude_candidates(
+        self, title: str, document_labels: list[str], reason: str, diagnostic: str
     ) -> None:
         gh = FakeGitHubClient(issues=[
             _make_issue(
@@ -2994,13 +3025,13 @@ class TestPlanningDocumentsAreNotWork:
         pool = source.collect_pool()
         assert [item.ref for item in pool.items] == [391]
         assert [(item.ref, item.reason) for item in pool.exclusions] == [
-            (390, "planning_document")
+            (390, reason)
         ]
         assert gh.issue_view_calls == [391]
         assert [item.ref for item in source.shallow_membership().candidates] == [391]
 
     def test_authoritative_record_is_checked_again(
-        self, title: str, document_labels: list[str]
+        self, title: str, document_labels: list[str], reason: str, diagnostic: str
     ) -> None:
         gh = FakeGitHubClient(
             issues=[_make_issue(390)],
@@ -3014,10 +3045,10 @@ class TestPlanningDocumentsAreNotWork:
         )
         pool = GitHubIssueSource(_silent_logger(), gh=gh).collect_pool()
         assert pool.items == ()
-        assert pool.exclusions[0].reason == "planning_document"
+        assert pool.exclusions[0].reason == reason
 
-    def test_refresh_and_parallel_pickup_reject_documents(
-        self, title: str, document_labels: list[str]
+    def test_refresh_and_parallel_pickup_reject_excluded_candidates(
+        self, title: str, document_labels: list[str], reason: str, diagnostic: str
     ) -> None:
         gh = FakeGitHubClient(issues=[
             _make_issue(390, labels=["ready-for-agent", "parallel-safe"])
@@ -3041,8 +3072,8 @@ class TestPlanningDocumentsAreNotWork:
         assert source.refresh_for_preparation(item).outcome == sources_module.PICKUP_STALE
         assert source.pickup(390).outcome == sources_module.PICKUP_STALE
 
-    def test_pin_refuses_planning_document(
-        self, title: str, document_labels: list[str]
+    def test_pin_names_the_exclusion(
+        self, title: str, document_labels: list[str], reason: str, diagnostic: str
     ) -> None:
         gh = FakeGitHubClient(issues=[
             _make_issue(390, title=title, labels=["ready-for-agent", *document_labels])
@@ -3051,7 +3082,7 @@ class TestPlanningDocumentsAreNotWork:
         source = GitHubIssueSource(logger, gh=gh, pin=390)
         with _capture(logger) as records:
             assert source.preflight() == 1
-        assert any("planning document" in record.getMessage() for record in records)
+        assert any(diagnostic in record.getMessage() for record in records)
 
 
 class TestThePinReachesSelection:

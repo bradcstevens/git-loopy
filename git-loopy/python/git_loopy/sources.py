@@ -97,6 +97,7 @@ __all__ = [
     "EXCLUSION_MISSING_BOTH_SECTIONS",
     "EXCLUSION_MISSING_WHAT_TO_BUILD",
     "EXCLUSION_PLANNING_DOCUMENT",
+    "EXCLUSION_NON_EXECUTION_TASK_TYPE",
     "EXCLUSION_REASONS",
     "PoolCollection",
     "PoolExclusion",
@@ -128,12 +129,13 @@ PICKUP_UNAVAILABLE: str = "unavailable"
 
 # Pool-exclusion reasons (#303). A ``ready-for-agent`` candidate that fails the
 # AFK-ready discriminator leaves the **Pool**; these name a planning document
-# or the required section it lacked so a human who triaged the issue can see why
+# or non-execution Task type, or a required section it lacked, so a human can see why
 # the runner is ignoring it rather than watching it vanish.
 EXCLUSION_MISSING_WHAT_TO_BUILD: str = "missing_what_to_build"
 EXCLUSION_MISSING_ACCEPTANCE_CRITERIA: str = "missing_acceptance_criteria"
 EXCLUSION_MISSING_BOTH_SECTIONS: str = "missing_both_sections"
 EXCLUSION_PLANNING_DOCUMENT: str = "planning_document"
+EXCLUSION_NON_EXECUTION_TASK_TYPE: str = "non_execution_task_type"
 
 # The closed reason vocabulary, in the order a contract reader should read it.
 EXCLUSION_REASONS: tuple[str, ...] = (
@@ -141,6 +143,7 @@ EXCLUSION_REASONS: tuple[str, ...] = (
     EXCLUSION_MISSING_ACCEPTANCE_CRITERIA,
     EXCLUSION_MISSING_BOTH_SECTIONS,
     EXCLUSION_PLANNING_DOCUMENT,
+    EXCLUSION_NON_EXECUTION_TASK_TYPE,
 )
 
 # Shared AFK-ready discriminator regexes (line-anchored, multiline).
@@ -191,12 +194,14 @@ def is_afk_ready(
     Args:
         body: Raw markdown body of an issue or local-markdown file.
         title: Issue title; PRD: and Spec: prefixes exclude planning documents.
-        labels: Issue labels; the exact ``wayfinder:map`` label excludes a map.
+        labels: Issue labels; exact ``wayfinder:map``, ``task-type:planning``
+            or ``task-type:review`` labels exclude the candidate.
             Omitted for the local-markdown backend, which has none.
 
     Returns:
         ``True`` if the issue is not a planning document (``PRD:`` or ``Spec:``
-        title, or a ``wayfinder:map`` label) and BOTH ``^## What to build`` and
+        title, or a ``wayfinder:map`` label), carries no planning/review Task
+        type label, and BOTH ``^## What to build`` and
         ``^## Acceptance criteria`` appear as line-anchored section headers in
         the body. ``## Parent`` is optional (a slice without a parent issue
         omits it per the to-issues template) and is intentionally not required,
@@ -227,15 +232,19 @@ def afk_ready_exclusion(
 
     Returns:
         ``None`` when the issue is AFK-ready, else one of
-        :data:`EXCLUSION_REASONS` naming a planning document or missing section.
+        :data:`EXCLUSION_REASONS` naming a planning document, non-execution
+        Task type or missing section.
         The "missing both" case is reported as its own reason rather than
         collapsed into either single-section reason, because an issue with
         neither section is usually a specification document rather than a
         slice that lost one heading — a distinction the operator acts on
-        differently. A planning document takes precedence over missing headings.
+        differently. A planning document takes precedence over a non-execution
+        Task type, which takes precedence over missing headings.
     """
     if is_planning_document(title, labels):
         return EXCLUSION_PLANNING_DOCUMENT
+    if "task-type:planning" in labels or "task-type:review" in labels:
+        return EXCLUSION_NON_EXECUTION_TASK_TYPE
     has_what = bool(_RE_WHAT_TO_BUILD.search(body))
     has_ac = bool(_RE_AC.search(body))
     if has_what and has_ac:
@@ -405,8 +414,8 @@ class PoolExclusion:
             path for the local-markdown backend.
         title: Display title (GitHub) or path (local markdown), so the operator
             can recognise the item without a second lookup.
-        reason: One of :data:`EXCLUSION_REASONS`, naming which required section
-            is absent.
+        reason: One of :data:`EXCLUSION_REASONS`, naming the planning document,
+            non-execution Task type or absent required section.
     """
 
     ref: int | str

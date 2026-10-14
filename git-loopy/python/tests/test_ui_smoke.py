@@ -672,6 +672,20 @@ def test_the_pool_line_claims_the_label_only_for_the_github_source(
         assert "ready-for-agent candidate" not in out
 
 
+def test_non_execution_task_type_exclusion_reaches_the_operator() -> None:
+    renderer, _summary, buf = _make_renderer()
+    renderer.render({
+        "type": "wrapper.pool.excluded",
+        "issue": 823,
+        "title": "A typed ticket",
+        "reason": "non_execution_task_type",
+    })
+
+    out = buf.getvalue()
+    assert "823" in out
+    assert "non execution task type" in out
+
+
 # ---------------------------------------------------------------------------
 # Usage accumulation — silent at default
 # ---------------------------------------------------------------------------

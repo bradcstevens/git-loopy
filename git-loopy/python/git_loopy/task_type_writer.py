@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Awaitable, Callable, Protocol, Sequence, runtime_checkable
 
-from git_loopy.config import TASK_TYPE_LABEL_PREFIX
+from git_loopy.config import EXECUTION_TASK_TYPE_KEYS, TASK_TYPE_LABEL_PREFIX
 from git_loopy.labels import TASK_TYPE_LABELS, LabelSpec
 from git_loopy.sources import AfkReadyItem
 from git_loopy.task_type_classifier import (
@@ -41,7 +41,7 @@ __all__ = [
     "write_task_type_label",
 ]
 
-#: The seven writable labels, indexed by the taxonomy key they carry.
+#: The five execution labels the classifier may write (ADR-0088).
 #:
 #: Derived from :data:`git_loopy.labels.TASK_TYPE_LABELS` — the same specs
 #: ``git-loopy init`` ensures — rather than assembled here from the prefix and
@@ -52,7 +52,9 @@ __all__ = [
 #: which is the closed taxonomy (#375) expressed as an absence rather than as a
 #: second check.
 _WRITABLE: dict[str, LabelSpec] = {
-    spec.name[len(TASK_TYPE_LABEL_PREFIX) :]: spec for spec in TASK_TYPE_LABELS
+    spec.name[len(TASK_TYPE_LABEL_PREFIX) :]: spec
+    for spec in TASK_TYPE_LABELS
+    if spec.name[len(TASK_TYPE_LABEL_PREFIX) :] in EXECUTION_TASK_TYPE_KEYS
 }
 
 
@@ -115,9 +117,8 @@ class TaskTypeLabelClient(Protocol):
 def task_type_label_spec(key: str) -> LabelSpec | None:
     """The label ``key`` may be written as, or ``None`` when it may not be.
 
-    The closed taxonomy at the write boundary. ``None`` is not "look it up
-    somewhere else": it is the refusal, because a key with no spec is a key
-    ``git-loopy init`` never created and a machine must never invent.
+    The execution subset at the write boundary. ``None`` is a refusal:
+    a machine may neither invent a key nor assert ``planning`` or ``review``.
     """
     return _WRITABLE.get(key)
 
