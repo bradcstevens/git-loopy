@@ -1343,10 +1343,12 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.29 adds the Python-only ``non_execution_task_type`` Pool-exclusion reason.
     The closed reason vocabulary advances the Event fixture revision to 1.8;
     compatibility schema stays 1 and dormant producers keep their baseline.
+    2.30 selects execution profiles and narrows Skill exposure. Permission
+    reasons remain open strings, so Event revision 1.8 and schema 1 stay intact.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.8"
-    assert _EVENT_SCHEMA["contract_version"] == "2.29"
+    assert _EVENT_SCHEMA["contract_version"] == "2.30"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -2582,7 +2584,7 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.21 tracks contract/Event provenance 2.29 / 1.8 without projection changes.
+    # 1.22 tracks contract/Event provenance 2.30 / 1.8 without projection changes.
     # 1.20 accounts for each attempt and marks Skipped inline.
     # 1.19 adds the Header's run_release_version from Run start. 1.18 adds
     # optional Ending/progress to Status (ADR-0075). 1.17 pins
@@ -2596,7 +2598,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.21"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.22"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]

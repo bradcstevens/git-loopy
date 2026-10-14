@@ -522,6 +522,81 @@ def test_the_transported_skill_policy_hides_denied_skills_not_merely_gates_them(
     assert recorded["config"].deny_skills == frozenset({"triage", "loop-me"})
 
 
+@pytest.mark.parametrize("missing", ["none", "profile", "root"])
+def test_remote_lane_opens_only_its_named_installed_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed_execution_profiles: Path,
+    missing: str,
+) -> None:
+    from copilot.generated.session_events import PermissionRequestCustomTool
+
+    recorded: dict[str, Any] = {}
+    if missing == "profile":
+        (installed_execution_profiles / "bugfix.md").unlink()
+    elif missing == "root":
+        installed_execution_profiles.rename(tmp_path / "uninstalled-profiles")
+
+    class Session:
+        async def disconnect(self) -> None: ...
+
+        async def send_and_wait(self, prompt: str, **kwargs: Any) -> None:
+            recorded["prompt"] = prompt
+            handler = recorded["on_permission_request"]
+            decision = handler(PermissionRequestCustomTool(
+                tool_name="skill", args={"skill": "prototype"},
+                tool_description="Load a Skill",
+                tool_call_id="remote-outside-profile",
+            ), {})
+            assert decision.kind == "reject"
+
+    class Client:
+        async def start(self) -> None: ...
+
+        async def stop(self) -> None: ...
+
+        async def create_session(self, **kwargs: Any) -> Session:
+            recorded.update(kwargs)
+            return Session()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(copilot_client_module, "make_copilot_client", lambda **kw: Client())
+    observed = asyncio.run(worker._run_agent_session(
+        make_request(
+            profile_key="bugfix", disabled_skills=["disabled-builtin"],
+            catalog_skills=["tdd", "prototype", "external-builtin"],
+        ),
+        worker._ArtifactEventLog(tmp_path / worker.EVENTS_FILENAME),
+    ))
+    if missing != "none":
+        assert observed.termination is SessionTermination.CRASHED
+        assert observed.error is not None and "bugfix" in observed.error.message
+        assert recorded == {}
+    else:
+        assert observed.termination is SessionTermination.COMPLETED
+        assert recorded["agent"] == "bugfix"
+        assert {"disabled-builtin", "external-builtin", "prototype"} <= set(recorded["disabled_skills"])
+        assert recorded["custom_agents"] == [{
+            "name": "bugfix", "prompt": "bugfix role delta.",
+            "infer": False, "skills": ["tdd"],
+        }]
+        assert recorded["prompt"] == "Work issue 460."
+        events = [json.loads(line) for line in (tmp_path / worker.EVENTS_FILENAME).read_text().splitlines()]
+        assert events[-1]["reason"] == "skill_outside_profile"
+
+
+@pytest.mark.parametrize("key", ["planning", "review", "../bugfix", "", None, ["bugfix"]])
+def test_remote_request_refuses_non_execution_profile_keys(key: object) -> None:
+    with pytest.raises(worker.ContributionRequestError, match="profile_key"):
+        worker.parse_request({worker.REQUEST_ENV: json.dumps(make_request(profile_key=key))})
+
+
+@pytest.mark.parametrize("field", ["disabled_skills", "catalog_skills"])
+@pytest.mark.parametrize("value", ["tdd", [None], ["../tdd"]])
+def test_remote_profile_request_refuses_malformed_skill_lists(field: str, value: object) -> None:
+    request = make_request(profile_key="bugfix", **{field: value})
+    with pytest.raises(worker.ContributionRequestError, match=field):
+        worker.parse_request({worker.REQUEST_ENV: json.dumps(request)})
+
+
 def test_an_ending_the_stream_alone_witnessed_survives_the_job(tmp_path: Path) -> None:
     """The ``await`` boundary sees only what was raised, which is half an ending.
 

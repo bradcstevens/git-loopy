@@ -300,6 +300,8 @@ from git_loopy.sources import (
 from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
 from git_loopy.skill_exposure import SkillExposureError
 from git_loopy.skill_policy import SkillPolicyResolutionError
+from git_loopy.agent_profiles import execution_profile_key
+from git_loopy.skill_install import installed_profiles_dir
 from git_loopy.skill_run_preflight import (
     RunSkillPreflight,
     resolve_run_skill_preflight,
@@ -2257,6 +2259,7 @@ class _Loop:
                         context_tier=context_tier,
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
+                        profile_key=execution_profile_key(resolution.task_type_keys),
                         event_observer=_ChainedObserver(
                             observers=tuple(
                                 observer
@@ -4339,6 +4342,7 @@ class _LaneWork:
     # later count minus this snapshot; a cut this Run did not observe has
     # no snapshot, and the observation is null rather than a guessed zero.
     base_publications_at_cut: int | None = None
+    profile_key: str | None = None
 
 
 @dataclass
@@ -6298,6 +6302,7 @@ class _ParallelLoop:
             git=wt_git,
             pre_sha=base,
             base_publications_at_cut=self._base_publications,
+            profile_key=execution_profile_key(resolution.task_type_keys),
         )
 
         # Prepare the freshly created worktree before its agent session
@@ -6556,6 +6561,12 @@ class _ParallelLoop:
             context_tier=contribution.context_tier,
             skill_policy=self._skill_exposure,
             run_id=self._lane_remote_run_id(lane_work.item.ref),
+            profile_key=(
+                lane_work.profile_key
+                if installed_profiles_dir(os.environ).exists()
+                or installed_profiles_dir(os.environ).is_symlink()
+                else None
+            ),
         )
 
     def _host_for_contribution(
@@ -6962,6 +6973,7 @@ class _ParallelLoop:
                 working_directory=str(lane_work.git.root),
                 issue_ref=lane_work.item.ref,
                 skill_exposure=self._skill_exposure,
+                profile_key=lane_work.profile_key,
                 event_observer=_ChainedObserver(
                     observers=tuple(
                         observer
@@ -7983,6 +7995,7 @@ class _ParallelLoop:
                 working_directory=str(stage.git.root),
                 issue_ref=contribution.ref,
                 skill_exposure=self._skill_exposure,
+                profile_key=lane_work.profile_key,
                 event_observer=self._serial._harness_capacity_observer(
                     issue=contribution.ref,
                     model=contribution.model,

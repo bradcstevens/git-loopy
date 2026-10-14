@@ -1,7 +1,25 @@
 {
   "schema_version": 1,
-  "contract_version": "2.28",
-  "description": "Agent profiles: every session the Orchestrator opens is isolated from harness memory and cross-session history (ADR-0076).",
+  "contract_version": "2.30",
+  "description": "Agent isolation (ADR-0076) and Python execution profile selection, registration and Skill exposure (ADR-0078).",
+  "selection_cases": [
+    {"id": "implementation", "distributions": ["python"], "keys": ["implementation"], "expected": "implementation"},
+    {"id": "bugfix", "distributions": ["python"], "keys": ["bugfix"], "expected": "bugfix"},
+    {"id": "test", "distributions": ["python"], "keys": ["test"], "expected": "test"},
+    {"id": "docs", "distributions": ["python"], "keys": ["docs"], "expected": "docs"},
+    {"id": "chore", "distributions": ["python"], "keys": ["chore"], "expected": "chore"},
+    {"id": "unresolved", "distributions": ["python"], "keys": [], "expected": "implementation"},
+    {"id": "conflicting", "distributions": ["python"], "keys": ["docs", "bugfix"], "expected": "implementation"},
+    {"id": "duplicate-key", "distributions": ["python"], "keys": ["bugfix", "bugfix"], "expected": "bugfix"}
+  ],
+  "exposure_cases": [
+    {"id": "implementation", "distributions": ["python"], "profile": "implementation", "required": ["tdd"], "permitted": ["prototype", "codebase-design"], "enabled": ["tdd", "prototype", "other"], "expected_disabled": ["code-review", "codebase-design", "diagnosing-bugs", "other"], "request": "other", "expected_reason": "skill_outside_profile"},
+    {"id": "bugfix", "distributions": ["python"], "profile": "bugfix", "required": ["diagnosing-bugs", "tdd"], "permitted": ["codebase-design"], "enabled": ["diagnosing-bugs", "tdd", "codebase-design", "other"], "expected_disabled": ["code-review", "other", "prototype"], "request": "other", "expected_reason": "skill_outside_profile"},
+    {"id": "test", "distributions": ["python"], "profile": "test", "required": ["tdd"], "permitted": [], "enabled": ["tdd", "prototype", "other"], "expected_disabled": ["code-review", "codebase-design", "diagnosing-bugs", "other", "prototype"], "request": "prototype", "expected_reason": "skill_outside_profile"},
+    {"id": "docs", "distributions": ["python"], "profile": "docs", "required": [], "permitted": [], "enabled": ["tdd", "prototype", "other"], "expected_disabled": ["code-review", "codebase-design", "diagnosing-bugs", "other", "prototype", "tdd"], "request": "tdd", "expected_reason": "skill_outside_profile"},
+    {"id": "chore", "distributions": ["python"], "profile": "chore", "required": [], "permitted": [], "enabled": ["tdd", "prototype", "other"], "expected_disabled": ["code-review", "codebase-design", "diagnosing-bugs", "other", "prototype", "tdd"], "request": "other", "expected_reason": "skill_outside_profile"},
+    {"id": "permitted-but-disabled", "distributions": ["python"], "profile": "implementation", "required": ["tdd"], "permitted": ["prototype"], "enabled": ["tdd"], "expected_disabled": ["code-review", "codebase-design", "diagnosing-bugs", "other", "prototype"], "request": "prototype", "expected_reason": "skill_outside_policy"}
+  ],
   "memory_cases": [
     {
       "id": "serial-iteration",

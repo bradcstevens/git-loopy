@@ -1215,12 +1215,17 @@ def test_the_runs_disabled_skills_travel_to_the_remote_contribution() -> None:
         sleep=_instant,
         poll_interval_seconds=0,
     )
-    policy = SimpleNamespace(disabled_skills=("grill-me", "loop-me"))
+    policy = SimpleNamespace(
+        disabled_skills=("grill-me", "loop-me"),
+        catalog=SimpleNamespace(winners={"grill-me": None, "loop-me": None, "tdd": None}),
+    )
 
-    asyncio.run(host.run_contribution(make_request(skill_policy=policy)))
+    asyncio.run(host.run_contribution(make_request(skill_policy=policy, profile_key="bugfix")))
 
     payload = json.loads(client.dispatched[0][2]["request"])
     assert payload["disabled_skills"] == ["grill-me", "loop-me"]
+    assert payload["profile_key"] == "bugfix"
+    assert payload["catalog_skills"] == ["grill-me", "loop-me", "tdd"]
 
 
 def test_a_failed_checkpoint_is_a_breach_rather_than_a_quiet_success() -> None:

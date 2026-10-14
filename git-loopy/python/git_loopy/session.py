@@ -123,7 +123,7 @@ Design notes
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Mapping, Protocol, runtime_checkable
+from typing import Any, Callable, Mapping, Protocol, TypedDict, runtime_checkable
 
 from copilot import CopilotClient, CopilotSession
 from copilot.generated.rpc import (
@@ -135,14 +135,15 @@ from copilot.generated.session_events import (
     SessionEvent,
     SessionEventType,
 )
-from copilot.session import PermissionRequestResult
+from copilot.session import CustomAgentConfig, PermissionRequestResult
 
 from git_loopy import events
 from git_loopy.emit import EventEmitter
 from git_loopy.persist import EventLogWriter
 from git_loopy.sinks import SinkFanout
-from git_loopy.skill_exposure import SkillExposure
-from git_loopy.skill_install import installed_catalog_dir
+from git_loopy.skill_exposure import SessionSkillExposure
+from git_loopy.agent_profiles import AgentProfileError, load_execution_profile
+from git_loopy.skill_install import installed_catalog_dir, installed_profiles_dir
 from git_loopy.skill_policy import (
     EffectiveSkillPolicy,
     SkillCatalog,
@@ -176,6 +177,7 @@ SKILL_TOOL_NAME: str = "skill"
 _REASON_TOOL_DENY: str = "tool_in_deny_list"
 _REASON_SKILL_DENY: str = "skill_in_deny_list"
 _REASON_SKILL_OUTSIDE_POLICY: str = "skill_outside_policy"
+_REASON_SKILL_OUTSIDE_PROFILE: str = "skill_outside_profile"
 _REASON_SKILL_UNKNOWN: str = "skill_unknown"
 _REASON_SKILL_INVALID: str = "skill_invalid_request"
 _REASON_SKILL_LEGACY_DENY: str = "skill_legacy_denied"
@@ -242,6 +244,11 @@ class EventObserver(Protocol):
 
 class _IssueBinding(Protocol):
     def observe_message(self, text: str, *, at: Any) -> object: ...
+
+
+class _ProfileOptions(TypedDict, total=False):
+    agent: str
+    custom_agents: list[CustomAgentConfig]
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +355,7 @@ def build_permission_handler(
     deny_skills: frozenset[str] = frozenset(),
     skill_policy: EffectiveSkillPolicy | None = None,
     skill_catalog: SkillCatalog | None = None,
+    profile_skills: frozenset[str] | None = None,
     record_event: Callable[[dict[str, Any]], None],
     run_id: str | None,
     identity: Mapping[str, Any] | None = None,
@@ -371,6 +379,7 @@ def build_permission_handler(
         skill_policy: Frozen Effective Skill policy, or ``None`` for the
             temporary legacy open-world caller path.
         skill_catalog: Resolved catalog paired with ``skill_policy``.
+        profile_skills: Optional per-profile exposure within the Effective Skill policy.
         record_event: Callback invoked with the envelope for every
             permission decision. Recording failures are swallowed
             (see :func:`_safe_record`) so a bad writer cannot demote
@@ -507,6 +516,20 @@ def build_permission_handler(
                     tool_name=tool_name,
                     arguments=scrubbed_args,
                     reason=_REASON_SKILL_OUTSIDE_POLICY,
+                    skill=skill_name,
+                )
+                _safe_record(record_event, envelope)
+                return PermissionDecisionReject()
+            if profile_skills is not None and skill_name not in profile_skills:
+                envelope = events.make_event(
+                    type=events.TOOL_PERMISSION_DENIED,
+                    run_id=run_id,
+                    iter=iter_num,
+                    **identity,
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    arguments=scrubbed_args,
+                    reason=_REASON_SKILL_OUTSIDE_PROFILE,
                     skill=skill_name,
                 )
                 _safe_record(record_event, envelope)
@@ -649,6 +672,11 @@ class IterationSession:
         skill_exposure: Optional Run-scoped closed-world projection. When
             supplied, the session exposes only its enabled catalog winners and
             sends the exact disabled catalog complement to the SDK.
+        profile_key: The issue's execution profile, resolved at Pickup. Without
+            an installed root the legacy session options remain unchanged.
+            Classifiers, selectors and calibration Trials leave this unset.
+        require_profile: A remote request must find its named installed profile,
+            even when the worker has no profile root at all.
     """
 
     def __init__(
@@ -667,7 +695,9 @@ class IterationSession:
         working_directory: str | None = None,
         issue_ref: int | str | None = None,
         issue_binding: _IssueBinding | None = None,
-        skill_exposure: SkillExposure | None = None,
+        skill_exposure: SessionSkillExposure | None = None,
+        profile_key: str | None = None,
+        require_profile: bool = False,
         event_observer: EventObserver | None = None,
     ) -> None:
         self._client = client
@@ -684,6 +714,8 @@ class IterationSession:
         self._issue_ref = issue_ref
         self._issue_binding = issue_binding
         self._skill_exposure = skill_exposure
+        self._profile_key = profile_key
+        self._require_profile = require_profile
         self._sdk_session: CopilotSession | None = None
         # The one scrub-and-fan-out seam (issue #43). ``diag=None`` keeps the
         # SDK-callback / permission-handler paths silent on a write/sink
@@ -722,7 +754,37 @@ class IterationSession:
         so early events such as :data:`SessionEventType.SESSION_START`
         are delivered.
         """
+        profile = (
+            load_execution_profile(
+                installed_profiles_dir(os.environ), self._profile_key,
+                skills=installed_catalog_dir(os.environ),
+                required=self._require_profile,
+            )
+            if self._profile_key is not None else None
+        )
+        profile_skills = None
+        if profile is not None:
+            if (
+                self._skill_exposure is None
+                or self._skill_exposure.policy is None
+                or self._skill_exposure.catalog is None
+            ):
+                raise AgentProfileError("An Agent profile requires an Effective Skill policy")
+            policy = self._skill_exposure.policy
+            missing = set(profile.required) - (
+                set(policy.enabled) & set(self._skill_exposure.catalog.winners)
+            )
+            denied = set(profile.required) & (
+                set(policy.legacy_denied) | self._config.deny_skills
+            )
+            if missing or denied:
+                raise AgentProfileError(
+                    f"Profile {profile.key!r} Required Skills are disabled: "
+                    + ", ".join(sorted(missing | denied))
+                )
+            profile_skills = profile.exposure(policy.enabled)
         handler = build_permission_handler(
+            profile_skills=profile_skills,
             deny_tools=self._config.deny_tools,
             deny_skills=self._config.deny_skills,
             skill_policy=(
@@ -750,7 +812,26 @@ class IterationSession:
             if self._skill_exposure is not None
             else None
         )
+        profile_options: _ProfileOptions = {}
+        if profile is not None:
+            assert self._skill_exposure is not None
+            assert self._skill_exposure.catalog is not None
+            assert profile_skills is not None
+            disabled_skills = sorted(
+                set(self._skill_exposure.disabled_skills)
+                | (set(self._skill_exposure.catalog.winners) - profile_skills)
+            )
+            profile_options = {
+                "agent": profile.key,
+                "custom_agents": [{
+                    "name": profile.key,
+                    "prompt": profile.instructions,
+                    "infer": False,
+                    "skills": list(profile.required),
+                }],
+            }
         session = await self._client.create_session(
+            **profile_options,
             on_permission_request=handler,
             on_event=self._on_sdk_event,
             memory={"enabled": False},

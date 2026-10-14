@@ -33,6 +33,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from git_loopy import events as events_module
+from git_loopy.config import EXECUTION_TASK_TYPE_KEYS
+from git_loopy.skill_policy import (
+    EffectiveSkillPolicy, SkillCatalog, SkillPolicyScope, is_canonical_skill_name,
+)
 from git_loopy.git import GitClient, GitError, SubprocessGitClient
 from git_loopy.session_outcome import (
     SessionError,
@@ -107,6 +111,13 @@ def parse_request(env: Mapping[str, str]) -> dict[str, Any]:
             raise ContributionRequestError(f"{REQUEST_ENV}.{field} must be a non-empty string")
     if not isinstance(request.get("issue_ref"), (int, str)) or request["issue_ref"] == "":
         raise ContributionRequestError(f"{REQUEST_ENV}.issue_ref must name an issue")
+    if "profile_key" in request and request["profile_key"] not in EXECUTION_TASK_TYPE_KEYS:
+        raise ContributionRequestError(f"{REQUEST_ENV}.profile_key must name an execution profile")
+    if "profile_key" in request:
+        for field in ("disabled_skills", "catalog_skills"):
+            names = request.get(field, [])
+            if not isinstance(names, list) or any(not is_canonical_skill_name(n) for n in names):
+                raise ContributionRequestError(f"{REQUEST_ENV}.{field} must list canonical Skills")
     return request
 
 
@@ -268,10 +279,10 @@ def _head_sha(git: GitClient) -> str | None:
 class _TransportedSkillExposure:
     """The half of a Run's **Effective Skill policy** that can cross a boundary.
 
-    ``IterationSession`` reads four things off an exposure. Two of them ---
-    the resolved policy object and the catalog --- are local artefacts of the
-    orchestrator's own discovery and mean nothing on a runner. The other two
-    are exactly what has to survive the trip:
+    The worker rebuilds a profile session's policy and catalog from its installed
+    root and the transported disabled names. Legacy requests leave those two
+    objects absent, retaining their original deny-only permission behavior.
+    Neither a source path nor a profile body crosses the machine boundary:
 
     * ``skill_directories`` is the catalog root ADR-0025 pins, which the job's
       setup step populates from the same revision this repository pins, so it
@@ -280,12 +291,15 @@ class _TransportedSkillExposure:
       the SDK and not merely the permission gate: denying an invocation still
       leaves the Skill visible in the session's catalog, and a closed world
       that advertises what it will refuse is not closed.
+      Profile requests additionally carry the sender's catalog names, so even
+      Skills absent from the installed root stay disabled rather than leaking
+      through a worker's built-in Skill inventory.
     """
 
     disabled: tuple[str, ...]
     root: str
-    policy: None = None
-    catalog: None = None
+    policy: EffectiveSkillPolicy | None = None
+    catalog: SkillCatalog | None = None
 
     @property
     def skill_directories(self) -> tuple[str, ...]:
@@ -300,13 +314,15 @@ class _TransportedSkillExposure:
 class _JobSessionConfig:
     """The :class:`~git_loopy.session.SessionConfig` this job's session reads.
 
-    ``deny_skills`` is where the Run's **Effective Skill policy** lands. The
+    For legacy requests, ``deny_skills`` carries the **Effective Skill policy**. The
     orchestrator resolved that policy once, against the pinned catalog, and a
     remote Lane has to honour the same closed world --- otherwise a Skill the
     operator disabled for this Run would be usable on exactly the contributions
     that ran off their machine. The *enabled* half needs no transport: ADR-0025
     already fixes the Skill root to the catalog ``git-loopy init`` installs, and
     the job's setup step installs the very same pinned revision.
+    Profile requests instead use the rebuilt policy, preserving the distinct
+    policy and profile refusal reasons in the shared permission handler.
     """
 
     deny_skills: frozenset[str]
@@ -332,12 +348,16 @@ async def _run_agent_session(
     from git_loopy.persist import EventLogWriter
     from git_loopy.session import IterationSession
     from git_loopy.sinks import SinkFanout
+    from git_loopy.skill_catalog import build_skill_catalog
     from git_loopy.skill_install import installed_catalog_dir
 
     working_directory = Path.cwd()
     client = make_copilot_client(working_directory=working_directory)
     disabled = tuple(request.get("disabled_skills") or ())
-    config = _JobSessionConfig(deny_skills=frozenset(disabled))
+    profile_key = request.get("profile_key")
+    config = _JobSessionConfig(
+        deny_skills=frozenset(disabled) if profile_key is None else frozenset()
+    )
     exposure = _TransportedSkillExposure(
         disabled=disabled, root=str(installed_catalog_dir(os.environ))
     )
@@ -346,6 +366,23 @@ async def _run_agent_session(
     watch = SessionOutcomeWatch()
     await client.start()
     try:
+        if profile_key is not None:
+            root = installed_catalog_dir(os.environ)
+            catalog = build_skill_catalog(
+                (), repo_root=working_directory, installed_skills_dir=root,
+            )
+            policy = EffectiveSkillPolicy(
+                enabled=tuple(sorted(set(catalog.winners) - set(disabled))),
+                required=(), legacy_denied=(),
+                source_kinds={name: winner.source_kind for name, winner in catalog.winners.items()},
+                base_scope=SkillPolicyScope.PROJECT,
+            )
+            exposure = _TransportedSkillExposure(
+                policy=policy, catalog=catalog, root=str(root),
+                disabled=tuple(sorted(
+                    set(disabled) | (set(request.get("catalog_skills", ())) - set(catalog.winners))
+                )),
+            )
         async with IterationSession(
             client,
             config=config,
@@ -359,6 +396,8 @@ async def _run_agent_session(
             working_directory=str(working_directory),
             issue_ref=request["issue_ref"],
             skill_exposure=exposure,
+            profile_key=profile_key,
+            require_profile=profile_key is not None,
             event_observer=watch,
         ) as session:
             try:

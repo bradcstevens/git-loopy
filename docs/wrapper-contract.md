@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.29 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.30 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -2306,14 +2306,15 @@ ADR-0070), 2.23 with upstream-durable Integration publication (§12, #418),
 and 2.24 with Subagent lifecycle telemetry and Activity totals (ADR-0022),
 and 2.26 with per-issue Endings and inline Queue explanations (ADR-0075),
 and 2.27 with the per-attempt account and inline Skipped marker (ADR-0075),
-and 2.29 with the Python-only non-execution Task-type exclusion (ADR-0088).
+and 2.29 with the Python-only non-execution Task-type exclusion (ADR-0088),
+and 2.30 with execution profile selection and Skill exposure (ADR-0078).
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
 it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1), then 2.29 with the Python-only non-execution Task-type exclusion.
-Event revision 1.8 and Dashboard revision 1.21 record the latter's provenance;
+Event revision 1.8 and Dashboard revision 1.22 record current provenance;
 the Dashboard projection is unchanged. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;
 the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility
@@ -2982,7 +2983,42 @@ session seam. The TUI helper opens no session and is role-waived. The fixture
 is introduced above the dormant shell and PowerShell paths' Contract support
 2.26, so they owe no implementation (ADR-0091). Until the support-scoped register
 lands, their entries are `waived_out_of_scope` with that ADR as the reason.
-This section does not yet require profile installation or selection.
+
+### 18.1 Execution profile selection and registration (Python, contract 2.30)
+
+With an installed profile root, each issue's **Agent** MUST run as its resolved
+**Execution Task type**, or `implementation` when no key resolves or distinct
+keys conflict, even if their Routed pairs agree. Selection is bound at Pickup;
+local and remote Lanes, Recovery and remediation retain the issue's own profile.
+The remote request names that profile; the worker reads its own installed root
+and MUST refuse a missing or invalid profile, including an absent root. Without
+an installed root, local sessions and requests retain their prior behavior.
+Classifier and Route-selector calls are not Agent profiles; calibration Trials
+retain their existing session setup.
+
+The session MUST register exactly one SDK `custom_agents` entry and select it
+with `agent`: its profile key, role delta as `prompt`, `infer: false`, and
+Required Skills as `skills`. It MUST NOT carry a model or effort, override the
+built-in Subagents, or replace the Run instructions. The role delta layers on
+the instructions still assembled and sent exactly as §4 prescribes. Execution
+profiles retain full tool access.
+
+### 18.2 Profile Skill exposure (Python, contract 2.30)
+
+The session MUST preload its profile's Required Skills. Its exposure is
+**Required ∪ (Permitted ∩ Effective Skill policy)**; every other catalog Skill
+MUST be disabled in the SDK, including transported catalog names unavailable on
+a remote worker. Missing or disabled Required Skills MUST fail explicitly,
+never become a silent failed preload.
+
+The permission handler MUST refuse an on-demand Skill outside that exposure.
+An otherwise policy-enabled catalog Skill excluded by the profile records
+`tool.permission_denied` with `reason: "skill_outside_profile"`. Existing invalid,
+unknown, legacy-denied and `skill_outside_policy` reasons keep their precedence;
+a Permitted Skill disabled by the policy remains `skill_outside_policy`.
+Preloads are not observed on-demand calls and MUST NOT be counted as consulted
+Skills. `agent-profiles.json` pins selection and exposure through the Python
+production session seam.
 
 ## 19. Changing this contract
 

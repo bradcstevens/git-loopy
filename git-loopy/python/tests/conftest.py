@@ -148,6 +148,21 @@ def _refuse_remote_skill_acquisition(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(skill_install, "acquire_skill_source", _guarded)
 
 
+@pytest.fixture
+def installed_execution_profiles() -> Path:
+    """Synthetic installed profiles; no acquisition or edit to the real install."""
+    root = skill_install.installed_profiles_dir(os.environ)
+    root.mkdir(parents=True)
+    for key in ("implementation", "bugfix", "test", "docs", "chore"):
+        required = "\n  - tdd\n" if key in ("implementation", "bugfix", "test") else " []\n"
+        (root / f"{key}.md").write_text(
+            f"---\nrequired-skills:{required}permitted-skills: []\n"
+            f"access: full\n---\n{key} role delta.\n",
+            encoding="utf-8",
+        )
+    return root
+
+
 @pytest.fixture(autouse=True)
 def _refuse_live_sdk_feed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail loudly if a test asks the corporate feed without an injected fetch.

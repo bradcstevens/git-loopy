@@ -161,6 +161,9 @@ class ContributionRequest:
             runs the contribution on no tier at all (#560).
         skill_policy: The Effective Skill policy in force for this
             contribution.
+        profile_key: The issue's execution profile when profiles are installed.
+            A remote host resolves it from its own installed root, never from
+            a transported path or role delta.
         run_id: The Run identity the host sees — the Run's ``run_id``, suffixed
             ``-attempt-N`` for a retry Lane — handed to the host, never minted by
             it (one of the seam's six refusals).
@@ -174,6 +177,7 @@ class ContributionRequest:
     context_tier: str | None
     skill_policy: Any
     run_id: str
+    profile_key: str | None = None
 
 
 @dataclass(frozen=True)

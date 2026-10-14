@@ -4743,7 +4743,7 @@ def _classifier_config(**overrides: Any) -> RunConfig:
 
 
 def test_an_unlabelled_issue_is_classified_and_labelled_at_pickup(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, installed_execution_profiles,
 ) -> None:
     """The whole ticket (#409): no human labelled #7, and it routes as a bugfix."""
     fake_client, tracker = _wire_classifier_run(tmp_path, monkeypatch)
@@ -4758,6 +4758,7 @@ def test_an_unlabelled_issue_is_classified_and_labelled_at_pickup(
         (e["task_type_keys"], e["model"], e["effort"], e["routing_source"])
         for e in _bound_pickups(tmp_path)
     ] == [(["bugfix"], "claude-opus-4.7", "high", "routed")]
+    assert fake_client.create_calls[-1]["agent"] == "bugfix"
 
 
 def test_an_unclassified_bump_class_is_inferred_and_written_at_pickup(

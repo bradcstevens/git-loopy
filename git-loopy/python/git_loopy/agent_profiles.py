@@ -1,4 +1,4 @@
-"""Prove a checkout's Agent profiles without installing or selecting them."""
+"""Read and prove the closed Agent profile definitions."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import TASK_TYPE_KEYS
+from .config import EXECUTION_TASK_TYPE_KEYS, TASK_TYPE_KEYS
 from .prompt import PromptMetadataError, PromptMetadataFailure, parse_required_skills
 from .skill_catalog import SkillCatalogError, read_skill_metadata
 
@@ -26,18 +26,64 @@ class ProfileBreach:
         return f"{self.profile} [{self.rule}]: {self.detail}"
 
 
-def _validate_profile(path: Path, skills: Path) -> list[ProfileBreach]:
+@dataclass(frozen=True)
+class AgentProfile:
+    key: str
+    required: tuple[str, ...]
+    permitted: tuple[str, ...]
+    access: str
+    instructions: str
+
+    def exposure(self, enabled: tuple[str, ...]) -> frozenset[str]:
+        return frozenset(self.required) | (frozenset(self.permitted) & set(enabled))
+
+
+class AgentProfileError(ValueError):
+    """An installed profile cannot safely start an Agent."""
+
+
+def execution_profile_key(task_type_keys: tuple[str, ...]) -> str:
+    """Conflicting or unresolved Task types use the implementation profile."""
+    keys = set(task_type_keys)
+    if len(keys) == 1 and keys <= set(EXECUTION_TASK_TYPE_KEYS):
+        return next(iter(keys))
+    return "implementation"
+
+
+def load_execution_profile(
+    root: Path, key: str, *, skills: Path, required: bool = False,
+) -> AgentProfile | None:
+    """Read only the installed root; an explicitly requested remote profile must exist."""
+    if key not in EXECUTION_TASK_TYPE_KEYS:
+        raise AgentProfileError(f"Not an execution profile: {key!r}")
+    if not root.exists() and not root.is_symlink() and not required:
+        return None
+    path = root / f"{key}.md"
+    if root.is_symlink() or path.is_symlink() or not path.is_file():
+        raise AgentProfileError(f"Installed profile {key!r} is unavailable at {path}")
+    profile, breaches = _parse_profile(path, skills)
+    if breaches:
+        raise AgentProfileError("; ".join(str(breach) for breach in breaches))
+    assert profile is not None
+    if profile.access != "full":
+        raise AgentProfileError(f"Execution profile {key!r} must declare full access")
+    return profile
+
+
+def _parse_profile(
+    path: Path, skills: Path,
+) -> tuple[AgentProfile | None, list[ProfileBreach]]:
     name = path.name
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as exc:
-        return [ProfileBreach(name, "frontmatter", f"cannot read profile: {exc}")]
+        return None, [ProfileBreach(name, "frontmatter", f"cannot read profile: {exc}")]
     if not lines or lines[0] != "---":
-        return [ProfileBreach(name, "frontmatter", "missing opening '---'")]
+        return None, [ProfileBreach(name, "frontmatter", "missing opening '---'")]
     try:
         closing = lines.index("---", 1)
     except ValueError:
-        return [ProfileBreach(name, "frontmatter", "missing closing '---'")]
+        return None, [ProfileBreach(name, "frontmatter", "missing closing '---'")]
 
     breaches: list[ProfileBreach] = []
     fields: dict[str, list[str]] = {}
@@ -128,7 +174,15 @@ def _validate_profile(path: Path, skills: Path) -> list[ProfileBreach]:
         )
     if not "\n".join(lines[closing + 1 :]).strip():
         breaches.append(ProfileBreach(name, "body", "role body must not be empty"))
-    return breaches
+    if breaches:
+        return None, breaches
+    return AgentProfile(
+        key=path.stem,
+        required=skill_lists["required-skills"],
+        permitted=skill_lists["permitted-skills"],
+        access=access,
+        instructions="\n".join(lines[closing + 1 :]).strip(),
+    ), []
 
 
 def validate_profiles(
@@ -175,5 +229,6 @@ def validate_profiles(
                 ProfileBreach(name, "profile-set", "expected one Markdown file per Task type")
             )
         else:
-            breaches.extend(_validate_profile(path, checkout / skills_directory))
+            _, profile_breaches = _parse_profile(path, checkout / skills_directory)
+            breaches.extend(profile_breaches)
     return tuple(breaches)

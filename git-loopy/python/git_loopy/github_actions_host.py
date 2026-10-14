@@ -1228,6 +1228,10 @@ def _request_json(request: ContributionRequest, send_timeout_seconds: float) -> 
             "run_id": request.run_id,
             "disabled_skills": list(_disabled_skills(request.skill_policy)),
             "send_timeout_seconds": session_budget(send_timeout_seconds),
+            **({
+                "profile_key": request.profile_key,
+                "catalog_skills": sorted(request.skill_policy.catalog.winners),
+            } if request.profile_key is not None else {}),
         },
         separators=(",", ":"),
         sort_keys=True,

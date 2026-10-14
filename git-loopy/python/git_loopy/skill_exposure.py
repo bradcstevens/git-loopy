@@ -5,12 +5,29 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from .skill_policy import EffectiveSkillPolicy, SkillCatalog
 
 
 class SkillExposureError(ValueError):
     """Raised when an exact isolated Skill projection cannot be built."""
+
+
+class SessionSkillExposure(Protocol):
+    """Local or transported Skill inputs consumed by the shared session seam."""
+
+    @property
+    def policy(self) -> EffectiveSkillPolicy | None: ...
+
+    @property
+    def catalog(self) -> SkillCatalog | None: ...
+
+    @property
+    def skill_directories(self) -> tuple[str, ...]: ...
+
+    @property
+    def disabled_skills(self) -> tuple[str, ...]: ...
 
 
 def _validated_source(source: Path, name: str) -> Path:

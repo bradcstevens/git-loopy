@@ -12,9 +12,9 @@ the first-time setup path is
 
 ---
 
-## Six words that are not synonyms
+## Seven words that are not synonyms
 
-Most Skill-policy confusion is one of these six being read as another. They are
+Most Skill-policy confusion is one of these seven being read as another. They are
 defined in [`GLOSSARY.md`](../GLOSSARY.md); what follows is what each one means
 when you are holding a terminal.
 
@@ -51,7 +51,7 @@ until you run `git-loopy skills sync` and confirm the diff.
 **Effective Skill policy** — what one specific Run actually gets: the selected
 base policy, plus that invocation's temporary overlays, minus the deprecated
 legacy deny guards. It is resolved **once** at preflight and frozen for every
-Iteration and every parallel Lane in the Run. This is the only one of the six
+Iteration and every parallel Lane in the Run. This is the only one of the seven
 that is per-Run.
 
 **Minimal Skill policy** — exactly the **Required Skills** and nothing else. It
@@ -72,6 +72,19 @@ The catalog's `implement-spec` and `retro` are outside the unattended Run, while
 `pr` is optional body-writing guidance, usable only when the effective policy
 enables it and the bound issue calls for it. None of these three is required.
 
+With an installed profile root, an execution profile also declares its own
+Required Skills. The session preloads them and refuses to start if they are
+unavailable or disabled. This session-level behavior does not yet replace the
+Run-wide prompt-metadata preflight described above.
+
+**Permitted Skill** — a further Skill a profile may invoke on demand, but only
+when the Effective Skill policy enables it. With an installed profile root,
+each issue's Agent exposes Required ∪ (Permitted ∩ Effective Skill policy), not
+the whole Run policy. A policy-enabled Skill outside its profile is refused as
+`skill_outside_profile`; a Permitted Skill disabled by policy remains
+`skill_outside_policy`. Without an installed profile root, the existing
+Run-wide exposure is unchanged. See [contract §18](wrapper-contract.md#18-agent-profiles-and-session-isolation-contract-228-must).
+
 Skill prompts are authored upstream and mirrored nowhere; the former
 Contract-carrying Skill category is retired
 ([ADR-0064](adr/0064-a-paired-skill-change-is-published-proved-then-pinned.md)).
@@ -83,6 +96,8 @@ Iteration actually invoked, pinned by
 [`skill-consultation.json`](../git-loopy/conformance/skill-consultation.json).
 That is *observed behaviour after the fact*. The Skill policy is *permission
 before the fact*.
+Required profile preloads are not on-demand invocations and do not count as
+consulted Skills.
 
 They answer different questions and move for different reasons:
 

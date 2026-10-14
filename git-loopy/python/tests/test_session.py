@@ -27,13 +27,13 @@ to simulate SDK events.
 from __future__ import annotations
 
 import ast
-import asyncio
 import io
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from copilot.generated.session_events import (
@@ -45,7 +45,6 @@ from copilot.generated.session_events import (
     PermissionRequestHook,
     SessionEvent,
     SessionEventType,
-    SessionStartData,
     SessionUsageInfoData,
     UserInputRequestedData,
 )
@@ -56,11 +55,11 @@ from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
 from git_loopy import session as session_module
 from git_loopy.active_issue import ActiveIssueBinding
+from git_loopy.agent_profiles import AgentProfileError, execution_profile_key
 from git_loopy.emit import EventEmitter
 from git_loopy.events import (
     ASSISTANT_MESSAGE,
     REDACTED_SECRET,
-    SESSION_CREATED,
     TOOL_PERMISSION_DENIED,
     TOOL_PERMISSION_REQUESTED,
     USAGE_CONTEXT_WINDOW,
@@ -75,7 +74,9 @@ from git_loopy.session import (
     SessionConfig,
     build_permission_handler,
 )
-from git_loopy.skill_exposure import build_skill_exposure
+from git_loopy.skill_exposure import SkillExposure, build_skill_exposure
+from git_loopy.skill_catalog import build_skill_catalog
+from git_loopy.skill_install import installed_catalog_dir, installed_profiles_dir
 from git_loopy.skill_policy import (
     EffectiveSkillPolicy,
     SkillCatalog,
@@ -90,6 +91,143 @@ _AGENT_PROFILES = json.loads(
     (Path(__file__).resolve().parents[2] / "conformance" / "agent-profiles.json")
     .read_text(encoding="utf-8")
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", _AGENT_PROFILES["exposure_cases"], ids=lambda c: c["id"])
+async def test_execution_profile_registers_delta_preload_and_exact_exposure(
+    tmp_path: Path, case: dict[str, Any],
+) -> None:
+    root = installed_profiles_dir(os.environ)
+    root.mkdir(parents=True)
+    required = "\n" + "".join(f"  - {n}\n" for n in case["required"]) if case["required"] else " []\n"
+    permitted = "\n" + "".join(f"  - {n}\n" for n in case["permitted"]) if case["permitted"] else " []\n"
+    (root / f"{case['profile']}.md").write_text(
+        f"---\nrequired-skills:{required}permitted-skills:{permitted}"
+        "access: full\n---\nRole delta.\n"
+    )
+    catalog_root = installed_catalog_dir(os.environ)
+    winners = {}
+    for name in ("tdd", "prototype", "other", "code-review", "codebase-design", "diagnosing-bugs"):
+        skill = catalog_root / name
+        skill.mkdir(parents=True, exist_ok=True)
+        path = skill / "SKILL.md"
+        path.write_text(f"---\nname: {name}\ndescription: Test.\n---\n{name}\n")
+        winners[name] = SkillCatalogWinner(name, "packaged", path=path)
+    policy = EffectiveSkillPolicy(
+        enabled=tuple(case["enabled"]), required=tuple(case["required"]),
+        legacy_denied=(), source_kinds={}, base_scope=SkillPolicyScope.PROJECT,
+    )
+    exposure = build_skill_exposure(
+        policy, SkillCatalog(winners=winners), directory=tmp_path / "exposure"
+    )
+    client = FakeCopilotClient()
+    with EventLogWriter(tmp_path / "events.jsonl") as log:
+        async with IterationSession(
+            client, config=_StubConfig(), event_log=log, sinks=SinkFanout(()),
+            run_id=_FIXED_RUN_ID, iter_num=1, profile_key=case["profile"],
+            skill_exposure=exposure,
+        ) as session:
+            assert not log.path.exists()
+            exposed = set(case["required"]) | (set(case["permitted"]) & set(case["enabled"]))
+            for name in sorted(exposed):
+                allowed = session.on_permission_request(
+                    _make_permission_request(tool_name="skill", tool_args={"skill": name}),
+                    {},
+                )
+                assert allowed.kind == "approve-once"
+            result = session.on_permission_request(
+                _make_permission_request(
+                    tool_name="skill", tool_args={"skill": case["request"]},
+                ), {},
+            )
+            assert result.kind == "reject"
+    call = client.create_calls[0]
+    assert call["agent"] == case["profile"]
+    assert call["custom_agents"] == [{
+        "name": case["profile"], "prompt": "Role delta.",
+        "infer": False, "skills": case["required"],
+    }]
+    assert call["disabled_skills"] == case["expected_disabled"]
+    assert "available_tools" not in call
+    assert "system_message" not in call
+    events = [json.loads(line) for line in log.path.read_text().splitlines()]
+    assert len(events) == len(exposed) + 1
+    assert events[-1]["reason"] == case["expected_reason"]
+
+
+@pytest.mark.parametrize("case", _AGENT_PROFILES["selection_cases"], ids=lambda c: c["id"])
+@pytest.mark.asyncio
+async def test_execution_profile_selection(
+    case: dict[str, Any], installed_execution_profiles: Path, tmp_path: Path,
+) -> None:
+    root = installed_catalog_dir(os.environ)
+    catalog = build_skill_catalog((), repo_root=tmp_path, installed_skills_dir=root)
+    exposure = SkillExposure(
+        EffectiveSkillPolicy(
+            enabled=tuple(catalog.winners), required=(), legacy_denied=(),
+            source_kinds={}, base_scope=SkillPolicyScope.PROJECT,
+        ), catalog, root,
+    )
+    client = FakeCopilotClient()
+    with EventLogWriter(tmp_path / "events.jsonl") as log:
+        async with IterationSession(
+            client, config=_StubConfig(), event_log=log, sinks=SinkFanout(()),
+            run_id=_FIXED_RUN_ID, iter_num=1,
+            profile_key=execution_profile_key(tuple(case["keys"])),
+            skill_exposure=exposure,
+        ):
+            pass
+    assert client.create_calls[0]["agent"] == case["expected"]
+    assert len(client.create_calls[0]["custom_agents"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_installed_profile_root_preserves_all_sdk_arguments(tmp_path: Path) -> None:
+    client = FakeCopilotClient()
+    with EventLogWriter(tmp_path / "events.jsonl") as log:
+        for key in (None, "bugfix"):
+            async with IterationSession(
+                client, config=_StubConfig(), event_log=log, sinks=SinkFanout(()),
+                run_id=_FIXED_RUN_ID, iter_num=1, profile_key=key,
+            ):
+                pass
+    calls = [
+        {key: value for key, value in call.items() if key not in (
+            "on_event", "on_permission_request",
+        )}
+        for call in client.create_calls
+    ]
+    assert calls[0] == calls[1]
+    assert "agent" not in calls[1] and "custom_agents" not in calls[1]
+
+
+@pytest.mark.parametrize("problem", ["no-policy", "disabled", "absent", "legacy-denied"])
+@pytest.mark.asyncio
+async def test_required_profile_preload_cannot_silently_disappear(
+    problem: str, installed_execution_profiles: Path, tmp_path: Path,
+) -> None:
+    root = installed_catalog_dir(os.environ)
+    catalog = build_skill_catalog((), repo_root=tmp_path, installed_skills_dir=root)
+    if problem == "absent":
+        catalog = SkillCatalog(winners={n: w for n, w in catalog.winners.items() if n != "tdd"})
+    exposure = None if problem == "no-policy" else SkillExposure(
+        EffectiveSkillPolicy(
+            enabled=() if problem == "disabled" else ("tdd",),
+            required=(), legacy_denied=("tdd",) if problem == "legacy-denied" else (),
+            source_kinds={}, base_scope=SkillPolicyScope.PROJECT,
+        ), catalog, root,
+    )
+    client = FakeCopilotClient()
+    with EventLogWriter(tmp_path / "events.jsonl") as log:
+        with pytest.raises(AgentProfileError, match="Effective Skill policy|tdd"):
+            async with IterationSession(
+                client, config=_StubConfig(), event_log=log, sinks=SinkFanout(()),
+                run_id=_FIXED_RUN_ID, iter_num=1, profile_key="implementation",
+                skill_exposure=exposure,
+            ):
+                pytest.fail("A required preload was silently omitted")
+    assert client.create_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -1442,9 +1580,9 @@ async def test_iteration_session_routes_mapped_sdk_event_to_writer(
             sdk_session.emit(ev)
 
     log_text = event_log.path.read_text()
-    lines = [json.loads(l) for l in log_text.strip().splitlines()]
-    assert any(l["type"] == ASSISTANT_MESSAGE for l in lines)
-    msg_line = next(l for l in lines if l["type"] == ASSISTANT_MESSAGE)
+    lines = [json.loads(line) for line in log_text.strip().splitlines()]
+    assert any(line["type"] == ASSISTANT_MESSAGE for line in lines)
+    msg_line = next(line for line in lines if line["type"] == ASSISTANT_MESSAGE)
     assert msg_line["run_id"] == _FIXED_RUN_ID
     assert msg_line["iter"] == 2
     assert msg_line["content"] == "hello world"
@@ -1604,8 +1742,8 @@ async def test_iteration_session_drops_streaming_delta_events(
     if event_log.path.exists():
         log_text = event_log.path.read_text()
         if log_text.strip():
-            lines = [json.loads(l) for l in log_text.strip().splitlines()]
-            assert all("thinking..." not in json.dumps(l) for l in lines)
+            lines = [json.loads(line) for line in log_text.strip().splitlines()]
+            assert all("thinking..." not in json.dumps(line) for line in lines)
 
 
 async def test_iteration_session_streams_deltas_to_renderer_not_jsonl(
@@ -1681,9 +1819,9 @@ async def test_iteration_session_translates_user_input_requested_to_wrapper_even
             sdk_session.emit(ev)
 
     log_lines = [
-        json.loads(l) for l in event_log.path.read_text().strip().splitlines()
+        json.loads(line) for line in event_log.path.read_text().strip().splitlines()
     ]
-    ask = next((l for l in log_lines if l["type"] == WRAPPER_ASK_USER_ATTEMPTED), None)
+    ask = next((line for line in log_lines if line["type"] == WRAPPER_ASK_USER_ATTEMPTED), None)
     assert ask is not None
     assert ask["question"] == "Continue?"
     assert ask["request_id"] == "req-001"
@@ -1764,8 +1902,8 @@ async def test_integration_approve_path_writes_permission_event(
             result = sdk_session.on_permission_request(req, {})
 
     assert result.kind == "approve-once"
-    lines = [json.loads(l) for l in event_log.path.read_text().strip().splitlines()]
-    perm = next((l for l in lines if l["type"] == TOOL_PERMISSION_REQUESTED), None)
+    lines = [json.loads(line) for line in event_log.path.read_text().strip().splitlines()]
+    perm = next((line for line in lines if line["type"] == TOOL_PERMISSION_REQUESTED), None)
     assert perm is not None
     assert perm["tool_name"] == "bash"
     assert perm["iter"] == 1
@@ -1792,8 +1930,8 @@ async def test_integration_deny_tool_path_writes_denied_event(
             result = sdk_session.on_permission_request(req, {})
 
     assert result.kind == "reject"
-    lines = [json.loads(l) for l in event_log.path.read_text().strip().splitlines()]
-    denied = next((l for l in lines if l["type"] == TOOL_PERMISSION_DENIED), None)
+    lines = [json.loads(line) for line in event_log.path.read_text().strip().splitlines()]
+    denied = next((line for line in lines if line["type"] == TOOL_PERMISSION_DENIED), None)
     assert denied is not None
     assert denied["tool_name"] == "bash"
     assert denied["reason"] == "tool_in_deny_list"
@@ -1821,8 +1959,8 @@ async def test_integration_deny_skill_path_writes_denied_event(
             result = sdk_session.on_permission_request(req, {})
 
     assert result.kind == "reject"
-    lines = [json.loads(l) for l in event_log.path.read_text().strip().splitlines()]
-    denied = next((l for l in lines if l["type"] == TOOL_PERMISSION_DENIED), None)
+    lines = [json.loads(line) for line in event_log.path.read_text().strip().splitlines()]
+    denied = next((line for line in lines if line["type"] == TOOL_PERMISSION_DENIED), None)
     assert denied is not None
     assert denied["reason"] == "skill_in_deny_list"
     assert denied["skill"] == "caveman"
@@ -1851,9 +1989,9 @@ async def test_integration_ask_user_path_writes_wrapper_event(
             result = sdk_session.on_permission_request(req, {})
 
     assert result.kind == "reject"
-    lines = [json.loads(l) for l in event_log.path.read_text().strip().splitlines()]
+    lines = [json.loads(line) for line in event_log.path.read_text().strip().splitlines()]
     asked = next(
-        (l for l in lines if l["type"] == WRAPPER_ASK_USER_ATTEMPTED), None
+        (line for line in lines if line["type"] == WRAPPER_ASK_USER_ATTEMPTED), None
     )
     assert asked is not None
     assert asked["iter"] == 4
@@ -1915,6 +2053,7 @@ def test_session_module_imports_are_constrained() -> None:
         # with. NO loop / cli / config / gh / git / wrapper.
         "git_loopy",
         "git_loopy.emit",
+        "git_loopy.agent_profiles",
         "git_loopy.events",
         "git_loopy.persist",
         "git_loopy.sinks",

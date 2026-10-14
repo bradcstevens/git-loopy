@@ -1985,7 +1985,16 @@ and
 The existing **Required Skill**, **Skill policy**, **Minimal Skill policy**, **Installed
 catalog**, **Task type**, **Task-type classifier** and **Pool exclusion** entries above
 describe current behavior; these decision records do not establish delivery acceptance.
-Permitted Skills enter this glossary when they ship.
+With an installed profile root, execution-profile selection, preload and exposure
+are implemented by Wrapper contract §18.1–18.2. The remaining profile lifecycle
+and preflight changes remain accepted design until their delivery issues close.
+
+**Permitted Skill**:
+A further Skill an **Agent profile** may invoke on demand only when the
+**Effective Skill policy** enables it. An execution Agent's exposure is its
+Required Skills plus that intersection; other policy-enabled Skills are refused
+as `skill_outside_profile`. A Required preload is not a consulted Skill.
+_Avoid_: optional preload, globally enabled Skill.
 
 **Agent profile**:
 A reusable definition that an **Agent** starts from: role instructions layered on the Run

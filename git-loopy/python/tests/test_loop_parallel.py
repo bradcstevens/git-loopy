@@ -774,7 +774,7 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
 
 
 def test_parallel_auto_resolution_session_reuses_lane_routed_model(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, installed_execution_profiles,
 ) -> None:
     """A Lane's auto-resolution session reuses that Lane's routed pair (#148).
 
@@ -842,6 +842,11 @@ def test_parallel_auto_resolution_session_reuses_lane_routed_model(
         assert c["working_directory"].endswith("/issue-42")
         assert c["model"] == "gpt-5-mini"
         assert c["reasoning_effort"] == "medium"
+        assert c["agent"] == "docs"
+    for call in fake_client.create_calls:
+        expected = "docs" if call["working_directory"].endswith("/issue-42") else "implementation"
+        assert call["agent"] == expected
+        assert call["custom_agents"][0]["name"] == expected
 
     # Both issues still landed and closed.
     assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 43]
