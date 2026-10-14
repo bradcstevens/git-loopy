@@ -291,8 +291,9 @@ RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
 
 #: The closed task-type taxonomy in its stable presentation order.
 TASK_TYPE_KEYS: tuple[str, ...] = tuple(RECOMMENDED_ROUTING)
-EXECUTION_TASK_TYPE_KEYS: tuple[str, ...] = (
-    "implementation", "bugfix", "test", "docs", "chore"
+# ADR-0088: Planning and Review never act as an issue's own Agent.
+EXECUTION_TASK_TYPE_KEYS: tuple[str, ...] = tuple(
+    key for key in TASK_TYPE_KEYS if key not in ("planning", "review")
 )
 
 

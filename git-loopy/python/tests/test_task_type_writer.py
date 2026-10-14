@@ -198,8 +198,11 @@ def test_the_writable_labels_are_exactly_the_execution_task_types() -> None:
     assert {"implementation", "bugfix", "test", "docs", "chore"} == {
         key for key in TASK_TYPE_KEYS if task_type_label_spec(key) is not None
     }
-    for key in ("implementation", "bugfix", "test", "docs", "chore"):
+    for key in TASK_TYPE_KEYS:
         spec = task_type_label_spec(key)
+        if key in ("planning", "review"):
+            assert spec is None
+            continue
         assert spec is not None
         assert spec.name == f"{TASK_TYPE_LABEL_PREFIX}{key}"
     assert task_type_label_spec("refactor") is None

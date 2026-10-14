@@ -184,18 +184,24 @@ class TestAfkReadyExclusion:
         assert sources_module.afk_ready_exclusion(body) is None
 
     @pytest.mark.parametrize("key", ["planning", "review"])
+    @pytest.mark.parametrize("extra", [(), ("task-type:implementation",)])
     @pytest.mark.parametrize(
         "body",
-        ["", "## What to build\nthing", "## What to build\nthing\n## Acceptance criteria\nOK"],
+        ["", "## What to build\nX", "## Acceptance criteria\nX",
+         "## What to build\nX\n## Acceptance criteria\nX"],
     )
     def test_non_execution_task_type_precedes_missing_headings(
-        self, key: str, body: str
+        self, key: str, extra: tuple[str, ...], body: str
     ) -> None:
-        labels = ("task-type:implementation", f"task-type:{key}")
+        labels = (f"task-type:{key}", *extra)
         assert sources_module.afk_ready_exclusion(
             body, labels=labels
         ) == "non_execution_task_type"
         assert not is_afk_ready(body, labels=labels)
+        assert not sources_module.is_planning_document("A ticket", labels)
+        assert sources_module.afk_ready_exclusion(
+            body, title="PRD: A plan", labels=labels
+        ) == "planning_document"
         assert sources_module.afk_ready_exclusion(
             body, title="Spec: Design", labels=labels
         ) == "planning_document"
@@ -3083,6 +3089,54 @@ class TestPoolExclusionsAreNotPickedUp:
         with _capture(logger) as records:
             assert source.preflight() == 1
         assert any(diagnostic in record.getMessage() for record in records)
+
+
+@pytest.mark.parametrize("key", ["planning", "review"])
+class TestNonExecutionTaskTypesAreExcluded:
+    def test_collection_membership_and_pickup_refuse_the_label(self, key: str) -> None:
+        labels = ["ready-for-agent", "priority", "parallel-safe", "task-type:bugfix"]
+        client = FakeGitHubClient(issues=[_make_issue(390, labels=labels)])
+        source = GitHubIssueSource(_silent_logger(), gh=client)
+        item = source.collect_pool().items[0]
+        excluded = _make_issue(390, labels=[*labels, f"task-type:{key}"])
+        client = FakeGitHubClient(issues=[excluded, _make_issue(391)])
+        source = GitHubIssueSource(_silent_logger(), gh=client, pin=390)
+
+        pool = source.collect_pool()
+        assert [item.ref for item in pool.items] == [391]
+        assert [(e.ref, e.reason) for e in pool.exclusions] == [
+            (390, "non_execution_task_type")
+        ]
+        assert client.issue_view_calls == [391]
+        assert [c.ref for c in source.shallow_membership().candidates] == [391]
+        assert source.pickup(390).outcome == sources_module.PICKUP_STALE
+        assert source.refresh_for_preparation(item).outcome == sources_module.PICKUP_STALE
+        assert client.issue_view(390).labels == [*labels, f"task-type:{key}"]
+
+    def test_collection_rechecks_authoritative_labels(self, key: str) -> None:
+        client = FakeGitHubClient(
+            issues=[_make_issue(390)],
+            issue_views={390: _make_issue(
+                390, labels=["ready-for-agent", f"task-type:{key}"]
+            )},
+        )
+        pool = GitHubIssueSource(_silent_logger(), gh=client).collect_pool()
+        assert pool.items == ()
+        assert pool.exclusions[0].reason == "non_execution_task_type"
+
+    def test_pin_names_the_task_type_exclusion(self, key: str) -> None:
+        client = FakeGitHubClient(issues=[
+            _make_issue(390, labels=["ready-for-agent", f"task-type:{key}"])
+        ])
+        logger = _silent_logger()
+        source = GitHubIssueSource(logger, gh=client, pin=390)
+        with _capture(logger) as records:
+            assert source.preflight() == 1
+        messages = "\n".join(record.getMessage() for record in records)
+        assert "non_execution_task_type" in messages
+        assert "human" in messages
+        assert "missing" not in messages
+        assert client.issue_view(390).labels == ["ready-for-agent", f"task-type:{key}"]
 
 
 class TestThePinReachesSelection:

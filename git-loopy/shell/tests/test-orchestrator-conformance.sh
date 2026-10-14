@@ -56,16 +56,23 @@ while IFS= read -r case_json; do
   assert_equal "$expected_reason" "$actual_reason" \
     "discriminator exclusion reason: $case_id"
 done < <(
-  jq -c '.cases[] | select((.distributions // ["shell"]) | index("shell"))' \
+  jq -c '. as $fixture | .cases[] |
+    select((.distributions // $fixture.distributions) | index("shell"))' \
     "$conformance_dir/discriminator.json"
 )
 jq -e '
-  [.cases[] | select((.distributions // ["shell"]) | index("shell"))] as $cases
+  . as $fixture
+  | [.cases[] | select((.distributions // $fixture.distributions) | index("shell"))] as $cases
   | ($cases | length) > 0
     and ([$cases[].exclusion_reason | select(. != null)] | unique)
         == (.baseline_exclusion_reasons | sort)
 ' "$conformance_dir/discriminator.json" >/dev/null ||
   fail "discriminator cases must cover exactly the dormant baseline reasons"
+
+assert_equal \
+  '["missing_acceptance_criteria","missing_both_sections","missing_what_to_build","planning_document"]' \
+  "$(jq -c '.baseline_exclusion_reasons | sort' "$conformance_dir/discriminator.json")" \
+  "discriminator baseline reason vocabulary"
 
 # Wrapper contract §3.3.1 — Readiness is decided at Pickup from the `blockedBy`
 # connection the collection already carried. Transform the language-neutral

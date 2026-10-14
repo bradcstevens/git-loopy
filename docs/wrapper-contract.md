@@ -165,13 +165,14 @@ closed vocabulary:
 | `planning_document` | Issue title begins with `PRD:` or `Spec:`, or labels include exact `wayfinder:map` (contract 2.10); takes precedence over every other discriminator reason |
 | `non_execution_task_type` | Exact `task-type:planning` or `task-type:review` label, whatever other labels are present; ranks after `planning_document` and before missing headings (Python, contract 2.29, ADR-0088) |
 
-The Python discriminator applies `non_execution_task_type` at Pool collection, the
-Membership read, the Pickup re-read, an explicit `--issue` pin and Proving-set mining.
+Python MUST apply `non_execution_task_type` at Pool collection, the Membership
+read, the Pickup re-read, an explicit `--issue` pin and Proving-set mining.
+Mining maps it to its own exclusion reason.
 Only `implementation`, `bugfix`, `test`, `docs` and `chore` are execution Task types.
 The classifier proposes only those five, and its label writer refuses every other key.
 Labels and Routing retain all seven Task types; only a human asserts `planning` or
 `review`. An excluded ticket remains Blocked on the Board until a human retypes it
-or hands it to the Planner. The Runner never relabels it, and `git-loopy labels`
+or hands it to the Planner. The Runner MUST NOT relabel it, and `git-loopy labels`
 neither reports nor repairs this conflict. Dormant shell and PowerShell paths keep
 their baseline discriminator vocabulary and cases (ADR-0091).
 Event fixture revision 1.8 adds this Python-only reason to
@@ -189,7 +190,7 @@ fix headings that are probably fine. The existing warn-and-skip path continues t
 A candidate that is not **ready** — one carrying an open native `blocked_by` dependency, one an
 open pull request will close when merged (**Awaiting merge**, contract 2.17, #692), or one whose
 Readiness could not be read — is likewise NOT an exclusion (contract 2.0). The exclusion
-vocabulary above is **closed at those four reasons**, and readiness MUST NOT be added to it. An
+vocabulary above is **closed at those five reasons** (four on dormant Paths), and readiness MUST NOT be added to it. An
 exclusion is an authoring mistake a human must fix; a Blocked or Awaiting-merge candidate is
 correctly authored work whose turn has not come, and it clears itself when its last blocker closes
 or its closing pull request merges or closes. A candidate that is not ready MUST remain in the
@@ -2051,6 +2052,11 @@ classifier MUST satisfy all four of the following (contract 1.23):
   rather than written, because attaching a `task-type:` label to an issue creates that label in
   the tracker: an invented key is not a bad routing decision that expires with the Run, it is a
   permanent addition to the vocabulary §14 closed.
+  Python's classifier MUST offer and write only the five execution keys
+  `implementation`, `bugfix`, `test`, `docs`, and `chore` (contract 2.29,
+  ADR-0088), with an execution key as its example marker. A `planning` or `review`
+  proposal MUST be refused without a write. Only a human asserts either label;
+  the label taxonomy and Routing retain all seven keys.
 - **No classification failure may cost the Iteration or tick a Strike.** Every way of not
   producing a Task type — a refused proposal, an unreadable answer, a failed session, a rejected
   tracker write — MUST leave the issue on the **Default pair** and leave the **Iteration**

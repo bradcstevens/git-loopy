@@ -274,7 +274,8 @@ planning document, carries exact `task-type:planning` or `task-type:review` (Pyt
 or its body lacks `## What to build`, `## Acceptance criteria`, or both. The Python
 reason `non_execution_task_type` ranks after `planning_document` and before missing
 headings; a human retypes that issue or hands it to the **Planner**, and the Runner
-never relabels it. A human deliberately
+never relabels it. The issue stays in the Board's Blocked column (ADR-0088).
+A human deliberately
 triaged the issue; only a human can fix it, so every exclusion is named to the operator
 and carried as a `wrapper.pool.excluded` **Event** with its reason. A candidate the
 source could not *read* is not an exclusion — it was never discriminated against.

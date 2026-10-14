@@ -52,7 +52,7 @@ $Discriminator = Get-Content `
 $DiscriminatorCases = @(
     $Discriminator["cases"] | Where-Object {
         $Selector = $_["distributions"]
-        if ($null -eq $Selector) { $true } else { @($Selector) -contains "powershell" }
+        if ($null -eq $Selector) { $true } else { @($Selector) -ccontains "powershell" }
     }
 )
 if ($DiscriminatorCases.Count -lt 1) {
@@ -76,17 +76,21 @@ foreach ($Case in $DiscriminatorCases) {
         $ActualReason `
         "discriminator exclusion reason: $($Case["id"])"
 }
+Assert-Equal `
+    "missing_acceptance_criteria,missing_both_sections,missing_what_to_build,planning_document" `
+    (($Discriminator["baseline_exclusion_reasons"] | Sort-Object) -join ",") `
+    "discriminator baseline reason vocabulary"
 foreach ($Reason in @($Discriminator["baseline_exclusion_reasons"])) {
     if (@($DiscriminatorCases | Where-Object {
             $_["exclusion_reason"] -ceq $Reason
         }).Count -eq 0) {
         throw "FAIL: no discriminator case covers exclusion reason $Reason"
     }
-    foreach ($Case in $DiscriminatorCases) {
-        if ($null -ne $Case["exclusion_reason"] -and
-            @($Discriminator["baseline_exclusion_reasons"]) -cnotcontains $Case["exclusion_reason"]) {
-            throw "FAIL: discriminator case exceeds dormant baseline: $($Case["id"])"
-        }
+}
+foreach ($Case in $DiscriminatorCases) {
+    if ($null -ne $Case["exclusion_reason"] -and
+        @($Discriminator["baseline_exclusion_reasons"]) -cnotcontains $Case["exclusion_reason"]) {
+        throw "FAIL: discriminator case exceeds dormant baseline: $($Case["id"])"
     }
 }
 

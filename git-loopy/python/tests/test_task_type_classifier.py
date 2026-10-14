@@ -105,8 +105,9 @@ async def test_an_unlabelled_issue_is_classified_from_its_own_content(key: str) 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key", ["refactor", "planning", "review"])
+@pytest.mark.parametrize("marked", [False, True])
 async def test_a_proposal_outside_execution_keys_is_refused_and_names_the_key(
-    key: str,
+    key: str, marked: bool,
 ) -> None:
     """Refused, not warned about (ADR-0029).
 
@@ -116,7 +117,7 @@ async def test_a_proposal_outside_execution_keys_is_refused_and_names_the_key(
     closes at this seam. The refusal names the key because #378 has to report
     what it declined to write.
     """
-    proposer = _ScriptedProposer(f"<task-type>{key}</task-type>")
+    proposer = _ScriptedProposer(f"<task-type>{key}</task-type>" if marked else key)
 
     result = await classify_task_type(
         _item("ready-for-agent"), pair=_PAIR, propose=proposer.propose

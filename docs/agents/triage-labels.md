@@ -171,7 +171,10 @@ Unlike `parallel-safe` and `priority`, a `task-type:` label **may be machine-set
 the **Task-type classifier** reads an unlabelled issue's own content and proposes
 only an execution key: `implementation`, `bugfix`, `test`, `docs` or `chore`
 (ADR-0029, ADR-0088). Only a human asserts `planning` or `review`; labels and
-Routing still retain all seven keys. Three consequences follow:
+Routing still retain all seven keys.
+The classifier exists because zero closed issues carried a key and routing could not
+otherwise apply to anything. Three consequences follow, and none of them is an
+oversight:
 
 - **Provenance is gone.** A human-set and a classifier-set label are the same
   string on the same issue, and nothing afterwards distinguishes them. What the

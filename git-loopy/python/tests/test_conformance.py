@@ -155,7 +155,7 @@ _DISCRIMINATOR = _load_fixture("discriminator.json")
     "case",
     [
         case for case in _DISCRIMINATOR["cases"]
-        if "python" in case.get("distributions", ["python"])
+        if "python" in case.get("distributions", _DISCRIMINATOR["distributions"])
     ],
     ids=lambda case: case["id"],
 )
@@ -182,7 +182,7 @@ def test_discriminator_reason_vocabulary_and_dormant_baseline() -> None:
     for distribution in ("python", "shell", "powershell"):
         cases = [
             case for case in _DISCRIMINATOR["cases"]
-            if distribution in case.get("distributions", [distribution])
+            if distribution in case.get("distributions", _DISCRIMINATOR["distributions"])
         ]
         vocabulary = _DISCRIMINATOR[
             "exclusion_reasons" if distribution == "python" else "baseline_exclusion_reasons"

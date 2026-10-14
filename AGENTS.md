@@ -202,8 +202,9 @@ implementation tickets instead.
 Only a human asserts `task-type:planning` or `task-type:review`. A
 `ready-for-agent` issue carrying either exact label is excluded as
 `non_execution_task_type`, even alongside an execution Task type, until a human
-retypes it or hands it to the Planner. The Runner never relabels it, and
-`git-loopy labels` does not repair this conflict.
+retypes it to an execution Task type or removes `ready-for-agent` and hands it
+to the Planner. The Runner never relabels it, and `git-loopy labels` neither
+reports nor repairs this conflict.
 
 ### Release milestones
 

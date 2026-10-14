@@ -42,8 +42,8 @@ from git_loopy.sources import (
     EXCLUSION_MISSING_ACCEPTANCE_CRITERIA,
     EXCLUSION_MISSING_BOTH_SECTIONS,
     EXCLUSION_MISSING_WHAT_TO_BUILD,
-    EXCLUSION_NON_EXECUTION_TASK_TYPE,
     EXCLUSION_PLANNING_DOCUMENT,
+    EXCLUSION_NON_EXECUTION_TASK_TYPE,
     afk_ready_exclusion,
 )
 from git_loopy.task_type_classifier import ClassifierPair, labelled_task_type

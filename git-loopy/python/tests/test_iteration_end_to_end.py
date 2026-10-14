@@ -863,8 +863,24 @@ def test_loop_emits_no_exclusion_events_when_nothing_is_dropped(
     assert collected["excluded"] == 0
 
 
+@pytest.mark.parametrize(
+    ("body", "labels", "reason"),
+    [
+        ("A PRD with neither section.", ["ready-for-agent"], "missing_both_sections"),
+        (
+            "## What to build\nX\n## Acceptance criteria\nX",
+            ["ready-for-agent", "task-type:planning"],
+            "non_execution_task_type",
+        ),
+        (
+            "## What to build\nX\n## Acceptance criteria\nX",
+            ["ready-for-agent", "task-type:review", "task-type:implementation"],
+            "non_execution_task_type",
+        ),
+    ],
+)
 def test_loop_reports_an_all_excluded_pool_distinctly(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, body, labels, reason
 ) -> None:
     """An all-excluded Pool reads differently from a Pool with no work.
 
@@ -880,12 +896,11 @@ def test_loop_reports_an_all_excluded_pool_distinctly(
         "_make_github_client",
         lambda: FakeGitHubClient(
             repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-            issues=[_make_issue(8, body="A PRD with neither section.")],
+            issues=[_make_issue(8, body=body, labels=labels)],
         ),
     )
-    monkeypatch.setattr(
-        loop_module, "_make_client", lambda: FakeCopilotClient(scripted_events=[])
-    )
+    client = FakeCopilotClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: client)
 
     exit_code = asyncio.run(
         loop_module.run(RunConfig(issue_source="github", max_iterations=1))
@@ -894,7 +909,13 @@ def test_loop_reports_an_all_excluded_pool_distinctly(
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "#8" in out
-    assert sources_module.EXCLUSION_MISSING_BOTH_SECTIONS.replace("_", " ") in out
+    assert reason.replace("_", " ") in out
+    assert client.created == []
+    assert [
+        (event["issue"], event["reason"])
+        for event in _read_events(tmp_path)
+        if event["type"] == events_module.WRAPPER_POOL_EXCLUDED
+    ] == [(8, reason)]
 
 
 def test_loop_reports_prds_pool_exclusions(tmp_path, monkeypatch) -> None:

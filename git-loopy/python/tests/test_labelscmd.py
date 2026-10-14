@@ -512,23 +512,23 @@ def test_a_planning_document_without_the_role_and_ordinary_work_are_correct(
 
 
 @pytest.mark.parametrize("key", ["planning", "review"])
+@pytest.mark.parametrize("apply", [False, True])
 def test_non_execution_task_type_is_not_a_label_repair(
-    tmp_path: Path, sinks: tuple[list[str], list[str]], key: str
+    tmp_path: Path, sinks: tuple[list[str], list[str]], key: str, apply: bool
 ) -> None:
     out, err = sinks
     client = _tracker_matching(tmp_path)
-    client.issues = [
-        _issue(7, "A typed ticket", (LABEL_READY_FOR_AGENT, f"task-type:{key}")),
-    ]
+    issue = _issue(8, "Fix the parser", (LABEL_READY_FOR_AGENT, f"task-type:{key}"))
+    client.issues = [issue]
 
-    rc = labelscmd.run_labels(
-        repo_root=tmp_path, client=client, apply=True,
+    assert labelscmd.run_labels(
+        repo_root=tmp_path, apply=apply, client=client,
         output_fn=out.append, warn=err.append,
-    )
-
-    assert rc == 0
-    assert "correct   #7 A typed ticket" in out
+    ) == 0
+    assert "correct   #8 Fix the parser" in out
     assert client.removed == []
+    assert client.created == [] and client.updated == []
+    assert issue.labels == (LABEL_READY_FOR_AGENT, f"task-type:{key}")
     assert err == []
 
 
