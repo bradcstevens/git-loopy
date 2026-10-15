@@ -1,7 +1,13 @@
 {
-  "schema_version": 1,
-  "contract_version": "2.31",
+  "schema_version": 2,
+  "contract_version": "2.33",
   "description": "Agent isolation (ADR-0076), Python profile selection, registration and Skill exposure (ADR-0078), and Reviewer read-only access (ADR-0086).",
+  "preflight_cases": [
+    {"id": "minimal-profile-union", "distributions": ["python"], "enabled": null, "required": ["code-review", "diagnosing-bugs", "tdd"], "missing": null},
+    {"id": "review-required", "distributions": ["python"], "enabled": ["diagnosing-bugs", "tdd"], "required": ["code-review", "diagnosing-bugs", "tdd"], "missing": "code-review"},
+    {"id": "bugfix-required", "distributions": ["python"], "enabled": ["code-review", "tdd"], "required": ["code-review", "diagnosing-bugs", "tdd"], "missing": "diagnosing-bugs"},
+    {"id": "implementation-required", "distributions": ["python"], "enabled": ["code-review", "diagnosing-bugs"], "required": ["code-review", "diagnosing-bugs", "tdd"], "missing": "tdd"}
+  ],
   "selection_cases": [
     {"id": "implementation", "distributions": ["python"], "keys": ["implementation"], "expected": "implementation"},
     {"id": "bugfix", "distributions": ["python"], "keys": ["bugfix"], "expected": "bugfix"},

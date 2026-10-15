@@ -754,7 +754,7 @@ def _first_setup_for_run(
     selector_concurrency=1,
 ):
     """Author first setup through init, retaining the real Run's Skill catalog."""
-    from git_loopy.prompt import packaged_required_skills
+    from git_loopy.skill_install import installed_required_skills
     from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
 
     answers = iter([
@@ -762,7 +762,7 @@ def _first_setup_for_run(
         '{"aa-opus" = "claude-opus-5@high", "aa-terra" = "gpt-5.6-terra@high"}',
     ])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
-    required = packaged_required_skills()
+    required = installed_required_skills()
     return init.run_init(
         scope="project",
         assume_yes=False,

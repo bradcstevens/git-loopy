@@ -207,19 +207,15 @@ at Run preflight for every work session and **Lane** in that Run.
 _Avoid_: persisted policy, Copilot state.
 
 **Minimal Skill policy**:
-The unconfigured, non-interactive fallback that exposes only git-loopy's packaged
-**Required Skills**. It keeps a first CI Run usable without consulting personal or
-machine-global Skill sources and is also the policy persisted by unattended setup
-unless that setup explicitly requests an external-client import. It also governs
-unattended Runs during migration from the former open-world skill behavior.
+The unconfigured, non-interactive fallback comprising the union of the in-Run
+**Agent profiles**' **Required Skills**. It is also the policy persisted by unattended
+setup unless that setup explicitly requests an external-client import.
 _Avoid_: default user policy, imported baseline.
 
 **Required Skill**:
-A Skill declared by the active Run instructions' machine-readable metadata as one an
-**Agent** must be able to invoke. A **Run** whose **Skill policy** omits a Required
-Skill is invalid and stops before its first work session rather than silently restoring
-or ignoring the Skill. Legacy custom instructions without that metadata inherit the
-packaged instructions' Required Skills until they declare their own set.
+A Skill an **Agent profile** requires and preloads. A **Run**'s **Skill policy** must
+include the union of its in-Run profiles' Required Skills, not the **Planner**'s;
+Run instructions do not declare or override that set.
 _Avoid_: default skill, recommended skill.
 
 **Iteration**:
@@ -1988,10 +1984,11 @@ and
 The existing **Required Skill**, **Skill policy**, **Minimal Skill policy**, **Installed
 catalog**, **Task type**, **Task-type classifier** and **Pool exclusion** entries above
 describe current behavior; these decision records do not establish delivery acceptance.
-With an installed profile root, execution-profile selection, preload and exposure
+Execution-profile selection, preload and exposure
 are implemented by Wrapper contract §18.1–18.2; §18.3 makes the Reviewer startable
-with read-only access. The Review stage and remaining profile lifecycle
-and preflight changes remain accepted design until their delivery issues close.
+with read-only access. Profiles are installed and required at preflight (§18.4);
+the Review stage and remaining profile lifecycle work remain accepted design until
+their delivery issues close.
 
 **Permitted Skill**:
 A further Skill an **Agent profile** may invoke on demand only when the

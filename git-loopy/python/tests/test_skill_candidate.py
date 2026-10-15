@@ -13,11 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from git_loopy.prompt import packaged_required_skills
 from git_loopy.skill_source import PIN_PATH
 from git_loopy.skill_candidate import (
     CONTRACT_LABEL_VOCABULARY,
-    CONTRACT_REQUIRED_SKILL,
+    CONTRACT_AGENT_PROFILE,
     CONTRACT_SKILL_REFERENCE,
     VERIFY_COMMAND,
     CandidateCheckoutError,
@@ -77,6 +76,7 @@ def test_a_required_skill_that_is_only_a_symlink_is_absent(tmp_path: Path) -> No
     tdd = skills / "tdd"
     tdd.mkdir()
     (tdd / "SKILL.md").symlink_to(outside / "SKILL.md")
+    _write_profiles(checkout)
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "README.md").write_text(
@@ -89,7 +89,7 @@ def test_a_required_skill_that_is_only_a_symlink_is_absent(tmp_path: Path) -> No
     absent = [
         breach
         for breach in verdict.breaches
-        if breach.contract == CONTRACT_REQUIRED_SKILL and breach.subject == "tdd"
+        if breach.contract == CONTRACT_AGENT_PROFILE and "'tdd'" in breach.subject
     ]
     assert absent, f"a symlink must not satisfy the Required Skill, got {verdict.breaches}"
 
@@ -97,6 +97,7 @@ def test_a_required_skill_that_is_only_a_symlink_is_absent(tmp_path: Path) -> No
 def test_a_candidate_missing_a_required_skill_names_that_skill(tmp_path: Path) -> None:
     checkout = tmp_path / "candidate"
     _write_skill(checkout / "skills", "code-review")
+    _write_profiles(checkout)
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "README.md").write_text(
@@ -110,10 +111,10 @@ def test_a_candidate_missing_a_required_skill_names_that_skill(tmp_path: Path) -
     absent = [
         breach
         for breach in verdict.breaches
-        if breach.contract == CONTRACT_REQUIRED_SKILL and breach.subject == "tdd"
+        if breach.contract == CONTRACT_AGENT_PROFILE and "'tdd'" in breach.subject
     ]
     assert absent, f"expected the Required Skill tdd to be named, got {verdict.breaches}"
-    assert "Required Skill absent: tdd" in str(absent[0])
+    assert "required-skills 'tdd'" in str(absent[0])
 
 
 def _repo_root() -> Path:
@@ -129,8 +130,9 @@ def test_a_broken_skill_reference_names_the_reference_that_does_not_resolve(
     """A front-door Skill the candidate dropped is a dead route, not a skip."""
     checkout = tmp_path / "candidate"
     skills = checkout / "skills"
-    for name in packaged_required_skills():
+    for name in ("code-review", "tdd"):
         _write_skill(skills, name)
+    _write_profiles(checkout)
 
     verdict = verify_candidate(checkout, repo_root=_repo_root())
 
@@ -143,7 +145,7 @@ def test_a_broken_skill_reference_names_the_reference_that_does_not_resolve(
         f"expected the Skill reference grill-me to be named, got {verdict.breaches}"
     )
     assert "Skill reference does not resolve: grill-me" in str(broken[0])
-    assert all(breach.contract != CONTRACT_REQUIRED_SKILL for breach in verdict.breaches)
+    assert all(breach.contract != CONTRACT_AGENT_PROFILE for breach in verdict.breaches)
 
 
 def _front_door_skills(repo_root: Path) -> set[str]:
@@ -179,8 +181,9 @@ def test_a_dropped_provisioned_label_names_that_label(tmp_path: Path) -> None:
     repo = _repo_root()
     checkout = tmp_path / "candidate"
     skills = checkout / "skills"
-    for name in set(packaged_required_skills()) | _front_door_skills(repo):
+    for name in {"code-review", "tdd"} | _front_door_skills(repo):
         _write_skill(skills, name)
+    _write_profiles(checkout)
     _write_triage_template(skills, omit="ready-for-agent")
 
     verdict = verify_candidate(checkout, repo_root=repo)
@@ -204,9 +207,10 @@ def test_a_dropped_provisioned_label_names_that_label(tmp_path: Path) -> None:
 def _satisfying_checkout(tmp_path: Path, repo: Path) -> Path:
     checkout = tmp_path / "candidate"
     skills = checkout / "skills"
-    for name in set(packaged_required_skills()) | _front_door_skills(repo):
+    for name in {"code-review", "tdd"} | _front_door_skills(repo):
         _write_skill(skills, name)
     _write_triage_template(skills)
+    _write_profiles(checkout)
     return checkout
 
 
@@ -326,6 +330,7 @@ def test_the_operator_command_names_a_broken_contract(
 ) -> None:
     checkout = tmp_path / "candidate"
     _write_skill(checkout / "skills", "code-review")
+    _write_profiles(checkout)
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "README.md").write_text(
@@ -337,7 +342,7 @@ def test_the_operator_command_names_a_broken_contract(
 
     captured = capsys.readouterr()
     assert code == 1
-    assert "Required Skill absent: tdd" in captured.err
+    assert "required-skills 'tdd'" in captured.err
     assert captured.out == ""
 
 
@@ -368,11 +373,12 @@ def test_the_operator_command_is_documented_beside_the_pin() -> None:
 
 def _write_profiles(checkout: Path) -> Path:
     profiles = checkout / "profiles"
-    profiles.mkdir()
+    profiles.mkdir(exist_ok=True)
     for key in ("planning", "review", "implementation", "test", "docs", "chore", "bugfix"):
         access = "read-only" if key == "review" else "full"
+        required = "code-review" if key == "review" else "tdd"
         (profiles / f"{key}.md").write_text(
-            "---\nrequired-skills:\n  - code-review\n"
+            f"---\nrequired-skills:\n  - {required}\n"
             f"permitted-skills: []\naccess: {access}\n---\n# Role\n",
             encoding="utf-8",
         )
@@ -428,6 +434,9 @@ def test_a_candidate_cannot_hide_invalid_profiles_behind_an_unusable_root(
     repo = _repo_root()
     checkout = _satisfying_checkout(tmp_path, repo)
     profiles = checkout / "profiles"
+    for path in profiles.iterdir():
+        path.unlink()
+    profiles.rmdir()
     if kind == "file":
         profiles.write_text("not profiles\n", encoding="utf-8")
     else:
@@ -440,12 +449,15 @@ def test_a_candidate_cannot_hide_invalid_profiles_behind_an_unusable_root(
     assert "profiles [" in captured.err
 
 
-def test_a_candidate_without_profiles_reports_only_the_existing_proofs(
+def test_a_candidate_without_profiles_is_refused(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     repo = _repo_root()
     checkout = _satisfying_checkout(tmp_path, repo)
+    for path in (checkout / "profiles").iterdir():
+        path.unlink()
+    (checkout / "profiles").rmdir()
 
-    assert main([str(checkout), "--repo-root", str(repo)]) == 0
+    assert main([str(checkout), "--repo-root", str(repo)]) == 1
 
-    assert "Agent profiles" not in capsys.readouterr().out
+    assert "expected a profile directory" in capsys.readouterr().err

@@ -13,6 +13,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any
+import os
 
 import pytest
 
@@ -41,6 +42,9 @@ def make_request(**overrides: object) -> dict[str, object]:
         "reasoning_effort": "high",
         "run_id": RUN_ID,
         "send_timeout_seconds": 21600.0,
+        "profile_key": "implementation",
+        "disabled_skills": [],
+        "catalog_skills": ["code-review", "diagnosing-bugs", "tdd"],
     }
     request.update(overrides)
     return request
@@ -454,6 +458,8 @@ def test_the_job_session_spends_the_transported_timeout_not_the_sdk_default(
                 "model": None,
                 "reasoning_effort": None,
                 "disabled_skills": ["triage", "loop-me"],
+                "profile_key": "implementation",
+                "catalog_skills": ["code-review", "diagnosing-bugs", "tdd"],
                 "send_timeout_seconds": 21600.0,
             },
             worker._ArtifactEventLog(tmp_path / worker.EVENTS_FILENAME),
@@ -510,6 +516,8 @@ def test_the_transported_skill_policy_hides_denied_skills_not_merely_gates_them(
                 "model": None,
                 "reasoning_effort": None,
                 "disabled_skills": ["triage", "loop-me"],
+                "profile_key": "implementation",
+                "catalog_skills": ["code-review", "diagnosing-bugs", "tdd"],
                 "send_timeout_seconds": 60.0,
             },
             worker._ArtifactEventLog(tmp_path / worker.EVENTS_FILENAME),
@@ -519,7 +527,8 @@ def test_the_transported_skill_policy_hides_denied_skills_not_merely_gates_them(
     exposure = recorded["skill_exposure"]
     assert exposure is not None, "an absent exposure leaves denied Skills visible"
     assert set(exposure.disabled_skills) == {"triage", "loop-me"}
-    assert recorded["config"].deny_skills == frozenset({"triage", "loop-me"})
+    assert recorded["config"].deny_skills == frozenset()
+    assert not {"triage", "loop-me"} & set(exposure.policy.enabled)
 
 
 @pytest.mark.parametrize("missing", ["none", "profile", "root"])
@@ -528,6 +537,14 @@ def test_remote_lane_opens_only_its_named_installed_profile(
     missing: str,
 ) -> None:
     from copilot.generated.session_events import PermissionRequestCustomTool
+    from git_loopy.skill_install import installed_catalog_dir
+
+    skill = installed_catalog_dir(os.environ) / "prototype"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: prototype\ndescription: An optional Skill.\n---\n",
+        encoding="utf-8",
+    )
 
     recorded: dict[str, Any] = {}
     if missing == "profile":
@@ -587,6 +604,15 @@ def test_remote_lane_opens_only_its_named_installed_profile(
 def test_remote_request_refuses_non_execution_profile_keys(key: object) -> None:
     with pytest.raises(worker.ContributionRequestError, match="profile_key"):
         worker.parse_request({worker.REQUEST_ENV: json.dumps(make_request(profile_key=key))})
+
+
+def test_remote_request_refuses_the_pre_profile_wire_shape() -> None:
+    request = make_request()
+    del request["profile_key"]
+    del request["catalog_skills"]
+
+    with pytest.raises(worker.ContributionRequestError, match="profile_key"):
+        worker.parse_request({worker.REQUEST_ENV: json.dumps(request)})
 
 
 @pytest.mark.parametrize("field", ["disabled_skills", "catalog_skills"])

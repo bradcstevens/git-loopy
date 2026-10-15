@@ -612,16 +612,17 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
     )
     assert resolved["base_scope"] == "minimal"
     assert resolved["fallback"] == "minimal"
-    assert resolved["migration_warning"] is True
+    assert resolved["migration_warning"] is False
     assert sorted(resolved["enabled"]) == sorted(resolved["required"])
-    assert set(disabled_skills).isdisjoint(resolved["enabled"])
+    assert set(disabled_skills) & set(resolved["enabled"]) == {"code-review"}
+    assert fake_client.create_calls[0]["agent"] == "implementation"
     assert str(tmp_path) not in json.dumps(resolved)
     warning_lines = [
         line
         for line in capsys.readouterr().err.splitlines()
         if "required-skills" in line
     ]
-    assert len(warning_lines) == 1
+    assert warning_lines == []
 
     # run-summary JSON present with documented schema.
     runs_dir = tmp_path / ".git-loopy" / "runs"
@@ -660,7 +661,7 @@ def test_skill_policy_failure_stops_before_source_collection_or_work(
 ) -> None:
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text(
-        "---\nrequired-skills: []\n---\n",
+        "# Run instructions\n",
         encoding="utf-8",
     )
     fake_git = FakeGitClient(tmp_path)
@@ -2500,16 +2501,27 @@ def _persisted_policy_repo(tmp_path: Path) -> tuple[Path, Path]:
     skills_root = skill_install.installed_catalog_dir(os.environ)
     enabled = _write_project_skill(skills_root, "team-review")
     withheld = _write_project_skill(skills_root, "team-deploy")
+    profile = skill_install.installed_profiles_dir(os.environ) / "implementation.md"
+    profile.write_text(
+        profile.read_text().replace(
+            "permitted-skills: []", "permitted-skills:\n  - team-review",
+        ),
+        encoding="utf-8",
+    )
+    record = skill_install.install_record_path(os.environ)
+    installed = json.loads(record.read_text())
+    installed["profiles_sha256"] = skill_install.catalog_digest(profile.parent)
+    record.write_text(json.dumps(installed), encoding="utf-8")
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text(
-        "---\nrequired-skills:\n  - tdd\n---\nYou are the agent.\n",
+        "You are the agent.\n",
         encoding="utf-8",
     )
     (tmp_path / "git-loopy" / "config.toml").write_text(
         'model = "claude-opus-4.7-xhigh"\n'
         'route_policy = "static"\n'
         'issue_source = "github"\n'
-        'enabled_skills = ["team-review", "tdd"]\n',
+        'enabled_skills = ["code-review", "diagnosing-bugs", "team-review", "tdd"]\n',
         encoding="utf-8",
     )
     return enabled, withheld
@@ -2596,12 +2608,12 @@ def test_persisted_skill_policy_reaches_exposure_and_permission_enforcement(
     assert exit_code == 0
     # The policy under test came out of the resolver, not out of the test.
     assert config.skill_policy.project.present is True
-    assert config.skill_policy.project.names == ("tdd", "team-review")
+    assert config.skill_policy.project.names == ("code-review", "diagnosing-bugs", "tdd", "team-review")
 
     # One session, exposed exactly the enabled winners.
     assert len(fake_client.create_calls) == 1
     assert len(fake_client.create_calls[0]["skill_directories"]) == 1
-    assert fake_client.exposed_names == [["tdd", "team-review"]]
+    assert fake_client.exposed_names == [["code-review", "diagnosing-bugs", "tdd", "team-review"]]
     assert "team-deploy" in fake_client.create_calls[0]["disabled_skills"]
 
     # The same frozen policy denies the withheld winner at the permission seam.
@@ -2614,7 +2626,7 @@ def test_persisted_skill_policy_reaches_exposure_and_permission_enforcement(
     resolved_event = next(
         event for event in logged if event["type"] == "wrapper.skill_policy.resolved"
     )
-    assert resolved_event["enabled"] == ["tdd", "team-review"]
+    assert resolved_event["enabled"] == ["code-review", "diagnosing-bugs", "tdd", "team-review"]
     assert resolved_event["base_scope"] == "project"
     assert resolved_event["fallback"] is None
     assert str(tmp_path) not in json.dumps(resolved_event)
@@ -2663,7 +2675,7 @@ def test_frozen_skill_policy_survives_a_catalog_change_mid_run(
     assert not enabled.exists(), "the test must actually mutate the catalog input"
     assert observed_after_change == [
         (
-            ["tdd", "team-review"],
+            ["code-review", "diagnosing-bugs", "tdd", "team-review"],
             "---\nname: team-review\ndescription: team-review description\n---\n"
             "# team-review\n",
         )
@@ -2744,7 +2756,7 @@ def test_persisted_skill_policy_bounds_the_replay_output(
     ]
     assert len(resolved) == 1
     boundary = resolved[0]["enabled"]
-    assert boundary == ["tdd", "team-review"]
+    assert boundary == ["code-review", "diagnosing-bugs", "tdd", "team-review"]
 
     # The two artifacts are checkable against each other with nothing else in
     # hand: every Skill the Run consulted is inside the policy the same Run
@@ -7678,7 +7690,7 @@ def test_first_setup_readiness_recovers_into_the_actual_routed_session(
     from git_loopy.interactive import init_wizard_app, picker
     from git_loopy.interactive.state import LiveRunState
     from git_loopy.interactive.view_model import project_run_view
-    from git_loopy.prompt import packaged_required_skills
+    from git_loopy.skill_install import installed_required_skills
     from tests.fakes import FakeGateRunner
     from tests.test_init import _FakeCopilotClient, _FakeLabelClient
     from tests.test_loop_parallel import _ParallelFakeClient
@@ -7752,7 +7764,7 @@ def test_first_setup_readiness_recovers_into_the_actual_routed_session(
 
     catalog_client = CatalogClient()
     monkeypatch.setattr(skillscmd, "make_copilot_client", lambda **_kwargs: catalog_client)
-    required = packaged_required_skills()
+    required = installed_required_skills()
 
     def wizard(app):
         async def collect():

@@ -59,26 +59,21 @@ is the answer whenever no base policy is in effect, which makes a first CI Run
 reproducible: it consults no personal Skill source and no Copilot inventory,
 because Required Skills come from the installed catalog.
 
-**Required Skill** — a name the active `PROMPT.md` declares in its
-`required-skills` frontmatter. The packaged prompt requires `diagnosing-bugs`,
-`prototype`, `tdd`, `codebase-design`, `implement`, and
-`code-review`. A Run whose effective set omits one is **invalid** and stops
-before its first work session — it is never silently restored. A custom prompt
-with no `required-skills` metadata inherits the packaged list and warns until it
-declares its own (an explicitly empty list is a valid declaration).
-`implement` is required for the bound PR's conflict-resolution path, which closes
-with `code-review`; its general orchestration remains outside an Iteration.
-The catalog's `implement-spec` and `retro` are outside the unattended Run, while
-`pr` is optional body-writing guidance, usable only when the effective policy
-enables it and the bound issue calls for it. None of these three is required.
+**Required Skill** — a name an installed in-Run Agent profile requires.
+A Run's Required Skills, and its Minimal Skill policy, are the union across
+the five execution profiles and the Reviewer: `code-review`, `diagnosing-bugs`,
+and `tdd`. The Planner works outside Runs and contributes no requirements.
+A Run whose effective set omits one is **invalid** and stops before its first
+work session; it never silently restores a disabled Skill.
 
-With an installed profile root, an execution profile also declares its own
-Required Skills. The session preloads them and refuses to start if they are
-unavailable or disabled. This session-level behavior does not yet replace the
-Run-wide prompt-metadata preflight described above.
+Profiles must match the active catalog pin. Preflight refuses an absent,
+drifted, or unrepairable profile root. `required-skills` in custom `PROMPT.md`
+frontmatter is retired: both preflight and `doctor` name the key to remove,
+including an explicitly empty declaration. A prompt without that key needs
+no migration warning.
 
 **Permitted Skill** — a further Skill a profile may invoke on demand, but only
-when the Effective Skill policy enables it. With an installed profile root,
+when the Effective Skill policy enables it.
 each issue's Agent exposes Required ∪ (Permitted ∩ Effective Skill policy), not
 the whole Run policy. A policy-enabled Skill outside its profile is refused as
 `skill_outside_profile`; a Permitted Skill disabled by policy remains
@@ -263,7 +258,7 @@ enabled    enabled      yes       packaged  tdd          Test-driven development
   when Copilot reports nothing for that name. Shown side by side so a
   divergence is visible; it has no authority, and the Run follows the
   GIT-LOOPY column.
-- **REQUIRED** — `yes` when the active prompt declares it in `required-skills`.
+- **REQUIRED** — `yes` when an installed in-Run profile requires it.
 - **SOURCE** — the winning source kind: `inherited`, `personal`, `plugin`
   (rendered `plugin:<name>` when the SDK identifies its owner, or
   `plugin (name unavailable)` when it does not), `custom`, `builtin`, or `packaged` — the last
@@ -618,7 +613,9 @@ the Skill policy` line rather than mislabelled as a policy blocker.
 | Message on stderr | Why | Recovery |
 | --- | --- | --- |
 | `Enabled Skills are missing from the catalog` | a configured name resolves to nothing — a personal Skill you never installed here, a plugin you removed, or a typo | `git-loopy skills list` to see the real names, then `git-loopy skills edit` to drop or correct it |
-| `Required Skills are disabled` | the effective set omits a name the active `PROMPT.md` declares in `required-skills` — a `--disable-skill` overlay, a legacy deny guard, or a `GIT_LOOPY_ENABLED_SKILLS` / `enabled_skills` value that simply does not list it | if the base came from the environment, correct or unset `GIT_LOOPY_ENABLED_SKILLS`; otherwise `git-loopy skills edit` and re-enable it, or drop the overlay / `deny_skills` entry causing the subtraction |
+| `Required Skills are disabled` | the effective set omits a name required by an installed in-Run profile — a `--disable-skill` overlay, a legacy deny guard, or an incomplete enabled set | correct the policy, overlay, or deny guard; `git-loopy skills edit` shows the Required names |
+| `Remove 'required-skills' from PROMPT.md` | custom Run instructions still declare the retired frontmatter key | remove that key; profiles are the only Required-Skill authority |
+| `Agent profiles ... are not matching` | the installed profiles are absent, drifted, or from another pin | `git-loopy doctor --apply` repairs the install; an unsuccessful repair blocks the Run |
 | `Enabled project Skills are not git-tracked` | a policy enables a Skill whose winning source is `project` and that is not committed, so it would not exist for a collaborator. No current Run can reach this: [ADR-0025](adr/0025-installed-skill-catalog.md) removed the project Skill source, and the check is kept only so a Runner that still exposes one fails closed | `git add` and commit the Skill, or `git-loopy skills edit` to disable it |
 | `Skill inventory is unavailable for explicit policy names` | you supplied an explicit policy but the Copilot inventory could not be resolved — Copilot missing, unauthenticated, or failing to start | restore Copilot CLI access, then re-run `git-loopy doctor`; `git-loopy skills list` reports the same discovery failure in isolation |
 
@@ -626,15 +623,11 @@ Preflight failures exit `1` and print
 `git-loopy: Skill policy preflight failed: <message>. Inspect the catalog and
 configured policy with `git-loopy skills`.`
 
-Two more diagnostics are warnings rather than failures:
+One diagnostic is a warning rather than a failure:
 
 - **`this Config predates the closed-world Skill policy`** on an unattended Run
   — the Run continues on the Minimal Skill policy and persists nothing. Fix with
   `git-loopy skills edit` on a terminal.
-- **`active prompt has no required-skills metadata`** — a custom `PROMPT.md`
-  inherited the packaged Required Skill list. Declare a `required-skills` list
-  in its frontmatter (an explicitly empty list is a valid declaration) to
-  complete the migration.
 
 ---
 
@@ -668,7 +661,7 @@ as the answer to "what could that Run have loaded?":
 | `enabled` | the sorted canonical names the Run may load — the effective set, after replacement, overlays, and deny guards |
 | `fallback` | why that *base scope* was `minimal` — `minimal` (nothing configured) or `migration` (an unconverted legacy Config) — and `null` when a project or global scope supplied the base |
 | `legacy_denied` | the sorted names the deprecated deny guards resolved, recorded in full whether or not each one actually removed an enabled Skill |
-| `migration_warning` | `true` when the active prompt declared no `required-skills` and inherited the packaged list |
+| `migration_warning` | historical prompt-inheritance flag; now always `false` because profiles own Required Skills |
 | `required` | the sorted Required Skill names |
 | `source_kinds` | each enabled name mapped to the source that won it (`project`, `inherited`, `personal`, `plugin`, `custom`, `builtin`, `packaged`) |
 

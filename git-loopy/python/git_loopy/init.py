@@ -339,13 +339,11 @@ def _post_setup_required_skills(
     scaffold: bool,
     required_skills: Sequence[str] | None,
 ) -> tuple[str, ...]:
-    """The Required Skills of the instructions this setup will leave behind.
+    """Validate the resulting instructions, then read the installed profiles.
 
-    A Skill policy is only valid against the **Run instructions** that resolve
-    once setup finishes. Reading the *current* prompt would let a wizard that
-    also scaffolds a ``PROMPT.md`` persist a policy its own scaffold immediately
-    invalidates, so this mirrors :func:`git_loopy.prompt.load_prompt` precedence
-    with the about-to-be-scaffolded prompt substituted at its own scope.
+    This mirrors :func:`git_loopy.prompt.load_prompt` precedence with the
+    about-to-be-scaffolded prompt substituted at its own scope. Replacing an
+    override can remove retired metadata; retaining it must still refuse setup.
     """
     if required_skills is not None:
         return tuple(required_skills)
@@ -381,8 +379,8 @@ def _post_setup_required_skills(
             if candidate.exists():
                 text = candidate.read_text(encoding="utf-8")
                 break
-        return resolve_required_skills(text).required_skills
-    except (OSError, PromptMetadataError) as exc:
+        return resolve_required_skills(text, env=env).required_skills
+    except (OSError, PromptMetadataError, SkillInstallError) as exc:
         raise _SkillPolicyUnavailable(
             f"cannot resolve Required Skills: {type(exc).__name__}: {exc}"
         ) from exc

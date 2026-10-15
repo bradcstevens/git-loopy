@@ -652,7 +652,24 @@ def test_skills_list_surfaces_invalid_required_metadata_before_client_start(
     assert result == 1
     assert len(errors) == 1
     assert errors[0].startswith("git-loopy: unable to resolve Required Skills: ")
-    assert "listed more than once" in errors[0]
+    assert "Remove 'required-skills'" in errors[0]
+
+
+def test_skills_list_names_missing_profiles_before_starting_the_client(tmp_path: Path) -> None:
+    errors: list[str] = []
+
+    def unexpected_client() -> object:
+        pytest.fail("No discovery is needed to refuse a missing profile install")
+
+    result = run_skills_list(
+        repo_root=tmp_path, env={"XDG_CONFIG_HOME": str(tmp_path / "empty")},
+        error_fn=errors.append, client_factory=unexpected_client,
+    )
+
+    assert result == 1
+    assert len(errors) == 1
+    assert errors[0].startswith("git-loopy: unable to resolve Required Skills:")
+    assert "profiles" in errors[0] and "doctor --apply" in errors[0]
 
 
 def test_skills_edit_without_repository_resolves_the_global_scope(

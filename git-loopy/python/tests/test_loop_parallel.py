@@ -4262,6 +4262,19 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
             )
         )
     ]
+    recovery = next(
+        session for session in fake_client.created
+        if session._working_directory in resolution_dirs
+    )
+    prompt = recovery.send_and_wait_calls[0][0]
+    for procedure in (
+        "resolve what the diff and the brief settle",
+        "keep both sides' intent",
+        "rerun the feedback loops",
+        "comment the blocker and end the turn",
+        "=== Issue #42:",
+    ):
+        assert procedure in prompt
 
     # Both issues closed; no breadcrumb (no fallback); the round made progress.
     assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 43]
@@ -10327,10 +10340,8 @@ def test_present_host_report_authorizes_static_actions_through_cli_and_doctor(
     fake_git, fake_gh, fake_client, _cfg = _wire_two_lane_rolling(
         tmp_path, monkeypatch
     )
-    # An absent frontmatter inherits the packaged Required Skills. This proof
-    # is about host authority, so the temporary repo declares none.
     (tmp_path / "git-loopy" / "prompt.md").write_text(
-        "---\nrequired-skills: []\n---\nYou are the agent.\n",
+        "You are the agent.\n",
         encoding="utf-8",
     )
     host_models = [
