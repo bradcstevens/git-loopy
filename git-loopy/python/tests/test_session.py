@@ -2270,7 +2270,10 @@ def test_session_module_imports_are_constrained() -> None:
     allow = {
         # stdlib
         "__future__",
+        "asyncio",
         "os",
+        "copy",
+        "dataclasses",
         "pathlib",
         "typing",
         # SDK

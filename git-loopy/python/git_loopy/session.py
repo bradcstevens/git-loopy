@@ -85,6 +85,12 @@ defence-in-depth paths exist because:
 Every session also passes ``memory={"enabled": False}``, so the harness cannot
 inject persistent memory before the permission handler runs (ADR-0076).
 
+An optional :class:`SandboxPolicy` forwards the operator's Copilot settings plus
+only caller-supplied path grants (ADR-0093). Before exposing the session it enables
+the Sandbox, disables bypass, and reads enforcement status. Setup failures close
+the session; unsandboxed tool completions abort it and raise
+:class:`SandboxBreachError`. No policy leaves the existing posture unchanged.
+
 Design notes
 ------------
 
@@ -125,7 +131,10 @@ Design notes
 
 from __future__ import annotations
 
+import asyncio
 import os
+from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, TypedDict, runtime_checkable
 
@@ -133,6 +142,7 @@ from copilot import CopilotClient, CopilotSession
 from copilot.generated.rpc import (
     PermissionDecisionApproveOnce,
     PermissionDecisionReject,
+    SessionUpdateOptionsParams,
 )
 from copilot.generated.session_events import (
     PermissionRequest,
@@ -167,6 +177,9 @@ __all__ = [
     "SessionConfig",
     "ASK_USER_TOOL_NAME",
     "SKILL_TOOL_NAME",
+    "SandboxPolicy",
+    "SandboxError",
+    "SandboxBreachError",
 ]
 
 
@@ -200,6 +213,52 @@ _REVIEW_READ_TOOLS = frozenset({
     "read_bash", "read_powershell", "list_bash",
     "task", "read_agent", "list_agents", "write_agent", "skill", "ask_user",
 })
+
+
+class SandboxError(RuntimeError):
+    """The Agent could not establish its required Sandbox."""
+
+
+class SandboxBreachError(SandboxError):
+    """A tool execution did not attest that it ran inside the Sandbox."""
+
+
+class _SandboxOptions(SessionUpdateOptionsParams):
+    """Preserve the operator's policy, including fields newer than SDK codegen."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        super().__init__()
+        self._config = config
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"sandboxConfig": deepcopy(self._config)}
+
+
+@dataclass(frozen=True)
+class SandboxPolicy:
+    """Forwarded Copilot ``sandbox`` settings and explicit caller path grants.
+
+    Paths use Copilot's spelling/semantics; this seam neither discovers nor adds
+    paths itself. No Run opts in until its caller supplies this optional policy.
+    """
+
+    settings: Mapping[str, Any]
+    readwrite_paths: tuple[str, ...] = ()
+    readonly_paths: tuple[str, ...] = ()
+
+    def options(self) -> SessionUpdateOptionsParams:
+        config = deepcopy(dict(self.settings))
+        config["enabled"] = True
+        config["allowBypass"] = False
+        if self.readwrite_paths or self.readonly_paths:
+            filesystem = config.setdefault("userPolicy", {}).setdefault("filesystem", {})
+            for key, paths in (
+                ("readwritePaths", self.readwrite_paths),
+                ("readonlyPaths", self.readonly_paths),
+            ):
+                if paths:
+                    filesystem.setdefault(key, []).extend(paths)
+        return _SandboxOptions(config)
 
 
 def _review_feedback_loops(working_directory: Path) -> frozenset[str]:
@@ -414,6 +473,7 @@ def build_permission_handler(
     skill_catalog: SkillCatalog | None = None,
     profile_skills: frozenset[str] | None = None,
     read_only: bool = False,
+    sandbox_required: bool = False,
     feedback_loops: frozenset[str] = frozenset(),
     working_directory: str | None = None,
     record_event: Callable[[dict[str, Any]], None],
@@ -441,6 +501,7 @@ def build_permission_handler(
         skill_catalog: Resolved catalog paired with ``skill_policy``.
         profile_skills: Optional per-profile exposure within the Effective Skill policy.
         read_only: Enforce Reviewer access for the Agent and all its Subagents.
+        sandbox_required: Deny every Sandbox bypass or permissive escalation.
         feedback_loops: Exact trusted commands snapshotted from AGENTS.md at session start.
         working_directory: Session directory in which feedback loops are authorized.
         record_event: Callback invoked with the envelope for every
@@ -474,6 +535,18 @@ def build_permission_handler(
         tool_name, tool_args, tool_call_id = _request_identity(req)
         iter_num = iter_provider()
         scrubbed_args = _scrub_permission_args(tool_args, tool_name)
+
+        if sandbox_required and (
+            getattr(req, "request_sandbox_bypass", False)
+            or getattr(req, "request_sandbox_permissive", False)
+        ):
+            _safe_record(record_event, events.make_event(
+                type=events.TOOL_PERMISSION_DENIED,
+                run_id=run_id, iter=iter_num, **identity,
+                tool_call_id=tool_call_id, tool_name=tool_name or "shell",
+                arguments=scrubbed_args, reason="sandbox_escalation_denied",
+            ))
+            return PermissionDecisionReject()
 
         if tool_name == "session_store_sql":
             envelope = events.make_event(
@@ -767,6 +840,11 @@ class IterationSession:
             for a Reviewer explicitly started by the Orchestrator. A named
             profile must be installed; there is no pre-profile execution path.
             Classifiers, selectors and calibration Trials leave this unset.
+        sandbox_policy: Optional forwarded Copilot Sandbox settings and path
+            grants. Applied through session.options.update before the context
+            body can send any prompt. Setup/readback failures raise SandboxError;
+            a tool completion without sandboxed=true aborts the Agent and raises
+            SandboxBreachError on context exit. No policy makes no Sandbox RPCs.
     """
 
     def __init__(
@@ -788,6 +866,7 @@ class IterationSession:
         skill_exposure: SessionSkillExposure | None = None,
         profile_key: str | None = None,
         event_observer: EventObserver | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
     ) -> None:
         self._client = client
         self._config = config
@@ -804,6 +883,10 @@ class IterationSession:
         self._issue_binding = issue_binding
         self._skill_exposure = skill_exposure
         self._profile_key = profile_key
+        self._sandbox_policy = sandbox_policy
+        self._sandbox_breach: SandboxBreachError | None = None
+        self._sandbox_abort: asyncio.Task[None] | None = None
+        self._owner_task: asyncio.Task[Any] | None = None
         self._sdk_session: CopilotSession | None = None
         # The one scrub-and-fan-out seam (issue #43). ``diag=None`` keeps the
         # SDK-callback / permission-handler paths silent on a write/sink
@@ -842,6 +925,7 @@ class IterationSession:
         so early events such as :data:`SessionEventType.SESSION_START`
         are delivered.
         """
+        self._owner_task = asyncio.current_task()
         profile = (
             load_session_profile(
                 installed_profiles_dir(os.environ), self._profile_key,
@@ -871,6 +955,7 @@ class IterationSession:
                 )
             profile_skills = profile.exposure(policy.enabled)
         handler = build_permission_handler(
+            sandbox_required=self._sandbox_policy is not None,
             profile_skills=profile_skills,
             read_only=profile is not None and profile.access == "read-only",
             feedback_loops=(
@@ -944,6 +1029,19 @@ class IterationSession:
             # permission handler is the second line of defence.
         )
         self._sdk_session = session
+        if self._sandbox_policy is not None:
+            try:
+                result = await session.rpc.options.update(self._sandbox_policy.options())
+                if result.success is not True:
+                    raise SandboxError("Sandbox policy application was not acknowledged")
+                status = await session.rpc.sandbox.get_enforcement_status()
+                if status.blocked is not False:
+                    raise SandboxError("Sandbox enforcement is blocked")
+            except BaseException as exc:
+                await self.__aexit__(type(exc), exc, exc.__traceback__)
+                if not isinstance(exc, Exception):
+                    raise
+                raise SandboxError("Could not establish Agent Sandbox") from exc
         return session
 
     async def __aexit__(
@@ -965,10 +1063,30 @@ class IterationSession:
         if session is None:
             return
         try:
-            await session.disconnect()
+            if self._sandbox_abort is not None:
+                try:
+                    await asyncio.shield(self._sandbox_abort)
+                except asyncio.CancelledError:
+                    # A synchronous send may return before our cancellation
+                    # reaches its first await. Still finish the abort RPC.
+                    if self._sandbox_breach is None:
+                        raise
+                    await self._sandbox_abort
+        finally:
+            try:
+                await session.disconnect()
+            except Exception:
+                # Cleanup failure must not hide the Agent failure.
+                pass
+        if self._sandbox_breach is not None:
+            raise self._sandbox_breach
+
+    async def _abort_sandbox_breach(self, session: CopilotSession) -> None:
+        try:
+            await asyncio.wait_for(session.abort(), timeout=10)
         except Exception:
-            # See docstring — swallowing keeps body-level exception
-            # propagation intact and avoids confusing tracebacks.
+            # A lost transport cannot turn a detected breach into success.
+            # __aexit__ disconnects and reports the original Sandbox failure.
             pass
 
     # -- event fan-out -----------------------------------------------------
@@ -1021,6 +1139,28 @@ class IterationSession:
         it falls through to the drop path.) Sink failures are swallowed:
         a broken sink must not crash SDK event dispatch.
         """
+        # The pinned SDK attests execution on COMPLETE, not START / PROGRESS /
+        # PARTIAL_RESULT (those schemas have no sandboxed field).
+        if (
+            self._sandbox_policy is not None
+            and sdk_event.type is SessionEventType.TOOL_EXECUTION_COMPLETE
+            and getattr(sdk_event.data, "sandboxed", None) is not True
+            and self._sandbox_breach is None
+        ):
+            tool_call_id = getattr(sdk_event.data, "tool_call_id", "unknown")
+            self._sandbox_breach = SandboxBreachError(
+                f"Sandbox breach: tool {tool_call_id} did not report sandboxed=true"
+            )
+            if self._sdk_session is not None:
+                self._sandbox_abort = asyncio.create_task(
+                    self._abort_sandbox_breach(self._sdk_session)
+                )
+            # Raising here is insufficient: the SDK swallows callback errors.
+            # Interrupt the context owner; exit converts cancellation to the
+            # distinct failure, even when send_and_wait would otherwise hang.
+            if self._owner_task is not None:
+                self._owner_task.cancel()
+
         if sdk_event.type is SessionEventType.ASSISTANT_REASONING_DELTA:
             try:
                 delta: Any = getattr(sdk_event.data, "delta_content", "") or ""
