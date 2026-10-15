@@ -802,7 +802,7 @@ run starts. Off by default: an ordinary launch uses the configured model and rea
 effort with no prompt.
 _Avoid_: picker mode, interactive model prompt.
 
-### Framework and configuration
+### The framework
 
 **git-loopy**:
 The GitHub Copilot SDK loop-engineering framework and brand for encoding specialized
@@ -815,6 +815,7 @@ spelling; `git_loopy` as the importable Python package. Supersedes the retired
 **copiloop** and **ralph-afk** brands.
 _Avoid_: copiloop, ralph-afk, "the runner" as a proper name.
 
+### Release and publication
 **Release version**:
 The Semantic Versioning identity assigned to one published **Language path**.
 Each path advances its own Release line independently, so version equality across
@@ -954,6 +955,7 @@ never choose the mode. A source-only **Rehearsal** and its publication seam cann
 certify or attach helper artifacts.
 _Avoid_: release type, artifact mode, channel.
 
+### Autonomous loops
 **Autonomous loop**:
 The *technique* git-loopy orchestrates — an unattended, iterative execution loop that
 drives the Copilot agent to work triaged issues one at a time, bounded by feedback
@@ -962,6 +964,7 @@ concept, never a code identifier. Named the "Ralph loop" until
 [ADR-0031](docs/adr/0031-encoded-workflows-retire-the-loop-name.md) retired that name.
 _Avoid_: Ralph loop (retired), ralph-afk (the retired brand), "ralph" in any form.
 
+### Install, Config and commands
 **Config**:
 The persisted settings (model, reasoning effort, strike policy, denylists, ...) that carry across
 runs so they need not be re-passed each time. Held on disk as a hand-editable `config.toml` in a
@@ -1069,6 +1072,7 @@ Whether **Config** and assets apply machine-wide (**global**) or only within one
 governs *which* settings and assets resolve for a run, not which binary runs.
 _Avoid_: local (ambiguous), workspace.
 
+### Task types and routing
 **Task type**:
 The classification an issue carries as a `task-type:<key>` label. Either set by an operator or
 inferred from the issue's own content by the **Task-type classifier** and written back to the
@@ -1286,6 +1290,7 @@ that Run's own event loop, holding its proposals in memory: discovering an issue
 running starts no background routing service (ADR-0057).
 _Avoid_: prefetch, routing queue, speculative routing, pre-binding (nothing is bound).
 
+### Harness, attempts and escalation
 **Harness capabilities**:
 What the authenticated Copilot harness says about the models *this account* may use, read from its
 own model listing: eligibility, whether each model has a reasoning-effort dial and which values it
@@ -1354,6 +1359,7 @@ on costs a stated justification rather than a veto — an issue may simply be ha
 memory like both its neighbours, because a bad night must not permanently demote a route (ADR-0057).
 _Avoid_: failure history, model blacklist, demotion (that is the **Calibration** term).
 
+### Skips and Run endings
 **Skip**:
 The disposition an **Attempt lifecycle** reaches when an issue has spent every attempt this
 **Run** has to offer. A skipped issue is filtered out of the **Pickup** candidate list and never
@@ -1446,6 +1452,7 @@ Default pair, and permitted retries may reselect without a fixed Escalation rung
 Unconditional: a Run that configured nothing prints the readback saying so.
 _Avoid_: config dump, banner, routing validation (nothing is refused here — the readback reports).
 
+### Measurement, Trials and demotion
 **Measured routing**:
 The **Calibration**-authored artifact. Under an unselected or Static **Route policy** it is
 one precedence rung between global **Config** and the built-in default, supplying a
