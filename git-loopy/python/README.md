@@ -189,8 +189,8 @@ a fallback. The other prerequisites (`gh` signed in, `git`, `copilot`) are liste
 The bootstrap is per-clone; subsequent invocations of `git-loopy` use
 the cached environment under `git-loopy/python/.venv/`.
 
-The corporate-compatible Runner pins `github-copilot-sdk==1.0.17rc5`, which runs
-Copilot CLI `1.0.92-5` by default. Updating the separate `copilot` command on `PATH`
+The corporate-compatible Runner pins stable `github-copilot-sdk==1.0.17`, which runs
+Copilot CLI `1.0.93` by default. Updating the separate `copilot` command on `PATH`
 does not update that harness. `python -m git_loopy.sdk_feed` reports when the
 corporate feed has ingested a newer release; it does not change the pin, and it
 is not an Integration feedback loop because an unreachable feed must not redden
@@ -2322,7 +2322,7 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
 
 This fallback carries the observed rows returned by the SDK-pinned CLI
-`1.0.92-5`, plus retained compatibility entries:
+`1.0.93`, plus retained compatibility entries:
 `claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-opus-4.7`, `claude-opus-4.6`,
 all three Gemini rows, and `mai-code-1-flash-picker`. Those eight were not offered
 by that account; their retained efforts are not a claim of current availability.
