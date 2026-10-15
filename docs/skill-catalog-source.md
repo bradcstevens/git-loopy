@@ -124,8 +124,8 @@ It fetches the pinned commit SHA itself â€” not a ref that points at it today â€
 unless it proves out. On success:
 
 ```
-acquired bradcstevens/git-loopy-skills @ 75e01c4f62d002bd0a0773b3c253b61ca065f87a into .git-loopy/skill-source
-43 Skills, licence MIT (LICENSE), provenance README.md
+acquired bradcstevens/git-loopy-skills @ 0063cccfcc0d89a9bdca57cc17e942382af40c64 into .git-loopy/skill-source
+45 Skills, licence MIT (LICENSE), provenance README.md
 ```
 
 | Flag | Use |
@@ -236,8 +236,9 @@ the proof is the failure this sequence exists to prevent.
    rerunning it; a failed preview never authorizes moving the pin.
    Reconcile the pin's consumers in that same change: the
    offline revision and Skill-name snapshot in `tests/test_prompt.py`, the
-   README's catalog table, and both `PROMPT.md` copies when a Skill is added,
-   renamed, or retired. Decide explicitly whether new Skills belong in an
+   README's catalog table, this document's revision, counts and upgrade notes,
+   and both `PROMPT.md` copies when a Skill is added, renamed, or retired.
+   Decide explicitly whether new Skills belong in an
    autonomous Iteration; user-invoked operations must not become implicit
    follow-up work. Keep the Required Skills unchanged unless the Run contract
    itself is changing.
@@ -256,15 +257,17 @@ names this pin rather than repeating a revision that could drift away from it.
 ### Upgrading existing policies
 
 The catalog is pinned to
-`a2189cb96ef48b51cea1672966726e7475fef4bd`, the published seven-profile change
-from [bradcstevens/git-loopy-skills#152](https://github.com/bradcstevens/git-loopy-skills/pull/152),
-proved for #825 and activated by #829. It replaces
-`7d98aa729d04cb01686793150272cf9c1094fb9a`. The paired change carries seven
-profiles, the read-only `code-review` findings return, `to-tickets`' five-execution-
-Task-type restriction for agent-ready tickets, and the scorecard/profile-role
-agreement check. It also carries the intervening `/next` Python chain-ledger
-and reentry implementation and its setup-hook update. No Skills were added or
-removed by this pin move; the catalog still has 44 names.
+`0063cccfcc0d89a9bdca57cc17e942382af40c64`, the published release-assessment change
+from [bradcstevens/git-loopy-skills#153](https://github.com/bradcstevens/git-loopy-skills/pull/153),
+proved and pinned for #767. It replaces
+`a2189cb96ef48b51cea1672966726e7475fef4bd`. The paired change adds
+`release-assessment`, updates `model-scorecard`'s `copilot:task` mapping and cached
+role-estimate header for that Skill, and adds the generated README row. No existing
+Skill body changes, and no Skills are removed; the catalog now has 45 names.
+The seven Agent profiles are unchanged from the previous pin, published in
+[bradcstevens/git-loopy-skills#152](https://github.com/bradcstevens/git-loopy-skills/pull/152),
+proved for #825 and activated by #829. Their Required and Permitted Skills
+remain unchanged.
 `/to-handoff` and `/chief-of-staff` are absent at this revision and await a
 later pin move.
 
@@ -278,7 +281,7 @@ The Run prompt prefers these root entry points in both domain reading and
 plan stress-testing, falling back to `CONTEXT.md` / `CONTEXT-MAP.md` only when
 neither new entry point exists.
 
-The current catalog includes 44 Skills. `/next` handles both workflow routing
+The current catalog includes 45 Skills. `/next` handles both workflow routing
 and skill selection, replacing `/skill-router`; its skill-selection and
 phase-boundary references travel with a standalone installation. An earlier
 upgrade also adopted the upstream retirement of `/loose-ends` and the addition
@@ -315,7 +318,11 @@ pull-request body guidance, not permission to create or merge a PR.
 Profiles keep `release`, `set-task-models`, `model-scorecard`, `sync-model-roster`,
 and `jev-ultrafast` out of autonomous Iterations, regardless of policy enablement.
 The same closed exposure answers #537: `push`, `wizard`, `codebase-audit`, and
-`wait-what` occur in no in-Run profile. The old prose exclusion list and its pinned
-test are retired under ADR-0078.
+`wait-what` occur in no in-Run profile. The old general prose exclusion list and
+its pinned test are retired under ADR-0078. The new `release-assessment` Skill
+also occurs in no in-Run profile; both `PROMPT.md` copies explicitly exclude it
+because a Run has no Release assessment service. It is an advisory Copilot App
+conversation: it shows the review packet verbatim, checks freshness before every
+follow-up, and offers only a re-run, never release authorization.
 Install the catalog into your agent client separately to invoke these yourself; doing
 so neither changes git-loopy's saved policy nor authorizes a release.
