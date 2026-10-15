@@ -105,9 +105,9 @@ def test_command_help_keeps_a_category_together_when_inventory_order_changes(
         "_COMMAND_SPECS",
         (
             *cli_module._COMMAND_SPECS,
-                    cli_module._CommandSpec(
-                        "lanes",
-                        "Configuration",
+            cli_module._CommandSpec(
+                "lanes",
+                "Configuration",
                 "Inspect Lane workspaces.",
             ),
         ),
