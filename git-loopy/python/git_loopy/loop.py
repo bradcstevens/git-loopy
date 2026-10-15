@@ -775,18 +775,12 @@ def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
 def _lane_worktree_path(
     common_git_dir: Path, run_id: str, issue_number: int | str
 ) -> Path:
-    """Compute a Lane's **workspace** path under the clone's git directory.
+    """Issue clone keyed by Run, setup attempt and issue (ADR-0093).
 
-    Lanes live in ``<common-git-dir>/git-loopy/<run_id>/issue-<N>``, grouped by
-    run so a run's workspaces are easy to find and reap. Later setups qualify
-    ``run_id`` with ``attempt-<A>/`` to preserve previous branches and trees.
-    The issue leaf stays stable so concurrent Lanes never share a tree.
-    The common git directory is not content in any working tree, so a live Lane is invisible to ``git
-    status``, unreachable by ``git add -A``, and survives ``git clean -ffxd``
-    — all without an ignore entry — while still being per-clone and dying with
-    the clone.
+    Outside the source checkout and shared git directory; Integration alone
+    continues using private worktrees. The Reserved branch decides ownership.
     """
-    return common_git_dir / "git-loopy" / run_id / f"issue-{issue_number}"
+    return git_module.issue_clone_root(common_git_dir) / run_id / f"issue-{issue_number}"
 
 
 _AUTO_RESOLUTION_MAX_ATTEMPTS = 3
@@ -6277,10 +6271,10 @@ class _ParallelLoop:
         branch = git_module.lane_branch_name(workspace_run_id, ref)
         path = _lane_worktree_path(self._workspace_root, workspace_run_id, ref)
         try:
-            wt_git = self._git.add_worktree(path, branch=branch, base=base)
+            wt_git = self._git.add_issue_clone(path, branch=branch, base=base)
         except git_module.GitError as exc:
             self._diag.warning(
-                "worktree add for issue #%s failed: %s; releasing reservation",
+                "Issue clone setup for issue #%s failed: %s; releasing reservation",
                 ref, exc,
             )
             if is_pin:
@@ -6662,6 +6656,8 @@ class _ParallelLoop:
             dirty, untracked = False, False
             verification_error = f"could not verify worktree state: {exc}"
         self._salvage_and_reclaim_lane_workspace(lane_work)
+        if not lane_work.reclaimed and not dirty and not untracked:
+            verification_error = "could not preserve the Issue clone in the source"
         return execution_host_module.LocalRunResult(
             branch=lane_work.branch,
             sha=sha,
@@ -6846,10 +6842,11 @@ class _ParallelLoop:
         if lane_work.reclaimed:
             return
         try:
-            self._git.remove_worktree(lane_work.path, force=True)
+            self._git.import_issue_clone(lane_work.path, branch=lane_work.branch)
+            self._git.remove_issue_clone(lane_work.path)
         except git_module.GitError as exc:
             self._diag.warning(
-                "worktree remove for %s failed: %s", lane_work.path, exc
+                "Issue clone import/reclaim for %s failed: %s", lane_work.path, exc
             )
         else:
             lane_work.reclaimed = True

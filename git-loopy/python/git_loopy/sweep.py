@@ -283,6 +283,7 @@ def _reclaim_dead_workspaces(
     worktrees: list[git_module.Worktree],
     dry_run: bool,
     liveness: Callable[[str], bool | None],
+    issue_clones: frozenset[Path] = frozenset(),
 ) -> tuple[list[Path], set[str]]:
     """**Salvage** and reclaim every workspace whose Run is provably dead.
 
@@ -329,7 +330,11 @@ def _reclaim_dead_workspaces(
                     workspace_git = git.open_worktree(worktree.path)
                     workspace_git.add_all()
                     workspace_git.commit(checkpoint_message(residue.issue))
-                git.remove_worktree(worktree.path, force=True)
+                if worktree.path in issue_clones:
+                    git.import_issue_clone(worktree.path, branch=residue.branch)
+                    git.remove_issue_clone(worktree.path)
+                else:
+                    git.remove_worktree(worktree.path, force=True)
         except git_module.GitError:
             withheld.add(residue.branch)
             continue
@@ -412,6 +417,7 @@ def _collect_resolved_branches(
     withheld: set[str],
     dry_run: bool,
     liveness: Callable[[str], bool | None],
+    pending_imports: tuple[git_module.Worktree, ...] = (),
 ) -> list[str]:
     """Delete every reserved branch of a dead Run that is resolved.
 
@@ -421,14 +427,26 @@ def _collect_resolved_branches(
     """
     collected: list[str] = []
     closed: dict[int, bool] = {}
-    for branch in git.list_branches():
+    pending = {
+        clone.branch: clone.path for clone in pending_imports if clone.branch is not None
+    }
+    for branch in sorted(set(git.list_branches()) | pending.keys()):
         residue = _parse_residue(branch)
         if residue is None or branch in withheld:
             continue
         if liveness(residue.run_id) is not False:
             continue
+        branch_git, base_ref = git, base_branch
+        if branch in pending:
+            try:
+                # Model the branch about to be imported without fetching during
+                # a dry run. The source base is readable through the alternate.
+                branch_git = git.open_worktree(pending[branch])
+                base_ref = git.branch_tip(base_branch).sha
+            except git_module.GitError:
+                continue
         if not _is_resolved(
-            residue, git=git, github=github, base_branch=base_branch, closed=closed
+            residue, git=branch_git, github=github, base_branch=base_ref, closed=closed
         ):
             continue
         if not dry_run:
@@ -488,9 +506,14 @@ def sweep(
         The :class:`SweepReport` of what was removed, or would be.
     """
     worktrees = _list_worktrees(git)
+    try:
+        clones = git.list_issue_clones()
+    except git_module.GitError:
+        clones = []
     run_liveness = _liveness_by_run(_control_dirs(control_dir, worktrees), liveness)
     reclaimed_paths, withheld = _reclaim_dead_workspaces(
-        git=git, worktrees=worktrees, dry_run=dry_run, liveness=run_liveness
+        git=git, worktrees=[*worktrees, *clones], dry_run=dry_run, liveness=run_liveness,
+        issue_clones=frozenset(clone.path for clone in clones),
     )
     branches = _collect_resolved_branches(
         git=git,
@@ -499,12 +522,14 @@ def sweep(
         withheld=withheld,
         dry_run=dry_run,
         liveness=run_liveness,
+        pending_imports=tuple(clones) if dry_run else (),
     )
     directories: list[Path] = []
     reclaimed = frozenset(reclaimed_paths)
     for root in (
         git.common_git_dir() / "git-loopy",
         git.root.parent / f"{git.root.name}.worktrees",
+        git_module.issue_clone_root(git.common_git_dir()),
     ):
         _reap_empty_directories(
             root, dry_run=dry_run, reaped=directories, reclaimed=reclaimed

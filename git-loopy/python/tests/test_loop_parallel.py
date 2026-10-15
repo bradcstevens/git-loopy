@@ -649,7 +649,7 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
     bases = {base for (_p, _b, base) in adds}
     assert all(base != "main" for base in bases)
     for path in add_paths:
-        assert path.is_relative_to(fake_git.common_git_dir() / "git-loopy")
+        assert path.is_relative_to(tmp_path.parent / f"{tmp_path.name}.issue-clones")
         assert path.name.startswith("issue-")
     # Deterministic ``git-loopy/<run_id>/issue-<N>`` branch names, one run_id.
     assert branches[0].startswith("git-loopy/")
@@ -2559,23 +2559,17 @@ def test_parallel_exception_salvages_and_reclaims_a_dirty_lane_workspace(
     assert [e["type"] for e in events].count("wrapper.contribution.end") == 1
 
 
-def test_parallel_workspace_paths_are_owned_by_the_clones_git_dir(
+def test_parallel_workspace_paths_separate_issue_clones_from_integration(
     tmp_path: Path,
 ) -> None:
-    """Lane and Integration workspaces are keyed off the common git directory.
-
-    Placement is the whole point of #449: both workspace kinds hang off the
-    clone's own git directory under the reserved ``git-loopy/`` subtree, keyed
-    by run and issue, with ``integrate/`` separating a contribution's stage
-    from the Lane workspace for the same issue.
-    """
+    """ADR-0093 supersedes #449's Lane placement, not the private stage."""
     common_git_dir = _wire_repo(tmp_path).common_git_dir()
     run_id = "01JAX7QZ8K9M"
 
     lane = loop_module._lane_worktree_path(common_git_dir, run_id, 42)
     stage = loop_module._integration_worktree_path(common_git_dir, run_id, 42)
 
-    assert lane == common_git_dir / "git-loopy" / run_id / "issue-42"
+    assert lane == tmp_path.parent / f"{tmp_path.name}.issue-clones" / run_id / "issue-42"
     assert stage == common_git_dir / "git-loopy" / run_id / "integrate" / "issue-42"
     assert lane != stage
 
@@ -8572,6 +8566,95 @@ def test_a_real_lane_keeps_a_lost_session_beside_its_published_progress(
         assert end["issues"][0]["ending"] == ending
 
 
+@pytest.mark.parametrize("cancelled", [False, True], ids=["integration", "exit-salvage"])
+def test_lane_commits_in_an_issue_clone_without_changing_source_refs(
+    tmp_path, monkeypatch, cancelled
+) -> None:
+    """ADR-0093: a Lane owns its refs/config, borrowing only source objects."""
+    observed = []
+
+    class CloneSession(_NoProgressFakeSession):
+        async def send_and_wait(self, prompt, *, timeout=60.0, **extra):
+            path = Path(self._working_directory)
+            lane = git_module.SubprocessGitClient(path)
+            assert (path / ".git").is_dir()
+            assert lane.common_git_dir() != source.common_git_dir()
+            assert source.common_git_dir() not in path.parents
+            before = subprocess.check_output(
+                ["git", "-C", str(tmp_path), "show-ref"]
+            )
+            (path / "contribution.txt").write_text("issue 42\n", encoding="utf-8")
+            if cancelled:
+                # Simulate a cancellation before commit accounting can run.
+                subprocess.run(
+                    ["git", "-C", str(tmp_path), "remote", "add", "origin", str(origin)],
+                    check=True,
+                )
+                observed.append(path)
+                raise asyncio.CancelledError
+            lane.add_all()
+            lane.commit("Implement isolated contribution\n\nCloses #42")
+            assert subprocess.check_output(
+                ["git", "-C", str(tmp_path), "show-ref"]
+            ) == before
+            assert source.head_sha() == base
+            assert lane.head_sha() != base
+            observed.append(path)
+            return await super().send_and_wait(prompt, timeout=timeout, **extra)
+
+    class CloneClient(_NoProgressFakeClient):
+        _session_cls = CloneSession
+
+    _wire_rolling_run(
+        tmp_path, monkeypatch, [_make_issue(42, labels=_PARALLEL_SAFE)],
+        client_cls=CloneClient,
+    )
+    origin = tmp_path / "origin.git"
+    if cancelled:
+        # Keep the local test remote outside the source's tracked tree.
+        origin = tmp_path.parent / f"{tmp_path.name}.origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    for key, value in (
+        ("user.name", "Tester"), ("user.email", "tester@example.com"),
+        ("commit.gpgsign", "false"),
+    ):
+        subprocess.run(["git", "-C", str(tmp_path), "config", key, value], check=True)
+    (tmp_path / ".gitignore").write_text(".git-loopy/\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n| Loop | Command | When |\n| --- | --- | --- |\n"
+        f'| Proof | `{sys.executable} -c "from pathlib import Path; '
+        "assert Path('contribution.txt').read_text() == 'issue 42\\n'; "
+        f"assert not Path('{tmp_path}/contribution.txt').exists()\"` | Always |\n",
+        encoding="utf-8",
+    )
+    source = git_module.SubprocessGitClient(tmp_path)
+    source.add_all()
+    source.commit("initial")
+    base = source.head_sha()
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: source)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", loop_module.gate_module.AgentsMdGateRunner
+    )
+
+    asyncio.run(loop_module.run(_pinned_config(42, max_iterations=1)))
+
+    assert len(observed) == 1
+    if cancelled:
+        assert source.head_sha() == base
+        branch = git_module.lane_branch_name(_run_id(tmp_path), 42)
+        tip = source.branch_tip(branch)
+        assert source.commit_message(tip.sha).strip() == checkpoint_message(42)
+        assert source.probe_remote_ref("origin", f"refs/heads/{branch}") == tip.sha
+        assert not any(
+            e["type"] == "wrapper.checkpoint.recorded" for e in _logged_events(tmp_path)
+        )
+    else:
+        assert (tmp_path / "contribution.txt").read_text() == "issue 42\n"
+    assert not observed[0].exists()
+    assert source.list_issue_clones() == []
+
+
 @pytest.mark.parametrize("residue", ["clean", "dirty", "committed_timeout", "committed_crash"])
 def test_lane_retries_use_distinct_branches_with_real_git(
     tmp_path, monkeypatch, residue
@@ -8604,8 +8687,8 @@ def test_lane_retries_use_distinct_branches_with_real_git(
             raise git_module.GitError(("git", "commit"), 1, "fixture checkpoint failure")
 
     class RealGit(git_module.SubprocessGitClient):
-        def add_worktree(self, path, *, branch, base):
-            child = super().add_worktree(path, branch=branch, base=base)
+        def add_issue_clone(self, path, *, branch, base):
+            child = super().add_issue_clone(path, branch=branch, base=base)
             return CheckpointRefusedGit(child.root) if preserve_dirty_workspace else child
 
     _wire_rolling_run(
@@ -8655,17 +8738,19 @@ def test_lane_retries_use_distinct_branches_with_real_git(
     assert run_end["outcome"] == "all_skipped"
     assert exit_code == loop_module.exit_code_for("all_skipped")
     branches = [b for b in git.list_branches() if b.startswith("git-loopy/")]
-    assert len(branches) == 3
+    clones = git.list_issue_clones()
+    assert len(branches) == (0 if preserve_dirty_workspace else 3)
+    assert len(clones) == (3 if preserve_dirty_workspace else 0)
+    assert git.head_sha() == base
     if residue.startswith("committed"):
-        for branch in branches:
-            commits = git.commits_between(base, branch)
+        for clone in clones:
+            commits = git.open_worktree(clone.path).commits_between(base, "HEAD")
             assert [commit.subject for commit in commits] == ["unlanded durable work"]
-    assert len(git.list_worktrees()) == (4 if preserve_dirty_workspace else 1)
-    for wt in git.list_worktrees():
-        if wt.branch in branches and preserve_dirty_workspace:
-            assert (wt.path / "unlanded.txt").read_text() == (
-                "work that salvage could not commit\n"
-            )
+    assert len(git.list_worktrees()) == 1
+    for clone in clones:
+        assert (clone.path / "unlanded.txt").read_text() == (
+            "work that salvage could not commit\n"
+        )
 
 
 def test_a_historical_lane_skip_does_not_turn_an_empty_pool_into_all_skipped(

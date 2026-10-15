@@ -403,6 +403,18 @@ class FakeGitClient:
         except KeyError as exc:
             raise GitError(["git", "worktree", "list"], 128, f"not found: {path}") from exc
 
+    def add_issue_clone(self, path: Path, *, branch: str, base: str) -> FakeGitClient:
+        return self.add_worktree(path, branch=branch, base=base)
+
+    def list_issue_clones(self) -> list[Worktree]:
+        return []
+
+    def import_issue_clone(self, path: Path, *, branch: str) -> None:
+        pass
+
+    def remove_issue_clone(self, path: Path) -> None:
+        self.remove_worktree(path, force=True)
+
     def remove_worktree(self, path: Path, *, force: bool = False) -> None:
         """Model ``git worktree remove`` — drop the child, keep the branch.
 

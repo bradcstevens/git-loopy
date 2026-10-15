@@ -1,10 +1,12 @@
-"""``git_loopy.worktree`` — the per-Lane worktree setup seam (#65, ADR-0008).
+"""``git_loopy.worktree`` — the per-Lane environment setup seam (#65).
 
 In **Parallel mode** (ADR-0008) each **Lane** works its issue in its own git
-worktree, created in a sibling directory outside the repo. A fresh worktree has
+Issue clone (ADR-0093), created outside the source repo. A fresh clone has
 the source but not the *environment* the feedback loops need — no installed
 dependencies, no virtualenv — so before a Lane's agent session starts the runner
-**prepares** that worktree. This module is that seam.
+**prepares** that clone. The legacy module, Protocol and environment-variable
+names remain compatible; this seam needs a working directory, not a linked
+worktree.
 
 The knob is ``GIT_LOOPY_WORKTREE_SETUP``: when set, its command is run in each
 freshly created Lane worktree; when unset, a **best-effort auto-detect** picks a

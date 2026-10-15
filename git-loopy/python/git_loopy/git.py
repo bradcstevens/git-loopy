@@ -52,11 +52,13 @@ The client's mechanics:
 * :meth:`~SubprocessGitClient.range_count` — ``git rev-list --count`` for
   ``pre..head``.
 * :meth:`~SubprocessGitClient.common_git_dir` — the directory git shares
-  across this clone's worktrees, which is where a **Lane workspace** and an
-  **Integration stage** live.
+  across this clone's worktrees; **Integration stages** still live there.
+* :meth:`~SubprocessGitClient.add_issue_clone` — independent Lane refs/config,
+  borrowing source objects; import before reclamation makes the contribution
+  durable in the source and available to Integration (ADR-0093).
 * :meth:`~SubprocessGitClient.add_worktree` /
-  :meth:`~SubprocessGitClient.remove_worktree` — the Parallel-mode **Lane**
-  worktree lifecycle (ADR-0008): ``git worktree add -b <branch> <path> <base>``
+  :meth:`~SubprocessGitClient.remove_worktree` — the **Integration stage** and
+  legacy worktree lifecycle: ``git worktree add -b <branch> <path> <base>``
   returns a fresh root-bound client for the worktree (so every mechanic above
   then addresses *that* worktree), and ``git worktree remove`` tears it down
   while keeping its branch as a breadcrumb. :func:`lane_branch_name` is the pure
@@ -86,6 +88,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -199,6 +202,12 @@ class Worktree:
     path: Path
     branch: str | None
     prunable: bool = False
+
+
+def issue_clone_root(common_git_dir: Path) -> Path:
+    """A per-source sibling directory, outside the source's shared git directory."""
+    source = common_git_dir.parent if common_git_dir.name == ".git" else common_git_dir
+    return source.parent / f"{source.name}.issue-clones"
 
 
 def _run(
@@ -481,8 +490,8 @@ class GitClient(Protocol):
         """Return the directory git shares across this clone's worktrees.
 
         A repository has one common git directory and one administrative
-        directory per linked worktree. **Lane workspaces** and **Integration
-        stages** are placed under the common one: it is per-clone, it is not
+        directory per linked worktree. **Integration stages** are placed under
+        the common one: it is per-clone, it is not
         content in any working tree (so no status, staging, or clean operation
         can reach it, and it needs no ``.gitignore`` entry), and it is removed
         with the clone.
@@ -560,6 +569,22 @@ class GitClient(Protocol):
         independently of the main worktree — the same root-binding trick, one
         client per worktree. ``path`` must not already exist (git creates it).
         """
+        ...
+
+    def add_issue_clone(self, path: Path, *, branch: str, base: str) -> GitClient:
+        """Create an independently writable Lane clone borrowing source objects."""
+        ...
+
+    def list_issue_clones(self) -> list[Worktree]:
+        """Registered Issue clones, with ownership read from their current branch."""
+        ...
+
+    def import_issue_clone(self, path: Path, *, branch: str) -> None:
+        """Copy a clone's branch and objects into this source without forcing refs."""
+        ...
+
+    def remove_issue_clone(self, path: Path) -> None:
+        """Remove a registered Issue clone after its work has been imported."""
         ...
 
     def open_worktree(self, path: Path) -> GitClient:
@@ -1295,6 +1320,103 @@ class SubprocessGitClient:
             cwd=self._root,
         )
         return SubprocessGitClient(target)
+
+    def add_issue_clone(
+        self, path: Path, *, branch: str, base: str
+    ) -> SubprocessGitClient:
+        """Create a self-contained clone (ADR-0093), not a linked worktree.
+
+        The source is an object alternate only. Origin still means the source's
+        origin, never the source itself; local identity/signing settings are
+        copied rather than including the source's writable repository config.
+        Registration precedes checkout so a crash cannot strand an owned clone
+        between publishing its Reserved branch and recording its location.
+        """
+        target = Path(path).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _run(
+            ["clone", "--shared", "--no-checkout", "--single-branch", "--no-tags",
+             "--", str(self._root.resolve()), str(target)],
+            cwd=self._root,
+        )
+        _run(["config", "--add", "git-loopy.issueClone", str(target)], cwd=self._root)
+        child = SubprocessGitClient(target)
+        origin = self.remote_url("origin")
+        if origin:
+            # Resolve relative filesystem remotes before changing cwd.
+            if "://" not in origin and ":" not in origin and not Path(origin).is_absolute():
+                origin = str((self._root / origin).resolve())
+            _run(["remote", "set-url", "origin", origin], cwd=target)
+        else:
+            _run(["remote", "remove", "origin"], cwd=target)
+        for key in (
+            "user.name", "user.email", "user.signingKey", "commit.gpgsign",
+            "gpg.format", "gpg.program",
+        ):
+            value = _run(["config", "--get", key], cwd=self._root, check=False).strip()
+            if value:
+                _run(["config", key, value], cwd=target)
+        _run(["checkout", "-b", branch, base], cwd=target)
+        return child
+
+    def list_issue_clones(self) -> list[Worktree]:
+        """Locations are discovery hints, never authority to remove a directory."""
+        paths = _run(
+            ["config", "--null", "--get-all", "git-loopy.issueClone"],
+            cwd=self._root, check=False,
+        ).split("\0")
+        result = []
+        for value in dict.fromkeys(filter(None, paths)):
+            path = Path(value)
+            if (
+                path.resolve() != path
+                or (path / ".git").is_symlink()
+                or not (path / ".git").is_dir()
+            ):
+                continue
+            try:
+                child = SubprocessGitClient(path)
+                if child.common_git_dir() != path / ".git" or child.discover(path).root != path:
+                    continue
+                branch = child.current_branch()
+            except GitError:
+                continue
+            result.append(Worktree(path, branch))
+        return result
+
+    def import_issue_clone(self, path: Path, *, branch: str) -> None:
+        """Preserve the Lane in source and origin before its clone can be removed.
+
+        No force: divergence or an unreachable configured origin preserves the
+        clone for a later Sweep. Offline repositories still retain a source ref.
+        """
+        child = SubprocessGitClient(path)
+        if not is_reserved_branch(branch) or child.current_branch() != branch:
+            raise GitError(["git", "fetch"], 1, "Issue clone left its Reserved branch")
+        self.fetch_sha(str(path), f"refs/heads/{branch}", branch)
+        if self.remote_url("origin") and not self.is_merged_into(branch, "HEAD"):
+            _run(
+                ["push", "--", "origin", f"refs/heads/{branch}:refs/heads/{branch}"],
+                cwd=self._root,
+            )
+
+    def remove_issue_clone(self, path: Path) -> None:
+        """Reclaim an owned clone; callers must import its work before removal."""
+        target = Path(path).absolute()
+        owned = any(
+            clone.path == target and is_reserved_branch(clone.branch or "")
+            for clone in self.list_issue_clones()
+        )
+        if not owned or target.resolve() == self._root.resolve():
+            raise GitError(["git", "clone"], 1, "not a registered owned Issue clone")
+        try:
+            shutil.rmtree(target)
+        except OSError as exc:
+            raise GitError(["git", "clone"], 1, str(exc)) from exc
+        _run(
+            ["config", "--fixed-value", "--unset-all", "git-loopy.issueClone", str(target)],
+            cwd=self._root,
+        )
 
     def open_worktree(self, path: Path) -> SubprocessGitClient:
         """Return a client bound to the existing registered worktree at ``path``."""
