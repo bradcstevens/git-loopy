@@ -9,6 +9,13 @@ boundary before any public tag exists.
 the major-bump exemption is withdrawn, so a closed milestone is the only
 Promotion trigger; the rehearsal's `--major-bump` trigger is now `--stable-commit`.
 
+**Amended by [ADR-0094](0094-a-promotion-proves-the-installation-it-ships-and-declares-the-live-proof-it-cannot-obtain.md):**
+the live smoke is no longer an unconditional condition of every stable
+Promotion. A Promotion runs an **Installation proof** of the same publication
+input, and publishes without the smoke only where the tagged trust policy
+declares it an **Unavailable proof** — reasoned, owed to a named issue, and
+never inferred from absent credentials. Everything else below stands.
+
 Amends the publication ordering of
 [ADR-0052](0052-the-release-line-advances-per-issue.md), not its Release target,
 Bump class, or unattended Promotion policy. Closing an existing matching
