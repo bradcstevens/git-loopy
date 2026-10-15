@@ -338,11 +338,18 @@ def test_a_promotion_that_is_not_source_only_is_refused_before_it_rehearses(
     assert not (tmp_path / "candidate").exists()
 
 
+@pytest.mark.parametrize("declared", [False, True], ids=["absent", "declared"])
 def test_missing_smoke_credentials_refuse_before_any_tag_exists(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, declared: bool,
 ) -> None:
-    """Limits and authorization are never invented to make the check run."""
+    """Neither absence nor the not-yet-consumed declaration can skip smoke."""
     trunk = trunk_repository(tmp_path / "trunk", VERSION)
+    if not declared:
+        policy_path = trunk / "git-loopy/conformance/release-trust.json"
+        document = json.loads(policy_path.read_text(encoding="utf-8"))
+        document.pop("unavailable_proofs")
+        policy_path.write_text(json.dumps(document), encoding="utf-8")
+        _commit_policy_before_release(trunk)
     for name in (
         "GIT_LOOPY_SMOKE_TOKEN",
         "GIT_LOOPY_SMOKE_REPOSITORY",
@@ -377,6 +384,75 @@ def test_missing_smoke_credentials_refuse_before_any_tag_exists(
     # so the evidence path uses that commit.
     assert evidence.is_file()
     assert json.loads(evidence.read_text(encoding="utf-8"))["verdict"] == "blocked"
+
+
+@pytest.mark.parametrize(
+    ("defect", "diagnostic"),
+    [
+        ("unknown", "unknown kind"),
+        ("malformed", "unavailable_proofs"),
+        ("invalid-json", "cannot read trust policy"),
+        ("invalid-utf8", "cannot read trust policy"),
+        ("missing", "trust policy must be committed"),
+        ("artifact-bearing", "Inconsistent distribution mode"),
+    ],
+)
+def test_a_committed_policy_refusal_precedes_smoke_and_publication(
+    tmp_path: Path, defect: str, diagnostic: str,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", VERSION)
+    policy_path = trunk / "git-loopy/conformance/release-trust.json"
+    document = json.loads(policy_path.read_text(encoding="utf-8"))
+    if defect == "unknown":
+        document["unavailable_proofs"][0]["kind"] = "unknown-proof"
+    elif defect == "malformed":
+        document["unavailable_proofs"][0].pop("issue")
+    elif defect == "artifact-bearing":
+        document["distribution_mode"] = "artifact-bearing"
+    policy_path.write_text(json.dumps(document), encoding="utf-8")
+    if defect == "invalid-json":
+        policy_path.write_bytes(b"{")
+    elif defect == "invalid-utf8":
+        policy_path.write_bytes(b"\xff")
+    elif defect == "missing":
+        policy_path.unlink()
+    _commit_policy_before_release(trunk)
+    remote, checkout = _remote_checkout_from_trunk(trunk, tmp_path)
+    service = FakeReleaseService()
+    smoke = RecordingSmoke()
+
+    with pytest.raises(ReleasePromotionError, match=diagnostic):
+        promote_candidate(
+            checkout,
+            stable_commit_promotion(),
+            workspace=tmp_path / "candidate",
+            archive_output=tmp_path / "archive.tar",
+            evidence_output=tmp_path / "evidence.json",
+            gate_runner=GATE_RUNNER,
+            release_service=service,
+            smoke=smoke,
+            distribution_mode=SOURCE_ONLY,
+        )
+
+    assert smoke.proofs == []
+    assert service.create_calls == []
+    assert service.releases == {}
+    assert f"refs/tags/{TAG}" not in _remote_refs(remote)
+
+
+def _commit_policy_before_release(trunk: Path) -> None:
+    """A policy edit precedes the Release commit, which may only move versions."""
+    path = trunk / "git-loopy/conformance/release-trust.json"
+    content = path.read_bytes() if path.exists() else None
+    release_commit = git(trunk, "rev-parse", "HEAD")
+    git(trunk, "reset", "--hard", "HEAD^")
+    if content is None:
+        path.unlink()
+    else:
+        path.write_bytes(content)
+    git(trunk, "add", ".")
+    git(trunk, "commit", "--amend", "--no-edit", "-q")
+    git(trunk, "cherry-pick", release_commit)
 
 
 def _remote_checkout_from_trunk(trunk: Path, tmp_path: Path) -> tuple[Path, Path]:

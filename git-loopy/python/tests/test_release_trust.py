@@ -21,6 +21,7 @@ import pytest
 import yaml
 
 from git_loopy import release_trust, tui_release
+from git_loopy.distribution_mode import DistributionModeError, read_trust_policy
 
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
@@ -31,6 +32,122 @@ RELEASE_VERSION_FIXTURE: dict[str, Any] = json.loads(
         encoding="utf-8"
     )
 )
+
+
+def test_an_unavailable_proof_preserves_its_kind_reason_and_owed_issue(
+    tmp_path: Path,
+) -> None:
+    document = dict(FIXTURE)
+    document["unavailable_proofs"] = [
+        {"kind": "release-smoke", "reason": " No disposable sandbox is available. ", "issue": 756}
+    ]
+    path = tmp_path / "git-loopy/conformance/release-trust.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    policy = release_trust.load_trust_policy(tmp_path)
+
+    assert len(policy.unavailable_proofs) == 1
+    proof = policy.unavailable_proofs[0]
+    assert proof.kind == "release-smoke"
+    assert proof.reason == " No disposable sandbox is available. "
+    assert proof.issue == 756
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        None,
+        {},
+        "release-smoke",
+        [None],
+        ["release-smoke"],
+        [{}],
+        [{"kind": "unknown-proof", "reason": "Unavailable", "issue": 756}],
+        [{"kind": ["release-smoke"], "reason": "Unavailable", "issue": 756}],
+        [{"kind": "release-smoke", "issue": 756}],
+        [{"kind": "release-smoke", "reason": "", "issue": 756}],
+        [{"kind": "release-smoke", "reason": " \n ", "issue": 756}],
+        [{"kind": "release-smoke", "reason": 756, "issue": 756}],
+        [{"kind": "release-smoke", "reason": "Unavailable"}],
+        [{"kind": "release-smoke", "reason": "Unavailable", "issue": True}],
+        [{"kind": "release-smoke", "reason": "Unavailable", "issue": 0}],
+        [{"kind": "release-smoke", "reason": "Unavailable", "issue": -756}],
+        [{"kind": "release-smoke", "reason": "Unavailable", "issue": "756"}],
+        [{"kind": "release-smoke", "reason": "Unavailable", "issue": 756.0}],
+        [{"kind": "release-smoke", "reason": "Unavailable", "issue": 756, "typo": True}],
+        [{"kind": "release-smoke", "reason": "Unavailable", "issue": 756}] * 2,
+    ],
+)
+def test_an_invalid_unavailable_proof_is_refused_by_both_policy_readers(
+    tmp_path: Path, declaration: Any,
+) -> None:
+    document = dict(FIXTURE, unavailable_proofs=declaration)
+    path = tmp_path / "git-loopy/conformance/release-trust.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(DistributionModeError, match="unavailable_proofs") as refusal:
+        read_trust_policy(path)
+    assert str(path) in str(refusal.value)
+    with pytest.raises(release_trust.ReleaseTrustError, match="unavailable_proofs"):
+        release_trust.load_trust_policy(tmp_path)
+
+
+def test_the_repository_declares_the_live_release_smoke_owed_to_issue_756() -> None:
+    policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+
+    assert policy.schema_version == 2
+    assert len(policy.unavailable_proofs) == 1
+    proof = policy.unavailable_proofs[0]
+    assert proof.kind == "release-smoke"
+    assert proof.issue == 756
+    assert "sandbox" in proof.reason
+    assert "credential" in proof.reason
+
+
+@pytest.mark.parametrize("empty", [None, []], ids=["absent", "empty"])
+def test_a_policy_can_declare_no_unavailable_proof(tmp_path: Path, empty: Any) -> None:
+    document = dict(FIXTURE)
+    document.pop("unavailable_proofs", None)
+    if empty is not None:
+        document["unavailable_proofs"] = empty
+    path = tmp_path / "git-loopy/conformance/release-trust.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    assert release_trust.load_trust_policy(tmp_path).unavailable_proofs == ()
+
+
+@pytest.mark.parametrize("content", [b"\xff", b"{", b"null"])
+def test_an_unreadable_policy_never_defaults_to_no_unavailable_proofs(
+    tmp_path: Path, content: bytes,
+) -> None:
+    path = tmp_path / "git-loopy/conformance/release-trust.json"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(content)
+
+    with pytest.raises(release_trust.ReleaseTrustError, match="trust policy") as refusal:
+        release_trust.load_trust_policy(tmp_path)
+    assert str(path) in str(refusal.value)
+
+
+def test_a_policy_read_error_is_an_actionable_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "git-loopy/conformance/release-trust.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(FIXTURE), encoding="utf-8")
+
+    def denied(*args: Any, **kwargs: Any) -> str:
+        raise PermissionError("policy access denied")
+
+    monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(
+        release_trust.ReleaseTrustError, match="policy access denied"
+    ) as refusal:
+        release_trust.load_trust_policy(tmp_path)
+    assert str(path) in str(refusal.value)
 
 
 def test_every_published_target_has_a_declared_signing_mechanism() -> None:
