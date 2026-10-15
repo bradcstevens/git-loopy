@@ -20,8 +20,10 @@ from .skill_source import read_skill_source_pin
 _AGENT_FILE = "git-loopy-planner.agent.md"
 _REFUSED_ARGUMENTS = frozenset({
     "--agent", "--interactive", "--prompt", "--fleet", "--resume", "--continue",
-    "--model", "--reasoning-effort", "--context",
+    "--model", "--reasoning-effort", "--effort", "--context",
 })
+# Copilot bundles its valueless short switches before value-taking ones.
+_REFUSED_SHORT_ARGUMENT = re.compile(r"^-[svh]*[ipr]")
 
 
 def run_plan(args: argparse.Namespace, *, passthrough: list[str]) -> int:
@@ -33,8 +35,9 @@ def run_plan(args: argparse.Namespace, *, passthrough: list[str]) -> int:
 
     try:
         for argument in passthrough:
-            if argument.partition("=")[0] in _REFUSED_ARGUMENTS or argument.startswith(
-                ("-i", "-p", "-r")
+            if (
+                argument.partition("=")[0] in _REFUSED_ARGUMENTS
+                or _REFUSED_SHORT_ARGUMENT.match(argument)
             ):
                 raise ValueError(
                     f"refused Copilot pass-through argument {argument!r}: "
@@ -65,8 +68,7 @@ def run_plan(args: argparse.Namespace, *, passthrough: list[str]) -> int:
         for warning in route.gate_warnings:
             warn(str(warning))
         context_named = (
-            args.context_tier is not None
-            or bool(os.environ.get("GIT_LOOPY_CONTEXT_TIER", "").strip())
+            resolved.run.context_tier_override
             or tables.project.get("context_tier") is not None
             or tables.global_.get("context_tier") is not None
         )

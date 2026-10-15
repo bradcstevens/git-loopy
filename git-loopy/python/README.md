@@ -344,9 +344,11 @@ file to remove or rename. `copilot` must resolve on `PATH` and be at least
 
 Arguments after `--` pass through unchanged, except `--agent`, `-i` /
 `--interactive`, `-p` / `--prompt`, `--fleet`, `--resume` (including `-r` and
-`--continue`), `--model`, `--reasoning-effort`, and `--context`. These would
+`--continue`), `--model`, `--reasoning-effort` (including its `--effort` alias),
+and `--context`. These would
 replace the Planner, its prompt, session, or Routing. Attached values such as
-`--agent=other` and `-pother` are refused too. Use the plan command's own three
+`--agent=other` and `-pother`, and short-option bundles such as `-spother`,
+are refused too. Use the plan command's own three
 flags for model, effort, and context.
 
 On POSIX the launcher execs Copilot, retaining the PID that owns the root.

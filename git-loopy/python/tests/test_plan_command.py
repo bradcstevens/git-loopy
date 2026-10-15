@@ -137,7 +137,8 @@ def test_plan_refuses_a_shadowing_agent(
     "--agent", "--agent=other", "-i", "-iother", "--interactive=other",
     "-p", "-pother", "--prompt=other", "--fleet", "--fleet=true", "--resume",
     "--resume=old", "-r", "-rold", "--continue", "--model=other",
-    "--reasoning-effort=low", "--context=long_context",
+    "--reasoning-effort=low", "--effort", "--effort=low", "--context=long_context",
+    "-spother", "-siother", "-srold",
 ])
 def test_plan_refuses_launch_replacing_passthrough(
     planning_home: Path, harness: list[list[str]], argument: str,
@@ -147,6 +148,13 @@ def test_plan_refuses_launch_replacing_passthrough(
     assert argument in capsys.readouterr().err
     assert harness == []
     assert not (planning_home / ".config/git-loopy/planner").exists()
+
+
+def test_passthrough_short_option_values_are_not_mistaken_for_flags(
+    planning_home: Path, harness: list[list[str]],
+) -> None:
+    assert cli.main(["plan", "--", "-n", "planning", "-nplanning", "-snplanning"]) == 0
+    assert harness[0][-4:] == ["-n", "planning", "-nplanning", "-snplanning"]
 
 
 @pytest.mark.parametrize(("version", "code", "allowed", "warning"), [
