@@ -207,16 +207,21 @@ clean -ffxd`, and is skipped by tree-walking feedback loops — with **no
 `.gitignore` entry**, so nothing about your repository has to change to make it
 so. It is also per-source-clone: Runs from linked worktrees resolve the same
 source workspace root, but independent source clones do not share one. Issue
-clones are registered in source-local git config before their Reserved branch
-is checked out, so crash recovery can discover them independently of layout.
+clones reserve their branch namespace in source-local git config before cloning.
+An interrupted setup is reclaimed from that preparing reservation, before any
+Agent can enter it; once setup finishes, its current Reserved branch owns it.
+Crash recovery therefore discovers clones independently of layout.
 Deleting the source manually does not delete its sibling Issue clones.
 
 The Agent commits only in its Issue clone. Before reclaiming it, the Runner
-fetches its named Lane branch into the source and pushes unlanded work to the
-source's configured origin (when present), without forcing either ref.
+fetches its named Lane branch into the source without forcing the ref.
+Salvage Checkpoints also get a best-effort push to the source's configured
+origin. Ordinary Lane completion does not require a remote push.
 Integration reads the imported branch and still gates its merge in the private
 stage; no unverified merge reaches base. A failed import, push or removal
-preserves the clone for retry. The clone's origin is the source's upstream
+preserves the clone for retry. A failed Checkpoint push does not block
+Integration of work already imported into the source, or classify the Agent as
+a breach. The clone's origin is the source's upstream
 origin, not the source itself; the source object store is an alternate, not a
 writable shared refs/config directory. Sandbox-policy forwarding is a separate
 obligation; Issue clones do not themselves enforce filesystem permissions.

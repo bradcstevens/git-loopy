@@ -409,11 +409,11 @@ class FakeGitClient:
     def list_issue_clones(self) -> list[Worktree]:
         return []
 
-    def import_issue_clone(self, path: Path, *, branch: str) -> None:
-        pass
-
-    def remove_issue_clone(self, path: Path) -> None:
+    def reclaim_issue_clone(
+        self, path: Path, *, branch: str, checkpoint: bool = False
+    ) -> bool:
         self.remove_worktree(path, force=True)
+        return True
 
     def remove_worktree(self, path: Path, *, force: bool = False) -> None:
         """Model ``git worktree remove`` — drop the child, keep the branch.

@@ -10,7 +10,7 @@ import pytest
 
 from git_loopy import sweepcmd
 from git_loopy.gh import Issue, Repo
-from git_loopy.git import SubprocessGitClient, integration_branch_name, lane_branch_name
+from git_loopy.git import GitError, SubprocessGitClient, integration_branch_name, lane_branch_name
 from git_loopy.run_control import RunControlArtifact, advisory_locking_available
 from git_loopy.sweep import SweepReport, sweep
 from git_loopy.wrapper import checkpoint_message, is_checkpoint_message
@@ -389,6 +389,55 @@ def test_sweep_preserves_clone_when_branch_cannot_be_saved(
         checkpoint = clone.head_sha()
         assert sweep(**options).worktrees == (clone.root,)
         assert source.probe_remote_ref("origin", f"refs/heads/{branch}") == checkpoint
+
+
+def test_failed_issue_clone_setup_removes_its_partial_clone(tmp_path: Path) -> None:
+    source = _real_repo(tmp_path)
+    path = tmp_path / "clone"
+
+    with pytest.raises(GitError):
+        source.add_issue_clone(
+            path, branch=lane_branch_name("RUNDEAD", 7), base="missing-revision"
+        )
+
+    assert not path.exists()
+    assert source.list_issue_clones() == []
+
+
+def test_sweep_recovers_a_crash_during_issue_clone_setup(tmp_path, monkeypatch) -> None:
+    """The process can die after git clone, before its first checkout."""
+    source = _real_repo(tmp_path)
+    path = tmp_path / "clone"
+    run = subprocess.run
+
+    def crash_after_clone(args, **kwargs):
+        result = run(args, **kwargs)
+        if args[:2] == ["git", "clone"]:
+            raise SystemExit("simulated process death after clone")
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "run", crash_after_clone)
+        with pytest.raises(SystemExit):
+            source.add_issue_clone(
+                path, branch=lane_branch_name("RUNDEAD", 7), base="main"
+            )
+    assert path.exists()
+    assert not sweep(
+        git=SubprocessGitClient(source.root), github=None,
+        control_dir=source.root / ".git-loopy" / "logs",
+        base_branch="main", dry_run=False, liveness=lambda _: True,
+    ).reclaimed_anything
+
+    report = sweep(
+        git=SubprocessGitClient(source.root), github=None,
+        control_dir=source.root / ".git-loopy" / "logs",
+        base_branch="main", dry_run=False, liveness=lambda _: False,
+    )
+
+    assert report.worktrees == (path,)
+    assert not path.exists()
+    assert source.list_issue_clones() == []
 
 
 def test_sweep_removes_an_empty_legacy_directory_after_reclaiming_its_lane(

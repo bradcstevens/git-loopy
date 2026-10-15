@@ -238,7 +238,7 @@ class _ParallelFakeSession:
             )
             # The Lane's agent commit references its issue so the reused serial
             # closure path fires at Integration. The worktree dir is named
-            # ``issue-<N>`` (see ``_lane_worktree_path``), so parse N from it.
+            # ``issue-<N>`` (see ``_issue_clone_path``), so parse N from it.
             ref = Path(self._working_directory).name.removeprefix("issue-")
             body = f"Closes #{ref}"
         else:
@@ -2566,7 +2566,7 @@ def test_parallel_workspace_paths_separate_issue_clones_from_integration(
     common_git_dir = _wire_repo(tmp_path).common_git_dir()
     run_id = "01JAX7QZ8K9M"
 
-    lane = loop_module._lane_worktree_path(common_git_dir, run_id, 42)
+    lane = loop_module._issue_clone_path(common_git_dir, run_id, 42)
     stage = loop_module._integration_worktree_path(common_git_dir, run_id, 42)
 
     assert lane == tmp_path.parent / f"{tmp_path.name}.issue-clones" / run_id / "issue-42"
@@ -8566,9 +8566,13 @@ def test_a_real_lane_keeps_a_lost_session_beside_its_published_progress(
         assert end["issues"][0]["ending"] == ending
 
 
-@pytest.mark.parametrize("cancelled", [False, True], ids=["integration", "exit-salvage"])
+@pytest.mark.parametrize(
+    ("cancelled", "offline", "leave_dirty"),
+    [(False, False, False), (True, False, True), (False, True, False), (False, True, True)],
+    ids=["integration", "exit-salvage", "offline-integration", "offline-checkpoint"],
+)
 def test_lane_commits_in_an_issue_clone_without_changing_source_refs(
-    tmp_path, monkeypatch, cancelled
+    tmp_path, monkeypatch, cancelled, offline, leave_dirty
 ) -> None:
     """ADR-0093: a Lane owns its refs/config, borrowing only source objects."""
     observed = []
@@ -8584,21 +8588,23 @@ def test_lane_commits_in_an_issue_clone_without_changing_source_refs(
                 ["git", "-C", str(tmp_path), "show-ref"]
             )
             (path / "contribution.txt").write_text("issue 42\n", encoding="utf-8")
-            if cancelled:
-                # Simulate a cancellation before commit accounting can run.
+            if cancelled or offline:
                 subprocess.run(
                     ["git", "-C", str(tmp_path), "remote", "add", "origin", str(origin)],
                     check=True,
                 )
+            if cancelled:
+                # Simulate a cancellation before commit accounting can run.
                 observed.append(path)
                 raise asyncio.CancelledError
-            lane.add_all()
-            lane.commit("Implement isolated contribution\n\nCloses #42")
+            if not leave_dirty:
+                lane.add_all()
+                lane.commit("Implement isolated contribution\n\nCloses #42")
             assert subprocess.check_output(
                 ["git", "-C", str(tmp_path), "show-ref"]
             ) == before
             assert source.head_sha() == base
-            assert lane.head_sha() != base
+            assert (lane.head_sha() != base) is not leave_dirty
             observed.append(path)
             return await super().send_and_wait(prompt, timeout=timeout, **extra)
 
@@ -8651,8 +8657,12 @@ def test_lane_commits_in_an_issue_clone_without_changing_source_refs(
         )
     else:
         assert (tmp_path / "contribution.txt").read_text() == "issue 42\n"
-    assert not observed[0].exists()
-    assert source.list_issue_clones() == []
+    if offline and leave_dirty:
+        assert observed[0].exists()
+        assert len(source.list_issue_clones()) == 1
+    else:
+        assert not observed[0].exists()
+        assert source.list_issue_clones() == []
 
 
 @pytest.mark.parametrize("residue", ["clean", "dirty", "committed_timeout", "committed_crash"])

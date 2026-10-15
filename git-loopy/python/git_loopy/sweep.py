@@ -257,7 +257,7 @@ def _holds_unseen_work(
       about a path, and a link makes that claim unverifiable — salvage would
       stage and commit whatever checkout the link actually points at.
     """
-    if worktree.prunable or stage or worktree.path.is_symlink():
+    if worktree.prunable or worktree.preparing or stage or worktree.path.is_symlink():
         return False
     workspace = git.open_worktree(worktree.path)
     return workspace.is_dirty() or workspace.has_untracked()
@@ -283,7 +283,6 @@ def _reclaim_dead_workspaces(
     worktrees: list[git_module.Worktree],
     dry_run: bool,
     liveness: Callable[[str], bool | None],
-    issue_clones: frozenset[Path] = frozenset(),
 ) -> tuple[list[Path], set[str]]:
     """**Salvage** and reclaim every workspace whose Run is provably dead.
 
@@ -330,9 +329,15 @@ def _reclaim_dead_workspaces(
                     workspace_git = git.open_worktree(worktree.path)
                     workspace_git.add_all()
                     workspace_git.commit(checkpoint_message(residue.issue))
-                if worktree.path in issue_clones:
-                    git.import_issue_clone(worktree.path, branch=residue.branch)
-                    git.remove_issue_clone(worktree.path)
+                if worktree.issue_clone:
+                    checkpoint = not worktree.preparing and _tip_is_a_checkpoint(
+                        git.open_worktree(worktree.path), residue.branch
+                    )
+                    if not git.reclaim_issue_clone(
+                        worktree.path, branch=residue.branch, checkpoint=checkpoint
+                    ):
+                        withheld.add(residue.branch)
+                        continue
                 else:
                     git.remove_worktree(worktree.path, force=True)
         except git_module.GitError:
@@ -428,7 +433,8 @@ def _collect_resolved_branches(
     collected: list[str] = []
     closed: dict[int, bool] = {}
     pending = {
-        clone.branch: clone.path for clone in pending_imports if clone.branch is not None
+        clone.branch: clone.path for clone in pending_imports
+        if clone.branch is not None and not clone.preparing
     }
     for branch in sorted(set(git.list_branches()) | pending.keys()):
         residue = _parse_residue(branch)
@@ -513,7 +519,6 @@ def sweep(
     run_liveness = _liveness_by_run(_control_dirs(control_dir, worktrees), liveness)
     reclaimed_paths, withheld = _reclaim_dead_workspaces(
         git=git, worktrees=[*worktrees, *clones], dry_run=dry_run, liveness=run_liveness,
-        issue_clones=frozenset(clone.path for clone in clones),
     )
     branches = _collect_resolved_branches(
         git=git,

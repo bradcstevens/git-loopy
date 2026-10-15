@@ -320,6 +320,7 @@ from git_loopy.telemetry import otel as telemetry
 from git_loopy.ui import Renderer, RunSummary, get_console
 from git_loopy.wrapper import (
     checkpoint_message,
+    is_checkpoint_message,
     did_iteration_make_progress,
     exit_code_for,
     extract_close_refs,
@@ -772,7 +773,7 @@ def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
     return "\n".join(parts)
 
 
-def _lane_worktree_path(
+def _issue_clone_path(
     common_git_dir: Path, run_id: str, issue_number: int | str
 ) -> Path:
     """Issue clone keyed by Run, setup attempt and issue (ADR-0093).
@@ -817,7 +818,7 @@ def _integration_worktree_path(
     reaches base — alongside the Lane workspaces under the same per-run
     directory but in an ``integrate/`` subgroup, so it never collides with the
     Lane's own ``issue-<N>`` workspace. The leaf stays ``issue-<N>`` (matching
-    :func:`_lane_worktree_path`) so the workspace still addresses exactly one
+    :func:`_issue_clone_path`) so the workspace still addresses exactly one
     issue. Bounded auto-resolution for a red / conflicting contribution reuses
     the stage that contribution was already staged in, so recovery costs no
     extra workspace.
@@ -4300,7 +4301,7 @@ class _Loop:
 
 @dataclass
 class _LaneWork:
-    """Mutable per-Lane-contribution state: worktree, branch, and pre-SHA.
+    """Mutable per-Lane-contribution state: Issue clone, branch, and pre-SHA.
 
     Keyed by :attr:`~git_loopy.rolling_scheduler.Contribution.contribution_id`
     (never ``lane_id``) in ``_ParallelLoop._lane_work`` — #219 §7 / ADR-0020
@@ -4326,6 +4327,7 @@ class _LaneWork:
     git: git_module.GitClient
     pre_sha: str | None = None
     reclaimed: bool = False
+    source_imported: bool = False
     # Publications already on base when this Lane was cut. Drift is the
     # later count minus this snapshot; a cut this Run did not observe has
     # no snapshot, and the observation is null rather than a guessed zero.
@@ -6269,7 +6271,7 @@ class _ParallelLoop:
         self._lane_setup_attempts[ref] = self._lane_setup_attempts.get(ref, 0) + 1
         workspace_run_id = self._lane_workspace_run_id(ref)
         branch = git_module.lane_branch_name(workspace_run_id, ref)
-        path = _lane_worktree_path(self._workspace_root, workspace_run_id, ref)
+        path = _issue_clone_path(self._workspace_root, workspace_run_id, ref)
         try:
             wt_git = self._git.add_issue_clone(path, branch=branch, base=base)
         except git_module.GitError as exc:
@@ -6656,7 +6658,7 @@ class _ParallelLoop:
             dirty, untracked = False, False
             verification_error = f"could not verify worktree state: {exc}"
         self._salvage_and_reclaim_lane_workspace(lane_work)
-        if not lane_work.reclaimed and not dirty and not untracked:
+        if not lane_work.source_imported and not dirty and not untracked:
             verification_error = "could not preserve the Issue clone in the source"
         return execution_host_module.LocalRunResult(
             branch=lane_work.branch,
@@ -6842,14 +6844,15 @@ class _ParallelLoop:
         if lane_work.reclaimed:
             return
         try:
-            self._git.import_issue_clone(lane_work.path, branch=lane_work.branch)
-            self._git.remove_issue_clone(lane_work.path)
+            checkpoint = is_checkpoint_message(lane_work.git.branch_tip(lane_work.branch).message)
+            lane_work.reclaimed = self._git.reclaim_issue_clone(
+                lane_work.path, branch=lane_work.branch, checkpoint=checkpoint
+            )
+            lane_work.source_imported = True
         except git_module.GitError as exc:
             self._diag.warning(
                 "Issue clone import/reclaim for %s failed: %s", lane_work.path, exc
             )
-        else:
-            lane_work.reclaimed = True
 
     def _reclaim_open_lane_workspaces(self) -> None:
         """Close out every Lane still live when the Rolling driver exits (#452).

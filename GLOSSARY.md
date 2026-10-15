@@ -1705,7 +1705,7 @@ failure, TODO, backlog entry.
 
 **Parallel mode**:
 The execution mode in which the runner works several independent issues at once,
-each isolated in its own worktree. The Python Runner is always in it: a bare
+each isolated in its own **Issue clone**. The Python Runner is always in it: a bare
 `git-loopy` uses **Rolling dispatch**, and the serial loop is an **Iteration
 driver** for a Run with no Lane work, announced only by the degraded and
 serial-fallback Events. Shell and PowerShell declare `parallel_mode`
@@ -1716,7 +1716,7 @@ _Avoid_: concurrent mode, multi mode, opt-in mode.
 **Rolling dispatch**:
 The **Parallel mode** scheduling model that continuously refills reusable **Lanes**
 instead of grouping them behind a barrier. It fills toward the **Lane cap** while
-eligible work and **Integration** admission capacity exist; worktree setup, Lane work,
+eligible work and **Integration** admission capacity exist; Issue clone setup, Lane work,
 and Integration may overlap.
 _Avoid_: Wave, batch, cohort, sliding window.
 
@@ -1823,7 +1823,7 @@ _Avoid_: branch prefix, runner branches, worktree directory.
 
 **Sweep**:
 Reclaiming residue **no live Run owns** — a dead Run's **Lane workspaces**, its resolved
-branches, and the empty directories every reclaimed worktree leaves behind. It runs at the
+branches, and the empty directories every reclaimed workspace leaves behind. It runs at the
 start of every Run, for that Run's dead predecessors, and on demand as `git-loopy sweep`
 (with a dry run) for when nothing is running at all. Liveness needs no new mechanism: the
 per-Run control artifact's advisory lock already says *lock free ⇒ Run dead ⇒ its
