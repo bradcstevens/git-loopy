@@ -12,6 +12,7 @@ refusals, limits and readback without being the live proof itself.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -361,6 +362,8 @@ def test_missing_credentials_block_before_any_service_is_touched(
     assert world["made"] == []
     assert world["installer"].calls == []
     assert evidence["candidate"]["proof"] == _payload(rehearsed)["proof"]
+    assert evidence["requested_execution_hosts"] == ["local", "github-actions"]
+    assert evidence["execution_hosts"] == []
 
 
 @pytest.mark.parametrize(
@@ -488,6 +491,7 @@ def test_a_clean_candidate_passes_on_both_hosts_through_the_public_commands(
     assert evidence["candidate"]["proof"] == proved["proof"]
     assert evidence["candidate"]["archive_digest"] == proved["archive_digest"]
     assert evidence["execution_hosts"] == ["local", "github-actions"]
+    assert evidence["requested_execution_hosts"] == ["local", "github-actions"]
     assert evidence["host"]["platform"] == sys.platform
     assert "0.11.0" in _observation(evidence, "clean-install")["detail"]
     for host in ("local", "github-actions"):
@@ -560,6 +564,8 @@ def test_the_work_limit_admits_no_run_beyond_it(
     assert _observation(evidence, "admission", "github-actions")["status"] == "not-admitted"
     assert [issue["host"] for issue in world["sandbox"].issues.values()] == ["local"]
     assert evidence["ledger"]["runs_started"] == 1
+    assert evidence["requested_execution_hosts"] == ["local", "github-actions"]
+    assert evidence["execution_hosts"] == ["local"]
 
 
 def test_spend_beyond_the_limit_is_blocking_and_admits_nothing_more(
@@ -662,6 +668,106 @@ def test_promotion_can_only_reuse_evidence_for_the_candidate_it_proved(
         release_smoke.confirm_smoke_evidence(
             json.loads(local_only.read_text(encoding="utf-8")), proved
         )
+
+
+@pytest.mark.parametrize("observed", [[], ["local"]])
+def test_confirmation_judges_observed_hosts_not_requested_hosts(
+    rehearsed: Path, observed: list[str]
+) -> None:
+    proved = _payload(rehearsed)
+    evidence = {
+        "schema": release_smoke.EVIDENCE_SCHEMA,
+        "verdict": "passed",
+        "candidate": {"proof": proved["proof"]},
+        "requested_execution_hosts": ["local", "github-actions"],
+        "execution_hosts": observed,
+    }
+    evidence["evidence_digest"] = hashlib.sha256(
+        json.dumps(evidence, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(release_smoke.SmokeEvidenceError, match="not every Execution host"):
+        release_smoke.confirm_smoke_evidence(evidence, proved)
+
+
+def test_installation_and_wizard_cancellation_need_no_smoke_inputs(
+    rehearsed: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second caller crosses the same installation seam, entirely offline."""
+    from collections.abc import Mapping
+
+    class Ambient(Mapping[str, str]):
+        def __init__(self, values: dict[str, str]) -> None:
+            self._values = values
+
+        def __iter__(self):
+            return iter(self._values)
+
+        def __len__(self) -> int:
+            return len(self._values)
+
+        def __getitem__(self, key: str) -> str:
+            if key.startswith("GIT_LOOPY_SMOKE_"):
+                raise AssertionError(f"credential-free caller read {key}")
+            return self._values[key]
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("credential-free installation resolved smoke configuration")
+
+    for name in ("resolve_authorization", "resolve_limits", "_make_sandbox"):
+        monkeypatch.setattr(release_smoke, name, forbidden)
+    for name in list(os.environ):
+        if name.startswith("GIT_LOOPY_SMOKE_"):
+            monkeypatch.delenv(name)
+    foreign = tmp_path / "foreign-bin"
+    foreign.mkdir()
+    for name in ("git-loopy", "git-loopy-tui"):
+        tool = foreign / name
+        tool.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+        tool.chmod(0o755)
+    ambient = Ambient({
+        **os.environ,
+        "PATH": f"{foreign}{os.pathsep}{os.environ['PATH']}",
+        "GH_TOKEN": "ambient",
+        "GITHUB_TOKEN": "ambient",
+        "COPILOT_GITHUB_TOKEN": "ambient",
+        "GH_ENTERPRISE_TOKEN": "ambient",
+        "GITHUB_ENTERPRISE_TOKEN": "ambient",
+        "GH_REPO": "not/a-sandbox",
+        "GH_HOST": "github.example.invalid",
+        "GH_CONFIG_DIR": str(tmp_path / "foreign-gh"),
+        "GIT_LOOPY_EXECUTION_HOST": "github-actions",
+        "GIT_LOOPY_SMOKE_TOKEN": "must-not-be-read",
+        "GIT_LOOPY_SMOKE_REPOSITORY": "must-not-be-read",
+        "GIT_LOOPY_SMOKE_MAX_RUNS": "must-not-be-read",
+        "UV_DEFAULT_INDEX": "https://packagefeedproxy.microsoft.io/pypi/simple/",
+    })
+    installed = release_smoke.install_candidate(
+        release_smoke.bind_candidate(_payload(rehearsed)),
+        workspace=tmp_path / "installation",
+        installer=_Installer(),
+        ambient=ambient,
+    )
+
+    assert installed.executable.is_file()
+    assert shutil.which("git-loopy", path=installed.env["PATH"]) == str(installed.executable)
+    assert str(foreign) not in installed.env["PATH"].split(os.pathsep)
+    assert not any(key.startswith("GIT_LOOPY_") for key in installed.env)
+    assert not {
+        "GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN", "GH_REPO", "GH_HOST", "GH_CONFIG_DIR",
+    } & installed.env.keys()
+    assert installed.env["UV_DEFAULT_INDEX"] == "https://packagefeedproxy.microsoft.io/pypi/simple/"
+    assert installed.env["HOME"] == str(tmp_path / "installation" / "home")
+    assert installed.env["XDG_CONFIG_HOME"] == str(tmp_path / "installation" / "config")
+    assert "git-loopy 0.11.0 installed from archive" in installed.detail
+    code, output, reached = release_smoke.cancel_in_pty(
+        installed.executable, ["init", "--global"],
+        cwd=installed.source_root, env=installed.env, timeout=10, settle=0.2,
+    )
+    assert reached and code == 1
+    assert "git-loopy init cancelled" in output
+    assert not (Path(installed.env["XDG_CONFIG_HOME"]) / "git-loopy" / "config.toml").exists()
 
 
 def test_the_smoke_is_a_module_entry_point() -> None:
@@ -851,6 +957,8 @@ def test_a_contribution_stamped_with_another_host_fails_the_placement(
     placement = _observation(evidence, "execution-host", "github-actions")
     assert placement["status"] == "failed"
     assert "contribution" in placement["detail"]
+    assert evidence["requested_execution_hosts"] == ["github-actions"]
+    assert evidence["execution_hosts"] == []
 
 
 def test_the_operator_environment_cannot_be_redirected_off_the_sandbox(tmp_path: Path) -> None:
