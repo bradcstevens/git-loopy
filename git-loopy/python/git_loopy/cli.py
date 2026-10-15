@@ -130,6 +130,7 @@ from git_loopy.skill_policy import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps dispatch import-light
+    from git_loopy.run_residence import RunLaunch
     from git_loopy.installation import InstalledAsset
     from git_loopy.labels import LabelBootstrapClient
     from git_loopy.rate_card import RateCard
@@ -3457,6 +3458,22 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as exc:
         print(f"git-loopy: error: {exc}", file=sys.stderr)
         return 1
+
+    from git_loopy.run_discovery import RunTargetError
+    from git_loopy.run_residence import RunLaunch, launch_run
+
+    try:
+        return launch_run(RunLaunch(target=repo_root, run_arguments=tuple(argv)))
+    except RunTargetError as exc:
+        print(f"git-loopy: {exc}", file=sys.stderr)
+        return 1
+
+
+def _run_local(request: RunLaunch) -> int:
+    """Existing local startup, kept separate from residence selection."""
+    argv = list(request.run_arguments)
+    args = build_parser().parse_args(argv)
+    repo_root = request.target
 
     # Load the two persisted Config scopes (project + global) and merge them
     # with CLI flags + env vars into the effective RunConfig (ADR-0006). A

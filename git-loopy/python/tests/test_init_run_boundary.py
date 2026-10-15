@@ -36,6 +36,7 @@ import pytest
 
 from git_loopy import cli as cli_module
 from git_loopy import skill_install
+from tests.profile_fixtures import seed_profile_install
 
 
 # ---------------------------------------------------------------------------
@@ -72,15 +73,9 @@ def _install_catalog(
     closes the network), but the *residue* it leaves is the whole point of the
     cancellation journey — so the double writes real files.
     """
-    (root / "tdd").mkdir(parents=True, exist_ok=True)
-    (root / "tdd" / "SKILL.md").write_text("tdd\n", encoding="utf-8")
     outcome = skill_install.RefreshOutcome(
-        catalog=skill_install.InstalledCatalog(
-            root=root,
-            repository="bradcstevens/git-loopy-skills",
-            revision="c" * 40,
-            skills=("tdd",),
-            sha256="0" * 64,
+        catalog=seed_profile_install(
+            {"XDG_CONFIG_HOME": str(root.parent.parent)},
         ),
         action=skill_install.ACTION_INSTALLED,
     )

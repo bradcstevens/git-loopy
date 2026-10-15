@@ -104,7 +104,7 @@ _AGENT_PROFILES = json.loads(
 @pytest.fixture
 def reviewer_exposure(tmp_path: Path) -> SkillExposure:
     root = installed_profiles_dir(os.environ)
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     (root / "review.md").write_text(
         "---\nrequired-skills:\n  - code-review\npermitted-skills: []\n"
         "access: read-only\n---\nReview the exact head.\n",
@@ -330,7 +330,7 @@ async def test_execution_profile_registers_delta_preload_and_exact_exposure(
     tmp_path: Path, case: dict[str, Any],
 ) -> None:
     root = installed_profiles_dir(os.environ)
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
     required = "\n" + "".join(f"  - {n}\n" for n in case["required"]) if case["required"] else " []\n"
     permitted = "\n" + "".join(f"  - {n}\n" for n in case["permitted"]) if case["permitted"] else " []\n"
     access = "read-only" if case["profile"] == "review" else "full"
@@ -415,23 +415,18 @@ async def test_execution_profile_selection(
 
 
 @pytest.mark.asyncio
-async def test_no_installed_profile_root_preserves_all_sdk_arguments(tmp_path: Path) -> None:
+async def test_no_installed_profile_root_refuses_execution(tmp_path: Path) -> None:
     client = FakeCopilotClient()
+    root = installed_profiles_dir(os.environ)
+    root.rename(root.with_name("saved-profiles"))
     with EventLogWriter(tmp_path / "events.jsonl") as log:
-        for key in (None, "bugfix"):
+        with pytest.raises(AgentProfileError, match="bugfix.*unavailable"):
             async with IterationSession(
                 client, config=_StubConfig(), event_log=log, sinks=SinkFanout(()),
-                run_id=_FIXED_RUN_ID, iter_num=1, profile_key=key,
+                run_id=_FIXED_RUN_ID, iter_num=1, profile_key="bugfix",
             ):
-                pass
-    calls = [
-        {key: value for key, value in call.items() if key not in (
-            "on_event", "on_permission_request",
-        )}
-        for call in client.create_calls
-    ]
-    assert calls[0] == calls[1]
-    assert "agent" not in calls[1] and "custom_agents" not in calls[1]
+                pytest.fail("Execution started without its installed profile")
+    assert client.create_calls == []
 
 
 @pytest.mark.parametrize("problem", ["no-policy", "disabled", "absent", "legacy-denied"])

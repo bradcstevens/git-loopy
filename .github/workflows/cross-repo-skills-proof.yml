@@ -4,7 +4,7 @@ name: Cross-repo Skills proof
 # for real (#632).
 #
 # Three Python-suite checks are the only place that dependency is ever tested:
-# that the Run instructions require no Skill the pinned revision lacks
+# that the profiles' Required and Permitted Skills resolve at the pinned revision
 # (`test_prompt_metadata.py::test_every_required_skill_exists_at_the_pinned_revision`),
 # that Skill reference routing resolves against the same pin
 # (`test_skill_reference_routing.py::test_every_documented_skill_exists_in_the_pinned_catalog`),

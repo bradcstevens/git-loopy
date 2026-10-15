@@ -8,7 +8,6 @@ from git_loopy.prompt import (
     PromptMetadataError,
     PromptMetadataFailure,
     minimal_skill_policy,
-    packaged_required_skills,
     parse_required_skills,
     resolve_required_skills,
 )
@@ -17,13 +16,12 @@ from git_loopy.skill_source import (
     DEFAULT_CHECKOUT,
     read_skill_source_pin,
 )
+from git_loopy.agent_profiles import required_profile_skills, validate_profiles
+from git_loopy.skill_install import installed_required_skills
 
-EXPECTED_PACKAGED_REQUIRED_SKILLS = (
+EXPECTED_PROFILE_REQUIRED_SKILLS = (
     "code-review",
-    "codebase-design",
     "diagnosing-bugs",
-    "implement",
-    "prototype",
     "tdd",
 )
 
@@ -57,18 +55,13 @@ owner: git-loopy
 
 
 @pytest.mark.parametrize("empty_sequence", ["[]  ", "[ ]"])
-def test_explicit_empty_required_skills_is_authoritative(
+def test_explicit_empty_required_skills_is_retired(
     empty_sequence: str,
 ) -> None:
     prompt = f"---\nrequired-skills: {empty_sequence}\n---\n# Instructions\n"
 
-    result = resolve_required_skills(
-        prompt,
-        packaged_required_skills=("code-review", "tdd"),
-    )
-
-    assert result.required_skills == ()
-    assert result.migration_warning is False
+    with pytest.raises(PromptMetadataError, match="Remove.*required-skills"):
+        resolve_required_skills(prompt)
 
 
 @pytest.mark.parametrize(
@@ -78,16 +71,13 @@ def test_explicit_empty_required_skills_is_authoritative(
         "---\ntitle: Legacy instructions\n---\n# Instructions\n",
     ],
 )
-def test_custom_prompt_without_required_skills_inherits_packaged_set(
+def test_custom_prompt_without_required_skills_uses_profiles(
     prompt: str,
 ) -> None:
-    result = resolve_required_skills(
-        prompt,
-        packaged_required_skills=("tdd", "code-review"),
-    )
+    result = resolve_required_skills(prompt)
 
-    assert result.required_skills == ("code-review", "tdd")
-    assert result.migration_warning is True
+    assert result.required_skills == EXPECTED_PROFILE_REQUIRED_SKILLS
+    assert result.migration_warning is False
 
 
 def test_unterminated_frontmatter_is_a_typed_failure() -> None:
@@ -141,16 +131,16 @@ def test_unsupported_or_invalid_frontmatter_is_malformed(frontmatter: str) -> No
     assert raised.value.failure is PromptMetadataFailure.MALFORMED_FRONTMATTER
 
 
-def test_packaged_prompt_defines_the_minimal_skill_policy() -> None:
-    assert packaged_required_skills() == EXPECTED_PACKAGED_REQUIRED_SKILLS
-    assert minimal_skill_policy() == EXPECTED_PACKAGED_REQUIRED_SKILLS
+def test_installed_profiles_define_the_minimal_skill_policy() -> None:
+    assert installed_required_skills() == EXPECTED_PROFILE_REQUIRED_SKILLS
+    assert minimal_skill_policy() == EXPECTED_PROFILE_REQUIRED_SKILLS
 
 
-def test_legacy_custom_prompt_inherits_the_packaged_required_skills() -> None:
+def test_legacy_custom_prompt_uses_profiles_without_a_migration_warning() -> None:
     result = resolve_required_skills("# Legacy custom instructions\n")
 
-    assert result.required_skills == EXPECTED_PACKAGED_REQUIRED_SKILLS
-    assert result.migration_warning is True
+    assert result.required_skills == EXPECTED_PROFILE_REQUIRED_SKILLS
+    assert result.migration_warning is False
 
 
 
@@ -162,7 +152,7 @@ def _repo_root() -> Path | None:
     return None
 
 def test_every_required_skill_exists_at_the_pinned_revision() -> None:
-    """The Run instructions may only require Skills the pin actually carries.
+    """The profiles may only require Skills the pin actually carries.
 
     git-loopy ships no Skills, so "does this Required Skill exist?" is a
     question about the pinned external catalog (ADR-0025). A Run answers it at
@@ -185,14 +175,21 @@ def test_every_required_skill_exists_at_the_pinned_revision() -> None:
             f"run `{ACQUIRE_COMMAND}`"
         )
     skills_root = checkout / pin.skills_directory
+    assert pin.profiles_directory is not None
+    assert validate_profiles(
+        checkout, profiles_directory=pin.profiles_directory,
+        skills_directory=pin.skills_directory,
+    ) == ()
 
     missing = [
         name
-        for name in packaged_required_skills()
+        for name in required_profile_skills(
+            checkout / pin.profiles_directory, skills=skills_root,
+        )
         if not (skills_root / name / "SKILL.md").is_file()
     ]
 
     assert missing == [], (
-        f"the Run instructions require Skills the pinned revision "
+        f"the profiles require Skills the pinned revision "
         f"{pin.short_revision} of {pin.repository} does not carry: {missing}"
     )

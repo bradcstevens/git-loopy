@@ -237,6 +237,23 @@ changes, so the fixture's own revision stays at `3`. Defaults and recommended
 routes do not change. The SDK 1.0.17rc4 record above is now historical
 evidence, not the current pin.
 
+## Corporate-compatible upgrade record: SDK 1.0.17 stable
+
+On 2026-10-14 the Microsoft corporate feed offered stable SDK 1.0.17.
+This upgrade replaces the 1.0.17rc5 prerelease with that published wheel.
+Its dependencies are unchanged, so only the SDK dependency entry changes in
+the lockfile. The wheel injects `CLI_VERSION = "1.0.93"`; the in-language
+roster stamp and Conformance fixture move together to that version.
+
+The live listing was captured through CLI 1.0.93 itself, installed from the
+corporate npm feed with auto-update disabled. The server confirmed version
+1.0.93 and returned the same 25 distinct model ids (24 concrete models plus
+`auto`). Projecting that listing through `HarnessCapabilities.from_listing`
+found no difference in any observed effort set or context tier. The same eight
+compatibility rows remain unlisted. No roster rows, defaults, or recommended
+routes change, so the fixture's own revision stays at `3`. The SDK 1.0.17rc5
+record above is now historical evidence, not the current pin.
+
 ## Amendment: the roster follows the harness you are running
 
 The stamped fixture bounded more than it was meant to. `cli_version` records

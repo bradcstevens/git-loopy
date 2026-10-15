@@ -12,7 +12,7 @@ Three properties are load-bearing:
   uncommitted edits included. Nothing is fetched, committed, pushed, or
   published, and the check reaches no network.
 * **It does not move the pin.** A pass says only that the cross-repo
-  proofs pass against this checkout, including Agent profiles when present.
+  proofs pass against this checkout, including its required Agent profiles.
   The pin still moves only as a reviewed
   edit to ``skill_source.json``.
 * **A failure names the contract.** The Required Skill that is absent, the
@@ -31,7 +31,6 @@ from typing import Sequence
 
 from git_loopy.agent_profiles import validate_profiles
 from git_loopy.labels import TRIAGE_ROLES
-from git_loopy.prompt import packaged_required_skills
 from git_loopy.skill_source import read_skill_source_pin
 
 
@@ -40,11 +39,6 @@ VERIFY_COMMAND = (
     "uv run --project git-loopy/python python -m git_loopy.skill_candidate"
 )
 
-
-#: The contract a Run's instructions impose on the catalog: every Required Skill
-#: must be carryable. Distinct from a front-door reference, which is a route a
-#: reader follows, and from the Label vocabulary, which a setup Skill writes.
-CONTRACT_REQUIRED_SKILL = "Required Skill"
 
 #: A Skill the front door routes a reader to. The reference resolves only when
 #: the candidate carries that Skill. Same row shape the pinned-catalog guard
@@ -78,8 +72,6 @@ class ContractBreach:
     subject: str
 
     def __str__(self) -> str:
-        if self.contract == CONTRACT_REQUIRED_SKILL:
-            return f"Required Skill absent: {self.subject}"
         if self.contract == CONTRACT_SKILL_REFERENCE:
             return f"Skill reference does not resolve: {self.subject}"
         if self.contract == CONTRACT_LABEL_VOCABULARY:
@@ -93,7 +85,6 @@ class CandidateVerdict:
 
     checkout: Path
     breaches: tuple[ContractBreach, ...]
-    profiles_checked: bool = False
 
     @property
     def passed(self) -> bool:
@@ -152,14 +143,6 @@ def _skill_present(skills: Path, name: str) -> bool:
     if skill.is_symlink() or metadata.is_symlink():
         return False
     return metadata.is_file()
-
-
-def _missing_required_skills(skills: Path) -> tuple[ContractBreach, ...]:
-    return tuple(
-        ContractBreach(contract=CONTRACT_REQUIRED_SKILL, subject=name)
-        for name in packaged_required_skills()
-        if not _skill_present(skills, name)
-    )
 
 
 def _documented_skill_references(repo_root: Path) -> tuple[str, ...]:
@@ -226,15 +209,12 @@ def verify_candidate(checkout: Path, *, repo_root: Path) -> CandidateVerdict:
     """Judge ``checkout`` against the cross-repo proofs. Reads only; writes nothing."""
     checkout = checkout.expanduser()
     skills = _skills_root(checkout)
-    profiles = checkout / "profiles"
-    profiles_checked = profiles.exists() or profiles.is_symlink()
-    profile_breaches = (
-        validate_profiles(checkout, skills_directory=str(skills.relative_to(checkout)))
-        if profiles_checked
-        else ()
+    profile_breaches = validate_profiles(
+        checkout,
+        profiles_directory=read_skill_source_pin().profiles_directory or "profiles",
+        skills_directory=str(skills.relative_to(checkout)),
     )
     breaches = (
-        *_missing_required_skills(skills),
         *_unresolved_references(skills, repo_root),
         *_dropped_labels(skills),
         *(
@@ -242,9 +222,7 @@ def verify_candidate(checkout: Path, *, repo_root: Path) -> CandidateVerdict:
             for breach in profile_breaches
         ),
     )
-    return CandidateVerdict(
-        checkout=checkout, breaches=breaches, profiles_checked=profiles_checked
-    )
+    return CandidateVerdict(checkout=checkout, breaches=breaches)
 
 
 def discover_repo_root(start: Path | None = None) -> Path | None:
@@ -302,9 +280,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"candidate check failed: {exc}", file=sys.stderr)
         return 1
     if verdict.passed:
-        proofs = "Required Skills, Skill references, Label vocabulary"
-        if verdict.profiles_checked:
-            proofs += ", Agent profiles"
+        proofs = "Agent profiles (Required and Permitted Skills), Skill references, Label vocabulary"
         print(
             f"{verdict.checkout} satisfies the cross-repo proofs "
             f"({proofs}). "

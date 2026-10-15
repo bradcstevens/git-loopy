@@ -45,7 +45,8 @@ the rest of git-loopy's global scope follows, so the catalog sits beside the
 | --- | --- |
 | `<config-home>/git-loopy/skills/` | the Skill root: Skills, and nothing else |
 | `<config-home>/git-loopy/skill-catalog/` | the private checkout the install is cut from |
-| `<config-home>/git-loopy/skill-catalog.json` | the install record: repository, revision, Skill names, tree digest |
+| `<config-home>/git-loopy/profiles/` | the seven Agent profiles, installed beside the Skills |
+| `<config-home>/git-loopy/skill-catalog.json` | the schema-2 install record: repository, revision, Skill names, and a digest for each root |
 
 Your project's `.copilot/skills/` is **not** read. Neither is `~/.copilot/skills/`.
 A Run's Skills are the pinned catalog, so "which Skills ran" is answerable from
@@ -62,7 +63,7 @@ the pin alone — and setup never writes a Skill into your repository.
 | already at the pinned revision, tree intact | no-op; **no connection is opened** |
 | pin moved | the new revision replaces the old one **wholesale** — a Skill retired upstream is gone |
 | a Skill was hand-edited | detected by digest and **repaired**; the installed catalog is git-loopy's to own, so change the pin, not the files |
-| upstream unreachable, catalog installed | **warning**, and the Run continues on the installed revision, naming it and whether it is the pinned one |
+| upstream unreachable, catalog installed at an older pin | the intact install is preserved with a **warning**, but Run preflight refuses profiles that do not match the active pin |
 | upstream unreachable, nothing installed | the Run **fails at preflight** — it has no Skills to expose, and discovering that one Iteration later is worse |
 | the acquired revision fails validation | nothing is replaced; the previous install stays exactly as it was |
 
@@ -77,11 +78,12 @@ interrupted install never leaves half a catalog.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "repository": "bradcstevens/git-loopy-skills",
   "url": "https://github.com/bradcstevens/git-loopy-skills.git",
   "revision": "<full 40-character commit SHA>",
   "skills_directory": "skills",
+  "profiles_directory": "profiles",
   "license": {
     "spdx_id": "MIT",
     "path": "LICENSE",
@@ -101,9 +103,10 @@ interrupted install never leaves half a catalog.
 - The pin **ships inside the wheel**, beside `THIRD_PARTY_LICENSES.txt`. A
   released artifact can always say which upstream revision it installs, with no
   source checkout and no network.
-- An optional `profiles_directory` names a relative directory inside the
-  checkout. The current pin omits it. Loading this field does not yet install
-  profiles or change what a Run reads.
+- Schema 2 requires `profiles_directory`, a relative directory inside the
+  checkout. The installed profiles are the Run's only profile source and the
+  authority for its Required Skills. Schema-1 pins remain readable for
+  installation migration; they cannot satisfy an activated Run's preflight.
 
 ---
 
@@ -166,17 +169,16 @@ pushed, or published, and a clone that has never been pushed is fine. The check
 reads that directory. It reaches no network, and it does not edit the pin or
 any tracked file.
 
-A pass means the same three proofs CI runs against the pinned catalog pass
-against this checkout, plus the Agent profile proof when the candidate carries
-`profiles/`. It is not a promise about the pin. The pin still moves
+A pass means the profile, Skill-reference and Label-vocabulary proofs pass
+against this checkout. The profiles supply the Required-Skill contract;
+`PROMPT.md` supplies none. It is not a promise about the pin. The pin still moves
 only as a reviewed edit to `skill_source.json`.
 
 | Proof | A failure names |
 | --- | --- |
-| **Required Skills** | the Required Skill the candidate does not carry (`Required Skill absent: tdd`) |
 | **Skill references** | the front-door reference that no longer resolves (`Skill reference does not resolve: grill-me`) |
 | **Label vocabulary** | the provisioned label the candidate's `setup-git-loopy-skills/triage-labels.md` stopped providing (`Label vocabulary stopped providing: ready-for-agent`) |
-| **Agent profiles** (when `profiles/` is present) | each profile and broken rule, for example `Agent profile: review.md [review]: must be read-only and require code-review` |
+| **Agent profiles, including Required and Permitted Skills** | each profile and broken rule, including an absent Skill, for example `Agent profile: review.md [review]: must be read-only and require code-review` |
 
 The profile validator requires exactly one `<task-type>.md` for each of the
 seven Task types and refuses symlinks, unknown or repeated frontmatter keys,
@@ -184,17 +186,15 @@ unresolved or repeated Skill names (including Required/Permitted overlap),
 invalid `access`, an unsafe `review` profile, and an empty role body
 ([ADR-0086](adr/0086-agent-profiles-are-markdown-beside-the-skills-proved-and-installed-with-the-catalog.md)).
 Only `required-skills`, `permitted-skills`, and `access` are allowed.
-Skill lists use the existing Run-instructions syntax: two-space-indented block
+Skill lists use two-space-indented block
 sequences or explicit `[]`; omitted lists are empty. Every profile declares
 `access: read-only` or `access: full`. The Reviewer must be read-only and
 require `code-review`, not merely permit it.
 
-The candidate command detects the top-level `profiles/` independently of the
-current pin, so a working clone can prove profiles before `profiles_directory`
-is pinned. A successful check names **Agent profiles** only when it judged
-them; a candidate without that directory keeps the three existing proofs.
-A file or dangling symlink named `profiles` is a refusal, not an absent profile
-set. This check neither installs profiles nor changes the Run's Required Skills.
+The candidate command reads `profiles_directory` from the pin, using `profiles/`
+when proving the transition from a schema-1 pin. A missing directory, file, or
+dangling symlink is a refusal. This check neither installs profiles nor changes
+the pin; every success includes the profile proof.
 
 A dropped triage-label row is a failure even when the canonical default would
 have filled that label back in. The template is what a consumer repository
@@ -256,13 +256,22 @@ names this pin rather than repeating a revision that could drift away from it.
 ### Upgrading existing policies
 
 The catalog is pinned to
-`7d98aa729d04cb01686793150272cf9c1094fb9a`, the published upstream `main`
-selected for #833. It replaces the previous
-`d4b73153f654b9f8251d4ee28bcd49aeb34d6fae` pin: conflict resolution now
-belongs to `/implement`, closing with `/code-review`; `/batch-grill-me` is
-retired; and `/implement-spec`, `/retro`, and `/pr` join the catalog.
+`a2189cb96ef48b51cea1672966726e7475fef4bd`, the published seven-profile change
+from [bradcstevens/git-loopy-skills#152](https://github.com/bradcstevens/git-loopy-skills/pull/152),
+proved for #825 and activated by #829. It replaces
+`7d98aa729d04cb01686793150272cf9c1094fb9a`. The paired change carries seven
+profiles, the read-only `code-review` findings return, `to-tickets`' five-execution-
+Task-type restriction for agent-ready tickets, and the scorecard/profile-role
+agreement check. It also carries the intervening `/next` Python chain-ledger
+and reentry implementation and its setup-hook update. No Skills were added or
+removed by this pin move; the catalog still has 44 names.
 `/to-handoff` and `/chief-of-staff` are absent at this revision and await a
 later pin move.
+
+Remove `required-skills` from custom Run instructions. Required Skills now come
+only from the installed profiles, and the Minimal Skill policy is `code-review`,
+`diagnosing-bugs`, and `tdd`. Both Run preflight and `doctor` refuse the retired
+key. A missing or stale profile install must be repaired before a Run.
 
 The catalog uses `GLOSSARY.md`, or `GLOSSARY-MAP.md` for multiple contexts.
 The Run prompt prefers these root entry points in both domain reading and
@@ -294,18 +303,19 @@ too; use `/design-control-loop`, which absorbed its scaffolding.
 Replace `model-fit` with `set-task-models` in saved policies and custom
 prompts; the Skill was renamed, not changed.
 
-Remove `batch-grill-me` from saved policies and custom prompts. Replace
-`resolving-merge-conflicts` with `implement` wherever conflict resolution is
-needed. The packaged Required Skills make that same replacement, so a saved
-policy used with the packaged prompt must enable `implement`. Its general
-orchestration stays outside the Run; only conflict resolution for the bound PR
-uses it, followed by review of the resolved head.
+Remove `batch-grill-me` and `resolving-merge-conflicts` from saved policies and
+custom prompts. Interactive sessions may use `implement` for conflict resolution;
+in-Run profiles permit no conflict-resolution Skill. Run and Recovery instructions
+carry that procedure directly, so `implement` is no longer Required in a Run.
 
 New catalog members do not automatically enter an existing allowlist.
 `implement-spec` orchestrates an entire spec's ticket graph and `retro` needs a
 user, so neither runs inside an unattended Iteration. `pr` is optional
 pull-request body guidance, not permission to create or merge a PR.
-The packaged prompt also keeps `release`, `set-task-models`,
-`model-scorecard`, `sync-model-roster`, and `jev-ultrafast` out of autonomous
-Iterations. Install the catalog into your agent client separately to invoke these yourself; doing
+Profiles keep `release`, `set-task-models`, `model-scorecard`, `sync-model-roster`,
+and `jev-ultrafast` out of autonomous Iterations, regardless of policy enablement.
+The same closed exposure answers #537: `push`, `wizard`, `codebase-audit`, and
+`wait-what` occur in no in-Run profile. The old prose exclusion list and its pinned
+test are retired under ADR-0078.
+Install the catalog into your agent client separately to invoke these yourself; doing
 so neither changes git-loopy's saved policy nor authorizes a release.

@@ -51,13 +51,11 @@ def execution_profile_key(task_type_keys: tuple[str, ...]) -> str:
 
 
 def load_session_profile(
-    root: Path, key: str, *, skills: Path, required: bool = False,
-) -> AgentProfile | None:
-    """Read the installed in-Run profile; Reviewers and remote requests fail closed."""
+    root: Path, key: str, *, skills: Path,
+) -> AgentProfile:
+    """Read the installed in-Run profile or refuse to start the session."""
     if key not in (*EXECUTION_TASK_TYPE_KEYS, "review"):
         raise AgentProfileError(f"Not an in-Run profile: {key!r}")
-    if not root.exists() and not root.is_symlink() and not required and key != "review":
-        return None
     path = root / f"{key}.md"
     if root.is_symlink() or path.is_symlink() or not path.is_file():
         raise AgentProfileError(f"Installed profile {key!r} is unavailable at {path}")
@@ -68,6 +66,15 @@ def load_session_profile(
     if key in EXECUTION_TASK_TYPE_KEYS and profile.access != "full":
         raise AgentProfileError(f"Execution profile {key!r} must declare full access")
     return profile
+
+
+def required_profile_skills(root: Path, *, skills: Path) -> tuple[str, ...]:
+    """The Minimal Skill policy: Required Skills of every in-Run profile."""
+    return tuple(sorted({
+        name
+        for key in (*EXECUTION_TASK_TYPE_KEYS, "review")
+        for name in load_session_profile(root, key, skills=skills).required
+    }))
 
 
 def _parse_profile(
@@ -116,7 +123,7 @@ def _parse_profile(
         if key not in fields:
             skill_lists[key] = ()
             continue
-        # Both lists use the Run instructions' existing canonical Skill-list syntax.
+        # Both lists share the canonical Skill-list syntax.
         text = "---\nrequired-skills:" + "\n".join(fields[key]) + "\n---\n"
         try:
             parsed = parse_required_skills(text)
