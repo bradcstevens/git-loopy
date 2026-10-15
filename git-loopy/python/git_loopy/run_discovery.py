@@ -83,6 +83,8 @@ class DiscoveredRun:
     liveness: RunLiveness
     trace_path: Path
     control_path: Path
+    #: Run residence owns these artifact paths and the transport to them.
+    residence: str = "local"
 
     @property
     def stem(self) -> str:
