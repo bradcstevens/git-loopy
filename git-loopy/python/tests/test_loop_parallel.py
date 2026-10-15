@@ -6687,7 +6687,7 @@ def test_priority_proposal_recovers_after_expiry_or_transient_revalidation(
     tmp_path, monkeypatch, change
 ) -> None:
     now = datetime.now(timezone.utc)
-    advanced = False
+    revalidations = []
     fake_gh = _wire_rolling_run(
         tmp_path, monkeypatch,
         [
@@ -6707,35 +6707,34 @@ def test_priority_proposal_recovers_after_expiry_or_transient_revalidation(
         original_init(router, **{**kwargs, "clock": lambda: now})
 
     monkeypatch.setattr(dynamic_route.DynamicRouter, "__init__", router_init)
-    if change == "unread":
-        original_available = dynamic_route.DynamicRouter.proposal_available
-        failed = False
+    original_available = dynamic_route.DynamicRouter.proposal_available
 
-        async def available(router, proposal, request):
-            nonlocal failed
-            if request.issue_ref == 49 and not failed:
-                failed = True
-                return dynamic_route.RoutingUnavailable(
+    async def available(router, proposal, request):
+        nonlocal now
+        if request.issue_ref != 49:
+            return await original_available(router, proposal, request)
+        if not revalidations:
+            # Expire #49's existing proposal at its own revalidation seam,
+            # never at whichever unrelated Lane happens to start work first.
+            if change == "expired":
+                now = proposal.valid_until + timedelta(seconds=1)
+            else:
+                result = dynamic_route.RoutingUnavailable(
                     reason=dynamic_route.RoutingUnavailableReason.SOURCE_UNAVAILABLE,
                     usage=router.usage,
                 )
-            return await original_available(router, proposal, request)
+                revalidations.append((proposal.proposal_id, result))
+                return result
+        result = await original_available(router, proposal, request)
+        revalidations.append((proposal.proposal_id, result))
+        return result
 
-        monkeypatch.setattr(dynamic_route.DynamicRouter, "proposal_available", available)
-
-    class AdvancingSession(_ParallelFakeSession):
-        async def send_and_wait(self, prompt, **kwargs):
-            nonlocal now, advanced
-            if change == "expired" and not advanced:
-                now += timedelta(seconds=301)
-                advanced = True
-            return await super().send_and_wait(prompt, **kwargs)
+    monkeypatch.setattr(dynamic_route.DynamicRouter, "proposal_available", available)
 
     client = _ParallelFakeClient(
         fake_git=loop_module._make_git_client(), scripted_events=[_usage_event("claude-opus-5")],
         serial_closes=True,
     )
-    client._session_cls = AdvancingSession
     monkeypatch.setattr(loop_module, "_make_client", lambda: client)
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
@@ -6757,6 +6756,17 @@ def test_priority_proposal_recovers_after_expiry_or_transient_revalidation(
     assert sum("#49:" in request.issue for _, request in spied["assessments"]) == (
         2 if change == "expired" else 1
     )
+    original_id, rejected = revalidations[0]
+    (resolved,) = [
+        e for e in events if e["type"] == "wrapper.routing.resolved" and e["issue"] == 49
+    ]
+    if change == "expired":
+        assert rejected is False
+        assert resolved["proposal_id"] != original_id
+    else:
+        assert isinstance(rejected, dynamic_route.RoutingUnavailable)
+        assert resolved["proposal_id"] == original_id
+    assert resolved["revalidated"] is True
     assert 49 in [ref for ref, _ in fake_gh.issue_close_calls]
     if change == "expired":
         latch = next(e for e in events if e["type"] == "wrapper.serial.requested")
@@ -12750,21 +12760,30 @@ def test_rolling_preparation_rereads_queued_readiness_without_spending(
 
 
 @pytest.mark.parametrize("priority", [False, True])
+@pytest.mark.parametrize("first_work_issue", [42, 43])
 def test_serial_required_work_is_prepared_while_existing_lanes_drain(
-    tmp_path, monkeypatch, priority
+    tmp_path, monkeypatch, priority, first_work_issue
 ) -> None:
-    discovered = False
     observed_during_work = []
+    first_work_started = asyncio.Event()
+    work_order = []
 
     async def work(session, tracker):
-        nonlocal discovered
         if session._working_directory is None:
             return
-        if not discovered:
+        issue = int(Path(session._working_directory).name.removeprefix("issue-"))
+        if issue == first_work_issue:
+            work_order.append(issue)
+            first_work_started.set()
+        else:
+            await asyncio.wait_for(first_work_started.wait(), timeout=2)
+            work_order.append(issue)
+        # #42 reveals the serial candidate and drains; #43 stays in work
+        # until preparation finishes, even when #43 reaches this seam first.
+        if issue == 42:
             tracker.seed_issue(_make_issue(
                 44, labels=["ready-for-agent", *(["priority"] if priority else [])]
             ))
-            discovered = True
             return
 
         async def prepared():
@@ -12787,6 +12806,17 @@ def test_serial_required_work_is_prepared_while_existing_lanes_drain(
     assert client.create_calls[-1]["model"] == "claude-opus-5"
     assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
     assert observed_during_work == ["issue-43"]
+    assert work_order == [first_work_issue, 43 if first_work_issue == 42 else 42]
+    events = _logged_events(tmp_path)
+    prepared = next(
+        e for e in events if e["type"] == "wrapper.routing.prepared" and e["issue"] == 44
+    )
+    draining_end = next(
+        e for e in events if e["type"] == "wrapper.contribution.end" and e["issue"] == 43
+    )
+    serial_start = next(e for e in events if e["type"] == "wrapper.iteration.start")
+    assert prepared["state"] == "proposed"
+    assert events.index(prepared) < events.index(draining_end) < events.index(serial_start)
 
 
 def test_priority_serial_discovery_interrupts_speculative_lane_preparation(
