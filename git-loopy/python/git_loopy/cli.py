@@ -209,6 +209,11 @@ _COMMAND_SPECS = (
         "skills list, skills edit, and skills sync for the closed-world Skill policy.",
     ),
     _CommandSpec(
+        "plan",
+        "Planning",
+        "Launch the named Planner in your own interactive Copilot CLI, outside a Run.",
+    ),
+    _CommandSpec(
         "runs",
         "Run control",
         "List this clone's Runs and whether each one is still running.",
@@ -793,6 +798,27 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         required=True,
+    )
+
+    plan = _add_command(
+        sub, "plan", allow_abbrev=False,
+        usage="git-loopy plan [planning document] [--model M] "
+        "[--reasoning-effort E] [--context-tier T] [-- copilot arguments...]",
+        description=(
+            "Launch the pinned Planner in your own Copilot CLI, outside every Run. "
+            "Arguments after -- pass through to Copilot, except those that replace "
+            "the agent, prompt, interactivity or model, resume, or enable fleet."
+        ),
+    )
+    plan.add_argument("planning_document", nargs="?", help="Planning document to decompose.")
+    plan.add_argument("--model", metavar="M", help="Override Routing's model.")
+    plan.add_argument(
+        "--reasoning-effort", metavar="E", choices=sorted(REASONING_EFFORTS),
+        help="Override Routing's reasoning effort.",
+    )
+    plan.add_argument(
+        "--context-tier", metavar="T", choices=sorted(CONTEXT_TIERS),
+        help="Constrain the context tier without suppressing Routing.",
     )
 
     init = _add_command(
@@ -3390,7 +3416,16 @@ def main(argv: list[str] | None = None) -> int:
     # in one parser — `git-loopy 5` would be misread as an invalid subcommand).
     # This path imports no SDK / renderer, keeping subcommand dispatch snappy.
     if argv and argv[0] in _SUBCOMMANDS:
+        passthrough: list[str] = []
+        if argv[0] == "plan" and "--" in argv:
+            separator = argv.index("--")
+            passthrough = argv[separator + 1:]
+            argv = argv[:separator]
         sub_args = build_subcommand_parser().parse_args(argv)
+        if sub_args.command == "plan":
+            from git_loopy.plancmd import run_plan
+
+            return run_plan(sub_args, passthrough=passthrough)
         if sub_args.command == "init":
             return _run_init(sub_args)
         if sub_args.command == "commands":
