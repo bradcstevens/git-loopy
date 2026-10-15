@@ -216,7 +216,8 @@ Deleting the source manually does not delete its sibling Issue clones.
 The Agent commits only in its Issue clone. Before reclaiming it, the Runner
 fetches its named Lane branch into the source without forcing the ref.
 Salvage Checkpoints also get a best-effort push to the source's configured
-origin. Ordinary Lane completion does not require a remote push.
+origin. Ordinary Agent commits do not require a remote push; wrapper
+Checkpoints made at normal session completion use the same policy as exit salvage.
 Integration reads the imported branch and still gates its merge in the private
 stage; no unverified merge reaches base. A failed import, push or removal
 preserves the clone for retry. A failed Checkpoint push does not block

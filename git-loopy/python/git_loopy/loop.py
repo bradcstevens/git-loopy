@@ -515,7 +515,7 @@ def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
 
 
 def _make_worktree_setup() -> worktree_module.WorktreeSetup:
-    """Construct the per-Lane worktree setup seam (#65, ADR-0008).
+    """Construct the per-Lane environment setup seam (#65, ADR-0093).
 
     Factored to its own module-level function — mirroring :func:`_make_gate_runner`
     — so the Parallel-mode orchestrator (#61, now Rolling-dispatch #219/ADR-0020)
@@ -529,7 +529,7 @@ def _make_worktree_setup() -> worktree_module.WorktreeSetup:
     unset or blank the adapter falls back to
     :func:`~git_loopy.worktree.detect_setup_command`'s best-effort auto-detect.
 
-    **Unused by the serial path.** Per-worktree setup only exists in Parallel mode
+    **Unused by the serial path.** Per-Lane setup only exists in Parallel mode
     (each **Lane** gets a fresh worktree that needs its environment prepared); the
     serial loop works in place on the repo worktree, so :func:`run` only wires this
     into the ``_ParallelLoop``.
@@ -815,9 +815,9 @@ def _integration_worktree_path(
 
     *Every* Lane contribution is merged and gated in
     ``<common-git-dir>/git-loopy/<run_id>/integrate/issue-<N>`` before anything
-    reaches base — alongside the Lane workspaces under the same per-run
-    directory but in an ``integrate/`` subgroup, so it never collides with the
-    Lane's own ``issue-<N>`` workspace. The leaf stays ``issue-<N>`` (matching
+    reaches base. Unlike the sibling Issue clones, stages remain inside the
+    source's git directory in an ``integrate/`` subgroup. The leaf stays
+    ``issue-<N>`` (matching
     :func:`_issue_clone_path`) so the workspace still addresses exactly one
     issue. Bounded auto-resolution for a red / conflicting contribution reuses
     the stage that contribution was already staged in, so recovery costs no
@@ -1588,7 +1588,7 @@ class _Loop:
                     sinks=self._sinks,
                     run_id=self._writers.run_id,
                     # The repository root, for the classifier's reason: the
-                    # assessment reads the issue, not a Lane's worktree, and a
+                    # assessment reads the issue, not a Lane's Issue clone, and a
                     # Lane is routed before its worktree exists.
                     working_directory=None,
                     send_timeout_seconds=config.send_timeout_seconds,
@@ -4442,7 +4442,7 @@ class _ParallelLoop:
     ``parallel-safe`` issue starts in a Lane immediately — there is no
     "wait for a second issue" threshold — and a finished Lane's slot refills
     the moment its **Lane contribution** is admitted or terminates, without
-    waiting on any other Lane. One Lane's worktree setup may freely overlap
+    waiting on any other Lane. One Lane's environment setup may freely overlap
     another Lane's agent session, and both may overlap **Integration**.
 
     Eligibility is still a **human assertion**, never inferred: only pool
@@ -4548,18 +4548,17 @@ class _ParallelLoop:
         # landing a Lane branch on base (:meth:`_integrate_lane`); the
         # conflict / red-gate recovery path is :meth:`_auto_resolve_lane`.
         self._gate_runner = gate_runner
-        # Injected per-Lane worktree setup (#65, ADR-0008): after a Lane's
-        # worktree is created and before its agent session starts, prepare its
+        # Injected per-Lane environment setup (#65): after a Lane's Issue clone
+        # is created and before its agent session starts, prepare its
         # environment (the configured ``GIT_LOOPY_WORKTREE_SETUP`` command, or a
         # best-effort auto-detected install) so the feedback loops can run there.
         self._worktree_setup = worktree_setup
         self._run_id = writers.run_id
         self._repo_root = git.root
-        # Where every Lane workspace and Integration stage this Run creates
-        # lives (#449): the clone's own git directory, resolved once. It is
-        # per-clone and outside every working tree's content, so a live
-        # workspace cannot be seen, staged, or cleaned by the tree an agent is
-        # working in — and it needs no ignore entry to stay that way.
+        # Source identity used to derive both workspace roots, resolved once:
+        # Integration stages stay inside the common git directory; Issue clones
+        # live beside the source clone (ADR-0093). Neither root is content in
+        # the source working tree, and neither needs an ignore entry.
         #
         # Resolved here, at construction, because the answer is a fact about
         # the clone and not about any one issue: a git that cannot give it up
@@ -6143,7 +6142,7 @@ class _ParallelLoop:
 
         # Resolve this Lane's (model, effort) ONCE at Active-issue pickup —
         # the structural per-Lane seam per-issue routing hangs off (#148). An
-        # invalid label is refused before a worktree exists. An unlabelled Lane
+        # invalid label is refused before an Issue clone exists. An unlabelled Lane
         # (or routing-off) yields the gated global default. `start_session`
         # binds the pair onto the Contribution, reused for this Lane's work AND
         # its later auto-resolution sessions.
@@ -6296,7 +6295,7 @@ class _ParallelLoop:
             profile_key=execution_profile_key(resolution.task_type_keys),
         )
 
-        # Prepare the freshly created worktree before its agent session
+        # Prepare the freshly created Issue clone before its agent session
         # starts (#65). Non-fatal: a broken environment still lets the agent
         # try, and one Lane's setup can never take down another's task.
         self._setup_lane_worktree(lane_work)
@@ -6491,7 +6490,7 @@ class _ParallelLoop:
         )
 
     def _setup_lane_worktree(self, lane_work: _LaneWork) -> None:
-        """Prepare a Lane's freshly created worktree before its session (#65).
+        """Prepare a Lane's freshly created Issue clone before its session (#65).
 
         Runs the injected :class:`~git_loopy.worktree.WorktreeSetup` — the
         configured ``GIT_LOOPY_WORKTREE_SETUP`` command or a best-effort
@@ -6675,7 +6674,7 @@ class _ParallelLoop:
     ) -> None:
         """Reclaim the local placeholder a substituted host did not use.
 
-        Dispatch always cuts the deterministic Lane worktree and branch locally,
+        Dispatch always cuts the deterministic Issue clone and branch locally,
         because that is what the ``local`` placement needs. A substituted host
         that never ran, or that contributed on a branch of its own, leaves that
         placeholder holding nothing — and ADR-0050 §F's collection rule cannot
@@ -7018,12 +7017,12 @@ class _ParallelLoop:
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
     ) -> tuple[bool, bool]:
-        """Post-session per-Lane commit accounting + per-worktree Checkpoint.
+        """Post-session per-Lane commit accounting + Issue clone Checkpoint.
 
         Reads the Lane branch's post-session head, emits one
         ``wrapper.commit.recorded`` per new commit (each Lane's Consumption
         attributed to its own issue), then captures any dirty / untracked
-        work in a per-worktree Checkpoint on the Lane branch (ADR-0004).
+        work in an Issue clone Checkpoint on the Lane branch (ADR-0004).
 
         Returns:
             ``(changed, checkpoint_ok)`` for
@@ -7064,10 +7063,10 @@ class _ParallelLoop:
     def _maybe_checkpoint_lane(
         self, lane_work: _LaneWork
     ) -> tuple[str | None, bool]:
-        """Per-worktree Checkpoint on a Lane branch (ADR-0004, per-Lane).
+        """Issue clone Checkpoint on a Lane branch (ADR-0004, per-Lane).
 
         Mirrors :meth:`_Loop._maybe_checkpoint` but scoped to the Lane's own
-        worktree and attributed to the Lane's issue.
+        Issue clone and attributed to the Lane's issue.
 
         Returns:
             ``(sha, ok)`` — ``ok`` is ``False`` only when the dirty-check or
@@ -7117,7 +7116,7 @@ class _ParallelLoop:
         for one newly-admitted from the parked FIFO) — serialized against
         every other contribution's Integration via ``self._integration_lock``
         so the shared main worktree never sees two concurrent merges, while
-        every OTHER Lane's worktree setup and session continue unblocked
+        every OTHER Lane's environment setup and session continue unblocked
         (#219, ADR-0020, criteria #2/#3). A contribution's Lane slot is
         already free the instant it was admitted
         (:meth:`~git_loopy.rolling_scheduler.RollingScheduler.finish_work`);
