@@ -1237,9 +1237,9 @@ RUN                         STATE    STARTED               SCOPE
 Every Run of **this clone** — the worktree you invoked it from plus every other
 worktree `git worktree list` registers — newest first. Run it from any of those
 worktrees and you get the same listing, including Runs that were started from a
-different one. Lane Issue clones are isolated Agent workspaces, not additional
-Run residences, and are not included in this list. `RUN` is the full Run
-identity, and `SCOPE` is the worktree the Run published its artefacts in;
+different one. **Lane workspaces** (**Issue clones**) are not separate Run
+residences and are not included in this list. `RUN` is the full Run identity,
+and `SCOPE` is the worktree the Run published its artefacts in;
 together they are what `git-loopy attach` and `git-loopy stop` target, so the
 two cannot disagree about which Runs exist.
 
