@@ -103,6 +103,7 @@ __all__ = [
 # than imported from ``git_loopy.events``, which would pull the SDK) and kept in
 # lockstep by ``test_state_event_type_constants_match_events``.
 _RUN_START = "wrapper.run.start"
+_SANDBOX_RESOLVED = "wrapper.sandbox.resolved"
 _RUN_END = "wrapper.run.end"
 _STOP_REQUESTED = "wrapper.stop.requested"
 _STOP_LIFTED = "wrapper.stop.lifted"
@@ -785,6 +786,8 @@ class LiveRunState:
         # An absent declaration is historical silence, not evidence the Run used
         # the local host.
         self.execution_host = ExecutionHostSnapshot()
+        # Undeclared is unknown, never an inferred opt-out or Isolation grade.
+        self.sandbox: str | None = None
         # None is historical silence: a trace that predates Wind-down says
         # neither that the Run was healthy nor that it was stopped.
         self.wind_down: WindDownSnapshot | None = None
@@ -1029,6 +1032,10 @@ class LiveRunState:
             _INTEGRATION_BRANCH_OBSERVED,
         }:
             self._record_integration(str(etype), event, now)
+            return
+        if etype == _SANDBOX_RESOLVED:
+            sandbox = event.get("state")
+            self.sandbox = sandbox if sandbox in ("local", "off", "remote") else "unknown"
             return
         if etype == _RUN_START:
             self._mark_started()

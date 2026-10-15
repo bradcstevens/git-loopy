@@ -64,6 +64,7 @@ def _bare_loop(*, max_iterations: int) -> Any:
     )
     bare._release_version = "0.0.0-test"
     bare._rate_card = None
+    bare._sandbox_state = "off"
     bare._skill_preflight = SimpleNamespace(
         migration_warning=False, event_payload={"policy": "closed-world"}
     )

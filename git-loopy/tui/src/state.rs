@@ -581,6 +581,7 @@ pub struct DashboardState {
     pub(crate) iteration: i64,
     pub(crate) capabilities: InsightCapabilities,
     execution_host: ExecutionHostProvenance,
+    pub(crate) sandbox: Option<String>,
     contribution_hosts: BTreeMap<String, String>,
     /// Issues whose open contribution is past its Lane-work boundary
     /// (ADR-0065, #681).
@@ -666,6 +667,7 @@ impl DashboardState {
             iteration: 0,
             capabilities: InsightCapabilities::default(),
             execution_host: ExecutionHostProvenance::default(),
+            sandbox: None,
             contribution_hosts: BTreeMap::new(),
             lane_work_finished: BTreeSet::new(),
             branch_drift: BTreeMap::new(),
@@ -874,6 +876,16 @@ impl DashboardState {
             }
         }
         match &event.payload {
+            EventPayload::SandboxResolved(disclosure) => {
+                self.sandbox = Some(
+                    disclosure
+                        .state
+                        .as_deref()
+                        .filter(|state| matches!(*state, "local" | "off" | "remote"))
+                        .unwrap_or("unknown")
+                        .to_string(),
+                );
+            }
             EventPayload::RunStart(start) => {
                 self.mark_started(now, now_monotonic);
                 self.status = RUN_RUNNING.to_string();

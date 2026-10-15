@@ -231,6 +231,8 @@ pub struct Event {
 pub enum EventPayload {
     /// `wrapper.run.start`
     RunStart(RunStart),
+    /// `wrapper.sandbox.resolved`: the Run's Sandbox, not an Isolation grade.
+    SandboxResolved(SandboxResolved),
     /// `wrapper.contribution.start`
     ContributionStart(ContributionStart),
     /// `wrapper.contribution.work_finished`
@@ -354,6 +356,12 @@ pub struct RunStart {
     /// The **Release version** of the Orchestrator that started this Run.
     #[serde(default, deserialize_with = "lenient_string")]
     pub release_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SandboxResolved {
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub state: Option<String>,
 }
 
 /// The Execution host facts announced on `wrapper.run.start`.
@@ -1289,6 +1297,7 @@ impl Event {
 fn decode_payload(kind: &str, value: &Value) -> EventPayload {
     match kind {
         "wrapper.run.start" => EventPayload::RunStart(decode_or_default(value)),
+        "wrapper.sandbox.resolved" => EventPayload::SandboxResolved(decode_or_default(value)),
         "wrapper.contribution.start" => EventPayload::ContributionStart(decode_or_default(value)),
         "wrapper.contribution.work_finished" => {
             EventPayload::ContributionWorkFinished(decode_or_default(value))

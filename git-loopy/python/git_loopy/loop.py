@@ -253,7 +253,7 @@ from git_loopy.release_version import (
 from git_loopy.run_control import RunControlArtifact
 from git_loopy import stop_request
 from git_loopy.run_environment_preflight import resolve_run_environment_preflight
-from git_loopy.run_sandbox import resolve_run_sandbox
+from git_loopy.run_sandbox import RunResidenceName, resolve_run_sandbox, sandbox_state
 from git_loopy.static_route import (
     HarnessCapabilities,
     RoutePolicy,
@@ -1378,6 +1378,7 @@ class _Loop:
         host_capabilities: HarnessCapabilities | None = None,
         release_line_reader: Callable[[], tuple[str, ReleaseLine]] | None = None,
         sandbox_settings: Mapping[str, Any] | None = None,
+        residence: RunResidenceName = "local",
         issue_clone_setup: Callable[[Path, int | str], None] | None = None,
     ) -> None:
         self._config = config
@@ -1393,6 +1394,7 @@ class _Loop:
         self._sinks = sinks
         self._client = client
         self._sandbox_settings = sandbox_settings
+        self._sandbox_state = sandbox_state(sandbox_settings, residence=residence)
         self._issue_clone_setup = issue_clone_setup
         self._skill_preflight = skill_preflight
         self._skill_exposure = skill_preflight.exposure
@@ -4305,6 +4307,11 @@ class _Loop:
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
         )
+        self._emit(
+            events_module.WRAPPER_SANDBOX_RESOLVED,
+            iter_num=None,
+            state=self._sandbox_state,
+        )
         self._retry_route_delivery()
 
         exit_code = exit_code_for("iteration_cap")
@@ -4615,6 +4622,7 @@ class _ParallelLoop:
         static_capabilities: HarnessCapabilities | None = None,
         host_capabilities: HarnessCapabilities | None = None,
         sandbox_settings: Mapping[str, Any] | None = None,
+        residence: RunResidenceName = "local",
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -4830,6 +4838,7 @@ class _ParallelLoop:
             host_capabilities=host_capabilities,
             release_line_reader=self._read_release_line,
             sandbox_settings=sandbox_settings,
+            residence=residence,
             issue_clone_setup=self._setup_issue_clone,
         )
         if self._scheduler is not None:
@@ -5045,6 +5054,11 @@ class _ParallelLoop:
             events_module.WRAPPER_RUN_START,
             iter_num=None,
             **start_payload,
+        )
+        self._serial._emit(
+            events_module.WRAPPER_SANDBOX_RESOLVED,
+            iter_num=None,
+            state=self._serial._sandbox_state,
         )
         self._serial._retry_route_delivery()
         self._report_parallel_degraded()
@@ -8287,6 +8301,7 @@ async def run(
     mirror_diagnostics_to_stderr: bool = True,
     host_capabilities: HostCapabilityReport | None = None,
     routing_preflight: RunRoutingPreflight | None = None,
+    residence: RunResidenceName = "local",
 ) -> int:
     """Drive one ``git-loopy`` invocation to completion.
 
@@ -8297,6 +8312,9 @@ async def run(
     Args:
         config: The frozen :class:`RunConfig` composed by
             :func:`git_loopy.cli.main`.
+        residence: Where this Orchestrator lives, supplied by its launcher.
+            Plain Runs remain local. Remote requires an always-on Sandbox;
+            never derive this value from a Lane's Execution host.
         rate_card: The **Rate card** :mod:`git_loopy.cli` resolved once at
             **Run** start from the Run's shared live model listing, or ``None``
             when that listing could not be read or carries no prices (#331,
@@ -8736,7 +8754,7 @@ async def run(
     skill_workspace = TemporaryDirectory(prefix="git-loopy-run-skills-")
     try:
         await client.start()
-        sandbox_settings = await resolve_run_sandbox(client)
+        sandbox_settings = await resolve_run_sandbox(client, residence=residence)
         if sandbox_settings is not None and selected_execution_host is not None:
             if selected_execution_host.placement != execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT:
                 raise SandboxError(
@@ -8870,6 +8888,7 @@ async def run(
             static_capabilities=routing_preflight.capabilities,
             host_capabilities=routing_preflight.host_capabilities,
             sandbox_settings=sandbox_settings,
+            residence=residence,
         )
     except git_module.GitError as exc:
         # Rolling dispatch resolves where its **Lane workspaces** live up front

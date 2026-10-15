@@ -80,6 +80,13 @@ async def test_disabled_sandbox_does_not_require_host_support():
     assert all(method != "sandbox.getHostSupport" for method, _ in runtime.calls)
 
 
+async def test_remote_sandbox_is_required_even_when_operator_disables_it():
+    runtime = Runtime(enabled=False)
+    assert await resolve_run_sandbox(runtime, residence="remote") == runtime.settings
+    with pytest.raises(SandboxError, match="Required Sandbox is unavailable"):
+        await resolve_run_sandbox(Runtime(enabled=False, supported=False), residence="remote")
+
+
 @pytest.mark.parametrize("method", [
     "user.settings.get", "session.sandbox.getEnforcementStatus", "sandbox.getHostSupport",
 ])

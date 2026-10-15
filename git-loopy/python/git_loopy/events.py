@@ -72,6 +72,7 @@ __all__ = [
     "python_parallel_capabilities",
     # Wrapper event-type constants
     "WRAPPER_RUN_START",
+    "WRAPPER_SANDBOX_RESOLVED",
     "WRAPPER_RUN_END",
     "WRAPPER_STOP_REQUESTED",
     "WRAPPER_STOP_LIFTED",
@@ -271,6 +272,7 @@ _CONTEXT_WINDOW_SAFETY_PERCENT = 75
 # Wrapper-emitted events. The wrapper constructs these directly via
 # :func:`make_event`; they have no SDK equivalent.
 WRAPPER_RUN_START = "wrapper.run.start"
+WRAPPER_SANDBOX_RESOLVED = "wrapper.sandbox.resolved"
 WRAPPER_RUN_END = "wrapper.run.end"
 WRAPPER_STOP_REQUESTED = "wrapper.stop.requested"
 WRAPPER_STOP_LIFTED = "wrapper.stop.lifted"

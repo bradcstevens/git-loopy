@@ -1136,7 +1136,12 @@ fn execution_host_segment(header: &Header, glyphs: &Glyphs) -> (u8, String) {
     } else {
         format!(" ({})", host.isolation_grade)
     };
-    (8, format!("host {placement}{grade}"))
+    let sandbox = match header.sandbox.as_deref() {
+        Some("remote") => " · Sandbox: remote (always on)".to_string(),
+        Some(state) => format!(" · Sandbox: {state}"),
+        None => String::new(),
+    };
+    (8, format!("host {placement}{grade}{sandbox}"))
 }
 
 /// The Run-scoped **Wind-down**, when one is latched.
