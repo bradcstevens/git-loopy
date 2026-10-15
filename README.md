@@ -290,11 +290,10 @@ if a saved Skill policy still enables the retired name.
 
 ## The complete workflow, start to finish
 
-> **Version note:** Step 4, Steps 6–7, and the diagram below describe
-> current-source behavior added after v0.11.2. Those changes require an Edge
-> install until v0.11.3 is published. With v0.11.2, invoke `/to-tickets`
-> directly in Copilot; the Agent selects its Active issue instead of the
-> Orchestrator binding it at Pickup.
+> **Version note:** Step 4, the task-specific Agent session in Step 6, and the
+> diagram below use current-source features added after v0.11.2. They require
+> an Edge install until v0.11.3 is published. With v0.11.2, invoke
+> `/to-tickets` directly in Copilot; issue binding at Pickup is already present.
 
 1. **Start with the vague idea.** Use `/grill-with-docs` for repository or domain
    work and `/grill-me` for a general plan. When the answers live in someone

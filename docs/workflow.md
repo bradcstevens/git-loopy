@@ -4,6 +4,12 @@
 > planning and review; git-loopy executes the ready work in bounded, observable
 > Iterations.
 
+> **Version note:** The named Planner, active task-specific Agent profiles,
+> planning/review Pool exclusions, and Issue-clone Lanes are current-source
+> features added after v0.11.2. Use an Edge install for them until v0.11.3 is
+> published. The v0.11.2 Runner already binds issues at Pickup; planning there
+> uses `/to-tickets` directly in Copilot.
+
 ```mermaid
 flowchart LR
     Idea["Vague idea"] --> Shape["Shape intent"]
@@ -89,10 +95,13 @@ seams, and explicit exclusions.
 The spec is the destination. `GLOSSARY.md` supplies the shared language and ADRs
 record consequential decisions; the spec says what this effort must make true.
 
-### 4. Create the route with `/to-tickets`
+### 4. Create the route with the Planner
 
-Run [`/to-tickets`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-tickets) to turn the spec into
-dependency-aware tracer bullets. Each ticket should:
+In the current source, run `git-loopy plan <planning-document>` to launch the
+named Planner in your interactive Copilot CLI. It invokes
+[`/to-tickets`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-tickets)
+to turn the spec into dependency-aware tracer bullets. With v0.11.2, invoke
+`/to-tickets` directly in Copilot. Each ticket should:
 
 - deliver a narrow but complete path through every affected layer;
 - be independently demonstrable or verifiable;
@@ -121,8 +130,9 @@ judges the pushed result.
 
 ### 6. Start a Run
 
-The Python reference Orchestrator is the currently available member of the
-Runner family:
+The Python Orchestrator is the active reference path. The shell and PowerShell
+paths are dormant at Release 0.11.2; see the [Runner family reference](runners.md)
+for their status. A Rust Orchestrator is planned.
 
 ```bash
 # Unlimited Iterations.
@@ -143,9 +153,12 @@ in the [Runner family reference](runners.md).
 One serial Iteration makes one bounded attempt at one Active issue:
 
 1. **Collect the Pool.** The Orchestrator collects open `ready-for-agent`
-   issues and keeps those with the required build and acceptance sections.
-2. **Declare the Active issue.** The agent selects exactly one Pool member and
-   emits its Working marker so timing and output are attributed immediately.
+   issues and keeps those with the required build and acceptance sections. In
+   current source, exact `task-type:planning` and `task-type:review` labels are
+   also reported as Pool exclusions.
+2. **Bind at Pickup.** The Orchestrator binds one eligible issue before opening
+   its Agent session. Current source loads that issue's installed Agent profile;
+   the Agent's Working marker confirms the binding.
 3. **Recover the domain.** The fresh agent reads the issue, recent commits,
    `AGENTS.md`, `GLOSSARY.md` (or the context glossaries linked by
    `GLOSSARY-MAP.md`), and relevant ADRs instead of relying on memory from
@@ -165,8 +178,9 @@ One serial Iteration makes one bounded attempt at one Active issue:
 
 ```mermaid
 flowchart TD
-    Pool["Collect ready-for-agent Pool"] --> Select["Select one Active issue"]
-    Select --> Marker["Emit Working marker"]
+    Pool["Collect ready-for-agent Pool"] --> Bind["Bind one eligible issue at Pickup"]
+    Bind --> Agent["Open task-specific Agent profile"]
+    Agent --> Marker["Emit Working marker"]
     Marker --> Context["Read issue and domain context"]
     Context --> Build["Build one vertical slice"]
     Build --> Feedback["Run feedback loops"]
