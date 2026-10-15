@@ -136,9 +136,11 @@ git-loopy config list             # the effective settings a Run would use
 > feedback-loop table before the first Run. Parallel Integration executes those
 > commands as a runner-owned gate. The serial path currently relies on the Agent
 > to run the checks inside its session; it does not run an independent
-> runner-side gate. For serial automation, independently verify the contribution
+> runner-side gate. For serial automation, independently verify the published work
 > before treating it as accepted or closing its issue. That policy gap is tracked
-> in [#674](https://github.com/bradcstevens/git-loopy/issues/674).
+> in [#674](https://github.com/bradcstevens/git-loopy/issues/674). The independent
+> [Review stage](docs/adr/0072-independent-review-gates-closure.md) is an accepted
+> design, not a shipped serial guarantee.
 
 Hosts without Python can run the [shell](git-loopy/shell/README.md) or
 [PowerShell](git-loopy/powershell/README.md) Orchestrator instead — same
@@ -154,7 +156,7 @@ preserves unfinished work; it is not an acceptance verdict.
 
 For Python serial CI, inspect the completed Run and Iteration records, including
 each issue's Status and optional Ending, and independently verify the published
-contribution. An `advanced` issue can still carry a `timeout` or `crash` Ending:
+work. An `advanced` issue can still carry a `timeout` or `crash` Ending:
 progress does not erase a failed session. Keep the decision to close an issue
 behind the verification policy your repository requires rather than inferring
 it from the process exit code or the existence of a commit. This does not change
