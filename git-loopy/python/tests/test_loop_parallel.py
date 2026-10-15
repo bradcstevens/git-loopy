@@ -6674,7 +6674,9 @@ def test_priority_dynamic_prefix_wait_revalidates_without_rebuying_assessments(
     )
     asyncio.run(loop_module.run(cfg))
     events = _logged_events(tmp_path)
-    assert _bindings(events) == [(ref, "priority") for ref in (41, 42, 43, 44)]
+    bindings = _bindings(events)
+    assert sorted(bindings[:-1]) == [(ref, "priority") for ref in (41, 42, 43)]
+    assert bindings[-1] == (44, "priority")
     for ref in (41, 42, 43, 44):
         assert sum(f"#{ref}:" in request.issue for _, request in spied["assessments"]) == 1
         assert sum(
@@ -6687,7 +6689,7 @@ def test_priority_proposal_recovers_after_expiry_or_transient_revalidation(
     tmp_path, monkeypatch, change
 ) -> None:
     now = datetime.now(timezone.utc)
-    advanced = False
+    disrupted_proposal = None
     fake_gh = _wire_rolling_run(
         tmp_path, monkeypatch,
         [
@@ -6707,35 +6709,31 @@ def test_priority_proposal_recovers_after_expiry_or_transient_revalidation(
         original_init(router, **{**kwargs, "clock": lambda: now})
 
     monkeypatch.setattr(dynamic_route.DynamicRouter, "__init__", router_init)
-    if change == "unread":
-        original_available = dynamic_route.DynamicRouter.proposal_available
-        failed = False
+    original_available = dynamic_route.DynamicRouter.proposal_available
 
-        async def available(router, proposal, request):
-            nonlocal failed
-            if request.issue_ref == 49 and not failed:
-                failed = True
-                return dynamic_route.RoutingUnavailable(
-                    reason=dynamic_route.RoutingUnavailableReason.SOURCE_UNAVAILABLE,
-                    usage=router.usage,
-                )
-            return await original_available(router, proposal, request)
+    async def available(router, proposal, request):
+        nonlocal now, disrupted_proposal
+        if request.issue_ref == 49 and disrupted_proposal is None:
+            disrupted_proposal = proposal
+            assert now <= proposal.valid_until
+            if change == "expired":
+                # Expire this prepared proposal, not whichever Lane sends first.
+                now = proposal.valid_until + timedelta(seconds=1)
+                result = await original_available(router, proposal, request)
+                assert result is False
+                return result
+            return dynamic_route.RoutingUnavailable(
+                reason=dynamic_route.RoutingUnavailableReason.SOURCE_UNAVAILABLE,
+                usage=router.usage,
+            )
+        return await original_available(router, proposal, request)
 
-        monkeypatch.setattr(dynamic_route.DynamicRouter, "proposal_available", available)
-
-    class AdvancingSession(_ParallelFakeSession):
-        async def send_and_wait(self, prompt, **kwargs):
-            nonlocal now, advanced
-            if change == "expired" and not advanced:
-                now += timedelta(seconds=301)
-                advanced = True
-            return await super().send_and_wait(prompt, **kwargs)
+    monkeypatch.setattr(dynamic_route.DynamicRouter, "proposal_available", available)
 
     client = _ParallelFakeClient(
         fake_git=loop_module._make_git_client(), scripted_events=[_usage_event("claude-opus-5")],
         serial_closes=True,
     )
-    client._session_cls = AdvancingSession
     monkeypatch.setattr(loop_module, "_make_client", lambda: client)
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
@@ -6745,7 +6743,7 @@ def test_priority_proposal_recovers_after_expiry_or_transient_revalidation(
     cfg = _dynamic_parallel_config(
         max_iterations=8, routing={"docs": ("gpt-5.6-terra", "high")}
     )
-    asyncio.run(loop_module.run(cfg))
+    assert asyncio.run(loop_module.run(cfg)) == 0
     events = _logged_events(tmp_path)
     bindings = [
         (e["issue"], e["iter"] is None)
@@ -6753,7 +6751,17 @@ def test_priority_proposal_recovers_after_expiry_or_transient_revalidation(
     ]
     assert set(bindings) == {(ref, ref != 49) for ref in (41, 42, 43, 45, 46, 49)}
     if change == "expired":
-        assert bindings == [(ref, ref != 49) for ref in (41, 42, 43, 45, 46, 49)]
+        assert sorted(bindings[:-1]) == [(ref, True) for ref in (41, 42, 43, 45, 46)]
+        assert bindings[-1] == (49, False)
+    assert disrupted_proposal is not None
+    (resolved,) = [
+        event for event in events
+        if event["type"] == "wrapper.routing.resolved" and event["issue"] == 49
+    ]
+    if change == "expired":
+        assert resolved["proposal_id"] != disrupted_proposal.proposal_id
+    else:
+        assert resolved["proposal_id"] == disrupted_proposal.proposal_id
     assert sum("#49:" in request.issue for _, request in spied["assessments"]) == (
         2 if change == "expired" else 1
     )
@@ -12750,22 +12758,28 @@ def test_rolling_preparation_rereads_queued_readiness_without_spending(
 
 
 @pytest.mark.parametrize("priority", [False, True])
+@pytest.mark.parametrize("discovering_lane", [42, 43])
 def test_serial_required_work_is_prepared_while_existing_lanes_drain(
-    tmp_path, monkeypatch, priority
+    tmp_path, monkeypatch, priority, discovering_lane
 ) -> None:
-    discovered = False
+    draining_lane = 43 if discovering_lane == 42 else 42
+    draining_started = asyncio.Event()
     observed_during_work = []
 
     async def work(session, tracker):
-        nonlocal discovered
         if session._working_directory is None:
             return
-        if not discovered:
+        lane = Path(session._working_directory).name
+        if lane == f"issue-{discovering_lane}":
+            # Both Lanes must be running before Priority serial work is visible.
+            await asyncio.wait_for(draining_started.wait(), timeout=2)
             tracker.seed_issue(_make_issue(
                 44, labels=["ready-for-agent", *(["priority"] if priority else [])]
             ))
-            discovered = True
             return
+
+        assert lane == f"issue-{draining_lane}"
+        draining_started.set()
 
         async def prepared():
             while not any(
@@ -12775,7 +12789,7 @@ def test_serial_required_work_is_prepared_while_existing_lanes_drain(
                 await asyncio.sleep(0)
 
         await asyncio.wait_for(prepared(), timeout=2)
-        observed_during_work.append(Path(session._working_directory).name)
+        observed_during_work.append(lane)
 
     client, spied, exit_code = _rolling_dynamic_run(
         tmp_path, monkeypatch, on_work=work, max_iterations=3,
@@ -12786,7 +12800,22 @@ def test_serial_required_work_is_prepared_while_existing_lanes_drain(
     ]
     assert client.create_calls[-1]["model"] == "claude-opus-5"
     assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
-    assert observed_during_work == ["issue-43"]
+    assert observed_during_work == [f"issue-{draining_lane}"]
+    events = _logged_events(tmp_path)
+    (prepared,) = [
+        event for event in events
+        if event["type"] == "wrapper.routing.prepared" and event["issue"] == 44
+    ]
+    assert prepared["state"] == "proposed"
+    draining_end = next(
+        event for event in events
+        if event["type"] == "wrapper.contribution.end" and event["issue"] == draining_lane
+    )
+    serial_bound = next(
+        event for event in events
+        if event["type"] == "wrapper.pickup.bound" and event["issue"] == 44
+    )
+    assert events.index(prepared) < events.index(draining_end) < events.index(serial_bound)
 
 
 def test_priority_serial_discovery_interrupts_speculative_lane_preparation(
