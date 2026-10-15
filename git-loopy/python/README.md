@@ -342,8 +342,12 @@ All serial, Lane, Recovery, and Reviewer sessions disable harness memory.
 Cross-session `session_store_sql` reads are refused as
 `cross_session_history_disabled`, including through Subagents. Continuity
 comes from repository history and the issue tracker. These session controls
-are not a machine Sandbox. The seventh profile, the human-driven Planner,
-works outside Runs and keeps its own harness's memory and Skills.
+are distinct from the Copilot Sandbox. The local Python Run follows its
+effective Sandbox policy and refuses when enforcement is required but
+unavailable; see
+[Local Copilot Sandbox](../../docs/parallel-mode.md#local-copilot-sandbox).
+The seventh profile, the human-driven Planner, works outside Runs and keeps
+its own harness's memory and Skills.
 
 ## Planning (`git-loopy plan`)
 

@@ -5,10 +5,10 @@
 > Iterations.
 
 > **Version note:** The named Planner, active task-specific Agent profiles,
-> planning/review Pool exclusions, and Issue-clone Lanes are current-source
-> features added after v0.11.2. Use an Edge install for them until v0.11.3 is
-> published. The v0.11.2 Runner already binds issues at Pickup; planning there
-> uses `/to-tickets` directly in Copilot.
+> planning/review Pool exclusions, Issue-clone Lanes, and policy-driven Copilot
+> Sandbox support are current-source features added after v0.11.2. Use an Edge
+> install for them until v0.11.3 is published. The v0.11.2 Runner already binds
+> issues at Pickup; planning there uses `/to-tickets` directly in Copilot.
 
 ```mermaid
 flowchart LR
@@ -143,10 +143,14 @@ uv run --project git-loopy/python git-loopy 50
 ```
 
 The Runner family is designed around one
-[Wrapper contract](wrapper-contract.md). Shell, PowerShell, and Rust
-Orchestrators are planned; the Python implementation is the reference today.
-Installation, Config, environment variables, and observability are documented
-in the [Runner family reference](runners.md).
+[Wrapper contract](wrapper-contract.md). Installation, Config, environment
+variables, and observability are documented in the
+[Runner family reference](runners.md).
+
+The local Python Run follows the effective Copilot Sandbox policy. When
+Sandbox enforcement is required but unavailable, the Run refuses instead of
+starting Agents unsandboxed; see
+[Local Copilot Sandbox](parallel-mode.md#local-copilot-sandbox).
 
 ### 7. Complete one Iteration
 

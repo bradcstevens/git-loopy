@@ -90,6 +90,7 @@ work needs it.
 | **Named Planner** *(current source)* | `git-loopy plan` launches the catalog-defined Planner profile in the loop engineer's own Copilot CLI, outside a Run and without approving its proposed ticket graph | [planning command](git-loopy/python/README.md#planning-git-loopy-plan), [ADR-0087](docs/adr/0087-the-planner-is-generated-from-the-pin-and-launched-into-the-loop-engineers-harness.md) |
 | **Task-specific Agent profiles** *(current source)* | Installed profiles bind execution work to its Required and Permitted Skills; Reviewer sessions are read-only, and planning stays outside Runs | [Skill policy](docs/skill-policy.md), [ADR-0078](docs/adr/0078-one-agent-profile-per-task-type.md) |
 | **Parallel Lanes** *(current source)* | Issue-clone-isolated Lanes work several `parallel-safe` issues at once, with a serialized, bounded-green Integration stage. A Run with no Lane work uses the serial Iteration driver and says so | [parallel mode](docs/parallel-mode.md) |
+| **Copilot Sandbox** *(current source)* | The Python Run honors Copilot's effective Sandbox policy and refuses when required enforcement is unavailable | [Local Copilot Sandbox](docs/parallel-mode.md#local-copilot-sandbox), [ADR-0093](docs/adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md) |
 | **Live interface** | Per-Iteration activity, context fill, observed tokens, and billed cost while the Run is happening — via the shared `git-loopy-tui` helper on a terminal, or the line printer everywhere else | [runners](docs/runners.md) |
 | **Closed-world Skill policy** | Exactly the Skills a Run may load — no ambient context bloat from whatever is installed on the host | [skill policy](docs/skill-policy.md) |
 
@@ -116,7 +117,8 @@ git-loopy
 
 This installs the latest published stable **v0.11.2** Release. The current
 source is at 0.11.3 and includes the named Planner, activated Agent profiles,
-and Issue-clone Lanes; use an Edge install for those until v0.11.3 is published.
+Issue-clone Lanes, and Copilot Sandbox support; use an Edge install for those
+until v0.11.3 is published.
 
 The terminal interface is included in the base installation. An older install
 command that names the removed `[tui]` extra still succeeds, but your package
