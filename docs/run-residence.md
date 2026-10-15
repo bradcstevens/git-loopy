@@ -1,7 +1,10 @@
 # Run residence provider seam
 
-Issue #862 implements the prefactor from [ADR-0093](adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md).
-It does not implement remote residence, Sandbox enforcement, or Issue clones.
+Issue #862 implements the whole-Run placement seam from
+[ADR-0093](adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md),
+not remote residence. Lane Issue clones are a separate workspace concern
+([parallel mode](parallel-mode.md)); they do not change where the whole Run
+resides.
 
 `git_loopy.run_residence.RunResidence` owns a whole Run's placement and
 transport. This is independent of a Lane's Execution host. The only production

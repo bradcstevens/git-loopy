@@ -51,9 +51,11 @@ an agent asked to double-check its own work.
 **git-loopy** is a GitHub Copilot SDK framework that runs the encoded workflow:
 it turns well-shaped issues into bounded, observable, autonomous delivery. It
 orchestrates a **Runner family** around one shared **Wrapper contract**. The
-Python reference Orchestrator and the shell and PowerShell ports are shippable
-phase-1 members today, spanning Linux, macOS, and Windows; the Rust Dashboard
-core ships with them, and a Rust Orchestrator is planned.
+Python Orchestrator is the active reference path across Linux, macOS, and
+Windows. The shell and PowerShell implementations remain in the repository as
+dormant paths at Release 0.11.2; they do not advance with the active Python
+Release. The Rust Dashboard helper belongs to the Python path, and a Rust
+Orchestrator is planned.
 
 Models produce code quickly, but an unstructured prompt-to-code process loses
 intent, overruns useful context, and hides whether the result is actually good.
@@ -85,9 +87,11 @@ work needs it.
 | --- | --- | --- |
 | **Issue-driven Iterations** | One Active issue per Iteration, a fresh context each time, and durable state in commits and tracker history | [concepts](docs/concepts.md), [wrapper contract](docs/wrapper-contract.md) |
 | **Your feedback loops as the gate** | The loops declared in `AGENTS.md` — lint, tests, builds — are what a change must survive, run by code and returned to the agent as evidence | [`AGENTS.md`](AGENTS.md) |
-| **Task-type routing** | Seven task types (`planning`, `review`, `implementation`, `test`, `docs`, `chore`, `bugfix`) each route to their own model and reasoning effort, so a chore never pays feature prices | [customization](docs/customization.md) |
+| **Task-type routing** | Seven recognized task types have configurable model-and-effort routes; `planning` and `review` are control tasks, while only execution types enter the issue Pool | [customization](docs/customization.md), [task-type exclusions](docs/adr/0088-only-execution-task-types-run-and-a-planning-or-review-typed-issue-is-a-pool-exclusion.md) |
 | **Measured routing** *(in progress)* | Routes calibrated from what Runs actually cost and deliver, rather than from a static opinion | [ADR-0027](docs/adr/0027-routing-is-calibrated-by-measurement.md) |
-| **Parallel Lanes** | Worktree-isolated Lanes work several `parallel-safe` issues at once, with a serialized, bounded-green Integration stage. A Run with no Lane work uses the serial Iteration driver and says so | [parallel mode](docs/parallel-mode.md) |
+| **Named Planner** *(current source)* | `git-loopy plan` launches the pinned Planner in the loop engineer's own Copilot CLI, outside a Run and without approving its proposed ticket graph | [planning command](git-loopy/python/README.md#planning-git-loopy-plan), [ADR-0087](docs/adr/0087-the-planner-is-generated-from-the-pin-and-launched-into-the-loop-engineers-harness.md) |
+| **Task-specific Agent profiles** *(current source)* | Installed profiles bind execution work to its Required and Permitted Skills; Reviewer sessions are read-only, and planning stays outside Runs | [Skill policy](docs/skill-policy.md), [ADR-0078](docs/adr/0078-one-agent-profile-per-task-type.md) |
+| **Parallel Lanes** *(current source)* | Issue-clone-isolated Lanes work several `parallel-safe` issues at once, with a serialized, bounded-green Integration stage. A Run with no Lane work uses the serial Iteration driver and says so | [parallel mode](docs/parallel-mode.md) |
 | **Live interface** | Per-Iteration activity, context fill, observed tokens, and billed cost while the Run is happening — via the shared `git-loopy-tui` helper on a terminal, or the line printer everywhere else | [runners](docs/runners.md) |
 | **Closed-world Skill policy** | Exactly the Skills a Run may load — no ambient context bloat from whatever is installed on the host | [skill policy](docs/skill-policy.md) |
 
@@ -100,7 +104,7 @@ work needs it.
 
 ```bash
 # Install the current published Release once, user-global.
-uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python"
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.11.3#subdirectory=git-loopy/python"
 
 # In the repository you want it to work on:
 cd ~/code/my-project
@@ -111,6 +115,11 @@ git-loopy init
 # Start a Run.
 git-loopy
 ```
+
+This installs the latest stable **v0.11.3** Release. The README also describes
+current-source features added after that tag, including the named Planner,
+activated Agent profiles, and Issue-clone Lanes; use an Edge install for those
+until a later Release includes them.
 
 The terminal interface is included in the base installation. An older install
 command that names the removed `[tui]` extra still succeeds, but your package
@@ -137,14 +146,16 @@ git-loopy config list             # the effective settings a Run would use
 > gated, and autonomous work has nothing to prove itself against. Declare the
 > commands you already trust before your first Run.
 
-Hosts without Python can run the [shell](git-loopy/shell/README.md) or
-[PowerShell](git-loopy/powershell/README.md) Orchestrator instead — same
-contract, same live helper.
+Python is required for the current active Release. The
+[shell](git-loopy/shell/README.md) and
+[PowerShell](git-loopy/powershell/README.md) implementations are retained as
+dormant 0.11.2 paths, not current alternatives; see the
+[Runner family status](docs/runners.md).
 
 ### Installation identity and channels
 
-The default command installs the published **v0.9.0 Release**. Its
-installation identity is therefore `git-loopy 0.9.0`: `git-loopy --version`
+The default command installs the published **v0.11.3 Release**. Its
+installation identity is therefore `git-loopy 0.11.3`: `git-loopy --version`
 and `wrapper.run.start` report that exact Release version.
 
 To install another named, published Release, replace the tag with the Release
@@ -296,21 +307,24 @@ if a saved Skill policy still enables the retired name.
    context glossaries reached through `GLOSSARY-MAP.md`), record
    consequential decisions in `docs/adr/`, and run `/to-spec` once the human and
    agent agree on the outcome.
-4. **Create the route.** Run `/to-tickets` to produce small vertical slices with
-   explicit acceptance criteria and blocking edges. Each ticket should fit inside
-   one focused execution context.
+4. **Create the route.** Launch the named Planner with
+   `git-loopy plan <planning-document>` (or invoke `/to-tickets` directly) to
+   produce small vertical slices with explicit acceptance criteria and blocking
+   edges. Each ticket should fit inside one focused execution context; the
+   proposed graph still needs the Loop engineer's approval.
 5. **Open the execution gate.** `/triage` checks that a ticket is actionable and
    applies `ready-for-agent`. That label is an explicit human decision, not a
    guess made by the runner.
 6. **Start the Run.** Launch `git-loopy`. At the start of an Iteration, the
-   Orchestrator collects the current Pool, and the agent selects exactly one
-   Active issue and emits its Working marker.
-7. **Complete one Iteration.** The agent reads the issue and domain docs, works in
-   vertical slices, and runs the repository's feedback loops. It commits with a
-   close keyword and closes the issue. The Orchestrator captures leftover work in
-   a Checkpoint when necessary, pushes new commits, updates the live interface
-   and Summary, and charges the issue a Strike whenever its session reaches an
-   ending: no progress, a timeout or crash, no more tasks, or a content filter.
+   Orchestrator collects the current Pool and binds one eligible issue before
+   opening its task-specific Agent session.
+7. **Complete one Iteration.** The Agent reads the issue and domain docs, works
+   in vertical slices, and runs the repository's feedback loops. It commits
+   with a close keyword and closes the issue. The Orchestrator captures leftover
+   work in a Checkpoint when necessary, pushes new commits, updates the live
+   interface and Summary, and charges the issue a Strike whenever its session
+   reaches an ending: no progress, a timeout or crash, no more tasks, or a
+   content filter.
 8. **Repeat, then judge.** The next Iteration receives a fresh Pool and context.
    An issue whose sessions keep ending badly is skipped once it holds
    its configured Strikes; the Run stops when work is exhausted, the configured
@@ -333,14 +347,15 @@ flowchart TD
     Evidence -- "Runnable answer" --> Prototype["/prototype"] --> Agreed
     Evidence -- "No" --> Agreed
     Agreed --> Spec["/to-spec<br/>durable destination"]
-    Spec --> Tickets["/to-tickets<br/>vertical slices and dependencies"]
+    Spec --> Tickets["git-loopy plan<br/>/to-tickets: vertical slices and dependencies"]
     Tickets --> Triage["/triage<br/>ready-for-agent"]
     Triage --> Pool["Issue Pool"]
 
     subgraph Iteration["One git-loopy Iteration"]
-        Collect["Collect the Pool"] --> Select["Select one Active issue<br/>emit Working marker"]
-        Select --> Execute["Execute one vertical slice<br/>run feedback loops"]
-        Execute --> Close["Commit with close keyword<br/>close the issue"]
+        Collect["Collect the Pool"] --> Bind["Bind one eligible issue<br/>at Pickup"]
+        Bind --> Execute["Open its task-specific Agent<br/>execute one vertical slice"]
+        Execute --> Verify["Run feedback loops"]
+        Verify --> Close["Commit with close keyword<br/>close the issue"]
         Close --> Account["Checkpoint if needed<br/>push and account for progress"]
     end
 
@@ -360,7 +375,7 @@ flowchart TD
 | [Workflow](docs/workflow.md) | The full path from vague idea to accepted value |
 | [Concepts](docs/concepts.md) | The context model behind small issues and fresh Iterations |
 | [Wrapper contract](docs/wrapper-contract.md) | The behavior every Orchestrator must implement |
-| [Runner family](docs/runners.md) | The [Python](git-loopy/python/README.md), [shell](git-loopy/shell/README.md), and [PowerShell](git-loopy/powershell/README.md) Orchestrators |
+| [Runner family](docs/runners.md) | The active Python path and the dormant [shell](git-loopy/shell/README.md) and [PowerShell](git-loopy/powershell/README.md) baselines |
 | [Installation lifecycle](git-loopy/python/README.md#installation-lifecycle) | Choosing Python Runner `update`, `upgrade`, or `uninstall` and their safeguards |
 | [Parallel mode](docs/parallel-mode.md) | Lanes, `parallel-safe`, and the Integration stage |
 | [Skill policy](docs/skill-policy.md) | The closed world of Skills a Run may load |
