@@ -31,11 +31,8 @@ not the Queue's explanation source (ADR-0075). The retained Python replay
 projection and the live external Rust Dashboard share this semantic contract;
 there is no separate Python live Dashboard widget since #459.
 
-`git-loopy` is the active Python Orchestrator and reference path. The shell and
-PowerShell implementations remain dormant at Release 0.11.2; they do not
-advance with the Python Release. The Rust Dashboard helper belongs to Python,
-and a Rust Orchestrator is planned
-([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md)). Model,
+`git-loopy` is the active Python Orchestrator and reference path; see the
+[Runner family guide](../../docs/runners.md) for the other paths' status. Model,
 reasoning effort, and context tier are set with per-Run `--model`,
 `--reasoning-effort`, and `--context-tier` flags or persisted `config.toml`
 values.
@@ -260,9 +257,9 @@ example, `@v0.8.0`). To deliberately install unreleased source, pin a full
 commit SHA instead; that is an **Edge install**, whose identity is the SHA, not
 the source `VERSION` value. See the root
 [installation channels](../../README.md#installation-identity-and-channels)
-for commands. The named Planner, activated Agent profiles, and Issue-clone
-Lanes documented below are current-source features added after v0.11.2; use an
-Edge install until v0.11.3 is published.
+for commands. The commands and features documented below describe current
+source; features added after v0.11.2 require an Edge install until v0.11.3 is
+published.
 
 ---
 
@@ -1229,16 +1226,18 @@ git-loopy runs
 ```
 RUN                         STATE    STARTED               SCOPE
 01K6Z9QWERTYUIOPASDFGHJKLZ  live     2026-09-19T11:04:02Z  /src/app
-01K6Z7H4TCXV0YQ9M2N8B3RJ5D  dead     2026-09-19T09:51:40Z  /src/app/.worktrees/lane-2
+01K6Z7H4TCXV0YQ9M2N8B3RJ5D  dead     2026-09-19T09:51:40Z  /src/app-worktree
 01K6Z4B1GKAP7WS3E6D9F2TQXN  unknown  2026-09-18T22:17:09Z  /src/app
 ```
 
 Every Run of **this clone** — the worktree you invoked it from plus every other
 worktree `git worktree list` registers — newest first. Run it from any of those
 worktrees and you get the same listing, including Runs that were started from a
-different one. `RUN` is the full Run identity, and `SCOPE` is the worktree the
-Run published its artefacts in; together they are what `git-loopy attach` and
-`git-loopy stop` target, so the two cannot disagree about which Runs exist.
+different one. Lane Issue clones are independent Git clones; Runs in them are
+listed from those clones, not here. `RUN` is the full Run identity, and `SCOPE`
+is the worktree the Run published its artefacts in; together they are what
+`git-loopy attach` and `git-loopy stop` target, so the two cannot disagree
+about which Runs exist.
 
 The domain is the clone, never the machine. An independent clone of the same
 repository has its own Runs and its own listing; nothing here scans for them,

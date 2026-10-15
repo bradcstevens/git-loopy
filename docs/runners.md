@@ -26,7 +26,7 @@ Python; no Rust Orchestrator path exists today.
 | **PowerShell**          | Dormant at 0.11.2               | PowerShell 7+ (no `jq`)      | Windows, Linux, macOS  | [`git-loopy/powershell/README.md`](../git-loopy/powershell/README.md) |
 
 Use the active Python path for current Releases. The dormant quickstarts
-describe their own pinned baselines, not feature parity with current Python.
+describe their own declared Path baselines, not feature parity with current Python.
 Compatibility is limited to each path's declared
 [Wrapper contract](wrapper-contract.md) support. CI still runs all existing
 [Conformance suites](../git-loopy/conformance/README.md); per-path gate selection
@@ -113,7 +113,7 @@ feature changes. The family was designed to grow in value-first phases
   [`docs/parallel-mode.md`](parallel-mode.md).
 
 The rest of this page documents the Python reference member in depth. The
-Wrapper contract defines the common surface, but the paths' pinned baselines
+Wrapper contract defines the common surface, but the paths' declared Path baselines
 and implemented behavior differ: the Python member charges each Strike to the
 issue its session worked and never stops on Strikes, while the shell and
 PowerShell Orchestrators keep one Run-wide count of consecutive no-progress
