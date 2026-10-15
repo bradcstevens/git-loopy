@@ -4,7 +4,9 @@ the installed Skill catalog (#518), and repair the saved Skill policy on request
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import subprocess
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -12,7 +14,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, Callable, Iterable, Mapping
 
 from .config import RunConfig, SkillPolicyInput, SkillPolicyInputs
-from .copilot_client import make_copilot_client
+from .copilot_client import make_copilot_client, resolve_copilot_base_directory
 from .git import GitClient, SubprocessGitClient
 from .prompt import PromptMetadataError, load_prompt, validate_run_instructions
 from .settings import global_config_path, project_config_path
@@ -47,6 +49,7 @@ from .skill_run_preflight import (
     resolve_run_skill_policy_preflight,
 )
 from .run_environment_preflight import (
+    RunEnvironmentCheck,
     RunEnvironmentPreflight,
     resolve_run_environment_preflight,
 )
@@ -180,6 +183,69 @@ def _render_catalog_unverified(
     output_fn(f"Skill catalog | could not verify | Warning: {detail}")
 
 
+def _copilot_proxy_ca_check(environment: Mapping[str, str]) -> RunEnvironmentCheck | None:
+    """Inspect Copilot's own CA verdict; never create, rotate or trust it (ADR-0093)."""
+    home = resolve_copilot_base_directory(environment)
+    path = home / "settings.json"
+    try:
+        policy = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(policy, dict):
+            raise ValueError("settings must be an object")
+        sandbox = policy.get("sandbox", {})
+        if not isinstance(sandbox, dict):
+            raise ValueError("sandbox must be an object")
+        auth = sandbox.get("auth", {})
+        if not isinstance(auth, dict) or not isinstance(auth.get("gh", False), bool):
+            raise ValueError("sandbox.auth.gh must be a boolean")
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return RunEnvironmentCheck(
+            name="Copilot sandbox settings",
+            passed=False,
+            detail="could not read sandbox.auth.gh from Copilot settings",
+            remedy=f"Check {path} before checking the proxy certificate authority.",
+        )
+    if auth.get("gh") is not True:
+        return None
+    # Bind the probe to the same Copilot home as the policy and SDK. Retain
+    # host tool/feed settings when the caller supplied only a scope overlay.
+    try:
+        result = subprocess.run(
+            ["copilot", "sandbox", "ca", "status"],
+            env={**os.environ, **environment, "COPILOT_HOME": str(home)},
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return RunEnvironmentCheck(
+            name="Copilot proxy CA",
+            passed=False,
+            detail="could not verify OS trust (CA status unavailable or timed out)",
+            remedy="Inspect `copilot sandbox ca status` before changing OS trust.",
+        )
+    if result.returncode == 0:
+        return None
+    if result.returncode != 3:
+        return RunEnvironmentCheck(
+            name="Copilot proxy CA",
+            passed=False,
+            detail=f"could not verify OS trust (CA status exit {result.returncode})",
+            remedy="Inspect `copilot sandbox ca status` before changing OS trust.",
+        )
+    return RunEnvironmentCheck(
+        name="Copilot proxy CA",
+        passed=False,
+        detail="Copilot's proxy certificate authority is not trusted by the OS",
+        remedy=(
+            "Run `copilot sandbox ca trust` yourself; git-loopy never changes "
+            "OS trust stores, even with `doctor --apply`."
+        ),
+    )
+
+
 def run_doctor(
     *,
     config: RunConfig,
@@ -205,6 +271,11 @@ def run_doctor(
         repo_root=repo_root,
         issue_source=config.issue_source,
     )
+    ca_check = _copilot_proxy_ca_check(environment)
+    if ca_check is not None:
+        environment_preflight = RunEnvironmentPreflight(
+            (*environment_preflight.checks, ca_check)
+        )
     for check in environment_preflight.checks:
         output_fn(
             f"{check.name} | {'passed' if check.passed else 'failed'} | "
@@ -310,6 +381,8 @@ def run_doctor(
             output_fn("Skill policy is healthy; new Dynamic assessments are unavailable.")
         elif apply:
             output_fn("Skill policy is healthy; no changes to apply.")
+        elif not environment_preflight.passed:
+            output_fn("Skill policy is healthy; environment checks still fail.")
         elif config.route_policy is RoutePolicy.UNSELECTED:
             output_fn("Skill policy is healthy; a Run would not be blocked.")
         else:
