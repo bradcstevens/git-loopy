@@ -34,6 +34,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Read-only Azure target setup. No SDK/credential discovery on a local Run.
+remote = [
+    "azure-containerapps-sandbox==0.1.0b4",
+]
+
 assessment = [
     "httpx>=0.24,<1",
     "mcp>=2.3,<3",
