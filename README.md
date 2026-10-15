@@ -263,6 +263,7 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/pr`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/pr) | Write a pull-request body that explains the change and its review context. |
 | [`/push`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/push) | Publish finished work: stage the intended changes, commit, push, and open a pull request when one is needed. |
 | [`/release`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/release) | Publish one release for all unreleased issues git-loopy completed, using the target project's versioning and release gates. Install this user-invoked skill separately in your agent; it is not a Required Skill in a Run. |
+| [`/release-assessment`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/release-assessment) | Show an advisory review packet in Copilot App, checking freshness before every follow-up. Offers only a re-run, never release authorization. Requires the [Release assessment service](docs/release-assessment.md); excluded from Runs. |
 
 ### Set up and extend the workflow
 

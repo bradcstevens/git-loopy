@@ -108,13 +108,23 @@ interrupted install never leaves half a catalog.
   authority for its Required Skills. Schema-1 pins remain readable for
   installation migration; they cannot satisfy an activated Run's preflight.
 
-### Bounded-load Skill change (#819)
+### Release-assessment and bounded-load Skills (#767, #819)
 
-The paired change publishes
-[`3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67`](https://github.com/bradcstevens/git-loopy-skills/commit/3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67)
-in `bradcstevens/git-loopy-skills`, proves that clean published checkout with
-`git_loopy.skill_candidate`, and only then moves the pin. It changes:
+The pin is
+[`725c893bdc58c57edc85376aac3764b52fc218c9`](https://github.com/bradcstevens/git-loopy-skills/commit/725c893bdc58c57edc85376aac3764b52fc218c9).
+It reconciles two sibling revisions: `0063cccfcc0d89a9bdca57cc17e942382af40c64`
+added release assessment (#767), while
+`3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67` bounded host load (#819).
+Neither contained the other; keeping either pin would lose the other change.
+The combined revision was published in `bradcstevens/git-loopy-skills`, proved
+with `git_loopy.skill_candidate` against its clean checkout, and only then
+pinned here. Both original revisions are ancestors, and their Skill bodies
+are preserved:
 
+- **`release-assessment`**: Copilot App displays the advisory packet verbatim,
+  checks freshness before every follow-up, and offers only a re-run. No Run
+  profile exposes it, and both Runner prompts explicitly exclude it even when
+  an operator enables it.
 - **`diagnosing-bugs`**: deliberate stress uses the macOS `utility` clamp,
   at most about 2x logical CPUs including child workers, and a per-invocation
   wall-clock cap from the issue or 30 minutes by default. A cutoff is
@@ -127,8 +137,10 @@ in `bradcstevens/git-loopy-skills`, proves that clean published checkout with
 Ordinary declared feedback loops remain uncapped and inherit the Run's Host
 yield policy; their processes still require cleanup. The upstream change also
 updates the three Skill guides and adds load-free wording guards to its
-declared validation gate. The catalog's 44 top-level Skill names and the
-profiles' Required and Permitted Skills are unchanged.
+declared validation gate. Reconciliation also generates the new
+`release-assessment` agent required by the upstream model projection.
+The recounted catalog has **45 top-level Skills** (49 including nested Skills).
+The profiles' Required and Permitted Skills are unchanged.
 
 ---
 
@@ -146,8 +158,8 @@ It fetches the pinned commit SHA itself â€” not a ref that points at it today â€
 unless it proves out. On success:
 
 ```
-acquired bradcstevens/git-loopy-skills @ 75e01c4f62d002bd0a0773b3c253b61ca065f87a into .git-loopy/skill-source
-43 Skills, licence MIT (LICENSE), provenance README.md
+acquired bradcstevens/git-loopy-skills @ 725c893bdc58c57edc85376aac3764b52fc218c9 into .git-loopy/skill-source
+45 Skills, licence MIT (LICENSE), provenance README.md
 ```
 
 | Flag | Use |
@@ -258,8 +270,9 @@ the proof is the failure this sequence exists to prevent.
    rerunning it; a failed preview never authorizes moving the pin.
    Reconcile the pin's consumers in that same change: the
    offline revision and Skill-name snapshot in `tests/test_prompt.py`, the
-   README's catalog table, and both `PROMPT.md` copies when a Skill is added,
-   renamed, or retired. Decide explicitly whether new Skills belong in an
+   README's catalog table, this document's revision, counts and upgrade notes,
+   and both `PROMPT.md` copies when a Skill is added, renamed, or retired.
+   Decide explicitly whether new Skills belong in an
    autonomous Iteration; user-invoked operations must not become implicit
    follow-up work. Keep the Required Skills unchanged unless the Run contract
    itself is changing.
@@ -278,15 +291,19 @@ names this pin rather than repeating a revision that could drift away from it.
 ### Upgrading existing policies
 
 The catalog is pinned to
-`a2189cb96ef48b51cea1672966726e7475fef4bd`, the published seven-profile change
-from [bradcstevens/git-loopy-skills#152](https://github.com/bradcstevens/git-loopy-skills/pull/152),
-proved for #825 and activated by #829. It replaces
-`7d98aa729d04cb01686793150272cf9c1094fb9a`. The paired change carries seven
-profiles, the read-only `code-review` findings return, `to-tickets`' five-execution-
-Task-type restriction for agent-ready tickets, and the scorecard/profile-role
-agreement check. It also carries the intervening `/next` Python chain-ledger
-and reentry implementation and its setup-hook update. No Skills were added or
-removed by this pin move; the catalog still has 44 names.
+`725c893bdc58c57edc85376aac3764b52fc218c9`, the reconciled release-assessment change
+from [bradcstevens/git-loopy-skills#153](https://github.com/bradcstevens/git-loopy-skills/pull/153),
+proved and pinned for #767 without dropping #819's bounded-load guidance.
+It replaces main's `3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67` and the PR's
+`0063cccfcc0d89a9bdca57cc17e942382af40c64`; see
+[the paired-change record above](#release-assessment-and-bounded-load-skills-767-819).
+The release-assessment addition includes `model-scorecard`'s `copilot:task`
+mapping, cached role-estimate header, generated agent and README row.
+No Skills are removed; the catalog has 45 names.
+The seven Agent profiles are unchanged from the previous pin, published in
+[bradcstevens/git-loopy-skills#152](https://github.com/bradcstevens/git-loopy-skills/pull/152),
+proved for #825 and activated by #829. Their Required and Permitted Skills
+remain unchanged.
 `/to-handoff` and `/chief-of-staff` are absent at this revision and await a
 later pin move.
 
@@ -300,7 +317,7 @@ The Run prompt prefers these root entry points in both domain reading and
 plan stress-testing, falling back to `CONTEXT.md` / `CONTEXT-MAP.md` only when
 neither new entry point exists.
 
-The current catalog includes 44 Skills. `/next` handles both workflow routing
+The current catalog includes 45 Skills. `/next` handles both workflow routing
 and skill selection, replacing `/skill-router`; its skill-selection and
 phase-boundary references travel with a standalone installation. An earlier
 upgrade also adopted the upstream retirement of `/loose-ends` and the addition
@@ -337,7 +354,11 @@ pull-request body guidance, not permission to create or merge a PR.
 Profiles keep `release`, `set-task-models`, `model-scorecard`, `sync-model-roster`,
 and `jev-ultrafast` out of autonomous Iterations, regardless of policy enablement.
 The same closed exposure answers #537: `push`, `wizard`, `codebase-audit`, and
-`wait-what` occur in no in-Run profile. The old prose exclusion list and its pinned
-test are retired under ADR-0078.
+`wait-what` occur in no in-Run profile. The old general prose exclusion list and
+its pinned test are retired under ADR-0078. The new `release-assessment` Skill
+also occurs in no in-Run profile; both `PROMPT.md` copies explicitly exclude it
+because a Run has no Release assessment service. It is an advisory Copilot App
+conversation: it shows the review packet verbatim, checks freshness before every
+follow-up, and offers only a re-run, never release authorization.
 Install the catalog into your agent client separately to invoke these yourself; doing
 so neither changes git-loopy's saved policy nor authorizes a release.
