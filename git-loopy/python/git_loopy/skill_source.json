@@ -2,7 +2,7 @@
   "schema_version": 2,
   "repository": "bradcstevens/git-loopy-skills",
   "url": "https://github.com/bradcstevens/git-loopy-skills.git",
-  "revision": "0063cccfcc0d89a9bdca57cc17e942382af40c64",
+  "revision": "725c893bdc58c57edc85376aac3764b52fc218c9",
   "skills_directory": "skills",
   "profiles_directory": "profiles",
   "license": {

@@ -108,6 +108,40 @@ interrupted install never leaves half a catalog.
   authority for its Required Skills. Schema-1 pins remain readable for
   installation migration; they cannot satisfy an activated Run's preflight.
 
+### Release-assessment and bounded-load Skills (#767, #819)
+
+The pin is
+[`725c893bdc58c57edc85376aac3764b52fc218c9`](https://github.com/bradcstevens/git-loopy-skills/commit/725c893bdc58c57edc85376aac3764b52fc218c9).
+It reconciles two sibling revisions: `0063cccfcc0d89a9bdca57cc17e942382af40c64`
+added release assessment (#767), while
+`3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67` bounded host load (#819).
+Neither contained the other; keeping either pin would lose the other change.
+The combined revision was published in `bradcstevens/git-loopy-skills`, proved
+with `git_loopy.skill_candidate` against its clean checkout, and only then
+pinned here. Both original revisions are ancestors, and their Skill bodies
+are preserved:
+
+- **`release-assessment`**: Copilot App displays the advisory packet verbatim,
+  checks freshness before every follow-up, and offers only a re-run. No Run
+  profile exposes it, and both Runner prompts explicitly exclude it even when
+  an operator enables it.
+- **`diagnosing-bugs`**: deliberate stress uses the macOS `utility` clamp,
+  at most about 2x logical CPUs including child workers, and a per-invocation
+  wall-clock cap from the issue or 30 minutes by default. A cutoff is
+  inconclusive, never a pass. No escalation or raised inherited priority is
+  allowed; owned processes are reaped after completion, failure, or interruption.
+- **`to-spec` and `to-tickets`**: acceptance criteria demanding deliberate host
+  load carry those bounds in the spec and each resulting ticket, preserving any
+  tighter agreed limits.
+
+Ordinary declared feedback loops remain uncapped and inherit the Run's Host
+yield policy; their processes still require cleanup. The upstream change also
+updates the three Skill guides and adds load-free wording guards to its
+declared validation gate. Reconciliation also generates the new
+`release-assessment` agent required by the upstream model projection.
+The recounted catalog has **45 top-level Skills** (49 including nested Skills).
+The profiles' Required and Permitted Skills are unchanged.
+
 ---
 
 ## Acquiring it by hand
@@ -124,7 +158,7 @@ It fetches the pinned commit SHA itself â€” not a ref that points at it today â€
 unless it proves out. On success:
 
 ```
-acquired bradcstevens/git-loopy-skills @ 0063cccfcc0d89a9bdca57cc17e942382af40c64 into .git-loopy/skill-source
+acquired bradcstevens/git-loopy-skills @ 725c893bdc58c57edc85376aac3764b52fc218c9 into .git-loopy/skill-source
 45 Skills, licence MIT (LICENSE), provenance README.md
 ```
 
@@ -257,13 +291,15 @@ names this pin rather than repeating a revision that could drift away from it.
 ### Upgrading existing policies
 
 The catalog is pinned to
-`0063cccfcc0d89a9bdca57cc17e942382af40c64`, the published release-assessment change
+`725c893bdc58c57edc85376aac3764b52fc218c9`, the reconciled release-assessment change
 from [bradcstevens/git-loopy-skills#153](https://github.com/bradcstevens/git-loopy-skills/pull/153),
-proved and pinned for #767. It replaces
-`a2189cb96ef48b51cea1672966726e7475fef4bd`. The paired change adds
-`release-assessment`, updates `model-scorecard`'s `copilot:task` mapping and cached
-role-estimate header for that Skill, and adds the generated README row. No existing
-Skill body changes, and no Skills are removed; the catalog now has 45 names.
+proved and pinned for #767 without dropping #819's bounded-load guidance.
+It replaces main's `3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67` and the PR's
+`0063cccfcc0d89a9bdca57cc17e942382af40c64`; see
+[the paired-change record above](#release-assessment-and-bounded-load-skills-767-819).
+The release-assessment addition includes `model-scorecard`'s `copilot:task`
+mapping, cached role-estimate header, generated agent and README row.
+No Skills are removed; the catalog has 45 names.
 The seven Agent profiles are unchanged from the previous pin, published in
 [bradcstevens/git-loopy-skills#152](https://github.com/bradcstevens/git-loopy-skills/pull/152),
 proved for #825 and activated by #829. Their Required and Permitted Skills

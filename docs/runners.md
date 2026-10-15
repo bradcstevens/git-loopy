@@ -11,23 +11,24 @@ host language that fits their operating system and comfort level
 ([ADR-0013](adr/0013-multi-language-runner-family.md)).
 
 The **Python Orchestrator** at [`git-loopy/python/`](../git-loopy/python/),
-built on the GitHub Copilot Python SDK, is the **reference implementation**.
-Alongside it, the **shell** (Bash) and **PowerShell** paths are **dormant at
-Release 0.11.2**, contract 2.26 and Event schema 1. Each runs its existing serial
-loop, with carried Attempt-lifecycle and Ending debt. Their Orchestrators and
-installers read their own [Path manifests](../git-loopy/paths/README.md), never
-Python's root Release version. The Rust Dashboard helper belongs to Python;
-no Rust path exists until a Rust Orchestrator starts.
+built on the GitHub Copilot Python SDK, is the **active reference
+implementation**. The **shell** (Bash) and **PowerShell** paths are dormant at
+Release 0.11.2, contract 2.26 and Event schema 1. Each retains its existing
+serial loop and carried Attempt-lifecycle and Ending debt. Their Orchestrators
+and installers read their own [Path manifests](../git-loopy/paths/README.md),
+never Python's root Release version. The Rust Dashboard helper belongs to
+Python; no Rust Orchestrator path exists today.
 
-| Orchestrator            | Language                     | Platforms              | Quickstart                                                        |
-| ----------------------- | ---------------------------- | ---------------------- | ---------------------------------------------------------------- |
-| **Python** (reference)  | Python ≥ 3.11 + Copilot SDK  | Linux, macOS, Windows  | [`git-loopy/python/README.md`](../git-loopy/python/README.md)     |
-| **shell**               | Bash 4+ (needs `jq`)         | Linux, macOS           | [`git-loopy/shell/README.md`](../git-loopy/shell/README.md)       |
-| **PowerShell**          | PowerShell 7+ (no `jq`)      | Windows, Linux, macOS  | [`git-loopy/powershell/README.md`](../git-loopy/powershell/README.md) |
+| Orchestrator            | Status                         | Language                     | Platforms              | Quickstart                                                        |
+| ----------------------- | ------------------------------ | ---------------------------- | ---------------------- | ---------------------------------------------------------------- |
+| **Python** (reference)  | Active                         | Python ≥ 3.11 + Copilot SDK  | Linux, macOS, Windows  | [`git-loopy/python/README.md`](../git-loopy/python/README.md)     |
+| **shell**               | Dormant at 0.11.2               | Bash 4+ (needs `jq`)         | Linux, macOS           | [`git-loopy/shell/README.md`](../git-loopy/shell/README.md)       |
+| **PowerShell**          | Dormant at 0.11.2               | PowerShell 7+ (no `jq`)      | Windows, Linux, macOS  | [`git-loopy/powershell/README.md`](../git-loopy/powershell/README.md) |
 
-Pick the member that matches your OS and the language you're comfortable with;
-compatibility is limited to their declared common
-[Wrapper contract](wrapper-contract.md) surface. CI still runs all existing
+Use the active Python path for current Releases. The dormant quickstarts
+describe their own pinned baselines, not feature parity with current Python.
+Compatibility is limited to each path's declared
+[Wrapper contract](wrapper-contract.md) support. CI still runs all existing
 [Conformance suites](../git-loopy/conformance/README.md); per-path gate selection
 is a later slice of #791. Each port's quickstart is
 self-contained (prerequisites, install, skills onboarding, a runnable example,
@@ -35,14 +36,15 @@ the phase-1 environment surface, replay artifacts, and exit codes); the shared
 contract, the per-Iteration flow, and skill routing live once in `docs/` and are
 linked, not copied.
 
-## Phase 1 today, richer experience later
+## Current path and retained port baselines
 
-Every phase-1 member runs the full loop contract — collection, the
+The active Python path implements the current Wrapper contract — collection, the
 discriminator, the auto-close backstop, progress/Strike accounting, the
 Checkpoint, push, the exit-code table, and the phase-1
 [environment surface](wrapper-contract.md#11-environment-variable-surface-must-honour-the-phase-1-core)
-— and emits the shared **Event schema** as JSONL. The richer experience is
-delivered in later phases, sequenced value-first
+— and emits the shared **Event schema** as JSONL. The dormant native paths
+retain their declared 0.11.2 baselines and do not inherit later contract or
+feature changes. The family was designed to grow in value-first phases
 ([ADR-0013](adr/0013-multi-language-runner-family.md#decision)):
 
 - **Phase 2 — live TUI + distribution.** The single shared `git-loopy-tui`
@@ -102,19 +104,19 @@ delivered in later phases, sequenced value-first
   reads no `routing.measured.toml` is conforming rather than behind.
 - **Phase 4 — telemetry.** OpenTelemetry (OTLP) emission from the native
   Orchestrators (the Python member offers it today via its `otel` extra).
-- **Phase 5 — Parallel mode.** git-worktree **Lanes** / **Rolling dispatch** /
+- **Phase 5 — Parallel mode.** Issue-clone **Lanes** / **Rolling dispatch** /
   **Integration** across the family. The Python member schedules Lanes today;
   the shell and PowerShell Orchestrators declare `parallel_mode` unsupported in
   their capability manifest and refuse a **Lane cap** above 1 rather than
   accepting it and running serially. See
   [`docs/parallel-mode.md`](parallel-mode.md).
 
-The rest of this page documents the Python reference member in depth; its
-per-Iteration flow, exit conditions, and skill routing below are the shared
-behaviour every port implements, except **Strike** accounting: the Python
-member charges each Strike to the issue its session worked and never stops on
-Strikes, while the shell and PowerShell Orchestrators keep one Run-wide count
-of consecutive no-progress Iterations and end `stuck` at the limit
+The rest of this page documents the Python reference member in depth. The
+Wrapper contract defines the common surface, but the paths' pinned baselines
+and implemented behavior differ: the Python member charges each Strike to the
+issue its session worked and never stops on Strikes, while the shell and
+PowerShell Orchestrators keep one Run-wide count of consecutive no-progress
+Iterations and end `stuck` at the limit
 ([ADR-0070](adr/0070-a-strike-is-charged-to-the-issue.md)).
 
 ## Python reference Orchestrator

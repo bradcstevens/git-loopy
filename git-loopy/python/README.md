@@ -31,8 +31,10 @@ not the Queue's explanation source (ADR-0075). The retained Python replay
 projection and the live external Rust Dashboard share this semantic contract;
 there is no separate Python live Dashboard widget since #459.
 
-`git-loopy` is the canonical command for the Python member. Shell, PowerShell,
-and Rust Orchestrators are planned around the same contract
+`git-loopy` is the active Python Orchestrator and reference path. The shell and
+PowerShell implementations remain dormant at Release 0.11.2; they do not
+advance with the Python Release. The Rust Dashboard helper belongs to Python,
+and a Rust Orchestrator is planned
 ([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md)). Model,
 reasoning effort, and context tier are set with per-Run `--model`,
 `--reasoning-effort`, and `--context-tier` flags or persisted `config.toml`
@@ -223,8 +225,8 @@ deferred, so the install string points at this repo's nested package via
 `#subdirectory=git-loopy/python`:
 
 ```bash
-# Put a single `git-loopy` command for the published v0.9.0 Release on PATH.
-uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python"
+# Put a single `git-loopy` command for the published v0.11.3 Release on PATH.
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.11.3#subdirectory=git-loopy/python"
 
 # ...then run it from inside any git repo:
 cd ~/some/other/repo && git-loopy
@@ -234,14 +236,14 @@ For an ephemeral, npx-style run (no install), use `uvx` with the same spec (a
 bare `uvx git-loopy` is reserved for a future PyPI release):
 
 ```bash
-uvx --from "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python" git-loopy
+uvx --from "git+https://github.com/bradcstevens/git-loopy@v0.11.3#subdirectory=git-loopy/python" git-loopy
 ```
 
 Repos already on Python/uv can instead add it as a **project-local dev
 dependency** and run it through their own environment:
 
 ```bash
-uv add --dev "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python"
+uv add --dev "git+https://github.com/bradcstevens/git-loopy@v0.11.3#subdirectory=git-loopy/python"
 uv run git-loopy
 ```
 
@@ -251,14 +253,16 @@ in a repo that has no `git-loopy/` folder at all. Persist per-run knobs in a
 [`config.toml`](#persistent-config-configtoml) — hand-written, or scaffolded for
 you by [`git-loopy init`](#first-run-setup-git-loopy-init) — when you want them.
 
-The commands above are all **v0.9.0 Release** installs: `git-loopy --version`
-reports `git-loopy 0.9.0`, the installation's Release identity. To choose a
+The commands above are all **v0.11.3 Release** installs: `git-loopy --version`
+reports `git-loopy 0.11.3`, the installation's Release identity. To choose a
 different named Release, use its published tag in the same position (for
 example, `@v0.8.0`). To deliberately install unreleased source, pin a full
 commit SHA instead; that is an **Edge install**, whose identity is the SHA, not
 the source `VERSION` value. See the root
 [installation channels](../../README.md#installation-identity-and-channels)
-for commands.
+for commands. The named Planner, activated Agent profiles, and Issue-clone
+Lanes documented below are current-source features added after v0.11.3; use an
+Edge install until a later Release includes them.
 
 ---
 
