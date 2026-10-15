@@ -198,7 +198,7 @@ def _remove_confirmed_plan(
 
 
 def find_live_lanes(repo_root: Path) -> tuple[Path, ...]:
-    """Return the clone's reserved worktrees whose owning Run still holds a lock.
+    """Return reserved workspaces whose owning Run still holds a lock.
 
     Liveness composes exactly as a Sweep's does (:func:`git_loopy.sweep`): any
     locked artifact means live, any *unreadable* answer means unknown, and only
@@ -212,7 +212,7 @@ def find_live_lanes(repo_root: Path) -> tuple[Path, ...]:
     worktrees = git.list_worktrees()
     control_dirs = tuple(worktree.path / ".git-loopy" / "logs" for worktree in worktrees)
     live: list[Path] = []
-    for worktree in reserved_worktrees(worktrees):
+    for worktree in reserved_worktrees([*worktrees, *git.list_issue_clones()]):
         match = _RESERVED_BRANCH.fullmatch(worktree.branch or "")
         if match is None:
             continue

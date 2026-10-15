@@ -274,10 +274,11 @@ What a sweep is allowed to touch is decided by one thing at a time:
   that lock in every worktree the clone registers. Where the lock cannot be
   read at all, liveness is *unknown* rather than dead, and nothing is reclaimed.
 - **Is any of it unfinished work?** A dirty workspace is committed to its own
-  Lane branch as a Checkpoint — **salvaged** — before the directory goes. Work
-  from an Issue clone reaches the source and its configured origin before removal.
-  is never destroyed, so the only workspace a sweep leaves behind is one whose
-  salvage failed. Salvaged work is recoverable, not resumable: a later Run cuts
+  Lane branch as a Checkpoint — **salvaged** — before the directory goes.
+  Issue clone commits reach the source; Checkpoints also get an origin push when
+  origin is configured. A failed push preserves the clone for retry without
+  blocking Integration. Work is never destroyed: failed salvage, import or
+  removal also preserves the workspace. Salvaged work is recoverable, not resumable: a later Run cuts
   a fresh Lane branch for the issue rather than continuing that one.
 - **Is the branch still worth anything?** A stage branch is always collected.
   A Lane branch is collected once it is *resolved* — merged into the branch

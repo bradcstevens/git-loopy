@@ -530,7 +530,7 @@ def _make_worktree_setup() -> worktree_module.WorktreeSetup:
     :func:`~git_loopy.worktree.detect_setup_command`'s best-effort auto-detect.
 
     **Unused by the serial path.** Per-Lane setup only exists in Parallel mode
-    (each **Lane** gets a fresh worktree that needs its environment prepared); the
+    (each **Lane** gets a fresh Issue clone that needs its environment prepared); the
     serial loop works in place on the repo worktree, so :func:`run` only wires this
     into the ``_ParallelLoop``.
     """
@@ -1589,7 +1589,7 @@ class _Loop:
                     run_id=self._writers.run_id,
                     # The repository root, for the classifier's reason: the
                     # assessment reads the issue, not a Lane's Issue clone, and a
-                    # Lane is routed before its worktree exists.
+                    # Lane is routed before its Issue clone exists.
                     working_directory=None,
                     send_timeout_seconds=config.send_timeout_seconds,
                     skill_exposure=self._skill_exposure,

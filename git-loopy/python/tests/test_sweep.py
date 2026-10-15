@@ -440,6 +440,44 @@ def test_sweep_recovers_a_crash_during_issue_clone_setup(tmp_path, monkeypatch) 
     assert source.list_issue_clones() == []
 
 
+@pytest.mark.skipif(not advisory_locking_available(), reason="requires advisory locks")
+@pytest.mark.parametrize("preparing", [False, True])
+def test_live_issue_clone_protects_run_control_from_uninstall(
+    tmp_path, monkeypatch, preparing,
+) -> None:
+    """Uninstall must not remove the lock that keeps Sweep away from a live clone."""
+    from git_loopy.uninstallcmd import find_live_lanes
+
+    source = _real_repo(tmp_path)
+    path = tmp_path / "clone"
+    run = subprocess.run
+
+    def interrupt_preparation(args, **kwargs):
+        result = run(args, **kwargs)
+        if preparing and args[:2] == ["git", "clone"]:
+            raise SystemExit("simulated setup interruption")
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "run", interrupt_preparation)
+        if preparing:
+            with pytest.raises(SystemExit):
+                source.add_issue_clone(path, branch=lane_branch_name("RUNLIVE", 7), base="main")
+        else:
+            source.add_issue_clone(path, branch=lane_branch_name("RUNLIVE", 7), base="main")
+    control_dir = source.root / ".git-loopy" / "logs"
+    control_dir.mkdir(parents=True)
+    control = RunControlArtifact.acquire(control_dir / "live-RUNLIVE.jsonl")
+    try:
+        assert find_live_lanes(source.root) == (path,)
+        assert not sweep(
+            git=source, github=None, control_dir=control_dir,
+            base_branch="main", dry_run=False,
+        ).reclaimed_anything
+    finally:
+        control.close()
+
+
 def test_sweep_removes_an_empty_legacy_directory_after_reclaiming_its_lane(
     tmp_path: Path,
 ) -> None:
