@@ -18,6 +18,7 @@ from tests.profile_fixtures import seed_profile_install
 def planning_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("COPILOT_HOME", str(home / ".copilot"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     for name in (
@@ -104,7 +105,7 @@ def test_plan_execs_routed_planner_with_a_private_copy(
 
 
 @pytest.mark.parametrize("where", [
-    "personal", "default-personal", ".github/agents", ".claude/agents",
+    "personal", "tilde-personal", "default-personal", ".github/agents", ".claude/agents",
     "nested/.github/agents", "nested/.claude/agents",
 ])
 def test_plan_refuses_a_shadowing_agent(
@@ -114,9 +115,13 @@ def test_plan_refuses_a_shadowing_agent(
     repo = Path.cwd()
     nested = repo / "nested/deeper"
     nested.mkdir(parents=True)
-    if where in ("personal", "default-personal"):
-        if where == "personal":
-            monkeypatch.setenv("COPILOT_HOME", str(planning_home / "custom-copilot"))
+    if where in ("personal", "tilde-personal", "default-personal"):
+        if where != "default-personal":
+            monkeypatch.setenv(
+                "COPILOT_HOME",
+                "~/custom-copilot" if where == "tilde-personal"
+                else str(planning_home / "custom-copilot"),
+            )
             directory = planning_home / "custom-copilot/agents"
         else:
             monkeypatch.delenv("COPILOT_HOME")

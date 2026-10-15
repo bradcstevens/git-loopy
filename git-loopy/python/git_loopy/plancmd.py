@@ -99,8 +99,9 @@ def run_plan(args: argparse.Namespace, *, passthrough: list[str]) -> int:
 
 
 def _refuse_shadowing(repo: Path) -> None:
-    home = os.environ.get("COPILOT_HOME", "").strip()
-    personal = Path(home) if home else Path.home() / ".copilot"
+    from .copilot_client import resolve_copilot_base_directory
+
+    personal = resolve_copilot_base_directory(os.environ)
     candidates = [personal / "agents" / _AGENT_FILE]
     directory = Path.cwd()
     while True:
