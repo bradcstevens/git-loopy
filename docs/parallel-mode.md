@@ -1,7 +1,7 @@
 # Parallel mode
 
 The Python Runner always uses **rolling dispatch**: it works independent issues
-in isolated git worktrees whenever its Pool has **Lane** work. The bound
+in isolated **Issue clones** whenever its Pool has **Lane** work. The bound
 **Execution host** declares the Lane ceiling. This page is the operator's guide
 to reading that behavior. [ADR-0020](adr/0020-rolling-dispatch-with-bounded-green-integration.md)
 records the design; §12 of the [Wrapper contract](wrapper-contract.md) defines
@@ -50,7 +50,7 @@ tells you what a replay log will contain.
 
 ## Starting a Run
 
-Run `git-loopy`. Optionally give each worktree a setup command — dependency installation, a
+Run `git-loopy`. Optionally give each Issue clone a setup command — dependency installation, a
 virtualenv, whatever a fresh checkout of your repository needs before the
 feedback loops can run:
 
@@ -184,31 +184,48 @@ Integration, not an operator-set Lane count, is the governing resource.
 
 ## Where the workspaces live, and which branches are ours
 
-A **Lane workspace** — and the private **Integration stage** its contribution is
-gated in — is a git worktree, and both are placed inside your repository's own
-git directory:
+A **Lane workspace** is a self-contained **Issue clone**, sharing the source's
+objects but owning its refs and config (ADR-0093). Only the private
+**Integration stage** remains a linked worktree:
 
 ```
-<repo>/.git/git-loopy/<run_id>/issue-<N>            ← the Lane workspace
+<repo>.issue-clones/<run_id>/issue-<N>             ← the Issue clone
 <repo>/.git/git-loopy/<run_id>/integrate/issue-<N>  ← its Integration stage
 ```
 
 A retry Lane of the same issue (ADR-0070) lives under
-`git-loopy/<run_id>/attempt-<A>/…` instead, with its stage beneath
+`<run_id>/attempt-<A>/…` in each workspace root instead, with its stage beneath
 `attempt-<A>/integrate/`. A counts setups of that issue, starting at 2 for the
 second setup, not Strikes: a failed setup spends no Strike but still advances
 the namespace. Earlier unlanded branches are preserved; this is fresh work,
 not a resumption of the earlier workspace.
 
-That location is chosen so a live Lane cannot get in the way of the very
-commands the agents in it are running. The git directory is not *content* in any
-working tree, so a workspace never appears in `git status`, cannot be picked up
+Neither location is *content* in the source working tree, so a workspace never
+appears in its `git status`, cannot be picked up
 by `git add -A` (and produces no embedded-repository warning), survives `git
 clean -ffxd`, and is skipped by tree-walking feedback loops — with **no
 `.gitignore` entry**, so nothing about your repository has to change to make it
-so. It is also per-clone: two clones of the same repository each get their own
-workspaces, neither can see the other's, and deleting a clone deletes its
-workspaces with it.
+so. It is also per-source-clone: Runs from linked worktrees resolve the same
+source workspace root, but independent source clones do not share one. Issue
+clones reserve their branch namespace in source-local git config before cloning.
+An interrupted setup is reclaimed from that preparing reservation, before any
+Agent can enter it; once setup finishes, its current Reserved branch owns it.
+Crash recovery therefore discovers clones independently of layout.
+Deleting the source manually does not delete its sibling Issue clones.
+
+The Agent commits only in its Issue clone. Before reclaiming it, the Runner
+fetches its named Lane branch into the source without forcing the ref.
+Salvage Checkpoints also get a best-effort push to the source's configured
+origin. Ordinary Agent commits do not require a remote push; wrapper
+Checkpoints made at normal session completion use the same policy as exit salvage.
+Integration reads the imported branch and still gates its merge in the private
+stage; no unverified merge reaches base. A failed import, push or removal
+preserves the clone for retry. A failed Checkpoint push does not block
+Integration of work already imported into the source, or classify the Agent as
+a breach. The clone's origin is the source's upstream
+origin, not the source itself; the source object store is an alternate, not a
+writable shared refs/config directory. Sandbox-policy forwarding is a separate
+obligation; Issue clones do not themselves enforce filesystem permissions.
 
 You do not have to clean anything up in the normal case: a workspace is torn
 down as soon as its contribution finishes.
@@ -221,7 +238,8 @@ thing git-loopy will ever use to decide that a workspace is its own to reclaim.
 Don't put your own branches there.
 
 Reading ownership from the branch rather than from a directory is what makes
-residue safe to identify. Earlier Runs placed workspaces in a sibling
+residue safe to identify. Sweep reads both registered Issue clones and linked
+worktrees left by older Runs. Earlier Runs placed workspaces in a sibling
 `<repo>.worktrees/` directory, which an operator's own worktrees could also be
 living in; sweeping that directory by location would take work nobody asked
 git-loopy to touch. A leftover from those Runs is still recognisable — it is on
@@ -256,9 +274,11 @@ What a sweep is allowed to touch is decided by one thing at a time:
   that lock in every worktree the clone registers. Where the lock cannot be
   read at all, liveness is *unknown* rather than dead, and nothing is reclaimed.
 - **Is any of it unfinished work?** A dirty workspace is committed to its own
-  Lane branch as a Checkpoint — **salvaged** — before the directory goes. Work
-  is never destroyed, so the only workspace a sweep leaves behind is one whose
-  salvage failed. Salvaged work is recoverable, not resumable: a later Run cuts
+  Lane branch as a Checkpoint — **salvaged** — before the directory goes.
+  Issue clone commits reach the source; Checkpoints also get an origin push when
+  origin is configured. A failed push preserves the clone for retry without
+  blocking Integration. Work is never destroyed: failed salvage, import or
+  removal also preserves the workspace. Salvaged work is recoverable, not resumable: a later Run cuts
   a fresh Lane branch for the issue rather than continuing that one.
 - **Is the branch still worth anything?** A stage branch is always collected.
   A Lane branch is collected once it is *resolved* — merged into the branch

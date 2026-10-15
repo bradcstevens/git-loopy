@@ -380,6 +380,9 @@ def test_uninstall_detects_a_live_integration_stage(
                 Worktree(stage, "git-loopy/RUNLIVE/integrate/issue-529"),
             ]
 
+        def list_issue_clones(self) -> list[object]:
+            return []
+
     control = RunControlArtifact.acquire(control_dir / "live-RUNLIVE.jsonl")
     try:
         monkeypatch.setattr(uninstallcmd, "SubprocessGitClient", lambda _root: Git())
@@ -408,6 +411,9 @@ def test_uninstall_recognises_a_live_retry_lane_namespace(
                 Worktree(repo, "main"),
                 Worktree(lane, "git-loopy/RUNLIVE/attempt-2/issue-529"),
             ]
+
+        def list_issue_clones(self) -> list[object]:
+            return []
 
     control = RunControlArtifact.acquire(control_dir / "live-RUNLIVE.jsonl")
     try:
@@ -503,6 +509,9 @@ def test_uninstall_treats_an_unprovable_lane_as_live_without_advisory_locks(
             from git_loopy.git import Worktree
 
             return [Worktree(repo, "main"), Worktree(lane, "git-loopy/RUNLIVE/issue-529")]
+
+        def list_issue_clones(self) -> list[object]:
+            return []
 
     monkeypatch.setattr(run_control, "_fcntl", None)
     monkeypatch.setattr(uninstallcmd, "SubprocessGitClient", lambda _root: Git())

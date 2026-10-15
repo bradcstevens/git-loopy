@@ -1,13 +1,15 @@
-"""``git_loopy.worktree`` — the per-Lane worktree setup seam (#65, ADR-0008).
+"""``git_loopy.worktree`` — the per-Lane environment setup seam (#65).
 
-In **Parallel mode** (ADR-0008) each **Lane** works its issue in its own git
-worktree, created in a sibling directory outside the repo. A fresh worktree has
+In **Parallel mode** (ADR-0008) each **Lane** works its issue in its own
+Issue clone (ADR-0093), created outside the source repo. A fresh clone has
 the source but not the *environment* the feedback loops need — no installed
 dependencies, no virtualenv — so before a Lane's agent session starts the runner
-**prepares** that worktree. This module is that seam.
+**prepares** that clone. The legacy module, Protocol and environment-variable
+names remain compatible; this seam needs a working directory, not a linked
+worktree.
 
 The knob is ``GIT_LOOPY_WORKTREE_SETUP``: when set, its command is run in each
-freshly created Lane worktree; when unset, a **best-effort auto-detect** picks a
+freshly created Issue clone; when unset, a **best-effort auto-detect** picks a
 common install command for the project type (a ``uv.lock`` -> ``uv sync``, a
 ``package.json`` -> ``npm install``, and so on). A setup failure is **reported**,
 never silently swallowed — the caller (the Wave orchestrator) surfaces it.
@@ -21,21 +23,21 @@ gate factories.
 
 Public surface:
 
-* :class:`SetupResult` — the outcome of preparing one worktree: which
+* :class:`SetupResult` — the outcome of preparing one workspace: which
   ``command`` ran (``None`` == nothing configured *and* nothing detected, a
   no-op), its ``returncode``, and a bounded ``output_tail`` for a breadcrumb.
   :attr:`~SetupResult.ran` / :attr:`~SetupResult.passed` are the two channels a
   caller screens.
 * :class:`WorktreeSetup` — the injectable Protocol: ``run(worktree) -> SetupResult``.
 * :class:`CommandWorktreeSetup` — the production adapter: run the configured
-  command (or the auto-detected fallback) *in the worktree*, capturing the outcome.
+  command (or the auto-detected fallback) *in the workspace*, capturing the outcome.
 * :func:`detect_setup_command` — the pure auto-detect (marker file -> command),
   separately tested.
 
 Design notes:
 
 * **Configured wins over detected.** An explicit ``GIT_LOOPY_WORKTREE_SETUP`` is a
-  human assertion of exactly how to prepare the worktree; the auto-detect is only
+  human assertion of exactly how to prepare the workspace; the auto-detect is only
   the zero-config fallback so typical projects work without extra configuration.
 * **Best-effort, not exhaustive.** The detector recognises the common lockfiles /
   manifests and prefers the more specific lockfile (``uv.lock`` over
@@ -86,12 +88,12 @@ _DETECTORS: Final[tuple[tuple[str, str], ...]] = (
 
 @dataclass(frozen=True)
 class SetupResult:
-    """The outcome of preparing one Lane worktree.
+    """The outcome of preparing one Issue clone.
 
     Attributes:
         command: The command that ran, or ``None`` when neither a configured
             ``GIT_LOOPY_WORKTREE_SETUP`` nor the auto-detect produced one (a
-            no-op — the worktree needed no preparation the runner knows of).
+            no-op — the workspace needed no preparation the runner knows of).
         returncode: The command's exit code (``0`` on success; a no-op is ``0``).
         output_tail: A bounded tail of the command's combined stdout+stderr, for
             a diagnostic breadcrumb without unbounded output. Empty for a no-op.
@@ -114,7 +116,7 @@ class SetupResult:
 
 @runtime_checkable
 class WorktreeSetup(Protocol):
-    """Prepare one Lane worktree before its agent session starts.
+    """Prepare one Issue clone before its agent session starts.
 
     The injectable seam (ADR-0008). Production is :class:`CommandWorktreeSetup`;
     tests script a fake. ``@runtime_checkable`` so both satisfy it structurally
@@ -138,12 +140,12 @@ def detect_setup_command(worktree: Path) -> str | None:
     """Best-effort auto-detect an install command for ``worktree``'s project type.
 
     Scans :data:`_DETECTORS` in order and returns the command for the first marker
-    file present at the worktree root, or ``None`` when nothing recognised is
-    found (or the path does not exist). Pure and never raises — a missing worktree
+    file present at the workspace root, or ``None`` when nothing recognised is
+    found (or the path does not exist). Pure and never raises — a missing workspace
     simply detects nothing.
 
     Args:
-        worktree: The Lane worktree root to inspect.
+        worktree: The Issue clone root to inspect (legacy parameter name).
 
     Returns:
         The install command to run, or ``None`` for "nothing to auto-run".
@@ -156,11 +158,11 @@ def detect_setup_command(worktree: Path) -> str | None:
 
 
 class CommandWorktreeSetup:
-    """Production :class:`WorktreeSetup`: run a command inside a Lane worktree.
+    """Production :class:`WorktreeSetup`: run a command inside an Issue clone.
 
     Runs the configured ``GIT_LOOPY_WORKTREE_SETUP`` command when one is given,
     otherwise the :func:`detect_setup_command` fallback, through the shell with
-    ``cwd`` set to the worktree. Captures the outcome in a :class:`SetupResult`
+    ``cwd`` set to the workspace. Captures the outcome in a :class:`SetupResult`
     — a non-zero exit is reported (``passed=False``), not raised, so the caller
     decides how loudly to surface it.
     """
@@ -180,7 +182,7 @@ class CommandWorktreeSetup:
         """Prepare ``worktree`` by running its setup command.
 
         Args:
-            worktree: The freshly created Lane worktree to prepare.
+            worktree: The freshly created Issue clone to prepare.
 
         Returns:
             A :class:`SetupResult`: ``command=None`` (a passing no-op) when

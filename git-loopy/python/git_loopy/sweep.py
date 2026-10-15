@@ -257,7 +257,7 @@ def _holds_unseen_work(
       about a path, and a link makes that claim unverifiable — salvage would
       stage and commit whatever checkout the link actually points at.
     """
-    if worktree.prunable or stage or worktree.path.is_symlink():
+    if worktree.prunable or worktree.preparing or stage or worktree.path.is_symlink():
         return False
     workspace = git.open_worktree(worktree.path)
     return workspace.is_dirty() or workspace.has_untracked()
@@ -329,7 +329,17 @@ def _reclaim_dead_workspaces(
                     workspace_git = git.open_worktree(worktree.path)
                     workspace_git.add_all()
                     workspace_git.commit(checkpoint_message(residue.issue))
-                git.remove_worktree(worktree.path, force=True)
+                if worktree.issue_clone:
+                    checkpoint = not worktree.preparing and _tip_is_a_checkpoint(
+                        git.open_worktree(worktree.path), residue.branch
+                    )
+                    if not git.reclaim_issue_clone(
+                        worktree.path, branch=residue.branch, checkpoint=checkpoint
+                    ):
+                        withheld.add(residue.branch)
+                        continue
+                else:
+                    git.remove_worktree(worktree.path, force=True)
         except git_module.GitError:
             withheld.add(residue.branch)
             continue
@@ -412,6 +422,7 @@ def _collect_resolved_branches(
     withheld: set[str],
     dry_run: bool,
     liveness: Callable[[str], bool | None],
+    pending_imports: tuple[git_module.Worktree, ...] = (),
 ) -> list[str]:
     """Delete every reserved branch of a dead Run that is resolved.
 
@@ -421,14 +432,27 @@ def _collect_resolved_branches(
     """
     collected: list[str] = []
     closed: dict[int, bool] = {}
-    for branch in git.list_branches():
+    pending = {
+        clone.branch: clone.path for clone in pending_imports
+        if clone.branch is not None and not clone.preparing
+    }
+    for branch in sorted(set(git.list_branches()) | pending.keys()):
         residue = _parse_residue(branch)
         if residue is None or branch in withheld:
             continue
         if liveness(residue.run_id) is not False:
             continue
+        branch_git, base_ref = git, base_branch
+        if branch in pending:
+            try:
+                # Model the branch about to be imported without fetching during
+                # a dry run. The source base is readable through the alternate.
+                branch_git = git.open_worktree(pending[branch])
+                base_ref = git.branch_tip(base_branch).sha
+            except git_module.GitError:
+                continue
         if not _is_resolved(
-            residue, git=git, github=github, base_branch=base_branch, closed=closed
+            residue, git=branch_git, github=github, base_branch=base_ref, closed=closed
         ):
             continue
         if not dry_run:
@@ -488,9 +512,13 @@ def sweep(
         The :class:`SweepReport` of what was removed, or would be.
     """
     worktrees = _list_worktrees(git)
+    try:
+        clones = git.list_issue_clones()
+    except git_module.GitError:
+        clones = []
     run_liveness = _liveness_by_run(_control_dirs(control_dir, worktrees), liveness)
     reclaimed_paths, withheld = _reclaim_dead_workspaces(
-        git=git, worktrees=worktrees, dry_run=dry_run, liveness=run_liveness
+        git=git, worktrees=[*worktrees, *clones], dry_run=dry_run, liveness=run_liveness,
     )
     branches = _collect_resolved_branches(
         git=git,
@@ -499,12 +527,14 @@ def sweep(
         withheld=withheld,
         dry_run=dry_run,
         liveness=run_liveness,
+        pending_imports=tuple(clones) if dry_run else (),
     )
     directories: list[Path] = []
     reclaimed = frozenset(reclaimed_paths)
     for root in (
         git.common_git_dir() / "git-loopy",
         git.root.parent / f"{git.root.name}.worktrees",
+        git_module.issue_clone_root(git.common_git_dir()),
     ):
         _reap_empty_directories(
             root, dry_run=dry_run, reaped=directories, reclaimed=reclaimed

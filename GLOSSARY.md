@@ -1705,7 +1705,7 @@ failure, TODO, backlog entry.
 
 **Parallel mode**:
 The execution mode in which the runner works several independent issues at once,
-each isolated in its own worktree. The Python Runner is always in it: a bare
+each isolated in its own **Issue clone**. The Python Runner is always in it: a bare
 `git-loopy` uses **Rolling dispatch**, and the serial loop is an **Iteration
 driver** for a Run with no Lane work, announced only by the degraded and
 serial-fallback Events. Shell and PowerShell declare `parallel_mode`
@@ -1716,7 +1716,7 @@ _Avoid_: concurrent mode, multi mode, opt-in mode.
 **Rolling dispatch**:
 The **Parallel mode** scheduling model that continuously refills reusable **Lanes**
 instead of grouping them behind a barrier. It fills toward the **Lane cap** while
-eligible work and **Integration** admission capacity exist; worktree setup, Lane work,
+eligible work and **Integration** admission capacity exist; Issue clone setup, Lane work,
 and Integration may overlap.
 _Avoid_: Wave, batch, cohort, sliding window.
 
@@ -1729,21 +1729,10 @@ active row in the **Dashboard**, with its own timer and **Log**.
 _Avoid_: worker, thread.
 
 **Lane workspace**:
-The private worktree one **Lane** works its issue in. It lives inside the clone's own git
-directory, under the **Reserved branch namespace**'s subtree and keyed by Run, setup attempt
-and issue: the first setup uses `<run_id>/issue-<N>`, and later setups use
-`<run_id>/attempt-<A>/issue-<N>` (A starts at 2). Setup attempts are not Strikes: a
-failed setup spends no Strike but still needs a fresh namespace. The nesting preserves an
-earlier attempt's **Breadcrumb**, rather than resuming or overwriting it. A workspace
-is never *content* in any working tree: no status, staging, or clean operation in the
-repository can see, capture, or destroy a live workspace, and no ignore entry is needed to
-keep it that way. It is per-clone, so two clones never share one, and it is removed with
-the clone. **Ephemeral by policy**: it exists only while its **Lane contribution** is in
-flight and is reclaimed on every exit path — inline when that contribution finishes, and at
-the Run's own exit when an exception or a **Stop** ends it instead — always after
-**Salvage**, and preserved only when salvage fails.
-_Avoid_: sandbox, checkout, scratch directory; worktree alone (the **Integration stage** is
-one too).
+The private working surface of one **Lane contribution**, now an **Issue clone**
+rather than a shared-directory worktree. It is ephemeral, keyed by **Run**, setup
+attempt and issue, and retained only when **Salvage** or reclamation cannot finish safely.
+_Avoid_: sandbox, scratch directory, shared worktree.
 
 **Salvage**:
 Committing a **Lane workspace**'s dirty tree to its own Lane branch as a **Checkpoint** —
@@ -1819,15 +1808,14 @@ The private worktree a **Lane contribution** is merged into and gated in before 
 reaches the base branch. Each contribution gets its own stage, and **Recovery**
 reuses the stage its contribution is already in. Because the stage is
 private, a red or conflicting result is never observable on base and there is nothing to
-undo. Placed exactly like a **Lane workspace** — inside the clone's git directory, on a
-branch in the **Reserved branch namespace** — with an `integrate/` segment that keeps it
-distinct from the Lane workspace for the same issue.
+undo. Unlike an **Issue clone**, it remains a worktree on a branch in the
+**Reserved branch namespace**.
 _Avoid_: integration branch, staging area, merge queue entry.
 
 **Reserved branch namespace**:
 `git-loopy/`, the branch prefix the runner cuts every branch of its own under — a
 **Lane workspace**'s branch and its **Integration stage**'s alike — and which nothing else
-in a repository may claim. It is the *only* thing that decides whether a leftover worktree
+in a repository may claim. It is the *only* thing that decides whether a leftover workspace
 is git-loopy's to reclaim. A location can never decide it: workspaces once lived in a
 sibling directory that an operator's own worktrees could share, so reclaiming by path
 would take work git-loopy was never given.
@@ -1835,7 +1823,7 @@ _Avoid_: branch prefix, runner branches, worktree directory.
 
 **Sweep**:
 Reclaiming residue **no live Run owns** — a dead Run's **Lane workspaces**, its resolved
-branches, and the empty directories every reclaimed worktree leaves behind. It runs at the
+branches, and the empty directories every reclaimed workspace leaves behind. It runs at the
 start of every Run, for that Run's dead predecessors, and on demand as `git-loopy sweep`
 (with a dry run) for when nothing is running at all. Liveness needs no new mechanism: the
 per-Run control artifact's advisory lock already says *lock free ⇒ Run dead ⇒ its
@@ -2190,12 +2178,11 @@ Agents work in their own **Sandbox** in either residence.
 _Avoid_: Run placement, Run host, remote Execution host (an Execution host places one
 **Lane contribution**, not a Run).
 
-**Issue clone** (accepted design):
-The self-contained clone in which one issue's **Agents** work, replacing the **Lane
-workspace** worktree: its own refs and config, borrowing the source clone's objects
-read-only. It is the boundary of that issue's **Sandbox**, so no issue's Agents can
-write another issue's branches or the base.
-_Avoid_: worktree, Lane workspace (the shipped worktree it replaces).
+**Issue clone**:
+The self-contained clone in which one **Lane contribution**'s **Agents** work:
+its own refs and config, borrowing the source clone's objects read-only.
+It supplies the issue-local writable repository boundary for a **Sandbox**.
+_Avoid_: linked worktree, shared git directory.
 
 **Sandbox**:
 GitHub Copilot's own sandbox, in exactly the sense GitHub defines it: a local sandbox
