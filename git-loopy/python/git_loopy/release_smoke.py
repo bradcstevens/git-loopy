@@ -143,6 +143,10 @@ class SmokeEvidenceError(ValueError):
     """Smoke evidence that cannot stand as proof for this publication input."""
 
 
+class CandidateInstallationError(RuntimeError):
+    """The candidate did not install or its executable failed verification."""
+
+
 @dataclass(frozen=True)
 class SmokeAuthorization:
     """The explicit credential and the disposable repository it may touch."""
@@ -628,6 +632,8 @@ def confirm_smoke_evidence(
             "the smoke evidence proves a different candidate; changed content "
             "needs its own smoke"
         )
+    # This is the observed set, never requested_execution_hosts. Asking for a
+    # host is not proof that the smoke reached it.
     covered = set(evidence.get("execution_hosts") or ())
     if not set(EXECUTION_HOSTS) <= covered:
         raise SmokeEvidenceError(
@@ -667,38 +673,30 @@ def _clean_path(path: str, *, bin_dir: Path) -> str:
     return os.pathsep.join(kept)
 
 
-def operator_environment(
+def clean_operator_environment(
     ambient: Mapping[str, str],
     *,
     home: Path,
     config_home: Path,
     bin_dir: Path,
-    token: str,
-    repository: str,
 ) -> dict[str, str]:
-    """A clean operator: private home and Config, the candidate first on PATH.
+    """A credential-free operator with private home, Config and cleaned PATH.
 
     Ambient credentials, ``gh`` redirections and ``GIT_LOOPY_*`` overrides are
-    removed so nothing of the host's own installation leaks in, and the smoke's
-    one credential is supplied under the names ``gh`` and the Copilot harness
-    read. ``GH_REPO`` is pinned to the verified sandbox: the candidate's own
-    ``gh`` calls name no ``--repo``, so an ambient value would otherwise send
-    them to whatever repository it named.
+    removed without reading their values. Package-feed environment settings
+    are retained. No authorization, repository or smoke limit is resolved.
     """
     env = {
-        key: value
-        for key, value in ambient.items()
+        key: ambient[key]
+        for key in ambient
         if key not in _AMBIENT_CREDENTIALS
         and key not in _GH_REDIRECTIONS
         and not key.startswith("GIT_LOOPY_")
     }
-    env["GH_REPO"] = repository
     env["HOME"] = str(home)
     env["USERPROFILE"] = str(home)
     env["XDG_CONFIG_HOME"] = str(config_home)
     env["PATH"] = _clean_path(ambient.get("PATH", os.defpath), bin_dir=bin_dir)
-    env["GH_TOKEN"] = token
-    env["COPILOT_GITHUB_TOKEN"] = token
     env["GH_PROMPT_DISABLED"] = "1"
     env["NO_COLOR"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
@@ -711,6 +709,108 @@ def operator_environment(
     ):
         env[key] = value
     return env
+
+
+def operator_environment(
+    ambient: Mapping[str, str],
+    *,
+    home: Path,
+    config_home: Path,
+    bin_dir: Path,
+    token: str,
+    repository: str,
+) -> dict[str, str]:
+    """The clean operator plus the smoke's explicit authorization and sandbox.
+
+    ``GH_REPO`` is pinned because the candidate's own ``gh`` calls name no
+    ``--repo``. Only this smoke-specific adapter supplies credentials.
+    """
+    env = clean_operator_environment(
+        ambient, home=home, config_home=config_home, bin_dir=bin_dir,
+    )
+    env["GH_REPO"] = repository
+    env["GH_TOKEN"] = token
+    env["COPILOT_GITHUB_TOKEN"] = token
+    return env
+
+
+@dataclass(frozen=True)
+class InstalledCandidate:
+    """A proved archive installed and version-checked for public commands."""
+
+    source_root: Path
+    bin_dir: Path
+    executable: Path
+    env: dict[str, str]
+    detail: str
+
+
+def install_candidate(
+    candidate: BoundCandidate,
+    *,
+    workspace: Path,
+    installer: CandidateInstaller,
+    ambient: Mapping[str, str],
+) -> InstalledCandidate:
+    """Install a bound archive and verify its executable, without a smoke.
+
+    The caller owns a fresh workspace and its cleanup. The installer is the
+    package-index seam (``UvToolInstaller`` in production). No token, sandbox,
+    limits or smoke configuration are read. ``SmokeCandidateError`` refuses an
+    invalid archive, ``SmokeBlocked`` reports an unavailable installer, and
+    ``CandidateInstallationError`` reports a failed installation or version
+    check. Subprocess errors during the version probe propagate to the caller.
+    """
+    source_root = extract_candidate(candidate, workspace / "candidate")
+    installer_env = {
+        key: ambient[key]
+        for key in ambient
+        if key not in _AMBIENT_CREDENTIALS and not key.startswith("GIT_LOOPY_")
+    }
+    try:
+        bin_dir = installer.install(
+            source_root / "git-loopy" / "python",
+            destination=workspace / "install",
+            env=installer_env,
+        )
+    except SmokeBlocked:
+        raise
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+        raise CandidateInstallationError(f"the candidate did not install: {exc}") from exc
+    executable = bin_dir / _executable_name()
+    if not executable.is_file():
+        raise CandidateInstallationError(f"the installation has no {executable.name}")
+    home = workspace / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    env = clean_operator_environment(
+        ambient, home=home, config_home=workspace / "config", bin_dir=bin_dir,
+    )
+    resolved = shutil.which("git-loopy", path=env["PATH"])
+    if resolved is None or Path(resolved).resolve() != executable.resolve():
+        raise CandidateInstallationError(
+            f"git-loopy resolves to {resolved}, not the clean installation {executable}"
+        )
+    result = subprocess.run(  # noqa: S603 - the candidate's own command
+        [str(executable), "--version"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    reported = result.stdout.strip().removeprefix("git-loopy").strip()
+    if result.returncode != 0 or reported != candidate.version:
+        raise CandidateInstallationError(
+            f"the installed git-loopy reports {reported or _tail(result.stderr)!r}, "
+            f"not the candidate {candidate.version}"
+        )
+    return InstalledCandidate(
+        source_root=source_root, bin_dir=bin_dir, executable=executable, env=env,
+        detail=(
+            f"git-loopy {reported} installed from archive "
+            f"{candidate.payload['archive_digest']} at {executable}"
+        ),
+    )
 
 
 class _Stream:
@@ -937,17 +1037,16 @@ class _Smoke:
         state = self.state
         sandbox_prepared = False
         try:
-            source_root = extract_candidate(self.candidate, self.workspace / "candidate")
-            bin_dir = self._install(source_root)
-            if bin_dir is None:
+            installed = self._install()
+            if installed is None:
                 return
             self.sandbox.verify_disposable()
             state.sandbox_base = self.sandbox.publish_base(
-                _smoke_base(source_root, self.workspace / "base", self.smoke_id),
+                _smoke_base(installed.source_root, self.workspace / "base", self.smoke_id),
                 smoke_id=self.smoke_id,
             )
             sandbox_prepared = True
-            operator = self._operator(bin_dir)
+            operator = self._operator(installed.bin_dir)
             if operator is None:
                 return
             self._inventory(operator)
@@ -965,70 +1064,19 @@ class _Smoke:
                 self._reclaim()
             self._retire_workspace()
 
-    def _install(self, source_root: Path) -> Path | None:
-        installer_env = {
-            key: value
-            for key, value in self.ambient.items()
-            if key not in _AMBIENT_CREDENTIALS
-        }
+    def _install(self) -> InstalledCandidate | None:
         try:
-            bin_dir = self.installer.install(
-                source_root / "git-loopy" / "python",
-                destination=self.workspace / "install",
-                env=installer_env,
+            installed = install_candidate(
+                self.candidate,
+                workspace=self.workspace,
+                installer=self.installer,
+                ambient=self.ambient,
             )
-        except SmokeBlocked:
-            raise
-        except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
-            self.state.see("clean-install", FAILED, f"the candidate did not install: {exc}")
+        except CandidateInstallationError as exc:
+            self.state.see("clean-install", FAILED, str(exc))
             return None
-        executable = bin_dir / _executable_name()
-        if not executable.is_file():
-            self.state.see(
-                "clean-install", FAILED, f"the installation has no {executable.name}"
-            )
-            return None
-        probe_env = operator_environment(
-            self.ambient,
-            home=self._home(),
-            config_home=self.workspace / "config",
-            bin_dir=bin_dir,
-            token=self.authorization.token,
-            repository=self.authorization.repository,
-        )
-        resolved = shutil.which("git-loopy", path=probe_env["PATH"])
-        if resolved is None or Path(resolved).resolve() != executable.resolve():
-            self.state.see(
-                "clean-install",
-                FAILED,
-                f"git-loopy resolves to {resolved}, not the clean installation "
-                f"{executable}",
-            )
-            return None
-        result = subprocess.run(  # noqa: S603 - the candidate's own command
-            [str(executable), "--version"],
-            env=probe_env,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        reported = result.stdout.strip().removeprefix("git-loopy").strip()
-        if result.returncode != 0 or reported != self.candidate.version:
-            self.state.see(
-                "clean-install",
-                FAILED,
-                f"the installed git-loopy reports {reported or _tail(result.stderr)!r}, "
-                f"not the candidate {self.candidate.version}",
-            )
-            return None
-        self.state.see(
-            "clean-install",
-            OBSERVED,
-            f"git-loopy {reported} installed from archive "
-            f"{self.candidate.payload['archive_digest']} at {executable}",
-        )
-        return bin_dir
+        self.state.see("clean-install", OBSERVED, installed.detail)
+        return installed
 
     def _home(self) -> Path:
         home = self.workspace / "home"
@@ -1088,7 +1136,7 @@ class _Smoke:
                 "this host has no pseudo-terminal to cancel the wizard through",
             )
             return
-        code, output, reached = _cancel_in_pty(
+        code, output, reached = cancel_in_pty(
             operator.executable,
             ["init", "--global"],
             cwd=operator.clone,
@@ -1712,7 +1760,7 @@ def _smoke_base(source_root: Path, destination: Path, smoke_id: str) -> Path:
     return destination
 
 
-def _cancel_in_pty(
+def cancel_in_pty(
     executable: Path,
     args: Sequence[str],
     *,
@@ -1721,10 +1769,12 @@ def _cancel_in_pty(
     timeout: float,
     settle: float,
 ) -> tuple[int | None, str, bool]:
-    """Open the wizard in a real terminal, then cancel it with Ctrl-C.
+    """Open a wizard in a POSIX terminal, then cancel it with Ctrl-C.
 
     Returns the exit code (``None`` if it never exited), everything the
     terminal showed, and whether the wizard took the screen before the cancel.
+    The caller supplies the command, environment and timeout; this helper
+    reads no ambient environment, authorization, sandbox or smoke limits.
     """
     import fcntl
     import pty
@@ -2282,7 +2332,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "verdict": verdict,
         "candidate": identity,
         "host": _host_identity(env),
-        "execution_hosts": list(hosts),
+        "requested_execution_hosts": list(hosts),
+        "execution_hosts": list(dict.fromkeys(
+            observation.host for observation in observations
+            if observation.name == "execution-host" and observation.status == OBSERVED
+            and observation.host is not None
+        )),
         "sandbox_repository": authorization.repository if authorization else None,
         "sandbox_base": smoke.state.sandbox_base if smoke is not None else None,
         "limits": limits.payload() if limits is not None else None,
