@@ -507,7 +507,7 @@ def test_packaged_prompt_bounds_deliberate_load() -> None:
     """#818: every bound on deliberate host load is pinned in the Run instructions."""
     text = (Path(git_loopy.__file__).parent / "PROMPT.md").read_text(encoding="utf-8")
     start = text.index("# DELIBERATE LOAD")
-    section = text[start : text.index("# FEEDBACK LOOPS", start)]
+    section = text[start : text.index("# LEAVE NO PROCESS BEHIND", start)]
     for bound in (
         "taskpolicy -c utility",
         "`nice` is not a substitute",
@@ -517,7 +517,60 @@ def test_packaged_prompt_bounds_deliberate_load() -> None:
         "inconclusive, never as a pass",
         "Never escalate",
         "Never raise the priority",
-        "`pgrep`",
-        "Ordinary feedback loops",
     ):
         assert bound in section
+
+
+def test_deliberate_load_bounds_exempt_a_declared_feedback_loop() -> None:
+    """#788/#818 bounded deliberate load, but its trigger read onto ordinary loops.
+
+    *"Many parallel copies of a test"* describes `cargo test` and a `pytest -n`
+    run as accurately as it describes a CPU burner, and the exemption sat in a
+    trailing sentence *after* seven bullets. An agent applying the bullets as it
+    read them clamped its own feedback loop and capped it at 30 minutes — and
+    the AGENTS.md Python suite exceeds 30 minutes on a host running concurrent
+    Lanes. Paired with *"inconclusive, never as a pass"*, that turns a passing
+    suite into a red Lane gate for a reason no change caused.
+
+    So the exemption is pinned as *position*, not merely presence: it must be
+    stated before the first bound, and it must name the parallelism that misled.
+    """
+    text = (Path(git_loopy.__file__).parent / "PROMPT.md").read_text(encoding="utf-8")
+    start = text.index("# DELIBERATE LOAD")
+    section = text[start : text.index("# LEAVE NO PROCESS BEHIND", start)]
+
+    assert "Ordinary feedback loops are **not** deliberate load" in section
+    assert section.index("Ordinary feedback loops") < section.index("taskpolicy"), (
+        "the feedback-loop exemption must precede the bounds, or an agent "
+        "applies them to its own suite before it reads the exemption"
+    )
+    assert "runs to completion however long it takes" in section
+    assert "inherits whatever Host yield policy" in section, (
+        "ADR-0092 clamps tool descendants and Integration feedback loops at the "
+        "Run boundary, so the prompt must not promise an unclamped loop"
+    )
+    for parallel_runner in ("cargo test", "pytest -n"):
+        assert parallel_runner in section, (
+            f"{parallel_runner} is parallel by design; the prompt must say so, "
+            "or its workers read as deliberate load"
+        )
+    assert "beyond what its own runner starts" in section
+
+
+def test_leaving_no_process_behind_is_not_scoped_to_deliberate_load() -> None:
+    """A leaked helper is what starved the host, and it comes from an ordinary loop.
+
+    #818 scoped cleanup to a *"load process"* inside the deliberate-load section,
+    so the leak that actually happens — `test_attach_command.py` leaving its
+    `git_loopy` helper alive when it fails — fell outside the rule twice over:
+    it is not load, and its loop is explicitly exempt. Cleanup therefore stands
+    as its own section, covering every process a Run starts.
+    """
+    text = (Path(git_loopy.__file__).parent / "PROMPT.md").read_text(encoding="utf-8")
+    start = text.index("# LEAVE NO PROCESS BEHIND")
+    section = text[start : text.index("# FEEDBACK LOOPS", start)]
+
+    assert "deliberate load and ordinary feedback loops alike" in section
+    assert "`pgrep`" in section
+    assert "end the ones you started by PID" in section
+    assert "interrupted" in section

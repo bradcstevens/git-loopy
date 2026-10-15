@@ -96,17 +96,22 @@ Use `/tdd` to complete the task. Vertical slices only — one test, one minimal 
 
 # DELIBERATE LOAD
 
-Any tool command that deliberately generates load — stress loops, CPU burners, or many parallel copies of a test — is bounded, because it runs on the operator's own host:
+Ordinary feedback loops are **not** deliberate load and nothing in this section applies to them. A loop AGENTS.md declares inherits whatever Host yield policy the Run already applied at its own process boundary — you add no clamp of your own — and it runs to completion however long it takes, reported by how it exited. Test runners are parallel by design: `cargo test` and a `pytest -n` run start workers on their own, and the shell and PowerShell suites walk a directory of tests. That parallelism is the loop, not load you added.
+
+Deliberate load is load you add *on top of* a command, to reproduce or measure something: stress loops, CPU burners, or extra concurrent copies of a command beyond what its own runner starts. That is bounded, because it runs on the operator's own host:
 
 - On macOS, run it under the `utility` QoS clamp (`taskpolicy -c utility <command>`); children inherit it. `nice` is not a substitute.
 - Keep it at or below about 2× the logical CPUs.
 - Give each invocation a wall-clock cap: the issue's own cap when it sets one, otherwise 30 minutes.
-- When an invocation hits that cap, report the result as inconclusive, never as a pass.
+- When that cap cuts an invocation off before it finished, report the reproduction as inconclusive, never as a pass. An invocation that finished inside its cap reports what it actually found.
 - Never escalate past these bounds to force a reproduction; record what you observed and stop.
 - Never raise the priority you inherited.
-- Leave no load process behind, whether or not the invocation was interrupted; check afterwards with `pgrep`.
 
-This covers deliberate load only. Ordinary feedback loops keep running as AGENTS.md declares them.
+# LEAVE NO PROCESS BEHIND
+
+Every process your commands start is yours to end — deliberate load and ordinary feedback loops alike. A suite that fails or is interrupted can leave a helper, server or worker running, and that process keeps burning the operator's CPU long after the Run has moved on.
+
+So before you finish, and after any command you interrupted, look for survivors with `pgrep` and end the ones you started by PID. Report what you ended. If a process is still alive and you cannot establish that it is yours, say so on the issue rather than leaving it unmentioned.
 
 # FEEDBACK LOOPS
 
