@@ -32,6 +32,12 @@ These are not Required Skills. Use them only when your profile exposes them, the
 
 - `/pr` — writes a pull-request body for the bound work; it does not authorize creating, merging, or closing a PR.
 
+# SKILLS NOT TO INVOKE
+
+A Run has no Release assessment service. Do not invoke `/release-assessment`,
+even if an operator enables it in the Skill policy. It belongs to the Loop
+engineer's advisory conversation in Copilot App, outside Runs.
+
 # EXPLORATION
 
 Explore the repo for your issue. Stay within the area the issue touches; don't grand-tour the codebase. If you're unfamiliar with an area, go up a layer first and map its modules and callers before drilling in.

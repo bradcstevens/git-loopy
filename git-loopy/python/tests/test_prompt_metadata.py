@@ -16,7 +16,12 @@ from git_loopy.skill_source import (
     DEFAULT_CHECKOUT,
     read_skill_source_pin,
 )
-from git_loopy.agent_profiles import required_profile_skills, validate_profiles
+from git_loopy.agent_profiles import (
+    load_session_profile,
+    required_profile_skills,
+    validate_profiles,
+)
+from git_loopy.config import EXECUTION_TASK_TYPE_KEYS
 from git_loopy.skill_install import installed_required_skills
 
 EXPECTED_PROFILE_REQUIRED_SKILLS = (
@@ -193,3 +198,14 @@ def test_every_required_skill_exists_at_the_pinned_revision() -> None:
         f"the profiles require Skills the pinned revision "
         f"{pin.short_revision} of {pin.repository} does not carry: {missing}"
     )
+
+    # Catalog membership and even an operator enable do not expose these
+    # outside-Run Skills through any in-Run Agent profile (#767).
+    outside_run = ("release-assessment", "release", "next")
+    for key in (*EXECUTION_TASK_TYPE_KEYS, "review"):
+        profile = load_session_profile(
+            checkout / pin.profiles_directory, key, skills=skills_root,
+        )
+        assert not set(outside_run) & set(profile.required), key
+        assert not set(outside_run) & set(profile.permitted), key
+        assert not set(outside_run) & profile.exposure(outside_run), key

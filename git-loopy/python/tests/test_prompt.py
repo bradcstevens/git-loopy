@@ -131,7 +131,7 @@ def _packaged_prompt_text() -> str:
 def test_role_rules_belong_to_profiles_not_shared_run_instructions() -> None:
     prompt = _packaged_prompt_text()
     for retired in (
-        "required-skills:", "# TASK TYPE", "# SKILLS NOT TO INVOKE",
+        "required-skills:", "# TASK TYPE",
         "`/tdd`", "`/code-review`", "`/implement`", "`/resolving-merge-conflicts`",
     ):
         assert retired not in prompt
@@ -249,6 +249,18 @@ _PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
 )
 
 _SKILL_REFERENCE = re.compile(r"`/([a-z][a-z0-9]*(?:-[a-z0-9]+)*)`")
+
+#: Run-wide service exclusions, independent of profile-specific role rules.
+_PINNED_SERVICE_EXCLUSIONS = frozenset({"release-assessment"})
+
+
+def test_assessment_service_skills_are_explicitly_excluded_from_runs() -> None:
+    section = _packaged_prompt_text().split("# SKILLS NOT TO INVOKE\n", 1)[1]
+    section = section.split("\n# ", 1)[0]
+
+    assert set(_SKILL_REFERENCE.findall(section)) == _PINNED_SERVICE_EXCLUSIONS
+    assert "A Run has no Release assessment service" in section
+    assert "even if an operator enables" in section
 
 
 def test_the_pinned_catalog_revision_is_the_one_this_repository_pins() -> None:
