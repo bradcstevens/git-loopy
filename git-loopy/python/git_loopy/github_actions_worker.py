@@ -111,13 +111,12 @@ def parse_request(env: Mapping[str, str]) -> dict[str, Any]:
             raise ContributionRequestError(f"{REQUEST_ENV}.{field} must be a non-empty string")
     if not isinstance(request.get("issue_ref"), (int, str)) or request["issue_ref"] == "":
         raise ContributionRequestError(f"{REQUEST_ENV}.issue_ref must name an issue")
-    if "profile_key" in request and request["profile_key"] not in EXECUTION_TASK_TYPE_KEYS:
+    if request.get("profile_key") not in EXECUTION_TASK_TYPE_KEYS:
         raise ContributionRequestError(f"{REQUEST_ENV}.profile_key must name an execution profile")
-    if "profile_key" in request:
-        for field in ("disabled_skills", "catalog_skills"):
-            names = request.get(field, [])
-            if not isinstance(names, list) or any(not is_canonical_skill_name(n) for n in names):
-                raise ContributionRequestError(f"{REQUEST_ENV}.{field} must list canonical Skills")
+    for field in ("disabled_skills", "catalog_skills"):
+        names = request.get(field)
+        if not isinstance(names, list) or any(not is_canonical_skill_name(n) for n in names):
+            raise ContributionRequestError(f"{REQUEST_ENV}.{field} must list canonical Skills")
     return request
 
 
@@ -280,8 +279,7 @@ class _TransportedSkillExposure:
     """The half of a Run's **Effective Skill policy** that can cross a boundary.
 
     The worker rebuilds a profile session's policy and catalog from its installed
-    root and the transported disabled names. Legacy requests leave those two
-    objects absent, retaining their original deny-only permission behavior.
+    root and the transported disabled names. Every request names its profile.
     Neither a source path nor a profile body crosses the machine boundary:
 
     * ``skill_directories`` is the catalog root ADR-0025 pins, which the job's
@@ -298,8 +296,8 @@ class _TransportedSkillExposure:
 
     disabled: tuple[str, ...]
     root: str
-    policy: EffectiveSkillPolicy | None = None
-    catalog: SkillCatalog | None = None
+    policy: EffectiveSkillPolicy
+    catalog: SkillCatalog
 
     @property
     def skill_directories(self) -> tuple[str, ...]:
@@ -354,35 +352,29 @@ async def _run_agent_session(
     working_directory = Path.cwd()
     client = make_copilot_client(working_directory=working_directory)
     disabled = tuple(request.get("disabled_skills") or ())
-    profile_key = request.get("profile_key")
-    config = _JobSessionConfig(
-        deny_skills=frozenset(disabled) if profile_key is None else frozenset()
-    )
-    exposure = _TransportedSkillExposure(
-        disabled=disabled, root=str(installed_catalog_dir(os.environ))
-    )
+    profile_key = request["profile_key"]
+    config = _JobSessionConfig(deny_skills=frozenset())
+    root = installed_catalog_dir(os.environ)
     termination = SessionTermination.COMPLETED
     raised: SessionError | None = None
     watch = SessionOutcomeWatch()
     await client.start()
     try:
-        if profile_key is not None:
-            root = installed_catalog_dir(os.environ)
-            catalog = build_skill_catalog(
-                (), repo_root=working_directory, installed_skills_dir=root,
-            )
-            policy = EffectiveSkillPolicy(
-                enabled=tuple(sorted(set(catalog.winners) - set(disabled))),
-                required=(), legacy_denied=(),
-                source_kinds={name: winner.source_kind for name, winner in catalog.winners.items()},
-                base_scope=SkillPolicyScope.PROJECT,
-            )
-            exposure = _TransportedSkillExposure(
-                policy=policy, catalog=catalog, root=str(root),
-                disabled=tuple(sorted(
-                    set(disabled) | (set(request.get("catalog_skills", ())) - set(catalog.winners))
-                )),
-            )
+        catalog = build_skill_catalog(
+            (), repo_root=working_directory, installed_skills_dir=root,
+        )
+        policy = EffectiveSkillPolicy(
+            enabled=tuple(sorted(set(catalog.winners) - set(disabled))),
+            required=(), legacy_denied=(),
+            source_kinds={name: winner.source_kind for name, winner in catalog.winners.items()},
+            base_scope=SkillPolicyScope.PROJECT,
+        )
+        exposure = _TransportedSkillExposure(
+            policy=policy, catalog=catalog, root=str(root),
+            disabled=tuple(sorted(
+                set(disabled) | (set(request["catalog_skills"]) - set(catalog.winners))
+            )),
+        )
         async with IterationSession(
             client,
             config=config,
@@ -397,7 +389,6 @@ async def _run_agent_session(
             issue_ref=request["issue_ref"],
             skill_exposure=exposure,
             profile_key=profile_key,
-            require_profile=profile_key is not None,
             event_observer=watch,
         ) as session:
             try:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from git_loopy.agent_profiles import validate_profiles
+from git_loopy.agent_profiles import required_profile_skills, validate_profiles
 
 
 PROFILE_KEYS = ("planning", "review", "implementation", "test", "docs", "chore", "bugfix")
@@ -91,6 +91,25 @@ def test_an_unusable_profile_root_is_a_named_refusal(checkout: Path, kind: str) 
 
 def test_a_valid_synthetic_profile_set_passes(checkout: Path) -> None:
     assert validate_profiles(checkout) == ()
+
+
+def test_required_skills_are_the_in_run_union_not_the_planner_or_permitted(
+    checkout: Path,
+) -> None:
+    (checkout / "profiles" / "planning.md").write_text(
+        "---\nrequired-skills:\n  - prototype\npermitted-skills: []\n"
+        "access: full\n---\nPlan with a human.\n",
+        encoding="utf-8",
+    )
+    (checkout / "profiles" / "implementation.md").write_text(
+        "---\nrequired-skills:\n  - tdd\npermitted-skills:\n  - prototype\n"
+        "access: full\n---\nImplement the issue.\n",
+        encoding="utf-8",
+    )
+
+    assert required_profile_skills(checkout / "profiles", skills=checkout / "skills") == (
+        "code-review", "tdd",
+    )
 
 
 @pytest.mark.parametrize(

@@ -34,8 +34,8 @@ from pathlib import Path
 import pytest
 
 from git_loopy import model_listing, sdk_feed, skill_install
-from git_loopy.prompt import packaged_required_skills
 from git_loopy.skill_source import SkillSourceError, SkillSourcePin
+from tests.profile_fixtures import seed_profile_install
 
 
 # The suite's fixtures build many real git repositories and subprocesses across
@@ -151,16 +151,9 @@ def _refuse_remote_skill_acquisition(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def installed_execution_profiles() -> Path:
     """Synthetic installed profiles; no acquisition or edit to the real install."""
-    root = skill_install.installed_profiles_dir(os.environ)
-    root.mkdir(parents=True)
-    for key in ("implementation", "bugfix", "test", "docs", "chore"):
-        required = "\n  - tdd\n" if key in ("implementation", "bugfix", "test") else " []\n"
-        (root / f"{key}.md").write_text(
-            f"---\nrequired-skills:{required}permitted-skills: []\n"
-            f"access: full\n---\n{key} role delta.\n",
-            encoding="utf-8",
-        )
-    return root
+    catalog = seed_profile_install(os.environ, ("tdd",))
+    assert catalog.profile_root is not None
+    return catalog.profile_root
 
 
 @pytest.fixture(autouse=True)
@@ -304,27 +297,17 @@ def installed_skill_catalog(
     covered against a genuine ``file://`` upstream in ``test_skill_install.py``.
     Request this fixture by name to inspect the catalog a test runs against.
     """
-    root = skill_install.installed_catalog_dir(os.environ)
-    names = ("setup-agent-skills", *packaged_required_skills())
-    for name in names:
-        skill = root / name
-        skill.mkdir(parents=True, exist_ok=True)
-        (skill / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: A stand-in {name} Skill.\n---\n",
-            encoding="utf-8",
-        )
-    catalog = skill_install.InstalledCatalog(
-        root=root,
-        repository="bradcstevens/git-loopy-skills",
-        revision="a" * 40,
-        skills=tuple(sorted(names)),
-        sha256=skill_install.catalog_digest(root),
-    )
+    catalog = seed_profile_install(os.environ)
     outcome = skill_install.RefreshOutcome(
         catalog=catalog, action=skill_install.ACTION_CURRENT
     )
 
-    def _refresh(**_kwargs: object) -> skill_install.RefreshOutcome:
+    def _refresh(*, env=None, **_kwargs: object) -> skill_install.RefreshOutcome:
+        environment = os.environ if env is None else env
+        if skill_install.installed_catalog_dir(environment) != catalog.root:
+            return skill_install.RefreshOutcome(
+                catalog=seed_profile_install(environment), action=skill_install.ACTION_CURRENT,
+            )
         return outcome
 
     for module_name in ("git_loopy.init", "git_loopy.loop"):

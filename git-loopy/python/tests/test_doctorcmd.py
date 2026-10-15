@@ -6,6 +6,7 @@ import asyncio
 import functools
 import hashlib
 import json
+import shutil
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -38,6 +39,7 @@ from git_loopy.skill_install import refresh_installed_catalog
 from git_loopy.skill_source import LicensePin, SkillSourcePin, read_skill_source_pin
 from git_loopy.static_route import RoutePolicy
 from tests.fakes import FakeGitClient
+from tests.profile_fixtures import seed_profile_install
 
 
 class _CatalogClient:
@@ -79,12 +81,14 @@ def _isolate_environment_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
 def _config(*names: str) -> RunConfig:
     return RunConfig(
         skill_policy=SkillPolicyInputs(
-            project=SkillPolicyInput(present=True, names=names)
+            project=SkillPolicyInput(present=True, names=("code-review", *names))
         )
     )
 
 
-def _seed_pinned_catalog(env: dict[str, str]) -> dict[str, str]:
+def _seed_pinned_catalog(
+    env: dict[str, str], required: tuple[str, ...] = (),
+) -> dict[str, str]:
     """Install a catalog the pin accepts into this scope, and return the scope.
 
     Doctor derives both the Skill root and the verdict it passes on that root
@@ -97,36 +101,64 @@ def _seed_pinned_catalog(env: dict[str, str]) -> dict[str, str]:
     (installed / "pinned" / "SKILL.md").write_text(
         "---\nname: pinned\ndescription: A Skill.\n---\n", encoding="utf-8"
     )
-    skill_install.install_record_path(env).write_text(
-        json.dumps(
-            {
-                "repository": read_skill_source_pin().repository,
-                "revision": read_skill_source_pin().revision,
-                "sha256": skill_install.catalog_digest(installed),
-            }
-        ),
-        encoding="utf-8",
-    )
+    seed_profile_install(env, required)
     return env
 
 
-def _pinned_scope(tmp_path: Path, **extra: str) -> dict[str, str]:
+def _pinned_scope(
+    tmp_path: Path, *, required: tuple[str, ...] = (), **extra: str,
+) -> dict[str, str]:
     """An isolated global config scope already holding the pinned catalog."""
     return _seed_pinned_catalog(
-        {"XDG_CONFIG_HOME": str(tmp_path / "xdg"), **extra}
+        {"XDG_CONFIG_HOME": str(tmp_path / "xdg"), **extra}, required,
     )
 
 
-def _matching_rows() -> tuple[str, str]:
+def _matching_rows(tmp_path: Path) -> tuple[str, str]:
     """The install verdict doctor prints before it judges any Skill name."""
     return (
         "Skill catalog | matching | installed revision "
         f"{read_skill_source_pin().revision} matches the pinned revision.",
-        "Agent profiles | not pinned | current pin names no profile directory.",
+        f"Agent profiles | matching | {tmp_path / 'xdg/git-loopy/profiles'} | "
+        f"pinned revision {read_skill_source_pin().revision}",
     )
 
 
+@pytest.mark.parametrize("scope", ["project", "global"])
+@pytest.mark.parametrize("apply", [False, True])
+@pytest.mark.parametrize("declaration", ["[]", "\n  - tdd", "not-a-list"])
+def test_doctor_refuses_retired_prompt_metadata_without_repairing_it(
+    tmp_path: Path, scope: str, apply: bool, declaration: str,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _pinned_scope(tmp_path)
+    prompt = (
+        repo / "git-loopy/PROMPT.md" if scope == "project"
+        else settings.global_prompt_path(env)
+    )
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    text = f"---\nrequired-skills: {declaration}\n---\nCustom instructions.\n"
+    prompt.write_text(text, encoding="utf-8")
+    output: list[str] = []
+
+    def unexpected_client() -> None:
+        pytest.fail("A retired prompt must be refused before client discovery")
+
+    code = run_doctor(
+        config=_config(), repo_root=repo, env=env, client_factory=unexpected_client,
+        output_fn=output.append, apply=apply,
+    )
+
+    assert code == 1
+    assert any("Remove 'required-skills' from PROMPT.md" in row for row in output)
+    assert prompt.read_text() == text
+    assert not settings.project_config_path(repo).exists()
+    assert not settings.global_config_path(env).exists()
+
+
 def _catalog(**winners: SkillCatalogWinner) -> SkillCatalog:
+    winners.setdefault("code-review", SkillCatalogWinner("code-review", "packaged"))
     return SkillCatalog(winners=winners)
 
 
@@ -152,6 +184,9 @@ def _run(
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
     output: list[str] = []
+    environment = _pinned_scope(tmp_path, required=required) if env is None else env
+    if required and env is not None:
+        seed_profile_install(environment, required)
 
     async def catalog_discoverer(_client: object, **_kwargs: object) -> SkillCatalog:
         return catalog
@@ -159,17 +194,11 @@ def _run(
     code = run_doctor(
         config=config,
         repo_root=repo,
-        env=_pinned_scope(tmp_path) if env is None else env,
+        env=environment,
         client_factory=_CatalogClient,
         discoverer=catalog_discoverer if discoverer is None else discoverer,
         git=FakeGitClient(repo, tracked_paths=tracked_paths),
-        prompt_text=(
-            "---\nrequired-skills: []\n---\n"
-            if not required
-            else "---\nrequired-skills:\n"
-            + "".join(f"  - {name}\n" for name in required)
-            + "---\n"
-        ),
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
         apply=apply,
         environment_preflight_resolver=(
@@ -536,7 +565,7 @@ def test_a_skill_repair_does_not_clear_or_rewrite_a_routing_refusal(tmp_path: Pa
     assert any(ARTIFICIAL_ANALYSIS_API_KEY_ENV in line for line in output)
     assert any("Saved repaired project Skill policy" in line for line in output)
     assert settings.load_config_table(path) == {
-        "route_policy": "dynamic", "enabled_skills": [],
+        "route_policy": "dynamic", "enabled_skills": ["code-review"],
     }
 
 
@@ -617,7 +646,7 @@ def test_doctor_reports_a_missing_tool_and_an_unauthorised_tracker_in_one_pass(
         "label_vocabulary | passed | the tracker carries all "
         f"{len(labels.read_run_required_vocabulary(repo))} Labels a Run reads",
         "feedback_loops | passed | AGENTS.md declares 1 runnable feedback loop(s)",
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "Skill policy is healthy; a Run would not be blocked.",
     ]
 
@@ -672,7 +701,7 @@ def test_doctor_apply_leaves_environment_rows_reported_and_unrepaired(
         client_factory=_CatalogClient,
         discoverer=_discoverer(_catalog()),
         git=FakeGitClient(repo),
-        prompt_text="---\nrequired-skills: []\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
         apply=True,
         environment_preflight_resolver=_host(
@@ -681,7 +710,7 @@ def test_doctor_apply_leaves_environment_rows_reported_and_unrepaired(
     )
 
     assert code == 1
-    assert settings.load_config_table(config_path) == {"enabled_skills": []}
+    assert settings.load_config_table(config_path) == {"enabled_skills": ["code-review"]}
     assert (
         "git | failed | git is not on PATH. Install Git and re-run git-loopy."
         in output
@@ -713,18 +742,18 @@ def test_doctor_apply_repairs_only_missing_and_required_names(
     code = run_doctor(
         config=_config("ghost"),
         repo_root=repo,
-        env=_pinned_scope(tmp_path),
+        env=_pinned_scope(tmp_path, required=("required",)),
         client_factory=_CatalogClient,
         discoverer=discoverer,
         git=FakeGitClient(repo),
-        prompt_text="---\nrequired-skills:\n  - required\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
         apply=True,
     )
 
     assert code == 0
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "ghost | enabled Skill has no catalog winner | project policy | "
         f"Config: {config_path}",
         "required | Required Skill is disabled | project policy | "
@@ -736,7 +765,7 @@ def test_doctor_apply_repairs_only_missing_and_required_names(
     ]
     assert settings.load_config_table(config_path) == {
         "model": "gpt-5.4",
-        "enabled_skills": ["required"],
+        "enabled_skills": ["code-review", "required"],
     }
 
     async def resolves_after_repair() -> tuple[object, ...]:
@@ -745,9 +774,12 @@ def test_doctor_apply_repairs_only_missing_and_required_names(
                 _CatalogClient(),
                 config=_config("required"),
                 git=FakeGitClient(repo),
-                prompt_text="---\nrequired-skills:\n  - required\n---\n",
+                prompt_text="# Run instructions\n",
                 repo_root=repo,
-                installed_skills_dir=tmp_path / "installed",
+                installed_skills_dir=skill_install.installed_catalog_dir(
+                    {"XDG_CONFIG_HOME": str(tmp_path / "xdg")},
+                ),
+                env={"XDG_CONFIG_HOME": str(tmp_path / "xdg")},
                 workspace=Path(workspace),
                 discoverer=discoverer,
             )
@@ -778,13 +810,13 @@ def test_doctor_apply_prints_the_delta_before_it_writes(tmp_path: Path) -> None:
     code = run_doctor(
         config=_config("ghost"),
         repo_root=repo,
-        env=_pinned_scope(tmp_path),
+        env=_pinned_scope(tmp_path, required=("required",)),
         client_factory=_CatalogClient,
         discoverer=_discoverer(
             _catalog(required=SkillCatalogWinner("required", "packaged"))
         ),
         git=FakeGitClient(repo),
-        prompt_text="---\nrequired-skills:\n  - required\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
         apply=True,
         writer=writer,
@@ -793,7 +825,7 @@ def test_doctor_apply_prints_the_delta_before_it_writes(tmp_path: Path) -> None:
     assert code == 0
     assert printed_at_write == [
         (
-            *_matching_rows(),
+            *_matching_rows(tmp_path),
             "ghost | enabled Skill has no catalog winner | project policy | "
             f"Config: {config_path}",
             "required | Required Skill is disabled | project policy | "
@@ -818,7 +850,7 @@ def test_doctor_apply_repairs_the_global_policy_that_carries_blockers(
         tmp_path,
         config=RunConfig(
             skill_policy=SkillPolicyInputs(
-                global_=SkillPolicyInput(present=True, names=("ghost",))
+                global_=SkillPolicyInput(present=True, names=("code-review", "ghost"))
             )
         ),
         catalog=_catalog(required=SkillCatalogWinner("required", "packaged")),
@@ -834,7 +866,7 @@ def test_doctor_apply_repairs_the_global_policy_that_carries_blockers(
         "Remove: ghost",
         f"Saved repaired global Skill policy to {config_path}",
     ]
-    assert settings.load_config_table(config_path)["enabled_skills"] == ["required"]
+    assert settings.load_config_table(config_path)["enabled_skills"] == ["code-review", "required"]
 
 
 def test_doctor_apply_does_not_create_a_policy_for_the_minimal_fallback(
@@ -848,12 +880,10 @@ def test_doctor_apply_does_not_create_a_policy_for_the_minimal_fallback(
         apply=True,
     )
 
-    assert code == 1
+    assert code == 0
     assert output == [
-        *_matching_rows(),
-        "needed | enabled Skill has no catalog winner | Minimal fallback | "
-        f"Config: {tmp_path / 'repo' / 'git-loopy' / 'config.toml'}",
-        "No saved Skill policy to repair.",
+        *_matching_rows(tmp_path),
+        "Skill policy is healthy; no changes to apply.",
     ]
     assert not (tmp_path / "repo" / "git-loopy" / "config.toml").exists()
 
@@ -875,7 +905,7 @@ def test_doctor_apply_reports_non_policy_remedies_without_writing(
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "local | enabled project Skill is not git-tracked | project policy | "
         "Fix: git add and commit the Skill, or run `git-loopy skills edit` "
         "to disable it.",
@@ -900,22 +930,22 @@ def test_doctor_apply_does_not_write_a_policy_replaced_by_environment(
         config=RunConfig(
             skill_policy=SkillPolicyInputs(
                 project=SkillPolicyInput(present=True, names=("kept",)),
-                environment=SkillPolicyInput(present=True, names=("ghost",)),
+                environment=SkillPolicyInput(present=True, names=("code-review", "ghost")),
             )
         ),
         repo_root=repo,
-        env=_pinned_scope(tmp_path, GIT_LOOPY_ENABLED_SKILLS="ghost"),
+        env=_pinned_scope(tmp_path, GIT_LOOPY_ENABLED_SKILLS="code-review,ghost"),
         client_factory=_CatalogClient,
         discoverer=discoverer,
         git=FakeGitClient(repo),
-        prompt_text="---\nrequired-skills: []\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
         apply=True,
     )
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "ghost | enabled Skill has no catalog winner | environment replacement | "
         "Environment: GIT_LOOPY_ENABLED_SKILLS",
         "No saved Skill policy to repair.",
@@ -938,7 +968,7 @@ def test_doctor_apply_refuses_a_repair_the_saved_policy_cannot_clear(
     code = run_doctor(
         config=RunConfig(
             skill_policy=SkillPolicyInputs(
-                project=SkillPolicyInput(present=True, names=("kept",)),
+                project=SkillPolicyInput(present=True, names=("code-review", "kept")),
                 enable_skills=frozenset({"ghost"}),
             )
         ),
@@ -947,14 +977,14 @@ def test_doctor_apply_refuses_a_repair_the_saved_policy_cannot_clear(
         client_factory=_CatalogClient,
         discoverer=discoverer,
         git=FakeGitClient(repo),
-        prompt_text="---\nrequired-skills: []\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
         apply=True,
     )
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "ghost | enabled Skill has no catalog winner | project policy | "
         f"Config: {config_path}",
         "No repair was applied; resolve the reported blockers first.",
@@ -985,21 +1015,21 @@ def test_doctor_apply_refuses_a_nameless_blocker_over_an_empty_saved_policy(
         client_factory=_CatalogClient,
         discoverer=unavailable,
         git=FakeGitClient(repo),
-        prompt_text="---\nrequired-skills: []\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
         apply=True,
     )
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "Skill policy | Skill inventory is unavailable | project policy | "
         "Fix: restore Copilot CLI access, then re-run `git-loopy doctor`.",
         "No repair was applied; resolve the reported blockers first.",
     ]
 
 
-def test_doctor_apply_writes_an_explicitly_empty_policy_when_every_name_is_a_ghost(
+def test_doctor_apply_retains_required_profiles_when_other_names_are_ghosts(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -1018,7 +1048,7 @@ def test_doctor_apply_writes_an_explicitly_empty_policy_when_every_name_is_a_gho
         client_factory=_CatalogClient,
         discoverer=discoverer,
         git=FakeGitClient(repo),
-        prompt_text="---\nrequired-skills: []\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
         apply=True,
     )
@@ -1031,7 +1061,7 @@ def test_doctor_apply_writes_an_explicitly_empty_policy_when_every_name_is_a_gho
     ]
     assert settings.load_config_table(config_path) == {
         "model": "gpt-5.4",
-        "enabled_skills": [],
+        "enabled_skills": ["code-review"],
     }
 
 
@@ -1056,7 +1086,7 @@ def test_doctor_is_clean_and_idempotent_after_an_applied_repair(
     _listing(monkeypatch)
     repo = tmp_path / "repo"
     repo.mkdir()
-    env = _pinned_scope(tmp_path)
+    env = _pinned_scope(tmp_path, required=("required",))
     config_path = repo / "git-loopy" / "config.toml"
     settings.write_config(config_path, {
         "enabled_skills": ["ghost"], "route_policy": "static",
@@ -1079,7 +1109,7 @@ def test_doctor_is_clean_and_idempotent_after_an_applied_repair(
             client_factory=_CatalogClient,
             discoverer=discoverer,
             git=FakeGitClient(repo),
-            prompt_text="---\nrequired-skills:\n  - required\n---\n",
+            prompt_text="# Run instructions\n",
             output_fn=output.append,
             apply=apply,
             writer=writer,
@@ -1097,7 +1127,7 @@ def test_doctor_is_clean_and_idempotent_after_an_applied_repair(
     )
     assert report == [
         routing_row,
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "Skill policy is healthy.",
     ]
 
@@ -1105,11 +1135,11 @@ def test_doctor_is_clean_and_idempotent_after_an_applied_repair(
     assert doctor(apply=True, output=again) == 0
     assert again == [
         routing_row,
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "Skill policy is healthy; no changes to apply.",
     ]
     assert written == [config_path]
-    assert settings.load_config_table(config_path)["enabled_skills"] == ["required"]
+    assert settings.load_config_table(config_path)["enabled_skills"] == ["code-review", "required"]
 
 
 def test_doctor_apply_is_a_noop_after_a_clean_repair(tmp_path: Path) -> None:
@@ -1123,7 +1153,7 @@ def test_doctor_apply_is_a_noop_after_a_clean_repair(tmp_path: Path) -> None:
 
     assert code == 0
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "Skill policy is healthy; no changes to apply.",
     ]
 
@@ -1139,7 +1169,7 @@ def test_doctor_reports_an_enabled_skill_without_a_catalog_winner(
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "removed-skill | enabled Skill has no catalog winner | project policy | "
         f"Config: {tmp_path / 'repo' / 'git-loopy' / 'config.toml'}"
     ]
@@ -1180,12 +1210,9 @@ def test_doctor_attributes_a_missing_skill_to_a_drifted_installed_catalog(
         f"installed revision {'b' * 40} does not match pinned {pin.revision}; "
         "refresh with `git-loopy doctor --apply`."
     )
-    assert output[2] == (
-        "removed-skill | enabled Skill has no catalog winner; "
-        "the installed catalog is drifted | project policy | "
-        "Fix: refresh the pinned Skill catalog with `git-loopy doctor --apply`; "
-        "do not prune this policy name."
-    )
+    assert "Agent profiles" in output[2] and "not matching" in output[2]
+    assert "doctor --apply" in output[2]
+    assert not any("Remove:" in row for row in output)
 
 
 @pytest.mark.parametrize(
@@ -1217,6 +1244,7 @@ def test_doctor_reports_the_installed_catalog_state(
             ),
             encoding="utf-8",
         )
+        seed_profile_install(env, ())
 
     code, output = _run(
         tmp_path,
@@ -1312,6 +1340,7 @@ def test_doctor_reports_each_root_and_repairs_profile_pins(
 
     pin = _profile_pin(tmp_path / "profile-upstream")
     monkeypatch.setattr(doctorcmd, "read_skill_source_pin", lambda: pin)
+    monkeypatch.setattr(skill_install, "read_skill_source_pin", lambda: pin)
     env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
     refresh_installed_catalog(pin, env=env)
     scope = settings.global_dir(env)
@@ -1327,7 +1356,10 @@ def test_doctor_reports_each_root_and_repairs_profile_pins(
     assert output[1].startswith(f"Agent profiles | {profiles_state} |")
     assert str(scope / "profiles") in output[1]
 
-    code, output = _run(tmp_path, config=_config(), catalog=_catalog(), env=env, apply=True)
+    code, output = _run(
+        tmp_path, config=_config("tdd"),
+        catalog=_catalog(tdd=SkillCatalogWinner("tdd", "packaged")), env=env, apply=True,
+    )
 
     assert code == 0
     assert any(row.startswith("Agent profiles | matching |") for row in output)
@@ -1354,10 +1386,18 @@ def test_doctor_apply_refreshes_before_pruning_a_name_restored_by_the_pin(
     refresh_installed_catalog(old_pin, env=env)
 
     _write_upstream_skill(upstream, "restored")
+    seeded = seed_profile_install({"XDG_CONFIG_HOME": str(tmp_path / "seed")}, ())
+    shutil.copytree(seeded.root, upstream / "skills", dirs_exist_ok=True)
+    assert seeded.profile_root is not None
+    shutil.copytree(seeded.profile_root, upstream / "profiles")
     _git(upstream, "add", "-A")
     _git(upstream, "commit", "--quiet", "-m", "restore Skill")
-    pin = _doctor_pin(upstream, _git(upstream, "rev-parse", "HEAD"))
+    pin = replace(
+        _doctor_pin(upstream, _git(upstream, "rev-parse", "HEAD")),
+        schema_version=2, profiles_directory="profiles",
+    )
     monkeypatch.setattr(doctorcmd, "read_skill_source_pin", lambda: pin)
+    monkeypatch.setattr(skill_install, "read_skill_source_pin", lambda: pin)
     repo = tmp_path / "repo"
     repo.mkdir()
     config_path = repo / "git-loopy" / "config.toml"
@@ -1507,7 +1547,7 @@ def test_doctor_names_the_environment_replacement_that_carries_the_blocker(
         config=RunConfig(
             skill_policy=SkillPolicyInputs(
                 global_=SkillPolicyInput(present=True, names=("kept",)),
-                environment=SkillPolicyInput(present=True, names=("ghost",)),
+                environment=SkillPolicyInput(present=True, names=("code-review", "ghost")),
             )
         ),
         catalog=_catalog(kept=SkillCatalogWinner("kept", "packaged")),
@@ -1515,7 +1555,7 @@ def test_doctor_names_the_environment_replacement_that_carries_the_blocker(
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "ghost | enabled Skill has no catalog winner | environment replacement | "
         "Environment: GIT_LOOPY_ENABLED_SKILLS"
     ]
@@ -1536,7 +1576,7 @@ def test_doctor_reports_a_required_skill_disabled_by_the_policy(
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "required | Required Skill is disabled | project policy | "
         f"Config: {tmp_path / 'repo' / 'git-loopy' / 'config.toml'}"
     ]
@@ -1560,7 +1600,7 @@ def test_doctor_reports_an_enabled_untracked_project_skill(
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "local | enabled project Skill is not git-tracked | project policy | "
         "Fix: git add and commit the Skill, or run `git-loopy skills edit` "
         "to disable it."
@@ -1584,13 +1624,15 @@ def test_doctor_reports_an_unavailable_inventory_separately_from_missing_skills(
         client_factory=_CatalogClient,
         discoverer=unavailable,
         git=FakeGitClient(repo),
-        prompt_text="---\nrequired-skills: []\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
     )
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
+        "code-review | Skill inventory is unavailable | project policy | "
+        "Fix: restore Copilot CLI access, then re-run `git-loopy doctor`.",
         "configured | Skill inventory is unavailable | project policy | "
         "Fix: restore Copilot CLI access, then re-run `git-loopy doctor`."
     ]
@@ -1610,13 +1652,15 @@ def test_doctor_reports_a_client_startup_failure_as_unavailable_inventory(
             env=_pinned_scope(tmp_path),
             client_factory=_UnavailableCatalogClient,
             git=FakeGitClient(repo),
-            prompt_text="---\nrequired-skills: []\n---\n",
+            prompt_text="# Run instructions\n",
             output_fn=output.append,
         )
         == 1
     )
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
+        "code-review | Skill inventory is unavailable | project policy | "
+        "Fix: restore Copilot CLI access, then re-run `git-loopy doctor`.",
         "configured | Skill inventory is unavailable | project policy | "
         "Fix: restore Copilot CLI access, then re-run `git-loopy doctor`."
     ]
@@ -1639,7 +1683,7 @@ def test_doctor_reports_every_live_blocker_class_in_one_report(
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         f"ghost | enabled Skill has no catalog winner | project policy | "
         f"Config: {config_path}",
         f"needed | Required Skill is disabled | project policy | "
@@ -1657,7 +1701,7 @@ def test_doctor_names_the_global_config_that_carries_a_global_policy(
         tmp_path,
         config=RunConfig(
             skill_policy=SkillPolicyInputs(
-                global_=SkillPolicyInput(present=True, names=("ghost",))
+                global_=SkillPolicyInput(present=True, names=("code-review", "ghost"))
             )
         ),
         catalog=_catalog(),
@@ -1666,13 +1710,13 @@ def test_doctor_names_the_global_config_that_carries_a_global_policy(
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "ghost | enabled Skill has no catalog winner | global policy | "
         f"Config: {tmp_path / 'xdg' / 'git-loopy' / 'config.toml'}"
     ]
 
 
-def test_doctor_names_the_project_config_behind_the_minimal_fallback(
+def test_doctor_minimal_fallback_uses_the_installed_profile_union(
     tmp_path: Path,
 ) -> None:
     code, output = _run(
@@ -1682,11 +1726,10 @@ def test_doctor_names_the_project_config_behind_the_minimal_fallback(
         required=("needed",),
     )
 
-    assert code == 1
+    assert code == 0
     assert output == [
-        *_matching_rows(),
-        "needed | enabled Skill has no catalog winner | Minimal fallback | "
-        f"Config: {tmp_path / 'repo' / 'git-loopy' / 'config.toml'}"
+        *_matching_rows(tmp_path),
+        "Skill policy is healthy; a Run would not be blocked.",
     ]
 
 
@@ -1697,7 +1740,7 @@ def test_doctor_names_the_deny_guard_that_subtracted_a_required_skill(
         tmp_path,
         config=RunConfig(
             skill_policy=SkillPolicyInputs(
-                project=SkillPolicyInput(present=True, names=("needed",))
+                project=SkillPolicyInput(present=True, names=("code-review", "needed"))
             ),
             deny_skills=frozenset({"needed"}),
         ),
@@ -1707,7 +1750,7 @@ def test_doctor_names_the_deny_guard_that_subtracted_a_required_skill(
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "needed | Required Skill is disabled | legacy deny guard | "
         "Deny guard: deny_skills or GIT_LOOPY_DENY_SKILLS"
     ]
@@ -1720,7 +1763,7 @@ def test_doctor_names_the_disable_overlay_that_subtracted_a_required_skill(
         tmp_path,
         config=RunConfig(
             skill_policy=SkillPolicyInputs(
-                project=SkillPolicyInput(present=True, names=("needed",)),
+                project=SkillPolicyInput(present=True, names=("code-review", "needed")),
                 disable_skills=frozenset({"needed"}),
             )
         ),
@@ -1730,7 +1773,7 @@ def test_doctor_names_the_disable_overlay_that_subtracted_a_required_skill(
 
     assert code == 1
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "needed | Required Skill is disabled | disable overlay | "
         "Overlay: --disable-skill"
     ]
@@ -1760,7 +1803,7 @@ def test_doctor_does_not_report_a_broken_git_as_an_unavailable_inventory(
         client_factory=_CatalogClient,
         discoverer=discoverer,
         git=_BrokenGit(repo),
-        prompt_text="---\nrequired-skills: []\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
     )
 
@@ -1791,7 +1834,7 @@ def test_doctor_reports_a_malformed_installed_catalog_instead_of_crashing(
         client_factory=_CatalogClient,
         discoverer=discoverer,
         git=FakeGitClient(repo),
-        prompt_text="---\nrequired-skills: []\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=output.append,
     )
 
@@ -1809,7 +1852,7 @@ def test_doctor_reports_one_clean_line_for_a_resolved_policy(tmp_path: Path) -> 
 
     assert code == 0
     assert output == [
-        *_matching_rows(),
+        *_matching_rows(tmp_path),
         "Skill policy is healthy; a Run would not be blocked.",
     ]
 
@@ -1837,7 +1880,7 @@ def test_doctor_does_not_create_config_or_an_installed_catalog(tmp_path: Path) -
             client_factory=_CatalogClient,
             discoverer=discoverer,
             git=FakeGitClient(repo),
-            prompt_text="---\nrequired-skills:\n  - required\n---\n",
+            prompt_text="# Run instructions\n",
             output_fn=output.append,
         )
         == 1
@@ -1896,17 +1939,17 @@ def test_doctor_apply_repairs_without_reaching_copilots_own_settings(
     code = run_doctor(
         config=_config("ghost"),
         repo_root=repo,
-        env=_pinned_scope(tmp_path, HOME=str(home)),
+        env=_pinned_scope(tmp_path, required=("required",), HOME=str(home)),
         client_factory=factory,
         discoverer=discoverer,
         git=FakeGitClient(repo),
-        prompt_text="---\nrequired-skills:\n  - required\n---\n",
+        prompt_text="# Run instructions\n",
         output_fn=lambda _line: None,
         apply=True,
     )
 
     assert code == 0
-    assert settings.load_config_table(config_path)["enabled_skills"] == ["required"]
+    assert settings.load_config_table(config_path)["enabled_skills"] == ["code-review", "required"]
     assert [client.lifecycle for client in clients] == [["start", "stop"]]
     assert not (home / ".copilot").exists()
 
@@ -1938,7 +1981,7 @@ def test_doctor_apply_replaces_the_saved_policy_rather_than_rewriting_it(
     assert code == 0
     assert settings.load_config_table(config_path) == {
         "model": "gpt-5.4",
-        "enabled_skills": [],
+        "enabled_skills": ["code-review"],
     }
     assert config_path.stat().st_ino != original
     assert list(config_path.parent.iterdir()) == [config_path]

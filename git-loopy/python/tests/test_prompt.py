@@ -128,6 +128,19 @@ def _packaged_prompt_text() -> str:
     return loop_module._packaged_prompt_path().read_text(encoding="utf-8")
 
 
+def test_role_rules_belong_to_profiles_not_shared_run_instructions() -> None:
+    prompt = _packaged_prompt_text()
+    for retired in (
+        "required-skills:", "# TASK TYPE", "# SKILLS NOT TO INVOKE",
+        "`/tdd`", "`/code-review`", "`/implement`", "`/resolving-merge-conflicts`",
+    ):
+        assert retired not in prompt
+    assert "resolve what the diff and the brief settle" in prompt
+    assert "keep both sides' intent" in prompt
+    assert "rerun the feedback loops" in prompt
+    assert "comment the blocker and end the turn" in prompt
+
+
 def test_packaged_prompt_is_present_and_nonempty() -> None:
     assert loop_module._packaged_prompt_path().is_file()
     assert _packaged_prompt_text().strip()
@@ -137,7 +150,6 @@ def test_packaged_prompt_is_present_and_nonempty() -> None:
     "marker",
     [
         "# YOUR ISSUE",  # the one-issue contract header (#394)
-        "TASK TYPE",  # the type -> mapped-skill contract
         "<working issue=N>",  # the working marker
         "FINAL SEQUENCE",  # the issue-closure contract
         "Closes #",  # the close-keyword backstop
@@ -148,16 +160,6 @@ def test_packaged_prompt_carries_runner_contract(marker: str) -> None:
     assert marker in _packaged_prompt_text(), (
         f"packaged PROMPT.md is missing the load-bearing marker {marker!r}"
     )
-
-
-def test_packaged_prompt_nudges_mapped_skills_but_exempts_infrastructure() -> None:
-    prompt = _packaged_prompt_text()
-
-    assert "invoke that mapped skill before implementing" in prompt
-    assert (
-        "Development infrastructure intentionally has no mapped skill and may proceed "
-        "without invoking one."
-    ) in prompt
 
 
 def test_packaged_prompt_makes_genuine_issue_blockers_native_dependencies() -> None:
@@ -171,10 +173,9 @@ def test_packaged_prompt_makes_genuine_issue_blockers_native_dependencies() -> N
     assert "comment, then output `<promise>NO MORE TASKS</promise>`" in prompt
 
 
-@pytest.mark.parametrize("heading", ["# DOMAIN AWARENESS", "# TASK TYPE"])
-def test_domain_guidance_prefers_glossary_with_legacy_fallback(heading: str) -> None:
+def test_domain_guidance_prefers_glossary_with_legacy_fallback() -> None:
     prompt = _packaged_prompt_text()
-    section = prompt.split(heading, 1)[1].split("\n# ", 1)[0]
+    section = prompt.split("# DOMAIN AWARENESS", 1)[1].split("\n# ", 1)[0]
 
     assert "`GLOSSARY.md`" in section
     assert "`GLOSSARY-MAP.md`" in section
@@ -184,13 +185,13 @@ def test_domain_guidance_prefers_glossary_with_legacy_fallback(heading: str) -> 
 
 
 # ---------------------------------------------------------------------------
-# "SKILLS NOT TO INVOKE": every Skill it names has to be a real Skill
+# The front door names the pinned catalog; exposure is owned by profiles
 # ---------------------------------------------------------------------------
 
 #: The external Skill catalog revision the name set below was read at. Asserted
 #: against ``git_loopy/skill_source.json`` so that moving the pin has to walk
 #: *through* this list rather than around it.
-_PINNED_CATALOG_REVISION = "7d98aa729d04cb01686793150272cf9c1094fb9a"
+_PINNED_CATALOG_REVISION = "a2189cb96ef48b51cea1672966726e7475fef4bd"
 
 #: Every canonical Skill name in the **installed catalog** at that revision.
 #:
@@ -247,69 +248,15 @@ _PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
     }
 )
 
-#: The Skills the packaged prompt tells an iteration to leave alone. Pinned as a
-#: set so that adding or dropping an exclusion is a decision someone made here,
-#: not a silent edit to a prose bullet.
-_EXPECTED_EXCLUSIONS: frozenset[str] = frozenset(
-    {
-        "triage",
-        "to-spec",
-        "to-tickets",
-        "to-questionnaire",
-        "wayfinder",
-        "grill-me",
-        "grill-with-docs",
-        "grilling",
-        "design-control-loop",
-        "improve-codebase-architecture",
-        "teach",
-        "handoff",
-        "implement",
-        "implement-spec",
-        "retro",
-        "next",
-        "loop-me",
-        "setup-git-loopy-skills",
-        "set-task-models",
-        "model-scorecard",
-        "sync-model-roster",
-        "jev-ultrafast",
-        "release",
-        "writing-for-agents",
-    }
-)
-
 _SKILL_REFERENCE = re.compile(r"`/([a-z][a-z0-9]*(?:-[a-z0-9]+)*)`")
-
-
-def _skills_not_to_invoke_section() -> str:
-    """The packaged prompt's ``# SKILLS NOT TO INVOKE`` section, heading to heading."""
-    prompt = _packaged_prompt_text()
-    heading = "# SKILLS NOT TO INVOKE"
-    start = prompt.index(heading)
-    return prompt[start : prompt.index("\n# ", start + len(heading))]
-
-
-def _excluded_skills() -> frozenset[str]:
-    """The Skill names the section's bullets exclude.
-
-    Only the names ahead of each bullet's em dash. What follows it is rationale
-    that may name a Skill the iteration is *expected* to reach for (``/tdd``,
-    ``/codebase-design``) — the opposite of an exclusion.
-    """
-    names: set[str] = set()
-    for line in _skills_not_to_invoke_section().splitlines():
-        if line.startswith("- "):
-            names.update(_SKILL_REFERENCE.findall(line[2:].split(" — ", 1)[0]))
-    return frozenset(names)
 
 
 def test_the_pinned_catalog_revision_is_the_one_this_repository_pins() -> None:
     """The name sets above describe *this* pin, so guard the pin they describe."""
     assert read_skill_source_pin().revision == _PINNED_CATALOG_REVISION, (
         "the Skill catalog pin moved; re-read the catalog at the new revision "
-        "and update _PINNED_CATALOG_REVISION, _PINNED_CATALOG_SKILLS, and any "
-        "exclusion in PROMPT.md the move renamed or retired"
+        "and update _PINNED_CATALOG_REVISION, _PINNED_CATALOG_SKILLS, and "
+        "review the profiles' Required and Permitted Skills"
     )
 
 
@@ -325,82 +272,16 @@ def test_documented_skills_match_the_pinned_catalog_offline() -> None:
     assert documented == _PINNED_CATALOG_SKILLS
 
 
-def test_every_skill_the_exclusion_section_names_is_in_the_catalog() -> None:
-    """A name that matches no Skill excludes no Skill (#536).
-
-    ``# SKILLS NOT TO INVOKE`` is prose, so an entry survives the Skill it names
-    being renamed or retired upstream — and reads exactly like a live exclusion
-    while excluding nothing. That is silent: an iteration invokes the renamed
-    Skill, and the list still looks complete. Checked over the whole section,
-    not just the bullet heads, so a typo in a rationale clause is caught too.
-    """
-    referenced = frozenset(_SKILL_REFERENCE.findall(_skills_not_to_invoke_section()))
-    unknown = sorted(referenced - _PINNED_CATALOG_SKILLS)
-
-    assert not unknown, (
-        f"PROMPT.md's exclusion section names Skills that are absent from the "
-        f"pinned catalog: {unknown}"
-    )
-
-
-def test_the_exclusion_list_is_pinned_against_silent_drift() -> None:
-    """The excluded set is a decision, so changing it has to be one too.
-
-    The catalog check above only proves each name is real; it says nothing about
-    a Skill that arrived in the catalog and was never ruled on. Pinning the set
-    turns every later add or drop into a two-file edit with a reviewer.
-    """
-    assert _excluded_skills() == _EXPECTED_EXCLUSIONS
-
-
-def test_the_prompt_excludes_the_orchestrators_that_would_nest() -> None:
-    """No Skill that drives or picks work runs *inside* an iteration (#536).
-
-    ``/implement`` general orchestration is excluded; conflicts are an exception.
-    The same argument reaches ``/next``, whose route table hands work to
-    ``/implement`` — and which selects work the runner has already bound — and
-    ``/loop-me``, which starts a whole Run inside one of its own iterations.
-    """
-    excluded = _excluded_skills()
-
-    for name in ("implement", "implement-spec", "next", "loop-me", "handoff"):
-        assert name in excluded, (
-            f"/{name} drives or selects work and must stay out of an iteration"
-        )
-
-
-def test_conflicts_use_implement_then_review_without_authorizing_other_work() -> None:
-    prompt = _packaged_prompt_text()
-    conflicts = next(
-        line for line in prompt.splitlines()
-        if line.startswith("If the branch has diverged")
-    )
-
-    assert "use `/implement`" in conflicts
-    assert "closes with `/code-review` of the resolved head" in conflicts
-    assert "not permission to select other work" in conflicts
-    assert "one exception is conflict resolution for the bound PR" in (
-        _skills_not_to_invoke_section()
-    )
-    assert "resolving-merge-conflicts" not in prompt
-    assert "batch-grill-me" not in prompt
-
-
 def test_new_catalog_skills_have_bounded_prompt_guidance() -> None:
     prompt = _packaged_prompt_text()
 
-    assert "- `/implement-spec` —" in _skills_not_to_invoke_section()
-    assert "- `/retro` —" in _skills_not_to_invoke_section()
     assert "- `/pr` —" in prompt
-    assert "pr" not in _excluded_skills()
+    assert "profile exposes them" in prompt
+    assert "it does not authorize creating, merging, or closing a PR" in prompt
+    assert set(_SKILL_REFERENCE.findall(prompt)) <= _PINNED_CATALOG_SKILLS
     for name in ("to-handoff", "chief-of-staff"):
+        assert name not in _PINNED_CATALOG_SKILLS
         assert f"`/{name}`" not in prompt
-
-
-@pytest.mark.parametrize("name", ["set-task-models", "release", "sync-model-roster"])
-def test_the_prompt_excludes_user_invoked_batch_operations(name: str) -> None:
-    """A catalog upgrade cannot authorize work beyond the bound issue."""
-    assert name in _excluded_skills()
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +388,7 @@ def test_packaged_prompt_bounds_deliberate_load() -> None:
     """#818: every bound on deliberate host load is pinned in the Run instructions."""
     text = (Path(git_loopy.__file__).parent / "PROMPT.md").read_text(encoding="utf-8")
     start = text.index("# DELIBERATE LOAD")
-    section = text[start : text.index("# FEEDBACK LOOPS", start)]
+    section = text[start : text.index("# LEAVE NO PROCESS BEHIND", start)]
     for bound in (
         "taskpolicy -c utility",
         "`nice` is not a substitute",
@@ -517,7 +398,60 @@ def test_packaged_prompt_bounds_deliberate_load() -> None:
         "inconclusive, never as a pass",
         "Never escalate",
         "Never raise the priority",
-        "`pgrep`",
-        "Ordinary feedback loops",
     ):
         assert bound in section
+
+
+def test_deliberate_load_bounds_exempt_a_declared_feedback_loop() -> None:
+    """#788/#818 bounded deliberate load, but its trigger read onto ordinary loops.
+
+    *"Many parallel copies of a test"* describes `cargo test` and a `pytest -n`
+    run as accurately as it describes a CPU burner, and the exemption sat in a
+    trailing sentence *after* seven bullets. An agent applying the bullets as it
+    read them clamped its own feedback loop and capped it at 30 minutes — and
+    the AGENTS.md Python suite exceeds 30 minutes on a host running concurrent
+    Lanes. Paired with *"inconclusive, never as a pass"*, that turns a passing
+    suite into a red Lane gate for a reason no change caused.
+
+    So the exemption is pinned as *position*, not merely presence: it must be
+    stated before the first bound, and it must name the parallelism that misled.
+    """
+    text = (Path(git_loopy.__file__).parent / "PROMPT.md").read_text(encoding="utf-8")
+    start = text.index("# DELIBERATE LOAD")
+    section = text[start : text.index("# LEAVE NO PROCESS BEHIND", start)]
+
+    assert "Ordinary feedback loops are **not** deliberate load" in section
+    assert section.index("Ordinary feedback loops") < section.index("taskpolicy"), (
+        "the feedback-loop exemption must precede the bounds, or an agent "
+        "applies them to its own suite before it reads the exemption"
+    )
+    assert "runs to completion however long it takes" in section
+    assert "inherits whatever Host yield policy" in section, (
+        "ADR-0092 clamps tool descendants and Integration feedback loops at the "
+        "Run boundary, so the prompt must not promise an unclamped loop"
+    )
+    for parallel_runner in ("cargo test", "pytest -n"):
+        assert parallel_runner in section, (
+            f"{parallel_runner} is parallel by design; the prompt must say so, "
+            "or its workers read as deliberate load"
+        )
+    assert "beyond what its own runner starts" in section
+
+
+def test_leaving_no_process_behind_is_not_scoped_to_deliberate_load() -> None:
+    """A leaked helper is what starved the host, and it comes from an ordinary loop.
+
+    #818 scoped cleanup to a *"load process"* inside the deliberate-load section,
+    so the leak that actually happens — `test_attach_command.py` leaving its
+    `git_loopy` helper alive when it fails — fell outside the rule twice over:
+    it is not load, and its loop is explicitly exempt. Cleanup therefore stands
+    as its own section, covering every process a Run starts.
+    """
+    text = (Path(git_loopy.__file__).parent / "PROMPT.md").read_text(encoding="utf-8")
+    start = text.index("# LEAVE NO PROCESS BEHIND")
+    section = text[start : text.index("# FEEDBACK LOOPS", start)]
+
+    assert "deliberate load and ordinary feedback loops alike" in section
+    assert "`pgrep`" in section
+    assert "end the ones you started by PID" in section
+    assert "interrupted" in section

@@ -764,12 +764,9 @@ class IterationSession:
             supplied, the session exposes only its enabled catalog winners and
             sends the exact disabled catalog complement to the SDK.
         profile_key: The issue's execution profile, resolved at Pickup, or ``review``
-            for a Reviewer explicitly started by the Orchestrator. Without
-            an installed root the legacy session options remain unchanged.
+            for a Reviewer explicitly started by the Orchestrator. A named
+            profile must be installed; there is no pre-profile execution path.
             Classifiers, selectors and calibration Trials leave this unset.
-        require_profile: A remote request must find its named installed profile,
-            even when the worker has no profile root at all. A Reviewer always
-            requires an installed profile, regardless of this flag.
     """
 
     def __init__(
@@ -790,7 +787,6 @@ class IterationSession:
         issue_binding: _IssueBinding | None = None,
         skill_exposure: SessionSkillExposure | None = None,
         profile_key: str | None = None,
-        require_profile: bool = False,
         event_observer: EventObserver | None = None,
     ) -> None:
         self._client = client
@@ -808,7 +804,6 @@ class IterationSession:
         self._issue_binding = issue_binding
         self._skill_exposure = skill_exposure
         self._profile_key = profile_key
-        self._require_profile = require_profile
         self._sdk_session: CopilotSession | None = None
         # The one scrub-and-fan-out seam (issue #43). ``diag=None`` keeps the
         # SDK-callback / permission-handler paths silent on a write/sink
@@ -851,7 +846,6 @@ class IterationSession:
             load_session_profile(
                 installed_profiles_dir(os.environ), self._profile_key,
                 skills=installed_catalog_dir(os.environ),
-                required=self._require_profile,
             )
             if self._profile_key is not None else None
         )

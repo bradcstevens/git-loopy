@@ -79,7 +79,10 @@ def make_request(**overrides: Any) -> ContributionRequest:
         "model": "gpt-5.6-terra",
         "reasoning_effort": "high",
         "context_tier": "default",
-        "skill_policy": ("code-review", "tdd"),
+        "skill_policy": SimpleNamespace(
+            disabled_skills=(),
+            catalog=SimpleNamespace(winners={"code-review": None, "tdd": None}),
+        ),
         "run_id": RUN_ID,
     }
     defaults.update(overrides)
@@ -1038,6 +1041,8 @@ def test_the_dispatch_carries_no_credential_across_the_machine_boundary() -> Non
         "reasoning_effort",
         "run_id",
         "send_timeout_seconds",
+        "profile_key",
+        "catalog_skills",
     }
 
 

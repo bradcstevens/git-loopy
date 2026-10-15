@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.32 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.33 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -2875,7 +2875,7 @@ pinned by [`skill-policy.json`](../git-loopy/conformance/skill-policy.json).
 | **Skill baseline** | The initial enabled/disabled selection copied once from the external agent client when the first policy is established. It seeds a policy and is never a live authority. |
 | **Effective Skill policy** | The single immutable resolution of every policy source for one Run: enabled names, Required Skills, legacy denials, resolved source kinds, base scope, and fallback reason. |
 | **Minimal Skill policy** | Exactly the **Required Skills** and nothing else. The answer whenever no base policy is in effect. |
-| **Required Skill** | A name the active Run instructions declare in their `required-skills` metadata. A Run whose effective set omits one is invalid. |
+| **Required Skill** | For Python from contract 2.33, a name required by an installed in-Run Agent profile (§18.4). A Run whose effective set omits one is invalid. Dormant paths retain their pre-profile contract. |
 
 A Skill is identified by **canonical name** — never by absolute path or content digest — so a
 project policy stays portable. Canonical names match `[a-z][a-z0-9]*(-[a-z0-9]+)*`. The
@@ -2949,7 +2949,7 @@ One Run-scoped Event (`iter: null`) records the frozen boundary, with exactly th
 | `enabled` | Sorted deduplicated canonical names. |
 | `fallback` | `minimal`, `migration`, or `null` when a base scope was in effect. |
 | `legacy_denied` | Sorted deprecated denial names. |
-| `migration_warning` | `true` when the active prompt declared no `required-skills` and inherited the packaged list. |
+| `migration_warning` | Historical prompt-metadata inheritance flag; Python emits `false` from contract 2.33 because profiles own Required Skills. |
 | `required` | Sorted Required Skill names. |
 | `source_kinds` | Enabled name → resolved `source_kind`. |
 
@@ -3011,13 +3011,13 @@ lands, their entries are `waived_out_of_scope` with that ADR as the reason.
 
 ### 18.1 Execution profile selection and registration (Python, contract 2.30)
 
-With an installed profile root, each issue's **Agent** MUST run as its resolved
+Each issue's **Agent** MUST run as its resolved
 **Execution Task type**, or `implementation` when no key resolves or distinct
 keys conflict, even if their Routed pairs agree. Selection is bound at Pickup;
 local and remote Lanes, Recovery and remediation retain the issue's own profile.
 The remote request names that profile; the worker reads its own installed root
-and MUST refuse a missing or invalid profile, including an absent root. Without
-an installed root, local sessions and requests retain their prior behavior.
+and MUST refuse a missing or invalid profile, including an absent root. From
+contract 2.33 local sessions likewise MUST refuse; there is no pre-profile fallback.
 Classifier and Route-selector calls are not Agent profiles; calibration Trials
 retain their existing session setup.
 
@@ -3092,6 +3092,34 @@ replace the Orchestrator's obligation to publish only the exact reviewed head
 (ADR-0072). `agent-profiles.json` access cases are claimed by Python through the
 registered production permission handler; dormant adapter obligations do not
 change (ADR-0091).
+
+### 18.4 Profile activation (Python, contract 2.33)
+
+The catalog pin MUST use schema 2 and name `profiles_directory`. Its published
+revision MUST pass `skill_candidate` before the pin moves (ADR-0064). That proof
+MUST require the complete profile set and validate its Required and Permitted
+Skill references; `PROMPT.md` is no longer the Required-Skill authority.
+
+Run preflight and `doctor` MUST derive Required Skills from the installed in-Run
+profiles: the five execution profiles plus `review`, excluding `planning`.
+Their union is the Minimal Skill policy; at the activating pin it is
+`code-review`, `diagnosing-bugs`, and `tdd`. A policy omitting any member MUST
+be refused, as MUST an absent or non-matching profile root, including a previous
+intact install left behind after an unsuccessful refresh. `doctor --apply`
+may repair the install before resolving the policy.
+
+Custom Run instructions declaring `required-skills` MUST be refused by both
+preflight and `doctor`, naming that key to remove, even when its value is empty
+or malformed. Instructions without it require no migration warning.
+
+The shared Run instructions MUST leave role rules to profiles. They and the
+Recovery prompt carry the conflict procedure directly: resolve what the diff
+and the brief settle, keep both sides' intent, rerun the feedback loops, and
+otherwise comment the blocker and end the turn. No conflict-resolution Skill
+is required or permitted by an execution profile.
+
+`agent-profiles.json` revision 2 pins the union and each missing-Required-Skill
+refusal through Python preflight. Its dormant-path waivers remain unchanged.
 
 ## 19. Changing this contract
 

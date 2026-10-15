@@ -62,7 +62,7 @@ ACQUIRE_COMMAND = (
     "uv run --project git-loopy/python python -m git_loopy.skill_source"
 )
 
-_SUPPORTED_SCHEMA_VERSION = 1
+_SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 _IMMUTABLE_REVISION = re.compile(r"\A[0-9a-f]{40}\Z")
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 
@@ -187,10 +187,10 @@ def read_skill_source_pin(path: Path = PIN_PATH) -> SkillSourcePin:
         raise SkillSourcePinError(f"Skill source pin at {path} must be an object")
 
     version = raw.get("schema_version")
-    if version != _SUPPORTED_SCHEMA_VERSION:
+    if type(version) is not int or version not in _SUPPORTED_SCHEMA_VERSIONS:
         raise SkillSourcePinError(
             f"unsupported Skill source pin schema_version {version!r}: "
-            f"expected {_SUPPORTED_SCHEMA_VERSION}"
+            f"expected one of {_SUPPORTED_SCHEMA_VERSIONS}"
         )
 
     where = f"the Skill source pin at {path}"
@@ -215,7 +215,7 @@ def read_skill_source_pin(path: Path = PIN_PATH) -> SkillSourcePin:
             _text(raw, "profiles_directory", where=where),
             where=f"{where} profiles_directory",
         )
-        if "profiles_directory" in raw
+        if version == 2 or "profiles_directory" in raw
         else None
     )
 

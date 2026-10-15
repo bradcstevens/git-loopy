@@ -39,6 +39,7 @@ from git_loopy.skill_install import (
     SkillInstallError,
     inspect_installed_catalog,
     installed_catalog_dir,
+    installed_required_skills,
     read_install_record,
     refresh_installed_catalog,
 )
@@ -177,6 +178,29 @@ def test_a_profile_pin_installs_both_roots_and_records_their_digests(
     assert record["sha256"] == outcome.catalog.sha256
     assert record["profiles_sha256"] == outcome.catalog.profiles_sha256
     assert len(record["profiles_sha256"]) == 64
+
+
+@pytest.mark.parametrize("damage", ["none", "missing", "drifted", "old-pin"])
+def test_required_skills_need_profiles_matching_the_active_pin(
+    tmp_path: Path, config_home: Path, monkeypatch: pytest.MonkeyPatch, damage: str,
+) -> None:
+    pin = _profile_pin(tmp_path / "profile-upstream")
+    env = _env(config_home)
+    refresh_installed_catalog(pin, env=env)
+    active_pin = pin
+    if damage == "missing":
+        shutil.rmtree(skill_install.installed_profiles_dir(env))
+    elif damage == "drifted":
+        (skill_install.installed_profiles_dir(env) / "docs.md").write_text("edited\n")
+    elif damage == "old-pin":
+        active_pin = dataclasses.replace(pin, revision="b" * 40)
+    monkeypatch.setattr(skill_install, "read_skill_source_pin", lambda: active_pin)
+
+    if damage == "none":
+        assert installed_required_skills(env) == ("code-review", "tdd")
+    else:
+        with pytest.raises(SkillInstallError, match="profiles.*matching.*doctor --apply"):
+            installed_required_skills(env)
 
 
 def test_invalid_profiles_are_refused_before_either_installed_root_changes(

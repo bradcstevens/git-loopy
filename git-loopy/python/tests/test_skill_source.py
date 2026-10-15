@@ -158,6 +158,8 @@ def test_pin_optionally_names_a_profile_directory(
 ) -> None:
     before = skill_source.PIN_PATH.read_bytes()
     raw = json.loads(before)
+    raw["schema_version"] = 1
+    raw.pop("profiles_directory")
     if directory is not None:
         raw["profiles_directory"] = directory
     path = tmp_path / "pin.json"
@@ -167,6 +169,17 @@ def test_pin_optionally_names_a_profile_directory(
 
     assert pin.profiles_directory == directory
     assert skill_source.PIN_PATH.read_bytes() == before
+
+
+def test_schema_two_requires_a_profile_directory(tmp_path: Path) -> None:
+    raw = json.loads(skill_source.PIN_PATH.read_text())
+    assert raw["schema_version"] == 2
+    assert raw.pop("profiles_directory") == "profiles"
+    path = tmp_path / "pin.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(SkillSourcePinError, match="profiles_directory"):
+        read_skill_source_pin(path)
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +298,7 @@ def test_a_pin_that_is_not_a_full_commit_sha_is_refused(
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     [
-        ({"schema_version": 2}, "schema_version"),
+        ({"schema_version": 3}, "schema_version"),
         ({"url": "git@github.com:bradcstevens/git-loopy-skills.git"}, "https"),
         ({"skills_directory": "../skills"}, "relative path"),
         ({"profiles_directory": "../profiles"}, "profiles_directory"),

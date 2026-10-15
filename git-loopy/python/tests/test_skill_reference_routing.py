@@ -140,19 +140,17 @@ def _documented_skills(repo_root: Path) -> dict[str, str]:
 
 def test_the_front_door_documents_every_required_skill(repo_root: Path) -> None:
     """A Run cannot start without these, so the front door has to name them."""
-    from git_loopy.prompt import resolve_required_skills
+    from git_loopy.skill_install import installed_required_skills
 
-    required = resolve_required_skills(
-        (repo_root / "git-loopy" / "PROMPT.md").read_text(encoding="utf-8")
-    ).required_skills
-    assert required, "the packaged Run instructions declare no Required Skills"
+    required = installed_required_skills()
+    assert required, "the installed profiles declare no Required Skills"
 
     documented = _documented_skills(repo_root)
     assert documented, "no Skill table found in README.md -- the scan looks broken"
 
     missing = sorted(name for name in required if name not in documented)
     assert not missing, (
-        "the Run instructions require these Skills, so a reader must be able to "
+        "the in-Run profiles require these Skills, so a reader must be able to "
         f"find them on the front door: {missing}"
     )
 

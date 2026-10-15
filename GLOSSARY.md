@@ -207,19 +207,15 @@ at Run preflight for every work session and **Lane** in that Run.
 _Avoid_: persisted policy, Copilot state.
 
 **Minimal Skill policy**:
-The unconfigured, non-interactive fallback that exposes only git-loopy's packaged
-**Required Skills**. It keeps a first CI Run usable without consulting personal or
-machine-global Skill sources and is also the policy persisted by unattended setup
-unless that setup explicitly requests an external-client import. It also governs
-unattended Runs during migration from the former open-world skill behavior.
+The unconfigured, non-interactive fallback comprising the union of the in-Run
+**Agent profiles**' **Required Skills**. It is also the policy persisted by unattended
+setup unless that setup explicitly requests an external-client import.
 _Avoid_: default user policy, imported baseline.
 
 **Required Skill**:
-A Skill declared by the active Run instructions' machine-readable metadata as one an
-**Agent** must be able to invoke. A **Run** whose **Skill policy** omits a Required
-Skill is invalid and stops before its first work session rather than silently restoring
-or ignoring the Skill. Legacy custom instructions without that metadata inherit the
-packaged instructions' Required Skills until they declare their own set.
+A Skill an **Agent profile** requires and preloads. A **Run**'s **Skill policy** must
+include the union of its in-Run profiles' Required Skills, not the **Planner**'s;
+Run instructions do not declare or override that set.
 _Avoid_: default skill, recommended skill.
 
 **Iteration**:
@@ -1105,6 +1101,11 @@ an unknown key is refused before selection, and a **Task type** the table does n
 falls back to that default too.
 _Avoid_: model selection (that is the operator-facing picker), dispatch, assignment.
 
+**Dynamic routing**:
+Evidence-grounded choice of an issue's model, reasoning effort, and context tier,
+aimed at the shortest predicted time to an acceptance-passing result.
+_Avoid_: Calibration (an experiment), auto (the harness's own model choice).
+
 **Routing resolution**:
 The one per-Pickup record **Routing** answers with: a gated model, reasoning effort and context
 tier; the `task-type` keys exactly as the tracker spelled them; the gate warnings raised while
@@ -1115,6 +1116,12 @@ published on the **Pickup**'s own Event and as one line on stdout, so which mode
 is answerable live and after the fact from the same record (ADR-0039) — and the **Dashboard**
 reads that same record twice, onto the **Queue** row and onto the contribution.
 _Avoid_: routed pair (only the model and effort values), routing decision (ambiguous).
+
+**Routing proposal**:
+A nonbinding recommendation for one eligible **Pool** candidate, together with the
+evidence and input identity it depends on. It is revalidated or superseded before
+**Pickup** reaches a **Routing resolution**, and reserves no work.
+_Avoid_: Routing resolution (binding), Lease (authority), assignment.
 
 **Routing source**:
 The closed provenance vocabulary on a **Routing resolution**: routed, or defaulted for no label,
@@ -1227,6 +1234,20 @@ the assessment that produced it, and a projection a newer resolution has overtak
 dropped rather than delivered late over the current label. Only a materially changed final
 assignment is projected — a proposal and an unchanged revalidation are not (ADR-0057).
 _Avoid_: route announcement, routing comment (the delivery state is part of it), route tag.
+
+**Route label**:
+An observational tracker label describing one dimension of an issue's final
+**Routing resolution**. Python publication spells `model_id:`, `model_context:`,
+and `model_effort:` with the exact value. Context is verified full capacity for
+the selected tier, not the tier name. A later harness window may fill or
+correct only that assignment's `model_context`; a superseded assignment's
+window does not overwrite it, even when the model id matches. Unavailable or
+unrepresentable dimensions are absent, never truncated. A legacy
+`git-loopy-route:` association is removed when that issue is republished.
+It may still represent a previous resolution or be absent after failed replacement
+and exhausted delivery retries, so the canonical local resolution and delivery status
+describe the current assignment, never the label as authority to choose, override, or pin a route.
+_Avoid_: model pin, routing input.
 
 **Reusable route**:
 A final **Routing resolution** an earlier **Run** of *this clone* recorded, read back out of the
@@ -1945,38 +1966,6 @@ the ordering constraint is the **Integration backlog**.
 _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap**, or
 **Rolling dispatch** instead.
 
-### Live routing (accepted design)
-
-These terms complete the vocabulary of
-[ADR-0057](docs/adr/0057-live-evidence-guides-per-issue-routing.md). The existing
-**Static route** and **Route selector** entries above describe their current
-implementation; this decision record does not establish delivery acceptance.
-
-**Dynamic routing**:
-Evidence-grounded choice of an issue's model, reasoning effort, and context tier,
-aimed at the shortest predicted time to an acceptance-passing result.
-_Avoid_: Calibration (an experiment), auto (the harness's own model choice).
-
-**Routing proposal**:
-A nonbinding recommendation for one eligible **Pool** candidate, together with the
-evidence and input identity it depends on. It is revalidated or superseded before
-**Pickup** reaches a **Routing resolution**, and reserves no work.
-_Avoid_: Routing resolution (binding), Lease (authority), assignment.
-
-**Route label**:
-An observational tracker label describing one dimension of an issue's final
-**Routing resolution**. Python publication spells `model_id:`, `model_context:`,
-and `model_effort:` with the exact value. Context is verified full capacity for
-the selected tier, not the tier name. A later harness window may fill or
-correct only that assignment's `model_context`; a superseded assignment's
-window does not overwrite it, even when the model id matches. Unavailable or
-unrepresentable dimensions are absent, never truncated. A legacy
-`git-loopy-route:` association is removed when that issue is republished.
-It may still represent a previous resolution or be absent after failed replacement
-and exhausted delivery retries, so the canonical local resolution and delivery status
-describe the current assignment, never the label as authority to choose, override, or pin a route.
-_Avoid_: model pin, routing input.
-
 ### Agent profiles (accepted design)
 
 These terms complete the vocabulary of
@@ -1988,10 +1977,11 @@ and
 The existing **Required Skill**, **Skill policy**, **Minimal Skill policy**, **Installed
 catalog**, **Task type**, **Task-type classifier** and **Pool exclusion** entries above
 describe current behavior; these decision records do not establish delivery acceptance.
-With an installed profile root, execution-profile selection, preload and exposure
+Execution-profile selection, preload and exposure
 are implemented by Wrapper contract §18.1–18.2; §18.3 makes the Reviewer startable
-with read-only access. The Review stage and remaining profile lifecycle
-and preflight changes remain accepted design until their delivery issues close.
+with read-only access. Profiles are installed and required at preflight (§18.4);
+the Review stage and remaining profile lifecycle work remain accepted design until
+their delivery issues close.
 
 **Permitted Skill**:
 A further Skill an **Agent profile** may invoke on demand only when the

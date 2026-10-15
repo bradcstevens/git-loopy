@@ -439,6 +439,8 @@ def test_the_dispatched_request_is_the_shape_the_worker_parses() -> None:
     Nothing in between reformats it, so a field added on one side and not the
     other fails here rather than six hours into a remote run.
     """
+    from types import SimpleNamespace
+
     request = host_module.ContributionRequest(
         issue_ref=460,
         prompt="Work issue 460.",
@@ -446,7 +448,10 @@ def test_the_dispatched_request_is_the_shape_the_worker_parses() -> None:
         model="claude-opus-4.8",
         reasoning_effort="high",
         context_tier="long_context",
-        skill_policy=None,
+        skill_policy=SimpleNamespace(
+            disabled_skills=(),
+            catalog=SimpleNamespace(winners={"code-review": None, "tdd": None}),
+        ),
         run_id="01M24Q7VKPKN6M52SMSF3NR3AE",
     )
 
@@ -456,6 +461,8 @@ def test_the_dispatched_request_is_the_shape_the_worker_parses() -> None:
 
     assert parsed["issue_ref"] == 460
     assert parsed["run_id"] == request.run_id
+    assert parsed["profile_key"] == "implementation"
+    assert parsed["catalog_skills"] == ["code-review", "tdd"]
     assert json.loads(host_module._request_json(request, 21600.0)) == parsed
 
 

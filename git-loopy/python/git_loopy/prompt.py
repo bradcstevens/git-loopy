@@ -1,4 +1,4 @@
-"""Machine-readable Required-Skill metadata for Run instructions."""
+"""Run instructions and the Skill-list syntax shared by Agent profiles."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ __all__ = [
     "load_prompt",
     "minimal_skill_policy",
     "packaged_prompt_path",
-    "packaged_required_skills",
     "parse_required_skills",
     "resolve_required_skills",
+    "validate_run_instructions",
 ]
 
 _SKILL_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
@@ -36,7 +36,7 @@ class PromptMetadataFailure(str, Enum):
     NON_STRING_REQUIRED_SKILL = "non_string_required_skill"
     DUPLICATE_REQUIRED_SKILL = "duplicate_required_skill"
     INVALID_REQUIRED_SKILL_NAME = "invalid_required_skill_name"
-    MISSING_REQUIRED_SKILLS = "missing_required_skills"
+    RETIRED_REQUIRED_SKILLS = "retired_required_skills"
 
 
 class PromptMetadataError(ValueError):
@@ -49,7 +49,7 @@ class PromptMetadataError(ValueError):
 
 @dataclass(frozen=True)
 class RequiredSkills:
-    """Required Skills resolved for active Run instructions."""
+    """Required Skills resolved from the installed in-Run profiles."""
 
     required_skills: tuple[str, ...]
     migration_warning: bool
@@ -160,45 +160,42 @@ def parse_required_skills(prompt_text: str) -> tuple[str, ...] | None:
     return required_skills
 
 
+def validate_run_instructions(prompt_text: str) -> None:
+    """Refuse the retired contract before interpreting its value."""
+    lines = prompt_text.splitlines()
+    if lines and lines[0] == "---":
+        for line in lines[1:]:
+            if line == "---":
+                break
+            if re.match(r"""(?:required-skills|'required-skills'|"required-skills")\s*:""", line):
+                raise PromptMetadataError(
+                    PromptMetadataFailure.RETIRED_REQUIRED_SKILLS,
+                    "Remove 'required-skills' from PROMPT.md; Required Skills "
+                    "come only from the installed Agent profiles.",
+                )
+    parse_required_skills(prompt_text)
+
+
 def resolve_required_skills(
     prompt_text: str,
     *,
-    packaged_required_skills: tuple[str, ...] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> RequiredSkills:
-    """Resolve active instructions, inheriting packaged requirements when absent."""
-    parsed = parse_required_skills(prompt_text)
-    if parsed is not None:
-        return RequiredSkills(required_skills=parsed, migration_warning=False)
-    fallback = (
-        _read_packaged_required_skills()
-        if packaged_required_skills is None
-        else packaged_required_skills
-    )
+    """Validate Run instructions and read the installed profiles' contract."""
+    from .skill_install import installed_required_skills
+
+    validate_run_instructions(prompt_text)
     return RequiredSkills(
-        required_skills=tuple(sorted(set(fallback))),
-        migration_warning=True,
+        required_skills=installed_required_skills(env),
+        migration_warning=False,
     )
 
 
-def _read_packaged_required_skills() -> tuple[str, ...]:
-    prompt_text = (files("git_loopy") / "PROMPT.md").read_text(encoding="utf-8")
-    required_skills = parse_required_skills(prompt_text)
-    if required_skills is None:
-        raise PromptMetadataError(
-            PromptMetadataFailure.MISSING_REQUIRED_SKILLS,
-            "packaged PROMPT.md must declare required-skills",
-        )
-    return required_skills
+def minimal_skill_policy(env: Mapping[str, str] | None = None) -> tuple[str, ...]:
+    """Return exactly the installed in-Run profiles' Required Skills."""
+    from .skill_install import installed_required_skills
 
-
-def packaged_required_skills() -> tuple[str, ...]:
-    """Read the Required Skills declared by the packaged Run instructions."""
-    return _read_packaged_required_skills()
-
-
-def minimal_skill_policy() -> tuple[str, ...]:
-    """Return the deterministic Minimal Skill policy from the packaged contract."""
-    return packaged_required_skills()
+    return installed_required_skills(env)
 
 
 def packaged_prompt_path() -> Path:
