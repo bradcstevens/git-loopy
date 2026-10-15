@@ -191,7 +191,7 @@ def test_sandboxed_agents_commit_in_issue_clones(tmp_path, monkeypatch, capsys, 
     line = sandbox_lines[0]
     label = "remote (always on)" if kind == "remote" else expected_state
     assert output[line].strip() == f"Sandbox: {label}"
-    assert output[line - 1].strip().startswith("Isolation grade:")
+    assert output[line - 1].strip() == "Isolation grade: workspace separation only"
     assert len(observed) == (2 if kind == "recovery" else 1)
     if kind == "serial-cancel":
         assert source.head_sha() == base
