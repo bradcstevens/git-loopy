@@ -84,7 +84,7 @@ work needs it.
 | Capability | What it gives you | Reference |
 | --- | --- | --- |
 | **Issue-driven Iterations** | One Active issue per Iteration, a fresh context each time, and durable state in commits and tracker history | [concepts](docs/concepts.md), [wrapper contract](docs/wrapper-contract.md) |
-| **Your feedback loops as the gate** | The loops declared in `AGENTS.md` — lint, tests, builds — are what a change must survive, run by code and returned to the agent as evidence | [`AGENTS.md`](AGENTS.md) |
+| **Your feedback loops** | Declare lint, tests, and builds in `AGENTS.md`. Serial Iterations ask the Agent to run them; Parallel Integration runs them as a runner-owned gate | [`AGENTS.md`](AGENTS.md), [Integration](docs/parallel-mode.md) |
 | **Task-type routing** | Seven task types (`planning`, `review`, `implementation`, `test`, `docs`, `chore`, `bugfix`) each route to their own model and reasoning effort, so a chore never pays feature prices | [customization](docs/customization.md) |
 | **Measured routing** *(in progress)* | Routes calibrated from what Runs actually cost and deliver, rather than from a static opinion | [ADR-0027](docs/adr/0027-routing-is-calibrated-by-measurement.md) |
 | **Parallel Lanes** | Worktree-isolated Lanes work several `parallel-safe` issues at once, with a serialized, bounded-green Integration stage. A Run with no Lane work uses the serial Iteration driver and says so | [parallel mode](docs/parallel-mode.md) |
@@ -100,7 +100,7 @@ work needs it.
 
 ```bash
 # Install the current published Release once, user-global.
-uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python"
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.11.2#subdirectory=git-loopy/python"
 
 # In the repository you want it to work on:
 cd ~/code/my-project
@@ -132,20 +132,41 @@ git-loopy config list             # the effective settings a Run would use
 ```
 
 > [!IMPORTANT]
-> git-loopy gates every change on the feedback loops your repository declares in
-> its `AGENTS.md` table. A repository that declares no runnable loop cannot be
-> gated, and autonomous work has nothing to prove itself against. Declare the
-> commands you already trust before your first Run.
+> Declare the commands you already trust in your repository's `AGENTS.md`
+> feedback-loop table before the first Run. Parallel Integration executes those
+> commands as a runner-owned gate. The serial path currently relies on the Agent
+> to run the checks inside its session; it does not run an independent
+> runner-side gate. For serial automation, independently verify the contribution
+> before treating it as accepted or closing its issue. That policy gap is tracked
+> in [#674](https://github.com/bradcstevens/git-loopy/issues/674).
 
 Hosts without Python can run the [shell](git-loopy/shell/README.md) or
 [PowerShell](git-loopy/powershell/README.md) Orchestrator instead — same
 contract, same live helper.
 
+### Using a capped Run in CI
+
+An exit code of `0` is not, by itself, evidence that an issue is complete.
+Reaching the Iteration cap is a clean Run exit under the
+[Wrapper contract](docs/wrapper-contract.md#10-exit-codes-phase-1-must),
+even when an attempted issue timed out or was left open. A pushed Checkpoint
+preserves unfinished work; it is not an acceptance verdict.
+
+For Python serial CI, inspect the completed Run and Iteration records, including
+each issue's Status and optional Ending, and independently verify the published
+contribution. An `advanced` issue can still carry a `timeout` or `crash` Ending:
+progress does not erase a failed session. Keep the decision to close an issue
+behind the verification policy your repository requires rather than inferring
+it from the process exit code or the existence of a commit. This does not change
+git-loopy's default exit-code semantics.
+
 ### Installation identity and channels
 
-The default command installs the published **v0.9.0 Release**. Its
-installation identity is therefore `git-loopy 0.9.0`: `git-loopy --version`
+The default command installs the published **v0.11.2 Release**. Its
+installation identity is therefore `git-loopy 0.11.2`: `git-loopy --version`
 and `wrapper.run.start` report that exact Release version.
+Check the [latest published Release](https://github.com/bradcstevens/git-loopy/releases/latest)
+when choosing a newer pin; the version on `main` may be unreleased.
 
 To install another named, published Release, replace the tag with the Release
 you want. For example, this installs the published **v0.8.0 Release**:
