@@ -132,6 +132,14 @@ def _isolate_global_config(
 
 
 @pytest.fixture(autouse=True)
+def _isolate_copilot_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run preflight must never probe a real operator's sandbox CA (#859)."""
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot-home"))
+
+
+@pytest.fixture(autouse=True)
 def _refuse_remote_skill_acquisition(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail loudly, rather than clone, if a test reaches for the real upstream."""
     real = skill_install.acquire_skill_source

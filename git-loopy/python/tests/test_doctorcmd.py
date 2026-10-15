@@ -69,8 +69,12 @@ class _UnavailableCatalogClient:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_environment_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_environment_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Keep Skill-policy tests independent of the host's Run environment."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "operator-home")
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "operator-copilot"))
     monkeypatch.setattr(
         doctorcmd,
         "resolve_run_environment_preflight",
@@ -110,7 +114,12 @@ def _pinned_scope(
 ) -> dict[str, str]:
     """An isolated global config scope already holding the pinned catalog."""
     return _seed_pinned_catalog(
-        {"XDG_CONFIG_HOME": str(tmp_path / "xdg"), **extra}, required,
+        {
+            "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
+            "HOME": str(tmp_path / "operator-home"),
+            **extra,
+        },
+        required,
     )
 
 
@@ -208,6 +217,255 @@ def _run(
         ),
     )
     return code, output
+
+
+def _run_ca_doctor(
+    tmp_path: Path, *, config: RunConfig, catalog: SkillCatalog,
+    env: dict[str, str], apply: bool = False,
+) -> tuple[int, list[str]]:
+    """Exercise doctor through the real shared preflight with offline host adapters."""
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    (repo / "AGENTS.md").write_text(
+        "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
+    return _run(
+        tmp_path, config=config, catalog=catalog, env=env, apply=apply,
+        environment_resolver=_host(repo, missing_tool="", authenticated=True),
+    )
+
+
+def test_doctor_reports_untrusted_copilot_proxy_ca(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = _pinned_scope(tmp_path, COPILOT_HOME=str(tmp_path / "copilot"))
+    home = Path(env["COPILOT_HOME"])
+    home.mkdir()
+    (home / "settings.json").write_text(
+        json.dumps({"sandbox": {"auth": {"gh": True}}}), encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def status(
+        command: list[str], *, env: dict[str, str], timeout: int, **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        assert command == ["copilot", "sandbox", "ca", "status"]
+        assert env["COPILOT_HOME"] == str(home)
+        assert timeout == 10
+        return subprocess.CompletedProcess(command, 3, "", "")
+
+    monkeypatch.setattr(subprocess, "run", status)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
+
+    assert code == 1
+    assert any(
+        "Copilot proxy CA | failed" in row
+        and "not trusted" in row
+        and "copilot sandbox ca trust" in row
+        for row in output
+    )
+    assert calls == [["copilot", "sandbox", "ca", "status"]]
+    assert not any("a Run would not be blocked" in row for row in output)
+
+
+@pytest.mark.parametrize("status_code", [1, 9])
+def test_doctor_does_not_mislabel_unknown_copilot_ca_status_as_untrusted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status_code: int,
+) -> None:
+    env = _pinned_scope(tmp_path, COPILOT_HOME=str(tmp_path / "copilot"))
+    home = Path(env["COPILOT_HOME"])
+    home.mkdir()
+    (home / "settings.json").write_text(
+        '{"sandbox": {"auth": {"gh": true}}}', encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, status_code, "private process output", "private process error",
+        ),
+    )
+
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
+
+    assert code == 1
+    assert any("could not verify" in row and "Copilot proxy CA" in row for row in output)
+    assert not any("copilot sandbox ca trust" in row for row in output)
+    assert not any("private process" in row for row in output)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [FileNotFoundError("private path"), subprocess.TimeoutExpired("copilot", 10)],
+)
+def test_doctor_reports_an_unavailable_copilot_ca_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception,
+) -> None:
+    env = _pinned_scope(tmp_path, COPILOT_HOME=str(tmp_path / "copilot"))
+    home = Path(env["COPILOT_HOME"])
+    home.mkdir()
+    (home / "settings.json").write_text(
+        '{"sandbox": {"auth": {"gh": true}}}', encoding="utf-8",
+    )
+
+    def unavailable(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
+
+    assert code == 1
+    assert any("could not verify" in row and "Copilot proxy CA" in row for row in output)
+    assert not any("copilot sandbox ca trust" in row for row in output)
+    assert not any("private path" in row for row in output)
+
+
+@pytest.mark.parametrize(
+    "settings_text",
+    [
+        "{",
+        "[]",
+        '{"sandbox": null}',
+        '{"sandbox": {"auth": null}}',
+        '{"sandbox": {"auth": {"gh": "true"}}}',
+    ],
+)
+def test_doctor_reports_unreadable_sandbox_settings_without_probing_ca(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings_text: str,
+) -> None:
+    env = _pinned_scope(tmp_path, COPILOT_HOME=str(tmp_path / "copilot"))
+    home = Path(env["COPILOT_HOME"])
+    home.mkdir()
+    (home / "settings.json").write_text(settings_text, encoding="utf-8")
+
+    def unexpected_process(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Unreadable sandbox settings must not start a CA probe")
+
+    monkeypatch.setattr(subprocess, "run", unexpected_process)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
+
+    assert code == 1
+    assert any("Copilot sandbox settings | failed" in row for row in output)
+    assert not any("Copilot proxy CA" in row or "copilot sandbox ca trust" in row for row in output)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        None, {}, {"sandbox": {}}, {"sandbox": {"auth": {"git": True}}},
+        {"sandbox": {"auth": {"gh": False}}},
+    ],
+)
+def test_doctor_skips_ca_probe_without_gh_sandbox_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: dict | None,
+) -> None:
+    env = _pinned_scope(tmp_path, COPILOT_HOME=str(tmp_path / "copilot"))
+    home = Path(env["COPILOT_HOME"])
+    home.mkdir()
+    if policy is not None:
+        (home / "settings.json").write_text(json.dumps(policy), encoding="utf-8")
+
+    def unexpected_process(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("auth.gh is off: doctor must not probe or modify CA trust")
+
+    monkeypatch.setattr(subprocess, "run", unexpected_process)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
+
+    assert code == 0
+    assert not any("Copilot proxy CA" in row or "copilot sandbox ca trust" in row for row in output)
+
+
+@pytest.mark.parametrize("home_source", ["HOME", "COPILOT_HOME"])
+@pytest.mark.parametrize("status_code", [0, 3, 4, 5])
+def test_doctor_probes_the_same_home_as_the_operator_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, home_source: str, status_code: int,
+) -> None:
+    operator_home = tmp_path / "operator"
+    home = operator_home / ".copilot"
+    env = _pinned_scope(tmp_path, HOME=str(operator_home))
+    if home_source == "COPILOT_HOME":
+        home = tmp_path / "custom-copilot"
+        env["COPILOT_HOME"] = str(home)
+        decoy = operator_home / ".copilot"
+        decoy.mkdir(parents=True)
+        (decoy / "settings.json").write_text(
+            '{"sandbox": {"auth": {"gh": false}}}', encoding="utf-8",
+        )
+    home.mkdir(parents=True)
+    settings_path = home / "settings.json"
+    saved = '{"sandbox": {"enabled": false, "auth": {"gh": true}}}'
+    settings_path.write_text(saved, encoding="utf-8")
+    calls: list[list[str]] = []
+    monkeypatch.setenv("UV_DEFAULT_INDEX", "https://packagefeedproxy.microsoft.io/pypi/simple/")
+
+    def status(
+        command: list[str], *, env: dict[str, str], **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        assert command == ["copilot", "sandbox", "ca", "status"]
+        assert env["COPILOT_HOME"] == str(home)
+        assert env["UV_DEFAULT_INDEX"] == "https://packagefeedproxy.microsoft.io/pypi/simple/"
+        return subprocess.CompletedProcess(command, status_code, "", "")
+
+    monkeypatch.setattr(subprocess, "run", status)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
+
+    assert code == (0 if status_code in {0, 4} else 1)
+    assert any("Copilot proxy CA" in row for row in output) == (status_code in {3, 5})
+    assert any("requires rotation" in row for row in output) == (status_code == 5)
+    assert any("copilot sandbox ca trust" in row for row in output) == (status_code == 3)
+    assert calls == [["copilot", "sandbox", "ca", "status"]]
+    assert settings_path.read_text() == saved
+
+
+@pytest.mark.parametrize("repair_policy", [False, True])
+def test_doctor_apply_leaves_untrusted_ca_to_the_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repair_policy: bool,
+) -> None:
+    from tests.test_skill_install import _profile_pin
+
+    pin = _profile_pin(tmp_path / "upstream")
+    monkeypatch.setattr(doctorcmd, "read_skill_source_pin", lambda: pin)
+    monkeypatch.setattr(skill_install, "read_skill_source_pin", lambda: pin)
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg"), "COPILOT_HOME": str(tmp_path / "copilot")}
+    refresh_installed_catalog(pin, env=env)
+    home = Path(env["COPILOT_HOME"])
+    home.mkdir()
+    settings_path = home / "settings.json"
+    settings_path.write_text('{"sandbox": {"auth": {"gh": true}}}', encoding="utf-8")
+    saved = settings_path.read_bytes()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    settings.write_config(
+        settings.project_config_path(repo),
+        {"enabled_skills": ["code-review", "tdd", *(["ghost"] if repair_policy else [])]},
+    )
+    real_run = subprocess.run
+    calls: list[list[str]] = []
+
+    def status(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        if command[0] == "git":
+            return real_run(command, **kwargs)
+        calls.append(command)
+        assert command == ["copilot", "sandbox", "ca", "status"]
+        return subprocess.CompletedProcess(command, 3, "", "")
+
+    monkeypatch.setattr(subprocess, "run", status)
+    config = _config("tdd", *(["ghost"] if repair_policy else []))
+    code, output = _run_ca_doctor(
+        tmp_path, config=config, catalog=_catalog(tdd=SkillCatalogWinner("tdd", "packaged")),
+        env=env, apply=True,
+    )
+
+    assert code == 1
+    assert any("copilot sandbox ca trust" in row for row in output)
+    assert calls == [["copilot", "sandbox", "ca", "status"]]
+    assert settings_path.read_bytes() == saved
+    assert settings.load_config_table(settings.project_config_path(repo))["enabled_skills"] == [
+        "code-review", "tdd",
+    ]
+    assert any("Saved repaired" in row for row in output) == repair_policy
 
 
 def test_doctor_refuses_the_same_missing_routing_access_as_a_run(tmp_path: Path) -> None:
@@ -647,7 +905,7 @@ def test_doctor_reports_a_missing_tool_and_an_unauthorised_tracker_in_one_pass(
         f"{len(labels.read_run_required_vocabulary(repo))} Labels a Run reads",
         "feedback_loops | passed | AGENTS.md declares 1 runnable feedback loop(s)",
         *_matching_rows(tmp_path),
-        "Skill policy is healthy; a Run would not be blocked.",
+        "Skill policy is healthy; environment checks still fail.",
     ]
 
 

@@ -204,6 +204,7 @@ def run_doctor(
     environment_preflight = resolve_environment(
         repo_root=repo_root,
         issue_source=config.issue_source,
+        env=environment,
     )
     for check in environment_preflight.checks:
         output_fn(
@@ -310,6 +311,8 @@ def run_doctor(
             output_fn("Skill policy is healthy; new Dynamic assessments are unavailable.")
         elif apply:
             output_fn("Skill policy is healthy; no changes to apply.")
+        elif not environment_preflight.passed:
+            output_fn("Skill policy is healthy; environment checks still fail.")
         elif config.route_policy is RoutePolicy.UNSELECTED:
             output_fn("Skill policy is healthy; a Run would not be blocked.")
         else:
