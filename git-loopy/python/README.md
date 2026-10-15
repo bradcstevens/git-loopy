@@ -301,6 +301,53 @@ than becoming a second human-facing listing.
 
 ---
 
+## Agent profiles and isolation
+
+The Runner starts one execution Agent per unit of work. At Pickup, code
+selects the profile for the issue's Execution Task type: `implementation`,
+`bugfix`, `test`, `docs`, or `chore`. If no single execution type resolves,
+it uses `implementation`. An exact `task-type:planning` or `task-type:review`
+label excludes a candidate as `non_execution_task_type`, even when it also
+carries an execution label. Only a human resolves that conflict; the Runner
+does not relabel it.
+
+The same catalog pin installs all seven profiles under
+`<config-home>/git-loopy/profiles/`. They are verified and repaired with the
+Skills; absent or drifted profiles that cannot be repaired refuse preflight.
+No repository or personal source overrides them. Profiles carry role
+instructions, Required and Permitted Skills, and access, not models or effort:
+Routing remains the sizing authority.
+
+An in-Run profile layers its role on the shared `PROMPT.md`, preloads its
+Required Skills, and exposes only Required ∪ (Permitted ∩ Effective Skill
+policy). The Minimal policy is the union across all six in-Run profiles:
+`code-review`, `diagnosing-bugs`, and `tdd`. A disabled Required Skill refuses
+the Run. Policy-enabled Skills outside the selected profile are denied as
+`skill_outside_profile`; preloads are not counted as consulted Skills.
+The [Skill-policy guide](../../docs/skill-policy.md#profiles-and-exposure)
+lists each profile's exact Skills and the ambient-agent probe evidence.
+
+The sixth in-Run profile is the **Reviewer**, preloading `/code-review`.
+It can be opened read-only to judge an exact head on separate Spec and
+Standards axes and return findings to its caller. Its edit tools are excluded,
+writes are denied as
+`profile_read_only` for it and its Subagents, and the exact trusted Feedback
+loops from `AGENTS.md` remain runnable. Recovery uses the issue's execution
+profile rather than turning the Reviewer into an author.
+
+The profile is shipped, but automatic Review-stage orchestration is separate
+delivery work (ADR-0072): the current Run loop does not yet start that stage,
+record its verdict, or enforce a review-before-publication gate. The Review
+stage's `review` Routing, remediation, and publication contract should not be
+read as guarantees supplied merely by installing the profile.
+
+All serial, Lane, Recovery, and Reviewer sessions disable harness memory.
+Cross-session `session_store_sql` reads are refused as
+`cross_session_history_disabled`, including through Subagents. Continuity
+comes from repository history and the issue tracker. These session controls
+are not a machine Sandbox. The seventh profile, the human-driven Planner,
+works outside Runs and keeps its own harness's memory and Skills.
+
 ## Planning (`git-loopy plan`)
 
 From inside a Git repository, launch the named **Planner** in your own
@@ -2389,6 +2436,13 @@ The prompt loaded each iteration resolves like the model/effort config —
 Only the packaged default is guaranteed present; drop a `PROMPT.md` into either
 scope to override it (a project file overrides a global one, which overrides the
 packaged default). The seam lives in `git_loopy.loop._read_prompt`.
+
+This is the shared Run base beneath the selected [Agent profile](#agent-profiles-and-isolation),
+not an override of that profile. A custom prompt's `required-skills`
+frontmatter is refused, including `required-skills: []`; remove the key.
+Profiles alone declare Required Skills, and the Skill policy controls which
+Permitted Skills may be exposed. The Planner's standalone body never layers
+on these Run instructions.
 
 ---
 

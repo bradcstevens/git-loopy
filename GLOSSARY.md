@@ -139,9 +139,29 @@ outlive it).
 **Agent memory**:
 Anything an **Agent** could recall from an earlier issue other than what the issue
 tracker and the repository's history record. In-Run Agents and their **Subagents**
-have none; the **Planner** outside a Run is exempt, but its approved graph must
-not depend on its memory (ADR-0076).
+have neither persistent memory nor cross-session history; the **Planner**
+outside a Run is exempt, but its approved graph must record every fact
+execution needs (ADR-0076).
 _Avoid_: profile memory, learnings, scratchpad.
+
+**Agent profile**:
+A pinned, reusable definition of an **Agent**'s role, **Required Skills**,
+**Permitted Skills**, and access, layered on shared Run instructions except
+for the standalone **Planner**. One exists per **Task type**: five execution
+profiles, the read-only **Reviewer**, and the human-driven Planner; repository
+and personal sources cannot override them, and **Routing**, not a profile,
+chooses model and reasoning effort.
+_Avoid_: custom agent (the harness mechanism), persona, role, worker.
+
+**Execution Task type**:
+One of the five **Task types** whose **Agent profile** a **Run** starts as an
+issue's own **Agent**: `implementation`, `bugfix`, `test`, `docs`, and `chore`,
+with `implementation` the fallback when no single execution type resolves.
+The other two, `planning` and `review`, belong to the **Planner** and
+**Reviewer**: only a human asserts them, either excludes an agent-ready issue
+even alongside an execution label, and the **Task-type classifier** and
+Planner propose only execution types for autonomous work.
+_Avoid_: non-executable issue (an excluded issue is still on the **Board**), runnable type.
 
 **Subagent**:
 An agent an **Agent** spawns inside its own session, on its own model. Its lifecycle —
@@ -217,6 +237,13 @@ A Skill an **Agent profile** requires and preloads. A **Run**'s **Skill policy**
 include the union of its in-Run profiles' Required Skills, not the **Planner**'s;
 Run instructions do not declare or override that set.
 _Avoid_: default skill, recommended skill.
+
+**Permitted Skill**:
+A further Skill an **Agent profile** may invoke on demand only when the
+**Effective Skill policy** enables it. An in-Run Agent's exposure is its
+Required Skills plus that intersection, not the whole Run policy; a Required
+preload is not a consulted Skill.
+_Avoid_: optional preload, globally enabled Skill.
 
 **Iteration**:
 One serial cycle of the loop — collect the pool, let the agent work exactly one task,
@@ -1960,58 +1987,6 @@ Parallel work is the **Lane contribution**, the concurrency bound is the **Lane 
 the ordering constraint is the **Integration backlog**.
 _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap**, or
 **Rolling dispatch** instead.
-
-### Agent profiles (accepted design)
-
-These terms complete the vocabulary of
-[ADR-0078](docs/adr/0078-one-agent-profile-per-task-type.md),
-[ADR-0086](docs/adr/0086-agent-profiles-are-markdown-beside-the-skills-proved-and-installed-with-the-catalog.md),
-[ADR-0087](docs/adr/0087-the-planner-is-generated-from-the-pin-and-launched-into-the-loop-engineers-harness.md)
-and
-[ADR-0088](docs/adr/0088-only-execution-task-types-run-and-a-planning-or-review-typed-issue-is-a-pool-exclusion.md).
-The existing **Required Skill**, **Skill policy**, **Minimal Skill policy**, **Installed
-catalog**, **Task type**, **Task-type classifier** and **Pool exclusion** entries above
-describe current behavior; these decision records do not establish delivery acceptance.
-Execution-profile selection, preload and exposure
-are implemented by Wrapper contract §18.1–18.2; §18.3 makes the Reviewer startable
-with read-only access. Profiles are installed and required at preflight (§18.4);
-the Review stage and remaining profile lifecycle work remain accepted design until
-their delivery issues close.
-
-**Permitted Skill**:
-A further Skill an **Agent profile** may invoke on demand only when the
-**Effective Skill policy** enables it. An execution Agent's exposure is its
-Required Skills plus that intersection; other policy-enabled Skills are refused
-as `skill_outside_profile`. A Required preload is not a consulted Skill.
-_Avoid_: optional preload, globally enabled Skill.
-
-**Agent profile**:
-A reusable definition that an **Agent** starts from: role instructions layered on the Run
-instructions (the **Planner**'s stand alone, because it works outside every **Run**),
-preloaded **Required Skills**, the further Skills it may invoke on demand,
-and its tool access, which is read-only for the **Reviewer** and full for every other
-profile. There is one per **Task type**: the **Planner** is `planning`, the **Reviewer**
-is `review`, and the other five are execution profiles. A **Run** starts only an execution
-profile as an issue's own **Agent**: the issue's **Execution Task type** selects it, and an
-issue whose Task type does not resolve runs as `implementation`. An
-in-Run **Agent** can reach only its profile's Skills, and only those the **Effective Skill
-policy** also enables. A profile carries no model or reasoning effort, because
-**Routing** alone decides those. The profiles, not the Run instructions, declare a
-**Run**'s Required Skills. Profiles come from the same pinned external catalog as the
-Skills and are installed and repaired with the **installed catalog**. No repository or
-personal source overrides them.
-_Avoid_: custom agent (the harness mechanism), persona, role, worker.
-
-**Execution Task type**:
-One of the five **Task types** whose **Agent profile** a **Run** starts as an issue's own
-**Agent**: `implementation`, `bugfix`, `test`, `docs` and `chore`. The other two name work
-a Run never starts for an issue. `planning` is the **Planner**'s, done outside every Run.
-`review` is the **Reviewer**'s, which only judges another Agent's result. A
-`ready-for-agent` issue carrying either of those two labels is a **Pool exclusion**, which
-a human resolves by retyping the issue or by handing it to the Planner. Only a human
-asserts either label. The **Task-type classifier** and the Planner propose only execution
-Task types.
-_Avoid_: non-executable issue (an excluded issue is still on the **Board**), runnable type.
 
 ### Board (accepted design)
 
