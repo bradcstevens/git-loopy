@@ -6730,6 +6730,26 @@ def test_priority_proposal_recovers_after_expiry_or_transient_revalidation(
         return result
 
     monkeypatch.setattr(dynamic_route.DynamicRouter, "proposal_available", available)
+    if change == "expired":
+        original_bind = dynamic_route.DynamicRouter.bind
+
+        async def ordered_bind(router, proposal, request):
+            # Keep the asserted priority binding order explicit: concurrent
+            # Lane setup may otherwise let #45 bind before #43, independently
+            # of whether #49's expired proposal is correctly re-elected.
+            predecessor = {42: 41, 43: 42, 45: 43, 46: 45}.get(request.issue_ref)
+            if predecessor is not None:
+                async def preceding_bound():
+                    while not any(
+                        e["type"] == "wrapper.pickup.bound" and e["issue"] == predecessor
+                        for e in _logged_events(tmp_path)
+                    ):
+                        await asyncio.sleep(0)
+
+                await asyncio.wait_for(preceding_bound(), timeout=10)
+            return await original_bind(router, proposal, request)
+
+        monkeypatch.setattr(dynamic_route.DynamicRouter, "bind", ordered_bind)
 
     client = _ParallelFakeClient(
         fake_git=loop_module._make_git_client(), scripted_events=[_usage_event("claude-opus-5")],
