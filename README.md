@@ -104,7 +104,7 @@ work needs it.
 
 ```bash
 # Install the current published Release once, user-global.
-uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.11.3#subdirectory=git-loopy/python"
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.11.2#subdirectory=git-loopy/python"
 
 # In the repository you want it to work on:
 cd ~/code/my-project
@@ -116,10 +116,9 @@ git-loopy init
 git-loopy
 ```
 
-This installs the latest stable **v0.11.3** Release. The README also describes
-current-source features added after that tag, including the named Planner,
-activated Agent profiles, and Issue-clone Lanes; use an Edge install for those
-until a later Release includes them.
+This installs the latest published stable **v0.11.2** Release. The current
+source is at 0.11.3 and includes the named Planner, activated Agent profiles,
+and Issue-clone Lanes; use an Edge install for those until v0.11.3 is published.
 
 The terminal interface is included in the base installation. An older install
 command that names the removed `[tui]` extra still succeeds, but your package
@@ -154,8 +153,8 @@ dormant 0.11.2 paths, not current alternatives; see the
 
 ### Installation identity and channels
 
-The default command installs the published **v0.11.3 Release**. Its
-installation identity is therefore `git-loopy 0.11.3`: `git-loopy --version`
+The default command installs the published **v0.11.2 Release**. Its
+installation identity is therefore `git-loopy 0.11.2`: `git-loopy --version`
 and `wrapper.run.start` report that exact Release version.
 
 To install another named, published Release, replace the tag with the Release

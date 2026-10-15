@@ -225,8 +225,8 @@ deferred, so the install string points at this repo's nested package via
 `#subdirectory=git-loopy/python`:
 
 ```bash
-# Put a single `git-loopy` command for the published v0.11.3 Release on PATH.
-uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.11.3#subdirectory=git-loopy/python"
+# Put a single `git-loopy` command for the published v0.11.2 Release on PATH.
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.11.2#subdirectory=git-loopy/python"
 
 # ...then run it from inside any git repo:
 cd ~/some/other/repo && git-loopy
@@ -236,14 +236,14 @@ For an ephemeral, npx-style run (no install), use `uvx` with the same spec (a
 bare `uvx git-loopy` is reserved for a future PyPI release):
 
 ```bash
-uvx --from "git+https://github.com/bradcstevens/git-loopy@v0.11.3#subdirectory=git-loopy/python" git-loopy
+uvx --from "git+https://github.com/bradcstevens/git-loopy@v0.11.2#subdirectory=git-loopy/python" git-loopy
 ```
 
 Repos already on Python/uv can instead add it as a **project-local dev
 dependency** and run it through their own environment:
 
 ```bash
-uv add --dev "git+https://github.com/bradcstevens/git-loopy@v0.11.3#subdirectory=git-loopy/python"
+uv add --dev "git+https://github.com/bradcstevens/git-loopy@v0.11.2#subdirectory=git-loopy/python"
 uv run git-loopy
 ```
 
@@ -253,16 +253,16 @@ in a repo that has no `git-loopy/` folder at all. Persist per-run knobs in a
 [`config.toml`](#persistent-config-configtoml) — hand-written, or scaffolded for
 you by [`git-loopy init`](#first-run-setup-git-loopy-init) — when you want them.
 
-The commands above are all **v0.11.3 Release** installs: `git-loopy --version`
-reports `git-loopy 0.11.3`, the installation's Release identity. To choose a
+The commands above are all **v0.11.2 Release** installs: `git-loopy --version`
+reports `git-loopy 0.11.2`, the installation's Release identity. To choose a
 different named Release, use its published tag in the same position (for
 example, `@v0.8.0`). To deliberately install unreleased source, pin a full
 commit SHA instead; that is an **Edge install**, whose identity is the SHA, not
 the source `VERSION` value. See the root
 [installation channels](../../README.md#installation-identity-and-channels)
 for commands. The named Planner, activated Agent profiles, and Issue-clone
-Lanes documented below are current-source features added after v0.11.3; use an
-Edge install until a later Release includes them.
+Lanes documented below are current-source features added after v0.11.2; use an
+Edge install until v0.11.3 is published.
 
 ---
 
@@ -1386,7 +1386,7 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Strikes each issue gets before the Run skips it (ADR-0070). Integer ≥ 1.                                                                                                                                         |
-| `GIT_LOOPY_WORKTREE_SETUP`         | unset (auto-detect)            | A shell command run in each freshly created **Lane** worktree, before that Lane's agent session starts, to prepare its environment (install deps, create a venv, ...) so the feedback loops can run there. Runs once per Lane creation with `cwd` set to the worktree. When unset/blank, a best-effort auto-detect picks a common install command for the project type (`uv.lock`→`uv sync`, `package-lock.json`→`npm ci`, `package.json`→`npm install`, `requirements.txt`→`pip install -r requirements.txt`, `go.mod`→`go mod download`, ...). A non-zero setup exit is surfaced in the diagnostics log but does not abort the Lane. |
+| `GIT_LOOPY_WORKTREE_SETUP`         | unset (auto-detect)            | A shell command run in each freshly created **Lane workspace** (an Issue clone), before that Lane's Agent session starts, to prepare its environment (install deps, create a venv, ...) so the feedback loops can run there. Runs once per Lane creation with `cwd` set to the workspace. The variable retains its legacy `WORKTREE` name. When unset/blank, a best-effort auto-detect picks a common install command for the project type (`uv.lock`→`uv sync`, `package-lock.json`→`npm ci`, `package.json`→`npm install`, `requirements.txt`→`pip install -r requirements.txt`, `go.mod`→`go mod download`, ...). A non-zero setup exit is surfaced in the diagnostics log but does not abort the Lane. |
 | `GIT_LOOPY_GATE_TIMEOUT_SECONDS`   | `3600` (one hour)              | The wall-clock bound each **feedback loop** the **Integration** gate runs must finish within. Integration re-runs the merged worktree's own `AGENTS.md` loops unattended after every Lane merge, so a loop waiting on a socket, a prompt or a lock would otherwise block the gate forever. On expiry the loop's whole process group is killed and the gate goes **red naming that loop, as a timeout** — kept distinct from a non-zero exit, because a timeout is not a test failure. |
 | `GIT_LOOPY_CREDIT_BUDGET_USD_PER_HOUR` | unset (contraction unavailable) | The authoritative AI-credit ceiling adaptation judges this Run's burn against. Without it, credit pressure is unknown rather than estimated. Credit never gates capacity or expansion; it only contracts the effective Lane limit under sustained burn. A malformed or non-positive value reads as unset rather than aborting the Run. |
 | `GIT_LOOPY_HOST_LOAD_BUDGET`       | `1.0`                           | The tolerated run-queue depth **per CPU**, so `1.0` means "keep every core busy but do not queue". Host/setup pressure is reported as the ratio of the observed one-minute load average per CPU to this budget. Host-load observability starts and ceilings the controller at the bound Execution host's declared capacity; a platform without a load average remains at the static-safe limit. Same malformed-reads-as-default rule. |
