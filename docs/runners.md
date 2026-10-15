@@ -17,7 +17,8 @@ Release 0.11.2, contract 2.26 and Event schema 1. Each retains its existing
 serial loop and carried Attempt-lifecycle and Ending debt. Their Orchestrators
 and installers read their own [Path manifests](../git-loopy/paths/README.md),
 never Python's root Release version. The Rust Dashboard helper belongs to
-Python; no Rust Orchestrator path exists today.
+Python; no Rust Orchestrator path exists today, though one is planned
+([ADR-0013](adr/0013-multi-language-runner-family.md)).
 
 | Orchestrator            | Status                         | Language                     | Platforms              | Quickstart                                                        |
 | ----------------------- | ------------------------------ | ---------------------------- | ---------------------- | ---------------------------------------------------------------- |
