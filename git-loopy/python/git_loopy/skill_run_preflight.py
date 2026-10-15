@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Mapping
 
 from .config import RunConfig, SkillPolicyInputs
 from .prompt import resolve_required_skills
@@ -105,6 +105,7 @@ async def resolve_run_skill_preflight(
     installed_skills_dir: Path,
     workspace: Path,
     discoverer: CatalogDiscoverer = discover_skill_catalog,
+    env: Mapping[str, str] | None = None,
 ) -> RunSkillPreflight:
     """Resolve the shared policy preflight, then materialize one Run exposure."""
     resolution = await resolve_run_skill_policy_preflight(
@@ -116,6 +117,7 @@ async def resolve_run_skill_preflight(
         installed_skills_dir=installed_skills_dir,
         workspace=workspace,
         discoverer=discoverer,
+        env=env,
     )
     if resolution.blockers:
         raise resolution.blockers[0]
@@ -141,9 +143,10 @@ async def resolve_run_skill_policy_preflight(
     installed_skills_dir: Path,
     workspace: Path,
     discoverer: CatalogDiscoverer = discover_skill_catalog,
+    env: Mapping[str, str] | None = None,
 ) -> RunSkillPolicyPreflight:
     """Resolve all Skill-policy blockers without materializing a Run exposure."""
-    required = resolve_required_skills(prompt_text)
+    required = resolve_required_skills(prompt_text, env=env)
     workspace.mkdir(parents=True, exist_ok=True)
     inputs = config.skill_policy
     configured = (

@@ -1,12 +1,3 @@
----
-required-skills:
-  - diagnosing-bugs
-  - prototype
-  - tdd
-  - codebase-design
-  - implement
-  - code-review
----
 # YOUR ISSUE
 
 The runner has already selected your work. Exactly one issue is provided at the start of context, and it is the issue you work this iteration — you do not choose it and you do not weigh it against other work. It comes from one of these sources, distinguishable by the delimiter used in its block:
@@ -23,16 +14,6 @@ You've also been passed the last few commits. Read them to understand what work 
 
 Before exploring code or proposing changes, read `docs/agents/domain.md` for the consumer rules. Read `GLOSSARY.md` at the repository root, or follow `GLOSSARY-MAP.md` there to the relevant context glossaries. If neither exists, fall back to `CONTEXT.md` / `CONTEXT-MAP.md` for repositories that have not migrated. If `docs/adr/` exists, respect any ADRs that touch the area you're about to change. Use the project's vocabulary in issue comments, commit messages, test names, and module names. When in doubt about how a section of code fits in, go up a layer of abstraction and map the relevant modules and callers (in the project's glossary vocabulary) before drilling in.
 
-# TASK TYPE
-
-Your issue is your task. Read it and classify it by type — the type decides which skill you invoke, never which work you do. When your task type names a skill, invoke that mapped skill before implementing rather than treating it as optional guidance. Development infrastructure intentionally has no mapped skill and may proceed without invoking one.
-
-- **Critical bugfix** — use `/diagnosing-bugs` to build a feedback loop, reproduce, hypothesise, instrument, and only then fix. Never patch a hard bug without a reproducing signal.
-- **Development infrastructure** (tests, types, dev scripts, CI) — no specific skill; just get the loop healthy.
-- **Tracer bullet for a new feature** — for non-trivial state/data-model or UI decisions, sketch with `/prototype` first (LOGIC branch for state, UI branch for visuals), then implement the slice with `/tdd`. A tracer bullet is a thin, end-to-end vertical slice through every layer.
-- **Polish or quick win** — implement with `/tdd`.
-- **Refactor** — use `/codebase-design` to find deepening opportunities (a lot of behaviour behind a small interface at a clean seam) first, then implement the agreed change with `/tdd`.
-
 If you're about to commit to a non-trivial plan (cross-cutting refactor, ambiguous requirements, new module boundary), pause and stress-test that plan against `docs/agents/domain.md`, `GLOSSARY.md` or the context glossaries reached through `GLOSSARY-MAP.md` at the repository root, and any ADRs under `docs/adr/`. If neither glossary entry point exists, fall back to `CONTEXT.md` / `CONTEXT-MAP.md` before you start — does the plan fit the existing vocabulary and decisions? Cheap stress-test, big save when you're wrong.
 
 # CONFIRM YOUR ACTIVE ISSUE (working marker)
@@ -43,56 +24,17 @@ The runner bound that issue as this iteration's **active issue** before your ses
 
 The marker changes nothing else: you still close the issue with a `Closes #N` close-keyword exactly as described under **COMMIT** / **THE ISSUE** below. Emit it once per iteration, for the issue you were handed.
 
-# SKILLS NOT TO INVOKE
-
-Many skills in the installed catalog exist for **human-driven sessions or upstream work** and are out of scope for this autonomous loop. Leave the ones below alone — they're grouped by *why* they don't belong in an unattended iteration.
-
-**Upstream issue-creation & requirements capture** — these run *before* the loop; the loop only works tickets that a human (or `/triage`) has already marked `ready-for-agent`:
-
-- `/triage` — relabels issues into the `ready-for-agent` pool.
-- `/to-spec`, `/to-tickets` — create or relabel issues (a spec and its sliced tickets) upstream of the loop.
-- `/to-questionnaire`, `/wayfinder` — capture and shape requirements into specs/tickets; the loop consumes their output, it doesn't produce it.
-
-**Human-in-the-loop skills** — they need a person to answer, so they can't run unattended. Most are `disable-model-invocation: true`; `/grilling` is model-invocable but still needs a human to grill:
-
-- `/grill-me`, `/grill-with-docs`, `/grilling` — interrogate a human about a plan or decision.
-- `/improve-codebase-architecture` — a human-driven architecture review; for autonomous refactors use `/codebase-design` instead.
-- `/teach` — walks a human through an area of the code.
-- `/design-control-loop` — interviews an operator before designing and building a new control loop.
-- `/retro` — reviews a coding session with the user to identify improvements to the agent's environment.
-
-**User-invoked operations beyond the bound issue** — catalog membership does not authorize a batch release or changes to the operator's model configuration:
-
-- `/release` — publishes a completed batch only when the user requests a release, never as a side effect of completing one issue.
-- `/set-task-models` — recalibrates models and updates operator configuration only on explicit user invocation.
-- `/model-scorecard` — rebuilds its model scorecard from a live leaderboard and local session history only on explicit user invocation.
-- `/sync-model-roster` — repairs the pinned model roster and changes operator configuration only on explicit user invocation.
-- `/jev-ultrafast` — runs fast browser automation only when a user requests it or explicitly asks to use Jev.
-
-**Session-management, setup & authoring** — irrelevant to a fresh one-shot `copilot -p` iteration:
-
-- `/handoff` — launches and watches another agent for a `/next` recommendation; the runner already owns the bound issue's execution, so this would nest another driver.
-- `/implement` — leave its general orchestration outside the Run; the one exception is conflict resolution for the bound PR, as described in **Pull-request mode** below, followed by `/code-review` of the resolved head.
-- `/implement-spec` — coordinates a spec's entire ticket graph on an integration branch, beyond this Run's one bound issue.
-- `/next` — a router whose route table hands work straight to `/implement`, so it nests that same second driver; and the runner has already bound your issue, so its selection role contradicts the binding rather than merely duplicating it.
-- `/loop-me` — starts a loop of its own, which inside a loop iteration is the nesting above one level worse.
-- `/setup-git-loopy-skills`, `/writing-for-agents` — install skills or author the documents agents read, not loop work.
-
-The guidance the excluded and now-removed skills used to carry still holds and is already inlined above: favour reviewable output over token compression while running unattended, go up a layer to map an unfamiliar area before drilling in, stress-test plans against the domain docs, and reach for deep-module design via `/codebase-design`.
+Favour reviewable output over token compression while running unattended. Go up a layer to map an unfamiliar area before drilling in, stress-test plans against the domain docs, and favour deep modules: substantial behaviour behind a small interface at a clean seam.
 
 # OPTIONAL SKILLS
 
-These are not Required Skills. Use them only when the effective Skill policy permits them and the bound issue calls for their work:
+These are not Required Skills. Use them only when your profile exposes them, the effective Skill policy permits them, and the bound issue calls for their work:
 
 - `/pr` — writes a pull-request body for the bound work; it does not authorize creating, merging, or closing a PR.
 
 # EXPLORATION
 
 Explore the repo for your issue. Stay within the area the issue touches; don't grand-tour the codebase. If you're unfamiliar with an area, go up a layer first and map its modules and callers before drilling in.
-
-# IMPLEMENTATION
-
-Use `/tdd` to complete the task. Vertical slices only — one test, one minimal implementation, repeat. No horizontal slicing (don't write all tests then all code).
 
 # DELIBERATE LOAD
 
@@ -167,15 +109,14 @@ Never modify the parent PRD issue (typically `#1`, identifiable from each slice'
 When a block is headed `=== PR #N: ... (branch: <head-branch>) ===`, you're advancing an **existing** pull request, not closing an issue. The work happens on the PR's own branch:
 
 1. **Check out the PR branch.** `gh pr checkout <N>` switches your worktree to `<head-branch>`. The wrapper restores the base branch at the start of the next iteration, so you don't need to switch back manually — but don't start unrelated work while checked out.
-2. **Read the brief.** Find the `## Agent Brief` (in the PR body or a comment) plus any review threads, and implement exactly what it asks using `/tdd`.
+2. **Read the brief.** Find the `## Agent Brief` (in the PR body or a comment) plus any review threads, and implement exactly what it asks.
 3. **Run the relevant feedback loops** from `AGENTS.md`, same as issue mode.
-4. **(Optional) Self-review with `/code-review`.** On a non-trivial diff, run `/code-review` over your changes to catch bugs or drift from the brief before you commit.
-5. **Commit to the PR branch** with a message recording key decisions and files changed. Do **not** use a `Closes #N` / `Fixes #N` / `Resolves #N` keyword for the PR's number — you are not closing it.
-6. **Push to the PR branch.** `git push`. The wrapper detects progress by the PR's head SHA moving, so a successful push is what registers as an advance.
-7. **Comment progress** with `gh pr comment <N> --body-file <path>` only when there's genuinely new information — same restraint as issue comments.
-8. **Never merge or close the PR.** A human reviews and merges it in QA. Your job is to push the diff forward, not to land it.
+4. **Commit to the PR branch** with a message recording key decisions and files changed. Do **not** use a `Closes #N` / `Fixes #N` / `Resolves #N` keyword for the PR's number — you are not closing it.
+5. **Push to the PR branch.** `git push`. The wrapper detects progress by the PR's head SHA moving, so a successful push is what registers as an advance.
+6. **Comment progress** with `gh pr comment <N> --body-file <path>` only when there's genuinely new information — same restraint as issue comments.
+7. **Never merge or close the PR.** A human reviews and merges it in QA. Your job is to push the diff forward, not to land it.
 
-If the branch has diverged and you hit merge conflicts, use `/implement` to work through the ones you can resolve from the diff and the brief; it closes with `/code-review` of the resolved head. This is the conflict-resolution exception to the general orchestration exclusion above, not permission to select other work. If the PR is in a state you genuinely can't advance (conflicts you can't resolve without more context, a brief blocked on a dependency), post one comment explaining the blocker and end the turn.
+If the branch has diverged and you hit merge conflicts, resolve what the diff and the brief settle, keep both sides' intent, and rerun the feedback loops. If they do not settle a conflict, or the brief is blocked on a dependency, comment the blocker and end the turn.
 
 ## Local-markdown mode (legacy)
 

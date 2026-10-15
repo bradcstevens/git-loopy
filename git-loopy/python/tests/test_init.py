@@ -1050,7 +1050,7 @@ def test_run_init_yes_gates_effort_for_reasoning_incapable_default(
     }
 
 
-def test_run_init_project_scope_without_repo_returns_nonzero() -> None:
+def test_run_init_project_scope_without_repo_returns_nonzero(tmp_path: Path) -> None:
     warnings: list[str] = []
     out = _Output()
     with contextlib.redirect_stdout(out):
@@ -1059,7 +1059,7 @@ def test_run_init_project_scope_without_repo_returns_nonzero() -> None:
             scope="project",
             assume_yes=True,
             repo_root=None,
-            env={"HOME": "/nonexistent-home-xyz"},
+            env=_env(tmp_path),
             fetch_choices=lambda: [],
             warn=warnings.append,
         )
@@ -1458,18 +1458,21 @@ def test_run_init_drops_a_stale_effort_when_the_new_model_has_none(
     assert "reasoning_effort" not in tomllib.loads(config_path.read_text())
 
 
-def test_run_init_requires_the_skills_the_prompt_it_scaffolds_declares(
+def test_run_init_uses_profiles_when_scaffolding_over_retired_metadata(
     tmp_path: Path,
 ) -> None:
-    """The policy answers to the instructions setup leaves behind, not the old ones."""
+    """Replacing retired instructions yields the installed profile union."""
     stale = tmp_path / "git-loopy" / "PROMPT.md"
     stale.parent.mkdir(parents=True, exist_ok=True)
     stale.write_text("---\nrequired-skills: []\n---\n# stale\n", encoding="utf-8")
     packaged = _packaged(tmp_path)
+    from tests.profile_fixtures import seed_profile_install
+
+    packaged["installed_skills"] = seed_profile_install(_env(tmp_path)).root
     Path(packaged["packaged_prompt"]).write_text(
-        "---\nrequired-skills:\n  - tdd\n---\n# packaged\n", encoding="utf-8"
+        "# packaged\n", encoding="utf-8"
     )
-    # Resolve Required Skills from the prompt rather than an injected list.
+    # Resolve Required Skills from the install rather than an injected list.
     packaged.pop("required_skills")
 
     out = _Output()
@@ -1486,7 +1489,7 @@ def test_run_init_requires_the_skills_the_prompt_it_scaffolds_declares(
 
     assert rc == 0
     written = tomllib.loads(settings.project_config_path(tmp_path).read_text())
-    assert written["enabled_skills"] == ["tdd"]
+    assert written["enabled_skills"] == ["code-review", "diagnosing-bugs", "tdd"]
 
 
 # ---------------------------------------------------------------------------
@@ -2043,33 +2046,34 @@ def test_run_init_unresolvable_required_skills_writes_nothing(tmp_path: Path) ->
 def test_run_init_revalidates_when_the_runner_changes_the_scaffold_decision(
     tmp_path: Path,
 ) -> None:
-    """A policy resolved for a scaffolding setup is not valid for a bare one.
-
-    ``scaffold`` chooses *which instructions* the Required Skills come from:
-    scaffolding resolves them against the packaged prompt, not scaffolding
-    against whatever is already on disk. A runner that collects under one and
-    answers under the other — a #507 back-navigation — must not have the first
-    answer's validation stand in for the second.
-    """
+    """Keeping an override with retired metadata refuses the setup's final answer."""
     stale = tmp_path / "git-loopy" / settings.PROMPT_FILENAME
     stale.parent.mkdir(parents=True, exist_ok=True)
     stale.write_text(
         "---\nrequired-skills:\n  - stale-skill\n---\nSTALE\n", encoding="utf-8"
     )
     packaged = _packaged(tmp_path)
+    from tests.profile_fixtures import seed_profile_install
+
+    packaged["installed_skills"] = seed_profile_install(_env(tmp_path)).root
     packaged_prompt = tmp_path / "pkg" / "PROMPT.md"
     packaged_prompt.write_text(
-        "---\nrequired-skills:\n  - tdd\n---\nPACKAGED\n", encoding="utf-8"
+        "PACKAGED\n", encoding="utf-8"
     )
     packaged["packaged_prompt"] = packaged_prompt
-    packaged.update(_policy_seams(tmp_path, catalog=_baseline_catalog()))
+    catalog = _baseline_catalog()
+    catalog = SkillCatalog(winners={
+        **catalog.winners,
+        "code-review": SkillCatalogWinner("code-review", "packaged"),
+        "diagnosing-bugs": SkillCatalogWinner("diagnosing-bugs", "packaged"),
+    })
+    packaged.update(_policy_seams(tmp_path, catalog=catalog))
     packaged["required_skills"] = None
     warnings: list[str] = []
     out = _Output()
 
     def runner(**kwargs: Any) -> Any:
-        # Collect while scaffolding (requirement: tdd), then answer without it
-        # (requirement: stale-skill) without collecting again.
+        # Collect with a replacement prompt, then retain the retired override.
         return _answers(
             scaffold=False,
             enabled_skills=kwargs["rebuild_skill_selection"](True, "project"),
@@ -2089,7 +2093,7 @@ def test_run_init_revalidates_when_the_runner_changes_the_scaffold_decision(
 
     assert rc == 1
     assert not settings.project_config_path(tmp_path).exists()
-    assert any("stale-skill" in message for message in warnings)
+    assert any("Remove 'required-skills'" in message for message in warnings)
 
 
 # ---------------------------------------------------------------------------

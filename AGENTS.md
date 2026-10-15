@@ -80,8 +80,8 @@ blocking gate:
   repository alone.
 - **The cross-repo Skills proof** in `cross-repo-skills-proof.yml` (#632) acquires
   that same pinned catalog and then runs the three Python-suite checks that read
-  it — that the Run instructions require no Skill the pin lacks, that Skill
-  reference routing resolves, and that the Skill-authored label vocabulary
+  it — that the profiles' Required and Permitted Skills resolve at the pin,
+  that Skill reference routing resolves, and that the Skill-authored label vocabulary
   matches what this repository provisions — each of which otherwise skips rather
   than fails when the catalog is not acquired. It inherits the same network
   exclusion as `python -m git_loopy.skill_source` above for the same reason: an

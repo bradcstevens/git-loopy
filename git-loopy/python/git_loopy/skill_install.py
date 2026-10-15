@@ -20,9 +20,9 @@ Three properties make that re-check something a Run can afford to do every time:
 * **An install is a replacement.** A bumped pin, or a catalog someone edited in
   place, is re-cut wholesale — so a Skill withdrawn upstream stops resolving,
   and the installed directory is never a place work can accumulate.
-* **A refresh that fails is not automatically a failed Run.** A machine that
-  already has a proven catalog keeps it and the operator is told once. Only a
-  machine with no catalog at all fails, because that Run has no Skills to run.
+* **A failed refresh preserves an intact install.** The operator is told once.
+  Preservation is not Run authorization: preflight still requires profiles
+  matching the active pin.
 
 Installation goes through :mod:`git_loopy.skill_source`, so the revision, the
 layout, the licence, and the provenance are all proven before anything reaches
@@ -39,7 +39,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Literal, Mapping
 
-from .agent_profiles import validate_profiles
+from .agent_profiles import AgentProfileError, required_profile_skills, validate_profiles
 from .settings import global_dir
 from .skill_source import (
     SkillSourceError,
@@ -153,6 +153,27 @@ def catalog_checkout_dir(env: Mapping[str, str]) -> Path:
 def installed_profiles_dir(env: Mapping[str, str]) -> Path:
     """The profile root, beside (never inside) the installed Skill root."""
     return global_dir(env) / PROFILES_DIRNAME
+
+
+def installed_required_skills(env: Mapping[str, str] | None = None) -> tuple[str, ...]:
+    """Read the in-Run union only from profiles matching the active pin."""
+    environment = os.environ if env is None else env
+    status = inspect_installed_catalog(read_skill_source_pin(), environment)
+    if status.profiles_state != "matching":
+        raise SkillInstallError(
+            f"Agent profiles at {status.profile_root} are not matching the pinned "
+            f"revision {status.pin.revision} ({status.profiles_state}); "
+            "repair with `git-loopy doctor --apply` before starting a Run."
+        )
+    try:
+        return required_profile_skills(
+            status.profile_root, skills=installed_catalog_dir(environment),
+        )
+    except AgentProfileError as exc:
+        raise SkillInstallError(
+            f"Installed Agent profiles are invalid: {exc}; "
+            "repair with `git-loopy doctor --apply`."
+        ) from exc
 
 
 def install_record_path(env: Mapping[str, str]) -> Path:
@@ -526,9 +547,10 @@ def refresh_installed_catalog(
             action=ACTION_KEPT,
             warning=(
                 f"could not refresh the Skill catalog from "
-                f"{resolved_pin.repository}: {exc}. Continuing with the intact "
-                f"installed revision {installed.short_revision}, which is not the "
-                f"pinned {resolved_pin.short_revision}"
+                f"{resolved_pin.repository}: {exc}. Kept the intact installed "
+                f"revision {installed.short_revision}, which is not the pinned "
+                f"{resolved_pin.short_revision}; a Run still requires matching "
+                "Agent profiles."
             ),
         )
 

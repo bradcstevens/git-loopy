@@ -14,7 +14,7 @@ from . import settings
 from .config import SkillPolicyInput, SkillPolicyInputs
 from .copilot_client import make_copilot_client
 from .prompt import PromptMetadataError, load_prompt, resolve_required_skills
-from .skill_install import installed_catalog_dir
+from .skill_install import SkillInstallError, installed_catalog_dir
 from .skill_catalog import (
     SdkSkillSurfaceError,
     SkillCatalogError,
@@ -226,11 +226,6 @@ def plan_skill_policy_sync(
     )
 
 
-def _installed_skills_dir() -> Path:
-    """The Skill catalog installed in the global config scope (ADR-0025)."""
-    return installed_catalog_dir(os.environ)
-
-
 def _required_skills(
     repo_root: Path,
     env: Mapping[str, str],
@@ -238,7 +233,7 @@ def _required_skills(
 ) -> tuple[str, ...]:
     if required_skills is not None:
         return tuple(required_skills)
-    return resolve_required_skills(load_prompt(repo_root, env)).required_skills
+    return resolve_required_skills(load_prompt(repo_root, env), env=env).required_skills
 
 
 def _configured_names(
@@ -517,7 +512,7 @@ def _collect_policy_context(
     caller write a Config afterwards without a teardown failure reporting
     failure over a Config that did change.
     """
-    packaged = installed_skills_dir or _installed_skills_dir()
+    packaged = installed_skills_dir or installed_catalog_dir(env)
     with TemporaryDirectory(prefix="git-loopy-skill-catalog-") as temporary:
         workspace = Path(temporary)
         root = repo_root if repo_root is not None else _repo_less_root(workspace)
@@ -1054,7 +1049,7 @@ def run_skills_list(
         if error_fn is None
         else error_fn
     )
-    packaged = installed_skills_dir or _installed_skills_dir()
+    packaged = installed_skills_dir or installed_catalog_dir(environment)
     # The discovery workspace's own creation and teardown belong inside the
     # inventory handler: an unusable temporary directory is an unavailable
     # inventory, not a traceback.
@@ -1065,7 +1060,7 @@ def run_skills_list(
             if required_skills is None:
                 try:
                     required_skills = _required_skills(root, environment, None)
-                except (OSError, PromptMetadataError) as exc:
+                except (OSError, PromptMetadataError, SkillInstallError) as exc:
                     errors(
                         "git-loopy: unable to resolve Required Skills: "
                         f"{type(exc).__name__}: {exc}"

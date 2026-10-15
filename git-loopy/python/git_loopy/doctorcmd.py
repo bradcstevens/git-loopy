@@ -14,7 +14,7 @@ from typing import Any, Callable, Iterable, Mapping
 from .config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from .copilot_client import make_copilot_client
 from .git import GitClient, SubprocessGitClient
-from .prompt import PromptMetadataError, load_prompt
+from .prompt import PromptMetadataError, load_prompt, validate_run_instructions
 from .settings import global_config_path, project_config_path
 from .skill_catalog import (
     SdkSkillSurfaceError,
@@ -241,6 +241,7 @@ def run_doctor(
         prompt = (
             prompt_text if prompt_text is not None else load_prompt(repo_root, environment)
         )
+        validate_run_instructions(prompt)
         # The Skill root and the verdict passed on it are derived from one
         # environment, never supplied separately: a caller able to point the
         # catalog read at one directory while the pin was compared against
@@ -286,6 +287,7 @@ def run_doctor(
                 prompt_text=prompt,
                 repo_root=repo_root,
                 installed_skills_dir=catalog_dir,
+                env=environment,
                 discoverer=discoverer,
             )
         )
@@ -469,6 +471,7 @@ async def _resolve(
     prompt_text: str,
     repo_root: Path,
     installed_skills_dir: Path,
+    env: Mapping[str, str],
     discoverer: CatalogDiscoverer,
 ) -> RunSkillPolicyPreflight:
     """Open only a catalog-discovery session and close it before reporting."""
@@ -488,6 +491,7 @@ async def _resolve(
                 prompt_text=prompt_text,
                 repo_root=repo_root,
                 installed_skills_dir=installed_skills_dir,
+                env=env,
                 workspace=workspace,
                 discoverer=discovery,
             )

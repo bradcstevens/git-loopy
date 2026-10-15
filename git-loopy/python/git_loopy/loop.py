@@ -302,7 +302,6 @@ from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_ca
 from git_loopy.skill_exposure import SkillExposureError
 from git_loopy.skill_policy import SkillPolicyResolutionError
 from git_loopy.agent_profiles import execution_profile_key
-from git_loopy.skill_install import installed_profiles_dir
 from git_loopy.skill_run_preflight import (
     RunSkillPreflight,
     resolve_run_skill_preflight,
@@ -1941,13 +1940,6 @@ class _Loop:
         )
 
     def _emit_skill_policy_resolved(self) -> None:
-        if self._skill_preflight.migration_warning:
-            print(
-                "git-loopy: active prompt has no required-skills metadata; "
-                "inherited packaged Required Skills for this Run. Add "
-                "required-skills frontmatter to complete migration.",
-                file=sys.stderr,
-            )
         self._emit(
             events_module.WRAPPER_SKILL_POLICY_RESOLVED,
             iter_num=None,
@@ -4344,7 +4336,7 @@ class _LaneWork:
     # later count minus this snapshot; a cut this Run did not observe has
     # no snapshot, and the observation is null rather than a guessed zero.
     base_publications_at_cut: int | None = None
-    profile_key: str | None = None
+    profile_key: str = "implementation"
 
 
 @dataclass
@@ -6564,12 +6556,7 @@ class _ParallelLoop:
             context_tier=contribution.context_tier,
             skill_policy=self._skill_exposure,
             run_id=self._lane_remote_run_id(lane_work.item.ref),
-            profile_key=(
-                lane_work.profile_key
-                if installed_profiles_dir(os.environ).exists()
-                or installed_profiles_dir(os.environ).is_symlink()
-                else None
-            ),
+            profile_key=lane_work.profile_key,
         )
 
     def _host_for_contribution(
@@ -8058,7 +8045,7 @@ class _ParallelLoop:
             situation = (
                 f"Branch {lane_work.branch} could not be merged into this "
                 "integration worktree (the conflicting merge was aborted). "
-                "Merge it, resolve every conflict, "
+                "Merge it, "
             )
         else:
             situation = (
@@ -8070,7 +8057,10 @@ class _ParallelLoop:
             f"Auto-resolution attempt {attempt} of "
             f"{_AUTO_RESOLUTION_MAX_ATTEMPTS} for issue #{contribution.ref}. "
             f"{situation}make all feedback loops in AGENTS.md pass, and commit "
-            f"the result. {self._prompt_text}"
+            f"the result. {lane_work.item.rendered_block} {self._prompt_text}"
+            " For conflicts, resolve what the diff and the brief settle, "
+            "keep both sides' intent, and rerun the feedback loops. "
+            "If they do not settle a conflict, comment the blocker and end the turn."
         )
 
     def _fallback_lane_to_serial(self, lane_work: _LaneWork) -> None:
@@ -8632,6 +8622,7 @@ async def run(
     except (
         OSError,
         PromptMetadataError,
+        SkillInstallError,
         SkillExposureError,
         SkillPolicyResolutionError,
     ) as exc:

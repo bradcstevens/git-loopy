@@ -8,7 +8,7 @@ import pytest
 
 from git_loopy import cli, dynamic_route, settings
 from git_loopy import loop as loop_module
-from git_loopy.prompt import packaged_required_skills
+from git_loopy.skill_install import installed_required_skills
 from tests.fakes import FakeGateRunner
 from tests.test_iteration_end_to_end import (
     _aa_row,
@@ -75,7 +75,7 @@ def test_bare_setup_preserves_the_recorded_route_into_actual_work(
         **_authorized_values(),
         "route_policy": policy,
         "context_tier": "long_context",
-        "enabled_skills": list(packaged_required_skills()),
+        "enabled_skills": list(installed_required_skills()),
         "route_associations": {
             "aa-opus": "claude-opus-5@high", "aa-terra": "gpt-5.6-terra@high",
         },
