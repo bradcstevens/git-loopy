@@ -130,9 +130,8 @@ judges the pushed result.
 
 ### 6. Start a Run
 
-The Python Orchestrator is the active reference path. The shell and PowerShell
-paths are dormant at Release 0.11.2; see the [Runner family reference](runners.md)
-for their status. A Rust Orchestrator is planned.
+The active Python Orchestrator is the reference path; see the
+[Runner family reference](runners.md) for the status of other paths.
 
 ```bash
 # Unlimited Iterations.
