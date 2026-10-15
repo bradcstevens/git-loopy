@@ -83,6 +83,8 @@ outside the Sandbox**. Sandboxing does not change the Execution host's Isolation
 grade. The GitHub Actions Execution host does not yet transport this policy;
 a Run requiring it refuses that placement with a remedy to select `local`,
 instead of dispatching an unsandboxed Lane.
+The separate Run-start Sandbox disclosure, Event and Dashboard display remain
+tracked by [#864](https://github.com/bradcstevens/git-loopy/issues/864).
 
 ## Remote-host safety
 

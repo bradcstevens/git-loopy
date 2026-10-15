@@ -88,6 +88,11 @@ def test_sandboxed_agents_commit_in_issue_clones(tmp_path, monkeypatch, kind):
     source.add_all()
     source.commit("initial")
     base = source.head_sha()
+    if kind == "serial-dirty":
+        origin = tmp_path.parent / f"{tmp_path.name}-origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin", str(origin)], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "push", "-q", "-u", "origin", "main"], check=True)
     monkeypatch.setattr(loop, "_make_git_client", lambda: source)
     loops = _capture_parallel_loops(monkeypatch)
     observed = []
@@ -197,5 +202,10 @@ def test_sandboxed_agents_commit_in_issue_clones(tmp_path, monkeypatch, kind):
     if kind == "serial-dirty":
         assert not any(event["type"] == "wrapper.commit.recorded" for event in _logged_events(tmp_path))
         assert any(event["type"] == "wrapper.checkpoint.recorded" for event in _logged_events(tmp_path))
+        assert source.probe_remote_ref("origin", "refs/heads/main") == source.head_sha()
+        assert subprocess.check_output(
+            ["git", "-C", str(tmp_path), "ls-remote", "--heads", "origin", "git-loopy/*"],
+            text=True,
+        ) == ""
     if parallel:
         assert gate_marker.read_text() == "outside sandbox"

@@ -2520,7 +2520,8 @@ class _Loop:
                 self._diag.error("serial Issue clone %s remains dirty; preserving it", clone.root)
                 return [], None
             self._git.reclaim_issue_clone(
-                clone.root, branch=branch, checkpoint=checkpoint is not None or not publish,
+                # Published serial Checkpoints reach origin through the base auto-push.
+                clone.root, branch=branch, checkpoint=not publish,
             )
             if not publish or not self._leased(active.ref, "publication onto base", kind=active.kind):
                 return [], None
