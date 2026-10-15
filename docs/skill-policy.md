@@ -74,15 +74,96 @@ no migration warning.
 
 **Permitted Skill** — a further Skill a profile may invoke on demand, but only
 when the Effective Skill policy enables it.
-each issue's Agent exposes Required ∪ (Permitted ∩ Effective Skill policy), not
+Each in-Run Agent exposes Required ∪ (Permitted ∩ Effective Skill policy), not
 the whole Run policy. A policy-enabled Skill outside its profile is refused as
 `skill_outside_profile`; a Permitted Skill disabled by policy remains
-`skill_outside_policy`. Without an installed profile root, the existing
-Run-wide exposure is unchanged. See [contract §18](wrapper-contract.md#18-agent-profiles-and-session-isolation-contract-228-must).
+`skill_outside_policy`. Every Run requires verified installed profiles; an
+absent profile root is a preflight failure, not a Run-wide fallback.
+See [contract §18](wrapper-contract.md#18-agent-profiles-and-session-isolation-contract-228-must).
 
 Skill prompts are authored upstream and mirrored nowhere; the former
 Contract-carrying Skill category is retired
 ([ADR-0064](adr/0064-a-paired-skill-change-is-published-proved-then-pinned.md)).
+
+### Profiles and exposure
+
+The pinned catalog supplies these profiles; repository and personal agents
+cannot override them. The Orchestrator selects an execution profile from the
+issue's Task type, falling back to `implementation` when no single execution
+type resolves. Exact `task-type:planning` or `task-type:review` labels exclude
+an issue as `non_execution_task_type`, even alongside an execution label.
+Recovery uses the issue's execution profile.
+
+| Profile | Required Skills (preloaded) | Permitted Skills (on demand) | Access |
+| --- | --- | --- | --- |
+| `implementation` | `tdd` | `prototype`, `codebase-design` | full |
+| `bugfix` | `diagnosing-bugs`, `tdd` | `codebase-design` | full |
+| `test` | `tdd` | — | full |
+| `docs` | — | — | full |
+| `chore` | — | — | full |
+| `review` (Reviewer) | `code-review` | — | read-only |
+| `planning` (Planner, outside Runs) | `to-tickets` | `grilling`, `domain-modeling`, `codebase-design`, `research`, `prototype`, `to-spec` | full |
+
+The Minimal Skill policy is therefore the three names `code-review`,
+`diagnosing-bugs`, and `tdd`, even for a Run working only docs. Enabling
+`prototype` makes it available to an implementation Agent, not to a bugfix or
+docs Agent. Enabling an unrelated Skill cannot widen any profile. Required
+preloads are validated before session creation; missing or disabled names
+refuse rather than silently losing required instructions.
+
+The Planner row is advisory: [`git-loopy plan`](../git-loopy/python/README.md#planning-git-loopy-plan)
+copies its Required and Permitted Skills into its launch root, preloads and
+explicitly invokes `/to-tickets`, but leaves the engineer's other harness
+Skills available. It neither uses nor widens a Run's Effective Skill policy.
+
+### Can ambient agents widen exposure?
+
+**No, in the git-loopy-shaped sessions tested by
+[#655's live probe](https://github.com/bradcstevens/git-loopy/issues/655#issuecomment-6112728509).**
+This is the answer to [#677](https://github.com/bradcstevens/git-loopy/issues/677):
+
+1. **File agents are not offered.** Neither project nor personal file-defined
+   agents were listed or dispatchable in those sessions. SDK-supplied custom
+   agents and built-in Subagents were available.
+2. **Disabled Skills block a custom agent's preload.** This held both for a
+   preselected agent and for one dispatched as a Subagent. A preload bypasses
+   the permission handler, so the handler alone is not the protection:
+   `disabled_skills` and the explicit exposure root gate loading. A preload
+   outside that root was a silent no-op, which is why git-loopy validates
+   Required Skills itself.
+3. **Profile exposure closes the rest.** The shipped Runner supplies only the
+   selected custom profile, disables catalog Skills outside its exposure, and
+   applies the same Skill permission guard to Agents and Subagents. On-demand
+   invocations outside the effective policy are refused as
+   `skill_outside_policy`; policy-enabled names outside the profile are
+   refused as `skill_outside_profile`.
+
+The empirical results were recorded on SDK `1.0.17rc3` / CLI `1.0.92-3`,
+not a new live probe on today's SDK pin. The current profile/exposure and
+permission-handler behavior is covered by the Python session tests. This
+conclusion concerns Run sessions, not the open-world interactive Planner.
+
+### Session isolation
+
+Every in-Run Agent — serial, Lane, Recovery, and Reviewer — starts with
+`memory={"enabled": False}`. The shared permission handler denies
+`session_store_sql` as `cross_session_history_disabled`, including requests
+from Subagents. Prior-issue continuity belongs in repository history and the
+issue tracker, not harness memory or cross-session transcripts.
+
+The Reviewer also excludes edit tools and refuses writes as
+`profile_read_only`, including through Subagents. It may read and run the exact
+trusted Feedback loops snapshotted from `AGENTS.md`; read-only does not mean
+"skip the tests". The profile returns findings to its caller; it cannot post
+them, publish, or close issues. This read-only session capability is shipped.
+Automatically starting the Review stage, recording its verdict, and gating
+publication and closure are separate delivery work under ADR-0072, not
+enforcement supplied by the current Run loop. These session controls are
+distinct from a machine Sandbox or an Execution host's Isolation grade.
+
+The Planner runs in the engineer's own harness outside every Run, so its memory
+is not disabled by this rule. Its approved graph must contain all facts that
+execution needs; execution cannot recover them from the Planner's history.
 
 ### Consulted Skills are a different fact entirely
 

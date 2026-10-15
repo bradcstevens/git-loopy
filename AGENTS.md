@@ -114,6 +114,23 @@ is the only Skill source a Run reads (ADR-0025). To type the same commands
 yourself in `copilot`, install them into Copilot CLI as well:
 `npx skills add bradcstevens/git-loopy-skills -g -a github-copilot`.
 
+The same pin supplies seven **Agent profiles**, installed and repaired with
+the catalog. Task type selects one of five execution profiles
+(`implementation`, `bugfix`, `test`, `docs`, `chore`); unresolved types fall
+back to `implementation`. The read-only Reviewer profile supplies the separate
+review role; automatic Review-stage orchestration is separate delivery work.
+Profiles own Required and Permitted Skills; `PROMPT.md` is their shared Run
+base, and its retired `required-skills` key is refused. Every in-Run Agent and
+its Subagents are isolated from persistent memory and cross-session history.
+For exposure rules, the three-Skill Minimal policy, and isolation, read
+[`docs/skill-policy.md`](docs/skill-policy.md#profiles-and-exposure).
+
+For human-led planning, use `git-loopy plan [planning document]`. It launches
+the pinned Planner in your interactive Copilot CLI with `/to-tickets`, outside
+every Run; the graph remains a proposal until the Loop engineer approves it.
+For Routing overrides, harness requirements, and launch refusals, read the
+[Planner reference](git-loopy/python/README.md#planning-git-loopy-plan).
+
 ### Skills repository
 
 [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)

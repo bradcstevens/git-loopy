@@ -24,9 +24,12 @@ roadmap in memory.
 
 ## The Memento Model
 
-Every Iteration starts with a fresh Copilot CLI context. The agent recovers from
-the prompt, `AGENTS.md`, the Active issue, domain docs, ADRs, and recent commits;
-it does not inherit an opaque summary of the previous conversation.
+Every Agent a Run starts — serial, Lane, Recovery, or Reviewer — starts with
+a fresh context. Harness memory is disabled and cross-session history reads
+are refused, including for Subagents. The Agent recovers from the shared Run
+instructions, its profile, `AGENTS.md`, the Active issue, domain docs, ADRs, and
+recent commits; it does not inherit an opaque summary of the previous
+conversation.
 
 This is a feature. Durable state travels through explicit artifacts:
 
@@ -38,6 +41,11 @@ This is a feature. Durable state travels through explicit artifacts:
 If information matters to a later Iteration, put it in one of those reviewable
 surfaces. Do not rely on scratchpads or compaction sediment that the next
 context cannot verify.
+
+The human-driven Planner works outside the Run, in the Loop engineer's own
+harness, and is exempt from this isolation. Its approved issue graph must
+record every fact execution needs; a Run cannot read the Planner's memory.
+See [Skill policy and isolation](skill-policy.md#session-isolation).
 
 ## The Compounding Workflow
 
@@ -64,6 +72,24 @@ consequences follow, and both are design rules rather than preferences:
   token spend and the number of paths by which unreviewed output reaches a
   branch, while leaving nothing durable behind to improve. One bounded Iteration
   against a real gate beats five speculative ones.
+
+**Agent profiles preserve that rule.** A Run still starts one execution Agent
+per unit of work, selected by Task type in code rather than by an agent
+inventing a team. The five execution profiles are `implementation`, `bugfix`,
+`test`, `docs`, and `chore`; an unresolved or conflicting execution Task type
+uses `implementation`. Planning- or review-typed issues are excluded, not
+turned into autonomous planning or review assignments.
+
+The other two profiles have bounded jobs. `git-loopy plan` launches the
+**Planner** outside the Run to draft one complete issue graph behind the Loop
+engineer's approval. The **Reviewer** is the read-only gate role on an exact
+result, not another author: its purpose is to close a path for unreviewed
+output. The read-only profile is shipped; automatically starting the Review
+stage before publication and closure is separate delivery work, not a
+guarantee of the current Run loop. Neither role adds speculative work. Profiles define role
+instructions, Skills, and access; Routing alone selects the model and effort.
+See the [shipped profiles](skill-policy.md#profiles-and-exposure) and the
+[Planner launcher](../git-loopy/python/README.md#planning-git-loopy-plan).
 
 The payoff is **meta-engineering**: you stop being the person who edits the
 application and become the person who improves the system that builds and

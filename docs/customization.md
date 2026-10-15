@@ -47,13 +47,40 @@
 ## The two files you almost always edit
 
 - **`AGENTS.md`** — fill in **Tech stack** and the **Feedback loops** table (see [Stack-agnostic defaults](#stack-agnostic-defaults) for the exact structure). The loop reads the **Feedback loops** table to know what commands to run before committing. If lint / type-check / test / build commands are wrong here, the agent guesses and CI catches the difference. The trailing **Agent skills** block is owned by `/setup-git-loopy-skills`; don't hand-edit it the first time around.
-- **[`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md)** — usually leave defaults; only change if you want different skill routing or different commit-message conventions. If you change the commit-message convention, also update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`git-loopy/python/git_loopy/wrapper.py`](../git-loopy/python/git_loopy/wrapper.py) so the auto-close backstop still matches what the agent emits.
+- **[`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md)** — the shared Run instructions beneath the Agent profiles. Usually leave the defaults; customize repository-wide execution guidance or commit-message conventions, not profile selection or Skill requirements. If you change the commit-message convention, also update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`git-loopy/python/git_loopy/wrapper.py`](../git-loopy/python/git_loopy/wrapper.py) so the auto-close backstop still matches what the agent emits.
 
 Replace the repository's [`GLOSSARY.md`](../GLOSSARY.md) with the adopting
 project's language as `/grill-with-docs` resolves real terms. For the
 `AGENTS.md` structure, see
 [Stack-agnostic defaults](#stack-agnostic-defaults); for the planning path from
 domain context to spec and tickets, see [`docs/workflow.md`](workflow.md).
+
+### Prompt overrides and fixed profiles
+
+Run instructions resolve **project > global > packaged default**: the first
+`git-loopy/PROMPT.md` in the repository or `PROMPT.md` in git-loopy's config
+home wins over the packaged prompt. That override remains the shared base;
+the selected profile layers its role instructions on it. It does not replace
+the profile. See the Python [prompt resolution reference](../git-loopy/python/README.md#prompt-resolution).
+
+Remove `required-skills` from custom prompt frontmatter, even if it is `[]`.
+Preflight and `git-loopy doctor` refuse that retired key. Required and
+Permitted Skills come from the installed profiles alone; select optional
+exposure through the [Skill policy](skill-policy.md#profiles-and-exposure).
+
+Profiles are fixed definitions from the pinned Skills repository, installed
+under `<config-home>/git-loopy/profiles/` and repaired with the catalog.
+Repository and personal sources cannot override them. To change a profile,
+make a paired upstream change, publish and prove it, then move the pin
+(ADR-0064); editing the install is not customization. Models and reasoning
+effort belong to Routing, not to profiles or `PROMPT.md`.
+
+The Planner is the exception to prompt layering, not an override mechanism.
+`git-loopy plan` generates it from the pinned planning profile and launches
+the engineer's interactive Copilot CLI without the Run's `PROMPT.md`.
+It works outside a Run, behind approval of the recorded issue graph. See
+[Planning](../git-loopy/python/README.md#planning-git-loopy-plan) for launch
+options, same-name agent refusals, and the open-world harness boundary.
 
 ## `/setup-git-loopy-skills` — the entry-point skill
 
