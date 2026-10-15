@@ -24,11 +24,12 @@ from pathlib import Path
 
 from git_loopy.git import GitError, SubprocessGitClient
 from git_loopy.run_discovery import (
+    DiscoveredRun,
     RunLiveness,
     RunTargetError,
-    discover_runs,
     resolve_run,
 )
+from git_loopy.run_residence import discover_resident_runs, residence_provider
 from git_loopy.stop_request import (
     StopRequestError,
     StopSubmission,
@@ -83,7 +84,7 @@ def run_stop(
     try:
         run = resolve_run(
             run_id,
-            discover_runs(git=SubprocessGitClient(repo_root)),
+            discover_resident_runs(git=SubprocessGitClient(repo_root)),
             require_proof=True,
         )
     except GitError as exc:
@@ -105,6 +106,24 @@ def run_stop(
         return 1
 
     identity = request_id if request_id is not None else _new_request_id()
+    try:
+        return residence_provider(run.residence).request_stop(
+            run, request_id=identity, timeout=timeout, output=output
+        )
+    except RunTargetError as exc:
+        print(f"git-loopy: {exc}", file=sys.stderr)
+        return 1
+
+
+def _request_local_stop(
+    run: DiscoveredRun,
+    *,
+    request_id: str,
+    timeout: float,
+    output: Callable[[str], None],
+) -> int:
+    """The original local transport, including retries and acknowledgment."""
+    identity = request_id
     try:
         submission = _submit_preserving_identity(run.control_path, identity)
     except StopRequestError as exc:

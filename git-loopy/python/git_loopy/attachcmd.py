@@ -21,10 +21,9 @@ from git_loopy.git import GitError, SubprocessGitClient
 from git_loopy.run_discovery import (
     RunLiveness,
     RunTargetError,
-    discover_runs,
     resolve_run,
 )
-from git_loopy.run_sidecar import observe_existing_run
+from git_loopy.run_residence import discover_resident_runs, residence_provider
 
 __all__ = ["run_attach"]
 
@@ -52,7 +51,7 @@ def run_attach(
     try:
         run = resolve_run(
             run_id,
-            discover_runs(git=SubprocessGitClient(repo_root)),
+            discover_resident_runs(git=SubprocessGitClient(repo_root)),
         )
     except GitError as exc:
         _refuse(f"could not enumerate this clone's worktrees: {exc}")
@@ -68,13 +67,12 @@ def run_attach(
             f"{run.control_path}. Attach does not resume a worker."
         )
         return 1
-    return observe_existing_run(
-        repository_root=repo_root,
-        trace_path=run.trace_path,
-        control_path=run.control_path,
-        run_id=run.run_id,
-        output=output,
-    )
+    try:
+        channel = residence_provider(run.residence).open_attach(run, repo_root=repo_root)
+        return channel.observe(output=output)
+    except RunTargetError as exc:
+        _refuse(str(exc))
+        return 1
 
 
 def _refuse(message: str) -> None:

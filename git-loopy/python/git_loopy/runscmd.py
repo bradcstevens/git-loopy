@@ -14,7 +14,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from git_loopy.git import GitError, SubprocessGitClient
-from git_loopy.run_discovery import DiscoveredRun, discover_runs
+from git_loopy.run_discovery import DiscoveredRun, RunTargetError
+from git_loopy.run_residence import discover_resident_runs
 
 __all__ = ["run_runs"]
 
@@ -40,12 +41,15 @@ def run_runs(
         worktrees than it claims is worse than no listing.
     """
     try:
-        runs = discover_runs(git=SubprocessGitClient(repo_root))
+        runs = discover_resident_runs(git=SubprocessGitClient(repo_root))
     except GitError as exc:
         print(
             f"git-loopy: could not enumerate this clone's worktrees: {exc}",
             file=sys.stderr,
         )
+        return 1
+    except RunTargetError as exc:
+        print(f"git-loopy: {exc}", file=sys.stderr)
         return 1
     if not runs:
         output("No Runs have been recorded in this clone.")
