@@ -24,9 +24,9 @@ roadmap in memory.
 
 ## The Memento Model
 
-Every Agent a Run starts — serial, Lane, Recovery, or Reviewer — starts with
-a fresh context. Harness memory is disabled and cross-session history reads
-are refused, including for Subagents. The Agent recovers from the shared Run
+Every Agent a Run starts — serial, Lane, or Recovery — and any Reviewer
+session starts with a fresh context. Harness memory is disabled and
+cross-session history reads are refused, including for Subagents. The Agent recovers from the shared Run
 instructions, its profile, `AGENTS.md`, the Active issue, domain docs, ADRs, and
 recent commits; it does not inherit an opaque summary of the previous
 conversation.
@@ -86,8 +86,8 @@ engineer's approval. The **Reviewer** is the read-only gate role on an exact
 result, not another author: its purpose is to close a path for unreviewed
 output. The read-only profile is shipped; automatically starting the Review
 stage before publication and closure is separate delivery work, not a
-guarantee of the current Run loop. Neither role adds speculative work. Profiles define role
-instructions, Skills, and access; Routing alone selects the model and effort.
+guarantee of the current Run loop. Neither role adds speculative work. Profiles
+define role instructions, Skills, and access; Routing alone selects the model and effort.
 See the [shipped profiles](skill-policy.md#profiles-and-exposure) and the
 [Planner launcher](../git-loopy/python/README.md#planning-git-loopy-plan).
 
