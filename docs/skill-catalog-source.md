@@ -110,8 +110,9 @@ interrupted install never leaves half a catalog.
 
 ### Release-assessment and bounded-load Skills (#767, #819)
 
-The pin is
-[`725c893bdc58c57edc85376aac3764b52fc218c9`](https://github.com/bradcstevens/git-loopy-skills/commit/725c893bdc58c57edc85376aac3764b52fc218c9).
+This pin was
+[`725c893bdc58c57edc85376aac3764b52fc218c9`](https://github.com/bradcstevens/git-loopy-skills/commit/725c893bdc58c57edc85376aac3764b52fc218c9),
+superseded by [the current pin below](#plan-handoff-for-decomposition-831).
 It reconciles two sibling revisions: `0063cccfcc0d89a9bdca57cc17e942382af40c64`
 added release assessment (#767), while
 `3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67` bounded host load (#819).
@@ -142,6 +143,29 @@ declared validation gate. Reconciliation also generates the new
 The recounted catalog has **45 top-level Skills** (49 including nested Skills).
 The profiles' Required and Permitted Skills are unchanged.
 
+### Plan handoff for decomposition (#831)
+
+The pin is
+[`d08c50a517cb4334b6c047b88e6a03514a8fe6c1`](https://github.com/bradcstevens/git-loopy-skills/commit/d08c50a517cb4334b6c047b88e6a03514a8fe6c1).
+It carries [bradcstevens/git-loopy-skills#154](https://github.com/bradcstevens/git-loopy-skills/pull/154):
+`/to-spec` and `/next` hand decomposition to `git-loopy plan <spec>` inside a
+git-loopy repository, naming `/to-tickets` as the fallback elsewhere, rather
+than wrapping the planner in a Skill persona of their own.
+
+This pin also restores the previous one's ancestry. `725c893b` was the head of
+an open pull request when it was first pinned, which inverted the ADR-0064
+order: it was absent from a default clone, and Runs survived only because
+`skill_source.py` asks the remote for the commit SHA itself rather than for a
+branch. Both upstream pull requests were then merged with **merge commits**
+rather than squashes, because a squash or a rebase would have rewritten the
+SHAs and orphaned the revision this repository already pinned. `725c893b` is
+now an ancestor of upstream main, and `d08c50a` is a published revision
+containing it.
+
+No Skill is added, renamed, or retired, so the catalog still has **45
+top-level Skills**, the README catalog table and both `PROMPT.md` copies are
+unchanged, and the profiles' Required and Permitted Skills are unchanged.
+
 ---
 
 ## Acquiring it by hand
@@ -158,7 +182,7 @@ It fetches the pinned commit SHA itself â€” not a ref that points at it today â€
 unless it proves out. On success:
 
 ```
-acquired bradcstevens/git-loopy-skills @ 725c893bdc58c57edc85376aac3764b52fc218c9 into .git-loopy/skill-source
+acquired bradcstevens/git-loopy-skills @ d08c50a517cb4334b6c047b88e6a03514a8fe6c1 into .git-loopy/skill-source
 45 Skills, licence MIT (LICENSE), provenance README.md
 ```
 
@@ -291,15 +315,19 @@ names this pin rather than repeating a revision that could drift away from it.
 ### Upgrading existing policies
 
 The catalog is pinned to
+`d08c50a517cb4334b6c047b88e6a03514a8fe6c1`, the plan-handoff change
+from [bradcstevens/git-loopy-skills#154](https://github.com/bradcstevens/git-loopy-skills/pull/154),
+proved and pinned for #831. It supersedes
 `725c893bdc58c57edc85376aac3764b52fc218c9`, the reconciled release-assessment change
 from [bradcstevens/git-loopy-skills#153](https://github.com/bradcstevens/git-loopy-skills/pull/153),
-proved and pinned for #767 without dropping #819's bounded-load guidance.
-It replaces main's `3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67` and the PR's
-`0063cccfcc0d89a9bdca57cc17e942382af40c64`; see
-[the paired-change record above](#release-assessment-and-bounded-load-skills-767-819).
+proved and pinned for #767 without dropping #819's bounded-load guidance,
+which in turn replaced main's `3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67` and
+that PR's `0063cccfcc0d89a9bdca57cc17e942382af40c64`; see
+[the paired-change records above](#plan-handoff-for-decomposition-831).
+Both earlier pins are now ancestors of the pinned revision.
 The release-assessment addition includes `model-scorecard`'s `copilot:task`
 mapping, cached role-estimate header, generated agent and README row.
-No Skills are removed; the catalog has 45 names.
+No Skills are added or removed; the catalog has 45 names.
 The seven Agent profiles are unchanged from the previous pin, published in
 [bradcstevens/git-loopy-skills#152](https://github.com/bradcstevens/git-loopy-skills/pull/152),
 proved for #825 and activated by #829. Their Required and Permitted Skills
