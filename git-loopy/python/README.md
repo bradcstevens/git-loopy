@@ -1119,6 +1119,60 @@ Copilot, network access, or the TUI.
 
 ---
 
+## Setting up an Azure target (`git-loopy remote setup`)
+
+Install the Python distribution with the `remote` extra through your configured
+package feed, sign in with `az login` as the intended operator, and run this
+from the target Git repository:
+
+```bash
+git-loopy remote setup \
+  --subscription 11111111-2222-3333-4444-555555555555 \
+  --resource-group agents \
+  --sandbox-group runs \
+  --credential-policy github-policy
+```
+
+Records and validates a target for **Run residence**, not a Lane's Execution
+host. All four flags are required resource identifiers. `--credential-policy`
+names an existing operator-owned sandbox in that group whose egress proxy holds
+the credential-injection policy — not a PAT or a group-level policy resource.
+Setup uses the operator's Azure CLI login, not service-principal environment
+credential discovery.
+
+Before saving, setup checks access to the sandbox group and policy sandbox,
+effective credential injection for the required GitHub and Copilot hosts, and
+the existence of the referenced sandbox-group secret key through its metadata.
+Missing access, a missing or ineffective injection rule, a missing secret key,
+or unavailable SDK support refuses with an actionable message and leaves Config
+unchanged. The message names the remedy: sign in or obtain access, repair the
+egress policy or secret reference, or install the `remote` extra.
+
+Only the subscription, resource group, sandbox group, and credential-policy
+sandbox reference are saved in `[remote]` in
+`<repository>/git-loopy/config.toml`; unrelated Config values are preserved.
+**No token or secret value is stored in git-loopy Config or files, or placed on
+a command line.** Keep the fine-grained PAT in Azure's egress-proxy secret store,
+scoped to the target repository with **Copilot Requests** permission. Setup
+reads secret-key metadata, never the secret value; PAT scope, expiry, and
+permissions remain the operator's responsibility, not guarantees of validation.
+
+Only when neither `.devcontainer` nor `.devcontainer.json` exists does setup
+offer to generate a minimal `.devcontainer/devcontainer.json`, using
+`mcr.microsoft.com/devcontainers/base:ubuntu`. An explicit `y` or `yes` consents;
+empty input, EOF, cancellation, or another answer writes no scaffold. Existing
+paths, including symlinks, are left alone. Declining still saves the validated
+target, with a reminder that a devcontainer is required before a remote Run can
+start. Customize the generated file for the repository's toolchain; it does not
+install git-loopy or Copilot's Sandbox prerequisites.
+
+**Setup is not remote launch.** It provisions no compute, registers no remote
+Run residence, and leaves plain Runs local. A saved target is not proof that a
+remote Run can start. See [Azure target setup](../../docs/run-residence.md#azure-target-setup-869)
+for the exact egress-policy rules and provider boundary.
+
+---
+
 ## Listing this clone's Runs (`git-loopy runs`)
 
 ```bash

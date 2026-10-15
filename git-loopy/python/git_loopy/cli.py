@@ -214,6 +214,11 @@ _COMMAND_SPECS = (
         "Launch the named Planner in your own interactive Copilot CLI, outside a Run.",
     ),
     _CommandSpec(
+        "remote",
+        "Run control",
+        "remote setup records and validates an Azure Run residence target.",
+    ),
+    _CommandSpec(
         "runs",
         "Run control",
         "List this clone's Runs and whether each one is still running.",
@@ -819,6 +824,22 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--context-tier", metavar="T", choices=sorted(CONTEXT_TIERS),
         help="Constrain the context tier without suppressing Routing.",
+    )
+
+    remote = _add_command(
+        sub, "remote",
+        description="Configure Azure Run residence. Remote Run launch is not yet available.",
+    )
+    remote_sub = remote.add_subparsers(dest="remote_action", required=True)
+    remote_setup = remote_sub.add_parser(
+        "setup", help="Validate Azure access and credential injection; save only references.",
+    )
+    remote_setup.add_argument("--subscription", required=True, help="Azure subscription UUID.")
+    remote_setup.add_argument("--resource-group", required=True, help="Azure resource group.")
+    remote_setup.add_argument("--sandbox-group", required=True, help="Container Apps sandbox group.")
+    remote_setup.add_argument(
+        "--credential-policy", required=True,
+        help="ID of an operator-owned sandbox in that group holding the egress injection policy; never a PAT.",
     )
 
     init = _add_command(
@@ -1629,6 +1650,28 @@ def _run_sweep(args: argparse.Namespace) -> int:
         print(f"git-loopy: sweep requires a git repository: {exc}", file=sys.stderr)
         return 1
     return sweepcmd.run_sweep(repo_root=repo_root, dry_run=bool(args.dry_run))
+
+
+def _run_remote_setup(args: argparse.Namespace) -> int:
+    from git_loopy.azure_target import AzureSandboxProvider
+    from git_loopy.remote_setup import AzureTarget, RemoteSetupError, run_setup
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError:
+        print("git-loopy: remote setup requires a git repository.", file=sys.stderr)
+        return 1
+    try:
+        target = AzureTarget(
+            args.subscription, args.resource_group, args.sandbox_group,
+            args.credential_policy,
+        )
+    except RemoteSetupError as exc:
+        print(f"git-loopy: error: {exc}", file=sys.stderr)
+        return 1
+    return run_setup(
+        target, repo_root=repo_root, provider=AzureSandboxProvider(), ask=input,
+    )
 
 
 def _run_runs(_args: argparse.Namespace) -> int:
@@ -3426,6 +3469,8 @@ def main(argv: list[str] | None = None) -> int:
             from git_loopy.plancmd import run_plan
 
             return run_plan(sub_args, passthrough=passthrough)
+        if sub_args.command == "remote":
+            return _run_remote_setup(sub_args)
         if sub_args.command == "init":
             return _run_init(sub_args)
         if sub_args.command == "commands":
