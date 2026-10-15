@@ -70,6 +70,7 @@ def test_root_help_groups_every_shipped_command_once(
     expected_categories = {
         "Getting started": ("init",),
         "Configuration": ("config", "skills"),
+        "Planning": ("plan",),
         "Run control": ("runs", "attach", "stop"),
         "Repository maintenance": (
             "labels",
@@ -123,6 +124,7 @@ def test_command_help_keeps_a_category_together_when_inventory_order_changes(
         "config",
         "skills",
         "lanes",
+        "plan",
         "runs",
         "attach",
         "stop",
@@ -170,6 +172,7 @@ def test_commands_json_emits_the_documented_complete_command_inventory(
         ("init", "Getting started"),
         ("config", "Configuration"),
         ("skills", "Configuration"),
+        ("plan", "Planning"),
         ("runs", "Run control"),
         ("attach", "Run control"),
         ("stop", "Run control"),

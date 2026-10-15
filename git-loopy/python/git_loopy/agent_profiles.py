@@ -56,6 +56,20 @@ def load_session_profile(
     """Read the installed in-Run profile or refuse to start the session."""
     if key not in (*EXECUTION_TASK_TYPE_KEYS, "review"):
         raise AgentProfileError(f"Not an in-Run profile: {key!r}")
+    return _load_profile(root, key, skills=skills)
+
+
+def load_planning_profile(root: Path, *, skills: Path) -> AgentProfile:
+    """Read the standalone Planner, never an in-Run session profile."""
+    profile = _load_profile(root, "planning", skills=skills)
+    if profile.access != "full" or "to-tickets" not in profile.required:
+        raise AgentProfileError(
+            "Planning profile must declare full access and require to-tickets"
+        )
+    return profile
+
+
+def _load_profile(root: Path, key: str, *, skills: Path) -> AgentProfile:
     path = root / f"{key}.md"
     if root.is_symlink() or path.is_symlink() or not path.is_file():
         raise AgentProfileError(f"Installed profile {key!r} is unavailable at {path}")

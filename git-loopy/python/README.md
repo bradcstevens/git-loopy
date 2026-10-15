@@ -297,6 +297,69 @@ than becoming a second human-facing listing.
 
 ---
 
+## Planning (`git-loopy plan`)
+
+From inside a Git repository, launch the named **Planner** in your own
+interactive Copilot CLI:
+
+```bash
+git-loopy plan https://github.com/owner/repo/issues/123
+git-loopy plan "docs/spec.md" --model gpt-6.1-sol --reasoning-effort xhigh
+git-loopy plan --context-tier long_context -- --add-dir ../design-notes
+```
+
+The stable command shape is
+`git-loopy plan [planning document] [--model M] [--reasoning-effort E] [--context-tier T] [-- copilot arguments...]`.
+It appears under **Planning** in help and `commands --json`. With no document,
+the initial prompt is simply `/to-tickets`.
+
+This is **not a Run**: it creates no Run records, picks up no issue, and opens
+no SDK session. The Planner drafts a complete graph for the Loop engineer's
+approval; launching it grants no execution approval (ADR-0071).
+
+Before launch, git-loopy refreshes its installed catalog and verifies that the
+profiles match the pin. A matching install needs no network. An unreachable
+upstream warns; no usable install, or profiles that cannot be repaired to the
+pin, refuse. The model and effort come from Routing's `planning` row, using
+the same resolution as Pickup, or the Default pair if no row resolves.
+Dynamic assessment is never elected. Explicit `--model` or
+`--reasoning-effort` (and their `GIT_LOOPY_*` environment equivalents) suppress
+Routing. `--context-tier` only constrains the tier; an unconfigured tier is
+omitted so the harness keeps its own setting.
+
+Each launch stages and renames its own
+`<config-home>/git-loopy/planner/<process-id>/` root, containing the generated
+`.github/agents/git-loopy-planner.agent.md` and **copies** of exactly the planning
+profile's Required and Permitted Skills under `.github/skills/`. The agent
+carries the planning body alone, not the Run's `PROMPT.md`, preloads
+`to-tickets`, and is user-invocable but not model-invocable. The launch also
+invokes `/to-tickets` explicitly. Your other harness Skills remain available;
+planning exposure is advisory, not the Run's closed world.
+
+git-loopy writes nothing into `~/.copilot`. It refuses a same-named agent in
+`$COPILOT_HOME/agents` (default `~/.copilot/agents`) or in `.github/agents` or
+`.claude/agents` from the working directory through the Git root, naming the
+file to remove or rename. `copilot` must resolve on `PATH` and be at least
+1.0.96; an unreadable version warns instead of refusing.
+
+Arguments after `--` pass through unchanged, except `--agent`, `-i` /
+`--interactive`, `-p` / `--prompt`, `--fleet`, `--resume` (including `-r` and
+`--continue`), `--model`, `--reasoning-effort` (including its `--effort` alias),
+and `--context`. These would
+replace the Planner, its prompt, session, or Routing. Attached values such as
+`--agent=other` and `-pother`, and short-option bundles such as `-spother`,
+are refused too. Use the plan command's own three
+flags for model, effort, and context.
+
+On POSIX the launcher execs Copilot, retaining the PID that owns the root.
+Windows cannot preserve a PID through exec, so the launcher waits for Copilot
+and returns its exit status instead. Its owner stays alive for the session.
+Subsequent launches preserve live roots and prune finished roots, including
+abandoned staging directories. Copies require no Windows symlink privilege;
+`git-loopy uninstall` removes the Planner roots with the other managed assets.
+
+---
+
 ## Installation identity (`git-loopy info`)
 
 `git-loopy info` describes the Python Runner artifact currently executing: its
