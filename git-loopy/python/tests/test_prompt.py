@@ -191,7 +191,7 @@ def test_domain_guidance_prefers_glossary_with_legacy_fallback() -> None:
 #: The external Skill catalog revision the name set below was read at. Asserted
 #: against ``git_loopy/skill_source.json`` so that moving the pin has to walk
 #: *through* this list rather than around it.
-_PINNED_CATALOG_REVISION = "a2189cb96ef48b51cea1672966726e7475fef4bd"
+_PINNED_CATALOG_REVISION = "0063cccfcc0d89a9bdca57cc17e942382af40c64"
 
 #: Every canonical Skill name in the **installed catalog** at that revision.
 #:
@@ -229,6 +229,7 @@ _PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
         "prototype",
         "push",
         "release",
+        "release-assessment",
         "research",
         "retro",
         "set-task-models",

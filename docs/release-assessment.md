@@ -102,6 +102,24 @@ configuration edit, since the policy is read once at start.
 Inputs are typed and bounded. None names a credential, URL, path or query, and
 there is no write tool.
 
+## The Copilot App Skill
+
+Install the `release-assessment` Skill from
+[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/release-assessment)
+in Copilot App and invoke it explicitly after registering the service. It shows
+the packet verbatim and checks freshness before every follow-up. Asked “can I
+ship?” or “can I close it?”, it repeats the verdict and advice line rather than
+answering yes or no. The only action it offers is re-running the assessment.
+
+The Skill understands result-format versions `1` and `2` (sandbox fault
+provenance). An unknown version is still displayed verbatim, but follow-ups
+are declined until the Skill is updated. Without both service tools it reports
+“Release assessment service is not configured.” and stops.
+
+Runs have no assessment service. The Skill is neither Required nor Permitted
+by any in-Run Agent profile, and both Run instruction copies explicitly exclude
+it even if an operator enables it in the Skill policy.
+
 ## The three verdicts
 
 | Verdict | Meaning |
