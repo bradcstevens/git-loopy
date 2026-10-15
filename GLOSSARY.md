@@ -126,6 +126,13 @@ separate machine for the contribution). These are two categories, not a
 scale; placement alone never proves either.
 _Avoid_: Sandbox, security score, host placement.
 
+**Sandbox**:
+GitHub Copilot's own local sandbox: the boundary around an **Agent**'s commands
+under the operator's effective Copilot policy, required for local **Run** Agents
+when that policy enables it. It is distinct from an **Isolation grade** and does
+not contain the Runner's **Integration** feedback loops.
+_Avoid_: Isolation grade, container, VM, sandbox repository (a disposable test repository).
+
 **Agent**:
 One live harness session doing work in a **Run**, bound to a single **Routed pair** for
 its lifetime: a serial **Iteration**'s session, a **Lane**'s session, or a
@@ -1734,6 +1741,13 @@ rather than a shared-directory worktree. It is ephemeral, keyed by **Run**, setu
 attempt and issue, and retained only when **Salvage** or reclamation cannot finish safely.
 _Avoid_: sandbox, scratch directory, shared worktree.
 
+**Issue clone**:
+The self-contained clone in which one issue's **Agents** work, with its own refs
+and config and read-only access to the source clone's objects. It is a **Lane
+workspace**, or the private working surface of a sandboxed serial **Iteration**
+or **Recovery**, and supplies the issue-local writable boundary for a **Sandbox**.
+_Avoid_: linked worktree, shared git directory.
+
 **Salvage**:
 Committing a **Lane workspace**'s dirty tree to its own Lane branch as a **Checkpoint** —
 the existing message and trailer verbatim, so close-keyword-free — before the directory is
@@ -2161,7 +2175,7 @@ recorded once and never edited. A member owes a **Fixture claim** or a waiver on
 fixtures whose introduction version is at or below its path's **Contract support**.
 _Avoid_: contract pin, fixture revision (both name a fixture's latest change).
 
-### Sandbox and Run residence (accepted design)
+### Run residence (accepted design)
 
 These terms complete the vocabulary of
 [ADR-0093](docs/adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md)
@@ -2177,20 +2191,6 @@ the default; a Run resides remotely only when the operator asks for it. Every is
 Agents work in their own **Sandbox** in either residence.
 _Avoid_: Run placement, Run host, remote Execution host (an Execution host places one
 **Lane contribution**, not a Run).
-
-**Issue clone**:
-The self-contained clone in which one **Lane contribution**'s **Agents** work:
-its own refs and config, borrowing the source clone's objects read-only.
-It supplies the issue-local writable repository boundary for a **Sandbox**.
-_Avoid_: linked worktree, shared git directory.
-
-**Sandbox**:
-GitHub Copilot's own sandbox, in exactly the sense GitHub defines it: a local sandbox
-confines what an **Agent**'s commands may read, write and reach on the machine under a
-policy the operator controls; a cloud sandbox runs the whole session in an ephemeral
-GitHub-hosted environment. It is a fact a **Run** discloses alongside its **Isolation
-grade**, never a grade itself.
-_Avoid_: Isolation grade, container, VM, sandbox repository (a disposable test repository).
 
 ## Relationships
 

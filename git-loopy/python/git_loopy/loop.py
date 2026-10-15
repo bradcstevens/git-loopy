@@ -253,6 +253,7 @@ from git_loopy.release_version import (
 from git_loopy.run_control import RunControlArtifact
 from git_loopy import stop_request
 from git_loopy.run_environment_preflight import resolve_run_environment_preflight
+from git_loopy.run_sandbox import resolve_run_sandbox
 from git_loopy.static_route import (
     HarnessCapabilities,
     RoutePolicy,
@@ -281,7 +282,7 @@ from git_loopy.serial_pickup import (
     pick_serial,
     reason_for,
 )
-from git_loopy.session import IterationSession
+from git_loopy.session import IterationSession, SandboxError, SandboxPolicy
 from git_loopy.sinks import EventSink, SinkFanout
 from git_loopy.sources import (
     AfkReadyItem,
@@ -1376,6 +1377,8 @@ class _Loop:
         static_capabilities: HarnessCapabilities | None = None,
         host_capabilities: HarnessCapabilities | None = None,
         release_line_reader: Callable[[], tuple[str, ReleaseLine]] | None = None,
+        sandbox_settings: Mapping[str, Any] | None = None,
+        issue_clone_setup: Callable[[Path, int | str], None] | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1389,6 +1392,8 @@ class _Loop:
         self._writers = writers
         self._sinks = sinks
         self._client = client
+        self._sandbox_settings = sandbox_settings
+        self._issue_clone_setup = issue_clone_setup
         self._skill_preflight = skill_preflight
         self._skill_exposure = skill_preflight.exposure
         self._source = source
@@ -2233,8 +2238,23 @@ class _Loop:
             # at all in exactly the case worth explaining. The watch is what
             # reads it, joined to the Run's own observer rather than replacing it.
             session_watch = session_outcome_module.SessionOutcomeWatch()
+            issue_git: git_module.GitClient | None = None
+            sandbox_commits: list[git_module.Commit] = []
+            checkpoint_sha: str | None = None
+            sandbox_failed = False
+            clone_branch = f"git-loopy/{self._writers.run_id}/serial/iteration-{iter_num}"
             with telemetry.span("git_loopy.session"):
                 try:
+                    if self._sandbox_settings is not None:
+                        path = (
+                            git_module.issue_clone_root(self._git.common_git_dir())
+                            / self._writers.run_id / "serial" / f"iteration-{iter_num}"
+                        )
+                        issue_git = self._git.add_issue_clone(
+                            path, branch=clone_branch, base=pre_sha,
+                        )
+                        if self._issue_clone_setup is not None:
+                            self._issue_clone_setup(path, active.ref)
                     async with IterationSession(
                         self._client,
                         config=self._config,
@@ -2245,6 +2265,10 @@ class _Loop:
                         model=model,
                         reasoning_effort=reasoning_effort,
                         context_tier=context_tier,
+                        working_directory=str(issue_git.root) if issue_git else None,
+                        sandbox_policy=self._agent_sandbox_policy(
+                            issue_git.root if issue_git else self._git.root
+                        ),
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
                         profile_key=execution_profile_key(resolution.task_type_keys),
@@ -2299,11 +2323,21 @@ class _Loop:
                             )
                         finally:
                             self._active_agent_task = None
+                except asyncio.CancelledError:
+                    operator_cancelled = True
+                    raise
                 except Exception as exc:
+                    sandbox_failed = isinstance(exc, SandboxError)
                     termination = session_outcome_module.SessionTermination.CRASHED
                     raised = session_outcome_module.SessionError.from_exception(
                         exc, origin="session_lifecycle"
                     )
+                finally:
+                    if issue_git is not None:
+                        sandbox_commits, checkpoint_sha = self._finish_serial_clone(
+                            issue_git, clone_branch, pre_sha, active, iter_num,
+                            publish=not operator_cancelled and not sandbox_failed,
+                        )
 
             # 6) Post-iteration accounting.
             try:
@@ -2322,6 +2356,8 @@ class _Loop:
                     "skipping commit accounting", exc,
                 )
                 new_commits = []
+            if self._sandbox_settings is not None:
+                new_commits = sandbox_commits
 
             # 7) Completion backstop — source-specific. The GitHub backend
             #    closes the issue via gh; the PRDs backend always returns
@@ -2390,9 +2426,10 @@ class _Loop:
             #    ``wrapper.checkpoint.recorded``, not ``wrapper.commit.recorded``)
             #    and it never counts as progress. Non-fatal — a failure warns and
             #    the loop carries on (a local-only repo still completes).
-            checkpoint_sha = self._maybe_checkpoint(
-                iter_num, issue_binding.active_ref
-            )
+            if self._sandbox_settings is None:
+                checkpoint_sha = self._maybe_checkpoint(
+                    iter_num, issue_binding.active_ref
+                )
 
             # 9) Auto-push (ADR-0004, second half). Whenever this iteration
             #    produced new commits — agent commits (step 6) and/or the
@@ -2458,10 +2495,58 @@ class _Loop:
 
             return ("continue", len(new_commits), completion_count)
 
+    def _agent_sandbox_policy(self, issue_clone: Path) -> SandboxPolicy | None:
+        if self._sandbox_settings is None:
+            return None
+        git_config = Path(os.environ.get("GIT_CONFIG_GLOBAL", str(Path.home() / ".gitconfig")))
+        return SandboxPolicy(
+            self._sandbox_settings,
+            readwrite_paths=(str(issue_clone.resolve()),),
+            readonly_paths=(
+                str((self._git.common_git_dir() / "objects").resolve()),
+                str(git_config.expanduser().resolve()),
+            ),
+        )
+
+    def _finish_serial_clone(
+        self, clone: git_module.GitClient, branch: str, base: str,
+        active: AfkReadyItem, iter_num: int, *, publish: bool,
+    ) -> tuple[list[git_module.Commit], str | None]:
+        """Import durable serial work before merging; salvage never needs a Sandbox."""
+        try:
+            commits = clone.commits_between(base, clone.head_sha())
+            checkpoint = self._maybe_checkpoint(iter_num, active.ref, git=clone)
+            if clone.is_dirty() or clone.has_untracked():
+                self._diag.error("serial Issue clone %s remains dirty; preserving it", clone.root)
+                return [], None
+            self._git.reclaim_issue_clone(
+                clone.root, branch=branch, checkpoint=checkpoint is not None or not publish,
+            )
+            if not publish or not self._leased(active.ref, "publication onto base", kind=active.kind):
+                return [], None
+            try:
+                self._git.merge(branch)
+            except git_module.GitError:
+                self._git.abort_merge()
+                raise
+            try:
+                self._git.delete_branch(branch)
+            except git_module.GitError as exc:
+                self._diag.warning("serial Issue clone branch cleanup failed: %s", exc)
+            return commits, checkpoint
+        except git_module.GitError as exc:
+            self._diag.error(
+                "serial Issue clone %s could not be integrated; work preserved: %s",
+                clone.root, exc,
+            )
+            return [], None
+
     def _maybe_checkpoint(
         self,
         iter_num: int,
         active_ref: int | str | None,
+        *,
+        git: git_module.GitClient | None = None,
     ) -> str | None:
         """Capture a dirty / untracked worktree in one Checkpoint commit.
 
@@ -2482,9 +2567,10 @@ class _Loop:
             The new Checkpoint commit SHA, or ``None`` when nothing was
             captured (clean tree) or the Checkpoint could not be made.
         """
+        checkpoint_git = self._git if git is None else git
         try:
-            dirty = self._git.is_dirty()
-            untracked = self._git.has_untracked()
+            dirty = checkpoint_git.is_dirty()
+            untracked = checkpoint_git.has_untracked()
         except git_module.GitError as exc:
             self._diag.warning(
                 "checkpoint dirty-check failed: %s; skipping checkpoint", exc
@@ -2494,8 +2580,8 @@ class _Loop:
             return None
 
         try:
-            self._git.add_all()
-            sha = self._git.commit(checkpoint_message(active_ref))
+            checkpoint_git.add_all()
+            sha = checkpoint_git.commit(checkpoint_message(active_ref))
         except git_module.GitError as exc:
             self._diag.warning(
                 "checkpoint commit failed: %s; continuing without it", exc
@@ -4395,6 +4481,8 @@ class _IntegrationStage:
     branch: str
     path: Path
     git: git_module.GitClient
+    issue_clone: bool = False
+    published: bool = False
 
 
 _ROLLING_EMPTY_POLL_INTERVAL = 1.0
@@ -4525,6 +4613,7 @@ class _ParallelLoop:
         lease: LeaseLifecycle | None = None,
         static_capabilities: HarnessCapabilities | None = None,
         host_capabilities: HarnessCapabilities | None = None,
+        sandbox_settings: Mapping[str, Any] | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -4739,6 +4828,8 @@ class _ParallelLoop:
             static_capabilities=static_capabilities,
             host_capabilities=host_capabilities,
             release_line_reader=self._read_release_line,
+            sandbox_settings=sandbox_settings,
+            issue_clone_setup=self._setup_issue_clone,
         )
         if self._scheduler is not None:
             self._serial._release_lane_ownership = self._scheduler.release_attempt
@@ -6298,7 +6389,7 @@ class _ParallelLoop:
         # Prepare the freshly created Issue clone before its agent session
         # starts (#65). Non-fatal: a broken environment still lets the agent
         # try, and one Lane's setup can never take down another's task.
-        self._setup_lane_worktree(lane_work)
+        self._setup_issue_clone(lane_work.path, lane_work.item.ref)
 
         contribution = scheduler.start_session(
             reservation,
@@ -6489,7 +6580,7 @@ class _ParallelLoop:
             contribution, events_module.WRAPPER_INTEGRATION_PARKED
         )
 
-    def _setup_lane_worktree(self, lane_work: _LaneWork) -> None:
+    def _setup_issue_clone(self, path: Path, ref: int | str) -> None:
         """Prepare a Lane's freshly created Issue clone before its session (#65).
 
         Runs the injected :class:`~git_loopy.worktree.WorktreeSetup` — the
@@ -6501,11 +6592,11 @@ class _ParallelLoop:
         another Lane's concurrent task.
         """
         try:
-            result = self._worktree_setup.run(lane_work.path)
+            result = self._worktree_setup.run(path)
         except Exception as exc:  # never let setup abort the Lane
             self._diag.warning(
                 "worktree setup for issue #%s raised %s: %s; continuing",
-                lane_work.item.ref, type(exc).__name__, exc,
+                ref, type(exc).__name__, exc,
             )
             return
         if not result.ran:
@@ -6513,13 +6604,13 @@ class _ParallelLoop:
         if result.passed:
             self._diag.info(
                 "worktree setup for issue #%s ran %r",
-                lane_work.item.ref, result.command,
+                ref, result.command,
             )
             return
         self._diag.warning(
             "worktree setup for issue #%s FAILED (exit %s): %r; continuing "
             "(agent will still run). Output tail: %s",
-            lane_work.item.ref, result.returncode, result.command,
+            ref, result.returncode, result.command,
             result.output_tail,
         )
 
@@ -6960,6 +7051,7 @@ class _ParallelLoop:
                 reasoning_effort=contribution.reasoning_effort,
                 context_tier=contribution.context_tier,
                 working_directory=str(lane_work.git.root),
+                sandbox_policy=self._serial._agent_sandbox_policy(lane_work.git.root),
                 issue_ref=lane_work.item.ref,
                 skill_exposure=self._skill_exposure,
                 profile_key=lane_work.profile_key,
@@ -7419,6 +7511,15 @@ class _ParallelLoop:
             return False
 
         try:
+            if stage.issue_clone:
+                try:
+                    stage.git.fetch_sha(
+                        str(self._git.root), f"refs/heads/{lane_work.branch}", lane_work.branch,
+                    )
+                except git_module.GitError as exc:
+                    self._diag.error("integration #%s: could not import contribution: %s", ref, exc)
+                    self._fallback_lane_to_serial(lane_work)
+                    return False
             try:
                 stage.git.merge(lane_work.branch)
             except git_module.GitError as exc:
@@ -7475,8 +7576,12 @@ class _ParallelLoop:
         workspace_run_id = self._lane_workspace_run_id(ref)
         branch = git_module.integration_branch_name(workspace_run_id, ref)
         path = _integration_worktree_path(self._workspace_root, workspace_run_id, ref)
+        sandboxed = self._serial._sandbox_settings is not None
+        if sandboxed:
+            path = _issue_clone_path(self._workspace_root, f"{workspace_run_id}/integrate", ref)
         try:
-            git = self._git.add_worktree(
+            create = self._git.add_issue_clone if sandboxed else self._git.add_worktree
+            git = create(
                 path, branch=branch, base=self._resolve_base_ref()
             )
         except git_module.GitError as exc:
@@ -7486,12 +7591,30 @@ class _ParallelLoop:
                 ref, exc,
             )
             return None
-        return _IntegrationStage(branch=branch, path=path, git=git)
+        if sandboxed:
+            self._setup_issue_clone(path, ref)
+        return _IntegrationStage(branch=branch, path=path, git=git, issue_clone=sandboxed)
 
     def _reap_integration_stage(
         self, stage: _IntegrationStage, ref: int | str
     ) -> None:
         """Tear down the private stage on every path (#219 §4.16, criterion #9)."""
+        if stage.issue_clone:
+            try:
+                if stage.git.is_dirty() or stage.git.has_untracked():
+                    stage.git.add_all()
+                    stage.git.commit(checkpoint_message(ref))
+                reclaimed = self._git.reclaim_issue_clone(
+                    stage.path, branch=stage.branch, checkpoint=not stage.published,
+                )
+                if reclaimed and stage.published:
+                    self._delete_branch_safely(ref, stage.branch)
+            except git_module.GitError as exc:
+                self._diag.error(
+                    "integration #%s: Issue clone salvage failed; preserving %s: %s",
+                    ref, stage.path, exc,
+                )
+            return
         try:
             self._git.remove_worktree(stage.path, force=True)
         except git_module.GitError as exc:
@@ -7544,6 +7667,8 @@ class _ParallelLoop:
             )
             return False
         try:
+            if stage.issue_clone:
+                self._git.fetch_sha(str(stage.path), f"refs/heads/{stage.branch}", stage.branch)
             self._git.merge(stage.branch)
         except git_module.GitError as exc:
             self._diag.warning(
@@ -7554,6 +7679,7 @@ class _ParallelLoop:
             return False
         if not self._base_advanced(pre_base, ref):
             return False
+        stage.published = True
         self._base_publications += 1
         return self._land_lane(contribution, lane_work, pre_base)
 
@@ -7982,6 +8108,7 @@ class _ParallelLoop:
                 reasoning_effort=contribution.reasoning_effort,
                 context_tier=contribution.context_tier,
                 working_directory=str(stage.git.root),
+                sandbox_policy=self._serial._agent_sandbox_policy(stage.git.root),
                 issue_ref=contribution.ref,
                 skill_exposure=self._skill_exposure,
                 profile_key=lane_work.profile_key,
@@ -8608,6 +8735,15 @@ async def run(
     skill_workspace = TemporaryDirectory(prefix="git-loopy-run-skills-")
     try:
         await client.start()
+        sandbox_settings = await resolve_run_sandbox(client)
+        if sandbox_settings is not None and selected_execution_host is not None:
+            if selected_execution_host.placement != execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT:
+                raise SandboxError(
+                    f"The {selected_execution_host.placement} Execution host cannot forward "
+                    "the required Sandbox policy. Select the local Execution host "
+                    "(GIT_LOOPY_EXECUTION_HOST=local); the Run will not dispatch "
+                    "unsandboxed Agents."
+                )
         skill_preflight = await resolve_run_skill_preflight(
             client,
             config=config,
@@ -8618,6 +8754,20 @@ async def run(
             workspace=Path(skill_workspace.name),
             discoverer=_discover_skill_catalog,
         )
+    except SandboxError as exc:
+        diag.error("Sandbox preflight failed: %s", exc)
+        print(f"git-loopy: Sandbox preflight failed: {exc}", file=sys.stderr)
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        try:
+            await client.stop()
+        except Exception as stop_exc:
+            diag.warning("CopilotClient.stop() failed: %s", stop_exc)
+        skill_workspace.cleanup()
+        control.close()
+        return exit_code_for("preflight_failed")
     except (
         OSError,
         PromptMetadataError,
@@ -8718,6 +8868,7 @@ async def run(
             lease=lease,
             static_capabilities=routing_preflight.capabilities,
             host_capabilities=routing_preflight.host_capabilities,
+            sandbox_settings=sandbox_settings,
         )
     except git_module.GitError as exc:
         # Rolling dispatch resolves where its **Lane workspaces** live up front

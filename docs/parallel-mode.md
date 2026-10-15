@@ -61,6 +61,29 @@ GIT_LOOPY_WORKTREE_SETUP='npm ci' git-loopy
 When no issue is Lane-eligible, the serial **Iteration driver** reaches the
 same outcomes and emits the existing degraded or serial-fallback Event.
 
+## Local Copilot Sandbox
+
+The Python Runner follows your effective Copilot `sandbox.enabled` setting,
+including managed policy. Preflight reads the runtime's policy and host-support
+verdict; an unreadable policy or a required but unavailable Sandbox refuses the
+Run rather than starting Agents without it.
+
+When required, every serial Iteration, local Lane and Recovery Agent receives
+your policy before its first prompt, with bypass disabled and only three added
+git grants: its Issue clone read/write, the source object store read-only, and
+your git config read-only (`GIT_CONFIG_GLOBAL` when set, otherwise `~/.gitconfig`).
+Existing operator grants are preserved. Serial work and Recovery then use
+independent Issue clones too, so neither needs write access to the shared git
+directory. The Runner imports their commits before publication and preserves
+unpublished work for salvage. With sandboxing disabled, the existing serial
+checkout and Integration-worktree behavior is unchanged.
+
+Clone setup commands and **Integration feedback loops remain Runner processes
+outside the Sandbox**. Sandboxing does not change the Execution host's Isolation
+grade. The GitHub Actions Execution host does not yet transport this policy;
+a Run requiring it refuses that placement with a remedy to select `local`,
+instead of dispatching an unsandboxed Lane.
+
 ## Remote-host safety
 
 When `GIT_LOOPY_EXECUTION_HOST=github-actions` selects the GitHub Actions
