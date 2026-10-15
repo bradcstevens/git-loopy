@@ -112,6 +112,7 @@ _RUN_TEST_MODULES = frozenset(
         "test_attach_command.py",
         "test_stop_command.py",
         "test_sweep_run_start.py",
+        "test_sandbox_run.py",
     }
 )
 
@@ -137,6 +138,22 @@ def _isolate_copilot_settings(
 ) -> None:
     """Run preflight must never probe a real operator's sandbox CA (#859)."""
     monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot-home"))
+
+
+@pytest.fixture(autouse=True)
+def _declare_sandbox_off_for_run_tests(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy Run fakes have no management RPCs; Sandbox tests supply those."""
+    if request.path.name not in _RUN_TEST_MODULES or request.path.name == "test_sandbox_run.py":
+        return
+
+    async def disabled(_client):
+        return None
+
+    monkeypatch.setattr(
+        importlib.import_module("git_loopy.loop"), "resolve_run_sandbox", disabled,
+    )
 
 
 @pytest.fixture(autouse=True)

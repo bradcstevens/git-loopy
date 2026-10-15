@@ -39,8 +39,9 @@ def _isolate_empty_pool_subprocess() -> None:
 
     from git_loopy import loop, model_listing, skill_install
     from git_loopy.skill_catalog import build_skill_catalog
+    from tests.test_run_sandbox import Runtime
 
-    class EmptyPoolClient:
+    class EmptyPoolClient(Runtime):
         async def start(self) -> None:
             pass
 
