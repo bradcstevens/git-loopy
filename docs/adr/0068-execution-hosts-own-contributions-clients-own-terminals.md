@@ -7,6 +7,8 @@
 [ADR-0010](0010-local-sandbox-per-iteration.md).
 **Amends, but does not supersede:** [ADR-0043](0043-a-stop-drains-before-it-cancels.md);
 see its revocability clarification. ADR-0058's client distinctions remain in force.
+**Partially superseded by:** [ADR-0093](0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md),
+for its refusal of local blast-radius containment and its Lane workspace location.
 
 ## Context
 

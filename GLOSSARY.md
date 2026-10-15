@@ -2183,6 +2183,38 @@ recorded once and never edited. A member owes a **Fixture claim** or a waiver on
 fixtures whose introduction version is at or below its path's **Contract support**.
 _Avoid_: contract pin, fixture revision (both name a fixture's latest change).
 
+### Sandbox and Run residence (accepted design)
+
+These terms complete the vocabulary of
+[ADR-0093](docs/adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md)
+and record decisions whose delivery has not yet been accepted. The **Isolation
+grade** and **Execution host** entries above keep their meanings: a Sandbox does not change
+a host's grade, and a Run residence does not change a host's placement.
+
+**Run residence**:
+Where a whole **Run** lives for its lifetime, its **Orchestrator** and every **Agent**
+included: `local` (the operator's machine, so the Run ends with it) or `remote` (a machine
+that keeps the Run going after the operator's terminal and laptop are gone). `local` is
+the default; a Run resides remotely only when the operator asks for it. Every issue's
+Agents work in their own **Sandbox** in either residence.
+_Avoid_: Run placement, Run host, remote Execution host (an Execution host places one
+**Lane contribution**, not a Run).
+
+**Issue clone** (accepted design):
+The self-contained clone in which one issue's **Agents** work, replacing the **Lane
+workspace** worktree: its own refs and config, borrowing the source clone's objects
+read-only. It is the boundary of that issue's **Sandbox**, so no issue's Agents can
+write another issue's branches or the base.
+_Avoid_: worktree, Lane workspace (the shipped worktree it replaces).
+
+**Sandbox**:
+GitHub Copilot's own sandbox, in exactly the sense GitHub defines it: a local sandbox
+confines what an **Agent**'s commands may read, write and reach on the machine under a
+policy the operator controls; a cloud sandbox runs the whole session in an ephemeral
+GitHub-hosted environment. It is a fact a **Run** discloses alongside its **Isolation
+grade**, never a grade itself.
+_Avoid_: Isolation grade, container, VM, sandbox repository (a disposable test repository).
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
@@ -2252,6 +2284,10 @@ _Avoid_: contract pin, fixture revision (both name a fixture's latest change).
 
 ## Flagged ambiguities
 
+- `sandbox` meant both a disposable test repository (the **Assessment policy** and the
+  release smoke) and containment of an Agent's commands — resolved: **Sandbox** is
+  GitHub Copilot's own sandbox; the disposable repository is a sandbox repository, and
+  neither is an **Isolation grade**.
 - `queue` was used to mean both a single iteration's input set and the whole-run list
   of issues — resolved: the per-iteration input is the **Pool**; the whole-run,
   status-bearing list is the **Queue**.
