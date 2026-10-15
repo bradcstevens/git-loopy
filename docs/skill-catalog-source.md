@@ -108,6 +108,28 @@ interrupted install never leaves half a catalog.
   authority for its Required Skills. Schema-1 pins remain readable for
   installation migration; they cannot satisfy an activated Run's preflight.
 
+### Bounded-load Skill change (#819)
+
+The paired change publishes
+[`3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67`](https://github.com/bradcstevens/git-loopy-skills/commit/3aa49a626f780e1f3b8a80c2c0fb70bfa04d9e67)
+in `bradcstevens/git-loopy-skills`, proves that clean published checkout with
+`git_loopy.skill_candidate`, and only then moves the pin. It changes:
+
+- **`diagnosing-bugs`**: deliberate stress uses the macOS `utility` clamp,
+  at most about 2x logical CPUs including child workers, and a per-invocation
+  wall-clock cap from the issue or 30 minutes by default. A cutoff is
+  inconclusive, never a pass. No escalation or raised inherited priority is
+  allowed; owned processes are reaped after completion, failure, or interruption.
+- **`to-spec` and `to-tickets`**: acceptance criteria demanding deliberate host
+  load carry those bounds in the spec and each resulting ticket, preserving any
+  tighter agreed limits.
+
+Ordinary declared feedback loops remain uncapped and inherit the Run's Host
+yield policy; their processes still require cleanup. The upstream change also
+updates the three Skill guides and adds load-free wording guards to its
+declared validation gate. The catalog's 44 top-level Skill names and the
+profiles' Required and Permitted Skills are unchanged.
+
 ---
 
 ## Acquiring it by hand
