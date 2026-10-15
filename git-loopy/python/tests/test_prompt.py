@@ -191,7 +191,7 @@ def test_domain_guidance_prefers_glossary_with_legacy_fallback() -> None:
 #: The external Skill catalog revision the name set below was read at. Asserted
 #: against ``git_loopy/skill_source.json`` so that moving the pin has to walk
 #: *through* this list rather than around it.
-_PINNED_CATALOG_REVISION = "725c893bdc58c57edc85376aac3764b52fc218c9"
+_PINNED_CATALOG_REVISION = "d08c50a517cb4334b6c047b88e6a03514a8fe6c1"
 
 #: Every canonical Skill name in the **installed catalog** at that revision.
 #:
