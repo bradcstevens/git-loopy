@@ -219,6 +219,23 @@ def _run(
     return code, output
 
 
+def _run_ca_doctor(
+    tmp_path: Path, *, config: RunConfig, catalog: SkillCatalog,
+    env: dict[str, str], apply: bool = False,
+) -> tuple[int, list[str]]:
+    """Exercise doctor through the real shared preflight with offline host adapters."""
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    (repo / "AGENTS.md").write_text(
+        "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
+    return _run(
+        tmp_path, config=config, catalog=catalog, env=env, apply=apply,
+        environment_resolver=_host(repo, missing_tool="", authenticated=True),
+    )
+
+
 def test_doctor_reports_untrusted_copilot_proxy_ca(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -240,7 +257,7 @@ def test_doctor_reports_untrusted_copilot_proxy_ca(
         return subprocess.CompletedProcess(command, 3, "", "")
 
     monkeypatch.setattr(subprocess, "run", status)
-    code, output = _run(tmp_path, config=_config(), catalog=_catalog(), env=env)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
 
     assert code == 1
     assert any(
@@ -253,7 +270,7 @@ def test_doctor_reports_untrusted_copilot_proxy_ca(
     assert not any("a Run would not be blocked" in row for row in output)
 
 
-@pytest.mark.parametrize("status_code", [1, 4, 5, 9])
+@pytest.mark.parametrize("status_code", [1, 9])
 def test_doctor_does_not_mislabel_unknown_copilot_ca_status_as_untrusted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status_code: int,
 ) -> None:
@@ -270,7 +287,7 @@ def test_doctor_does_not_mislabel_unknown_copilot_ca_status_as_untrusted(
         ),
     )
 
-    code, output = _run(tmp_path, config=_config(), catalog=_catalog(), env=env)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
 
     assert code == 1
     assert any("could not verify" in row and "Copilot proxy CA" in row for row in output)
@@ -296,7 +313,7 @@ def test_doctor_reports_an_unavailable_copilot_ca_probe(
         raise error
 
     monkeypatch.setattr(subprocess, "run", unavailable)
-    code, output = _run(tmp_path, config=_config(), catalog=_catalog(), env=env)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
 
     assert code == 1
     assert any("could not verify" in row and "Copilot proxy CA" in row for row in output)
@@ -326,7 +343,7 @@ def test_doctor_reports_unreadable_sandbox_settings_without_probing_ca(
         pytest.fail("Unreadable sandbox settings must not start a CA probe")
 
     monkeypatch.setattr(subprocess, "run", unexpected_process)
-    code, output = _run(tmp_path, config=_config(), catalog=_catalog(), env=env)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
 
     assert code == 1
     assert any("Copilot sandbox settings | failed" in row for row in output)
@@ -353,14 +370,14 @@ def test_doctor_skips_ca_probe_without_gh_sandbox_auth(
         pytest.fail("auth.gh is off: doctor must not probe or modify CA trust")
 
     monkeypatch.setattr(subprocess, "run", unexpected_process)
-    code, output = _run(tmp_path, config=_config(), catalog=_catalog(), env=env)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
 
     assert code == 0
     assert not any("Copilot proxy CA" in row or "copilot sandbox ca trust" in row for row in output)
 
 
 @pytest.mark.parametrize("home_source", ["HOME", "COPILOT_HOME"])
-@pytest.mark.parametrize("status_code", [0, 3])
+@pytest.mark.parametrize("status_code", [0, 3, 4, 5])
 def test_doctor_probes_the_same_home_as_the_operator_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, home_source: str, status_code: int,
 ) -> None:
@@ -392,10 +409,12 @@ def test_doctor_probes_the_same_home_as_the_operator_settings(
         return subprocess.CompletedProcess(command, status_code, "", "")
 
     monkeypatch.setattr(subprocess, "run", status)
-    code, output = _run(tmp_path, config=_config(), catalog=_catalog(), env=env)
+    code, output = _run_ca_doctor(tmp_path, config=_config(), catalog=_catalog(), env=env)
 
-    assert code == (0 if status_code == 0 else 1)
-    assert any("Copilot proxy CA" in row for row in output) == (status_code == 3)
+    assert code == (0 if status_code in {0, 4} else 1)
+    assert any("Copilot proxy CA" in row for row in output) == (status_code in {3, 5})
+    assert any("requires rotation" in row for row in output) == (status_code == 5)
+    assert any("copilot sandbox ca trust" in row for row in output) == (status_code == 3)
     assert calls == [["copilot", "sandbox", "ca", "status"]]
     assert settings_path.read_text() == saved
 
@@ -434,7 +453,7 @@ def test_doctor_apply_leaves_untrusted_ca_to_the_operator(
 
     monkeypatch.setattr(subprocess, "run", status)
     config = _config("tdd", *(["ghost"] if repair_policy else []))
-    code, output = _run(
+    code, output = _run_ca_doctor(
         tmp_path, config=config, catalog=_catalog(tdd=SkillCatalogWinner("tdd", "packaged")),
         env=env, apply=True,
     )

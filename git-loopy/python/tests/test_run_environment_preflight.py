@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,35 @@ def _complete_vocabulary(repo_root: Path) -> _FakeLabelTracker:
     return _FakeLabelTracker(
         tuple(spec.name for spec in labels.read_tracker_vocabulary(repo_root))
     )
+
+
+def test_run_preflight_reports_the_same_untrusted_ca_as_doctor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "copilot"
+    home.mkdir()
+    (home / "settings.json").write_text(
+        '{"sandbox": {"auth": {"gh": true}}}', encoding="utf-8",
+    )
+    monkeypatch.setenv("COPILOT_HOME", str(home))
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
+
+    def status(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert command == ["copilot", "sandbox", "ca", "status"]
+        return subprocess.CompletedProcess(command, 3, "", "")
+
+    monkeypatch.setattr(subprocess, "run", status)
+    result = resolve_run_environment_preflight(
+        repo_root=tmp_path, issue_source="prds",
+        executable_finder=lambda name: f"/tools/{name}",
+    )
+
+    assert not result.passed
+    assert [check.name for check in result.failures] == ["Copilot proxy CA"]
+    assert "copilot sandbox ca trust" in result.failures[0].message
 
 
 @pytest.mark.parametrize(
