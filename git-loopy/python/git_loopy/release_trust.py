@@ -61,6 +61,15 @@ class UnavailableEvidence:
 
 
 @dataclass(frozen=True)
+class UnavailableProof:
+    """A proof the repository cannot obtain, with its reason and owed issue."""
+
+    kind: str
+    reason: str
+    issue: int
+
+
+@dataclass(frozen=True)
 class SigningMechanism:
     """How one platform's artifacts are signed, and what that proves."""
 
@@ -116,6 +125,7 @@ class TrustPolicy:
     channel_credentials: tuple[ChannelCredential, ...]
     distribution_mode: str
     distribution_modes: tuple[str, ...]
+    unavailable_proofs: tuple[UnavailableProof, ...] = ()
 
     def mechanism_for(self, platform: str) -> SigningMechanism | None:
         """The mechanism that signs ``platform``, or ``None`` if undeclared."""
@@ -211,6 +221,12 @@ def load_trust_policy(repository_root: Path) -> TrustPolicy:
         distribution_mode=str(document["distribution_mode"]),
         distribution_modes=tuple(
             str(item) for item in document["distribution_modes"]
+        ),
+        unavailable_proofs=tuple(
+            UnavailableProof(
+                kind=item["kind"], reason=item["reason"], issue=item["issue"]
+            )
+            for item in document.get("unavailable_proofs", [])
         ),
     )
 

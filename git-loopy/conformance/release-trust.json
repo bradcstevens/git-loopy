@@ -1,6 +1,13 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "distribution_mode": "source-only",
+  "unavailable_proofs": [
+    {
+      "kind": "release-smoke",
+      "reason": "The live Release smoke has never run: no disposable sandbox repository carries the git-loopy-release-smoke topic, and the smoke credential and bounded work, time and spend inputs are not provisioned.",
+      "issue": 756
+    }
+  ],
   "distribution_modes": [
     "source-only",
     "artifact-bearing"

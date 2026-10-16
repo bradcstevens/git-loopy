@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 
 DISTRIBUTION_MODE_SOURCE_ONLY = "source-only"
@@ -71,6 +71,34 @@ def read_trust_policy(policy_path: Path) -> dict[str, Any]:
         raise DistributionModeError(
             f"declared distribution_mode '{mode}' is not in policy distribution_modes {modes}"
         )
+
+    # Validate at the shared publication boundary, not just the typed artifact
+    # reader: even source-only publication must refuse an invalid declaration.
+    # Absence declares nothing; it never grants permission to omit a proof.
+    proofs = data.get("unavailable_proofs", [])
+    location = f"unavailable_proofs in trust policy at {policy_path}"
+    if not isinstance(proofs, list):
+        raise DistributionModeError(f"{location} must be an array of declarations")
+    seen: set[str] = set()
+    for index, item in enumerate(proofs):
+        entry = f"{location}[{index}]"
+        if not isinstance(item, dict) or item.keys() != {"kind", "reason", "issue"}:
+            raise DistributionModeError(
+                f"{entry} must be an object with exactly kind, reason and issue"
+            )
+        proof = cast(dict[str, Any], item)
+        kind = proof["kind"]
+        if not isinstance(kind, str) or kind != "release-smoke":
+            raise DistributionModeError(
+                f"{entry} has unknown kind {kind!r}; allowed: 'release-smoke'"
+            )
+        if kind in seen:
+            raise DistributionModeError(f"{entry} repeats kind {kind!r}")
+        seen.add(kind)
+        if not isinstance(proof["reason"], str) or not proof["reason"].strip():
+            raise DistributionModeError(f"{entry} reason must be a non-blank string")
+        if type(proof["issue"]) is not int or proof["issue"] <= 0:
+            raise DistributionModeError(f"{entry} issue must be a positive integer")
 
     return data
 
