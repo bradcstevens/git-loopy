@@ -7240,7 +7240,6 @@ class _ParallelLoop:
             self._emit_contribution_event(
                 contribution, events_module.WRAPPER_INTEGRATION_STARTED
             )
-            latched_before = self._scheduler.serial_latched
             lane_work = self._lane_work.get(contribution.contribution_id)
             self._emit_contribution_event(
                 contribution,
@@ -7255,6 +7254,9 @@ class _ParallelLoop:
                 published = False
             else:
                 published = await self._integrate_lane(contribution, lane_work)
+            # Sampled after the gate's await (#901), so a latch the driver
+            # makes meanwhile is not misreported as this contribution's.
+            latched_before = self._scheduler.serial_latched
             newly_admitted = self._scheduler.finalize(
                 contribution, published=published
             )
@@ -7550,7 +7552,7 @@ class _ParallelLoop:
                     contribution, lane_work, stage, conflicted=True
                 )
 
-            if self._gate_green(ref, "post-merge", stage.path):
+            if await self._gate_green(ref, "post-merge", stage.path):
                 return self._publish_stage(contribution, lane_work, stage)
 
             # A red / un-runnable gate on the private result: base still has
@@ -7718,7 +7720,7 @@ class _ParallelLoop:
             )
         return advanced
 
-    def _gate_green(
+    async def _gate_green(
         self, ref: int | str, phase: str, worktree: Path | None = None
     ) -> bool:
         """Run the injected gate on ``worktree`` (default repo root); ``True`` == green.
@@ -7727,10 +7729,14 @@ class _ParallelLoop:
         both return ``False`` — the contribution stays unpublished in its private
         **Integration stage** and drives auto-resolution there; the ``phase``
         label enriches the diagnostic.
+
+        The gate is awaited off the event loop (#901), so Lane send timeouts,
+        Events and the Dashboard keep running for the row's whole bound, while
+        ``self._integration_lock`` stays held and Integration stays serial.
         """
         target = worktree if worktree is not None else self._repo_root
         try:
-            result = self._gate_runner.run(target)
+            result = await gate_module.run_gate_off_loop(self._gate_runner, target)
         except gate_module.GateError as exc:
             self._diag.warning(
                 "integration #%s: %s gate could not run: %s; treating as red",
@@ -8075,7 +8081,7 @@ class _ParallelLoop:
             await self._run_resolution_session(
                 contribution, lane_work, stage, attempt, conflicted=conflicted
             )
-            if not self._gate_green(
+            if not await self._gate_green(
                 ref, f"auto-resolution attempt {attempt}", stage.path
             ):
                 continue
