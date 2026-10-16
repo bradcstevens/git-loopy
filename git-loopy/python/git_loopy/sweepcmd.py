@@ -60,4 +60,6 @@ def run_sweep(
         output(f"{collect_verb} branch: {branch}")
     for directory in report.directories:
         output(f"{reclaim_verb} directory: {directory}")
+    for stem in report.runs:
+        output(f"{reclaim_verb} Run logs: {stem}")
     return 0

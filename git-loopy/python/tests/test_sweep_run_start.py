@@ -24,10 +24,12 @@ from git_loopy import gh as gh_module
 from git_loopy import loop as loop_module
 from git_loopy.config import RunConfig
 from git_loopy.git import lane_branch_name
+from git_loopy.route_reuse import MAX_HISTORY_LOGS
 from git_loopy.run_control import RunControlArtifact, advisory_locking_available
 from git_loopy.skill_catalog import build_skill_catalog
 from tests.fakes import FakeGitClient, FakeGitHubClient
 from tests.test_iteration_end_to_end import FakeCopilotClient
+from tests.test_sweep_retention import _artifacts, _run
 
 
 @pytest.fixture(autouse=True)
@@ -174,3 +176,25 @@ def test_a_sweep_never_reaches_the_wire_or_the_durable_record(empty_pool_run) ->
     assert [row["issues"] for row in summary["iterations"]] == [[]]
     assert [row["commits"] for row in summary["iterations"]] == [0]
     assert [row["strikes"] for row in summary["iterations"]] == [0]
+
+
+def test_start_of_run_retention_reports_without_events_or_strikes(empty_pool_run) -> None:
+    git, drive = empty_pool_run()
+    logs = git.root / ".git-loopy" / "logs"
+    old = [_run(logs, number, control=False) for number in range(MAX_HISTORY_LOGS + 1)]
+
+    assert drive() == 0
+
+    # The starting Run already has diagnostics, so it occupies a window slot.
+    assert all(not path.exists() for trace in old[:2] for path in _artifacts(trace))
+    assert all(trace.exists() for trace in old[2:])
+    current = next(trace for trace in logs.glob("*.jsonl") if trace not in old)
+    events = [json.loads(line) for line in current.read_text().splitlines()]
+    assert not any("sweep" in event["type"] or "retention" in event["type"] for event in events)
+    assert events[-1]["type"] == "wrapper.run.end"
+    diagnostics = current.with_suffix(".log").read_text()
+    for trace in old[:2]:
+        assert f"start-of-Run sweep reclaimed Run logs: {trace.with_suffix('')}" in diagnostics
+    summary = json.loads(next((git.root / ".git-loopy" / "runs").glob("*.json")).read_text())
+    assert [row["strikes"] for row in summary["iterations"]] == [0]
+    assert [row["issues"] for row in summary["iterations"]] == [[]]
