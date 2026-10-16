@@ -2545,6 +2545,28 @@ single invocation share the same stem, so `ls .git-loopy/logs/` and
 The run-summary JSON schema is documented at the top of
 [`git_loopy/persist.py`](git_loopy/persist.py).
 
+### Run-log retention (`git-loopy sweep`)
+
+The start-of-Run sweep and `git-loopy sweep` keep the newest
+`route_reuse.MAX_HISTORY_LOGS` Runs (currently 64) in each registered worktree's
+`.git-loopy/logs/`, ordered by Run stem rather than file modification time.
+Live and unknown Runs count toward that window. An older Run is reclaimed only
+when its control lock is free, or when it has no control artifact and its trace
+contains a `wrapper.run.end` Event. Held locks and unprovable liveness are
+preserved; a host without advisory locking never reclaims a Run with a control
+artifact.
+
+Reclamation deletes the whole stem's `.jsonl`, `.log`, `.control` and
+`.control.stops/` together, without compression. Non-Run files are untouched,
+and `.git-loopy/runs/` summaries are kept indefinitely. Nothing outside this
+clone's registered worktrees is scanned.
+
+Use `git-loopy sweep --dry-run` to list the Run stems that would be reclaimed
+without deleting anything. Both sweep entry points report reclaimed stems and
+stay silent when there is nothing to reclaim. Retention emits no Event or Strike,
+and a Run never prunes its own logs on exit. See
+[ADR-0095](../../docs/adr/0095-run-traces-are-retained-by-count-at-the-route-reuse-window.md).
+
 ---
 
 ## Cost figures

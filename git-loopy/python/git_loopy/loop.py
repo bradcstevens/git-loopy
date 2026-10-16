@@ -8471,6 +8471,8 @@ async def run(
                 len(sweep_report.branches),
                 len(sweep_report.directories),
             )
+            for stem in sweep_report.runs:
+                diag.info("start-of-Run sweep reclaimed Run logs: %s", stem)
 
     if config.execution_host not in events_module.PYTHON_EXECUTION_HOSTS:
         supported = ", ".join(events_module.PYTHON_EXECUTION_HOSTS) or "(none)"
