@@ -1574,6 +1574,33 @@ fn the_header_shows_a_serial_drain_cohort_oldest_lane_and_wait() {
 }
 
 #[test]
+fn sandbox_is_visible_alongside_but_outside_the_isolation_grade() {
+    for (state, label) in [
+        ("local", "local"),
+        ("off", "off"),
+        ("remote", "remote (always on)"),
+    ] {
+        let mut view = fixture_view("baseline-closed-iteration");
+        view.dashboard.header.execution_host = ExecutionHostView {
+            placement: "local".to_string(),
+            isolation_grade: "workspace separation only".to_string(),
+            capacity: Some(4),
+            starting_lane_limit: Some(4),
+        };
+        view.dashboard.header.sandbox = Some(state.to_string());
+        let lines = render_lines(&view, 240, 36, TerminalCapabilities::default());
+        let header = band(&lines, "git-loopy").join("\n");
+        assert!(
+            header.contains(&format!(
+                "host local (workspace separation only) · Sandbox: {label}"
+            )),
+            "{header}"
+        );
+        assert_eq!(header.matches("Sandbox:").count(), 1);
+    }
+}
+
+#[test]
 fn the_header_announces_the_execution_host_and_its_isolation_grade() {
     let mut view = fixture_view("baseline-closed-iteration");
     view.dashboard.header.execution_host = ExecutionHostView {

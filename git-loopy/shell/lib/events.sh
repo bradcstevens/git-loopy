@@ -13,6 +13,7 @@ fi
 # shellcheck disable=SC2034
 declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_RUN_START]="wrapper.run.start"
+  [WRAPPER_SANDBOX_RESOLVED]="wrapper.sandbox.resolved"
   [WRAPPER_RUN_END]="wrapper.run.end"
   [WRAPPER_STOP_REQUESTED]="wrapper.stop.requested"
   [WRAPPER_STOP_LIFTED]="wrapper.stop.lifted"

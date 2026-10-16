@@ -76,10 +76,10 @@
       "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard renders the selected model facts but does not validate a model or reasoning effort."}
     },
     "event-schema.json": {
-      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py serializes fixture Event cases through the production event seam."},
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py serializes fixture Event cases through the production event seam. python/tests/test_sandbox_disclosure.py folds every Sandbox serialization case through LiveRunState and project_run_view; test_sandbox_run.py proves once-only startup emission from resolved local, managed and remote policy through complete Runs."},
       "shell": {"kind": "claimed", "reason": "shell/tests/test-event-conformance.sh serializes fixture Event cases through production event seams."},
       "powershell": {"kind": "claimed", "reason": "powershell/tests/test-event-conformance.ps1 serializes fixture Event cases through production event seams."},
-      "rust": {"kind": "claimed", "reason": "tui/tests/event_schema_conformance.rs folds the fixture's rolling_stream_cases obliging rust through DashboardSession::ingest, the production consumer Event-folding seam ADR-0045 assigns it."}
+      "rust": {"kind": "claimed", "reason": "tui/tests/event_schema_conformance.rs folds the fixture's rolling_stream_cases obliging rust and every Sandbox serialization case through DashboardSession::ingest, the production consumer Event-folding seam ADR-0045 assigns it. Sandbox state projects beside the unchanged Isolation grade; dashboard_render.rs proves the separate rendered disclosure."}
     },
     "exit-codes.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture exit-code, Pool-emptiness and unbound-Pool cases with the production exit-code function, emptiness rule and unbound-outcome rule."},

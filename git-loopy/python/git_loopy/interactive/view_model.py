@@ -195,6 +195,8 @@ def _header(state: LiveRunState) -> dict[str, Any]:
         # the wire's own `unknown`, because every Run to date having been local
         # is a fact about history rather than about this record.
         "execution_host": _execution_host(state.execution_host),
+        # Optional for historical traces, but never inferred from the host.
+        **({"sandbox": state.sandbox} if state.sandbox is not None else {}),
         # Whether this Run has stopped taking new work, why, and how much is
         # still in flight. `availability` separates the two silences a single
         # nullable `cause` would collapse: a trace that never mentioned a

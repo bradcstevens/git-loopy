@@ -80,6 +80,7 @@ from git_loopy.events import (
     WRAPPER_PUSH_RECORDED,
     WRAPPER_RUN_END,
     WRAPPER_RUN_START,
+    WRAPPER_SANDBOX_RESOLVED,
     WRAPPER_SERIAL_REQUESTED,
     WRAPPER_STRIKE,
     WRAPPER_STOP_LIFTED,
@@ -236,6 +237,16 @@ class Renderer:
         self.console.print(text)
         self._print_run_readback(event)
         self._print_parallel_mode(event)
+        host = event.get("execution_host")
+        grade = host.get("isolation_grade", "unknown") if isinstance(host, dict) else "unknown"
+        self.console.print(Text(f"  Isolation grade: {grade}", style=STYLES["meta"]))
+
+    def _on_sandbox_resolved(self, event: dict[str, Any]) -> None:
+        state = event.get("state")
+        if state not in ("local", "off", "remote"):
+            state = "unknown"
+        label = "remote (always on)" if state == "remote" else state
+        self.console.print(Text(f"  Sandbox: {label}", style=STYLES["meta"]))
 
     def _print_run_readback(self, event: dict[str, Any]) -> None:
         """Read back what this Run parsed, and what the gate makes of it (#410).
@@ -1413,6 +1424,7 @@ def _run_readback_lines(event: dict[str, Any]) -> list[tuple[str, str, str]]:
 # slip through to the ``_raw_dump`` path at high verbosity.
 _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_RUN_START: Renderer._on_run_start,
+    WRAPPER_SANDBOX_RESOLVED: Renderer._on_sandbox_resolved,
     WRAPPER_RUN_END: Renderer._on_run_end,
     WRAPPER_ITERATION_START: Renderer._on_iteration_start,
     WRAPPER_ITERATION_END: Renderer._on_iteration_end,

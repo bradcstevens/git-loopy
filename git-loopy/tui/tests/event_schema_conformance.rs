@@ -20,6 +20,39 @@ fn fixture() -> Value {
 }
 
 #[test]
+fn sandbox_records_project_the_declared_state_without_changing_the_grade() {
+    let fixture = fixture();
+    let cases: Vec<_> = fixture["serialization_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|case| case["event"]["type"] == "wrapper.sandbox.resolved")
+        .collect();
+    assert_eq!(cases.len(), 3);
+    for case in cases {
+        let mut session = DashboardSession::new(
+            RunInputs::new("work", "high"),
+            Zone::utc(),
+            IssueRef::number(42),
+        );
+        session.ingest(
+            r#"{"type":"wrapper.run.start","execution_host":{"placement":"local","isolation_grade":"workspace separation only"}}"#,
+        );
+        session.ingest(case["jsonl"].as_str().unwrap());
+        let view = serde_json::to_value(session.view()).unwrap();
+        assert_eq!(
+            view["dashboard"]["header"]["sandbox"],
+            case["event"]["state"]
+        );
+        assert_eq!(
+            view["dashboard"]["header"]["execution_host"]["isolation_grade"],
+            "workspace separation only"
+        );
+        assert_eq!(session.diagnostics().unreadable_lines, 0);
+    }
+}
+
+#[test]
 fn the_rust_core_folds_every_rolling_stream_case_obliging_it() {
     let fixture = fixture();
     let cases = fixture["rolling_stream_cases"]

@@ -658,6 +658,7 @@ def test_live_run_state_satisfies_event_sink_protocol() -> None:
 def test_state_event_type_constants_match_events() -> None:
     """The locally re-declared literals must equal the events.py contract."""
     assert state_module._RUN_START == events_module.WRAPPER_RUN_START
+    assert state_module._SANDBOX_RESOLVED == events_module.WRAPPER_SANDBOX_RESOLVED
     assert state_module._RUN_END == events_module.WRAPPER_RUN_END
     assert state_module._STOP_REQUESTED == events_module.WRAPPER_STOP_REQUESTED
     assert state_module._ISSUE_ACTIVATED == events_module.WRAPPER_ISSUE_ACTIVATED

@@ -2194,6 +2194,35 @@ fn a_lifted_drain_is_an_observed_wind_down_with_nothing_latched() {
 }
 
 #[test]
+fn sandbox_is_a_separate_header_fact_and_never_an_inferred_grade() {
+    for sandbox in ["local", "off", "remote"] {
+        let mut state = DashboardState::new(RunInputs::new("work", "high"));
+        let ctx = context("2026-05-16T00:00:01.000Z", 0);
+        state.apply(&Event::from_jsonl_line(
+            r#"{"type":"wrapper.run.start","execution_host":{"placement":"local","isolation_grade":"workspace separation only"}}"#,
+        ).unwrap());
+        assert!(
+            view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]
+                .get("sandbox")
+                .is_none()
+        );
+        state.apply(
+            &Event::from_jsonl_line(&format!(
+                r#"{{"type":"wrapper.sandbox.resolved","state":"{sandbox}"}}"#
+            ))
+            .unwrap(),
+        );
+        let projected = view(&state, &ctx, IssueRef::number(42));
+        let header = &projected["dashboard"]["header"];
+        assert_eq!(header["sandbox"], sandbox);
+        assert_eq!(
+            header["execution_host"]["isolation_grade"],
+            "workspace separation only"
+        );
+    }
+}
+
+#[test]
 fn the_header_carries_the_execution_host_and_its_isolation_grade() {
     let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
     let ctx = context("2026-05-16T00:00:01.000Z", 0);

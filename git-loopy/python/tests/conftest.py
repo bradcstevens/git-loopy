@@ -148,7 +148,8 @@ def _declare_sandbox_off_for_run_tests(
     if request.path.name not in _RUN_TEST_MODULES or request.path.name == "test_sandbox_run.py":
         return
 
-    async def disabled(_client):
+    async def disabled(_client, *, residence="local"):
+        assert residence == "local", "remote Runs must exercise required Sandbox preflight"
         return None
 
     monkeypatch.setattr(

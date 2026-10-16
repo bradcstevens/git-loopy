@@ -1353,10 +1353,13 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     revision to 1.9; compatibility schema stays 1, no envelope key or Event-type
     literal is added, and a trace without the disclosure stays readable as
     ``unknown``.
+
+    2.34 adds the Run-scoped Sandbox Event, moving the fixture to 1.10 while
+    retaining envelope compatibility 1 and historical silence as unknown.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.9"
-    assert _EVENT_SCHEMA["contract_version"] == "2.32"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.10"
+    assert _EVENT_SCHEMA["contract_version"] == "2.34"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1432,6 +1435,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         | set(_EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"])
         | set(_EVENT_SCHEMA["run_control_types"])
         | {"wrapper.release.advanced"}
+        | {"wrapper.sandbox.resolved"}
         # Calibration lifecycle records are no **Run**'s Insight (#371): they
         # carry no ``run_id``, and nothing a Calibration buys is delivered work.
         | set(_EVENT_SCHEMA["calibration_identity"]["lifecycle_types"])
@@ -2612,7 +2616,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.24"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.25"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -6724,7 +6728,8 @@ def test_host_yield_fixture_and_event_schema_declare_one_vocabulary() -> None:
         _HOST_YIELD["disclosure_states"]
         == _EVENT_SCHEMA["run_start_disclosures"]["host_yield_states"]
     )
-    assert _HOST_YIELD["contract_version"] == _EVENT_SCHEMA["contract_version"]
+    # A later Sandbox Event advances the Event fixture, not Host yield policy.
+    assert _HOST_YIELD["contract_version"] == "2.32"
 
 
 def test_host_yield_fixture_pins_which_platforms_declare_a_policy() -> None:

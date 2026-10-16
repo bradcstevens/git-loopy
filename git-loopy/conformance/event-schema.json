@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "contract_version": "2.32",
-  "event_schema_version": "1.9",
+  "contract_version": "2.34",
+  "event_schema_version": "1.10",
   "insight_capabilities": {
     "names": [
       "agent_output",
@@ -139,6 +139,14 @@
     "note": "Contract 2.2. Host metering and CI-trigger identity are siblings of execution_host on wrapper.run.start, because where the orchestrator publishes is a deployment fact, not an Execution-host fact. host_metering declares no meter for local work as not applicable, a free standard GitHub Actions runner on a public target, or metered GitHub Actions work. It is a disclosure, never host-compute Cost: no number, unit, Dashboard column, or Consumption entry follows from it. ci_trigger_identity names the GitHub Actions deployment route whose existing job identity cannot trigger downstream CI; git-loopy never selects, transports, or upgrades a credential to change that behaviour. host_yield (contract 2.32) is a third sibling, naming the Host yield policy the Run actually applied: utility under the macOS QoS clamp, none when the operator opted out, unsupported on a platform that declares no policy. It is deliberately not the resolved Config value, because a host that was never offered the choice has not opted out and must never report none. An absent disclosure is unknown on an old trace."
   },
   "payload_contracts": {
+    "wrapper.sandbox.resolved": {
+      "required": ["state"],
+      "state_values": ["local", "off", "remote"],
+      "scope": "Run",
+      "emitted": "Exactly once immediately after wrapper.run.start, before any Iteration or Lane contribution. iter is null; no policy or grants are recorded.",
+      "meaning": "local is the resolved local Run Sandbox, including managed requirements; off is a local Run whose effective policy requires no Sandbox; remote is the remote Run's always-on local Copilot Sandbox. Never an Isolation grade or a Lane Execution-host placement. Integration feedback loops remain outside the Sandbox.",
+      "legacy_value": "unknown"
+    },
     "wrapper.run.end": {
       "refusals_optional": ["refusals"],
       "refusals_entry_keys": ["issue", "reason"],
@@ -662,6 +670,7 @@
     "CALIBRATION_TRIAL_END": "calibration.trial.end",
     "AGENT_OUTPUT": "agent.output",
     "WRAPPER_RUN_START": "wrapper.run.start",
+    "WRAPPER_SANDBOX_RESOLVED": "wrapper.sandbox.resolved",
     "WRAPPER_RUN_END": "wrapper.run.end",
     "WRAPPER_STOP_REQUESTED": "wrapper.stop.requested",
     "WRAPPER_STOP_LIFTED": "wrapper.stop.lifted",
@@ -2121,6 +2130,21 @@
     }
   ],
   "serialization_cases": [
+    {
+      "id": "sandbox-local",
+      "event": {"ts": "2026-05-16T00:00:00.000Z", "run_id": "sandbox-run", "iter": null, "type": "wrapper.sandbox.resolved", "state": "local"},
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"sandbox-run\", \"iter\": null, \"type\": \"wrapper.sandbox.resolved\", \"state\": \"local\"}\n"
+    },
+    {
+      "id": "sandbox-off",
+      "event": {"ts": "2026-05-16T00:00:00.000Z", "run_id": "sandbox-run", "iter": null, "type": "wrapper.sandbox.resolved", "state": "off"},
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"sandbox-run\", \"iter\": null, \"type\": \"wrapper.sandbox.resolved\", \"state\": \"off\"}\n"
+    },
+    {
+      "id": "sandbox-remote",
+      "event": {"ts": "2026-05-16T00:00:00.000Z", "run_id": "sandbox-run", "iter": null, "type": "wrapper.sandbox.resolved", "state": "remote"},
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"sandbox-run\", \"iter\": null, \"type\": \"wrapper.sandbox.resolved\", \"state\": \"remote\"}\n"
+    },
     {
       "id": "contribution-stamped-upstream-push",
       "event": {"ts": "2026-05-16T00:00:06.000Z", "run_id": "01HXR0000000000000000000DD", "iter": null, "type": "wrapper.push.recorded", "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1"},

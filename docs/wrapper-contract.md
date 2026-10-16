@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.33 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.34 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -1220,6 +1220,31 @@ read an absent declaration or stamp in a historical trace as `unknown`, never as
 an inferred local placement. These are additive payload fields within Event schema
 compatibility 1; no envelope key or Event-type literal is added.
 
+**Sandbox disclosure (contract 2.34, #864, ADR-0093).** A Run MUST emit
+`wrapper.sandbox.resolved` exactly once, immediately after `wrapper.run.start`,
+before any Iteration or Lane contribution. Its Run-scoped envelope has `iter: null`
+and its only payload field is `state`: `local` when the local Run's resolved
+Copilot policy requires a Sandbox (including managed requirements), `off` when it
+does not, or `remote` for a remote Run's always-on local Copilot Sandbox. A required
+but unenforceable Sandbox refuses preflight; it MUST NOT be reported as `off`.
+No policy, filesystem grants or credentials belong in this Event.
+
+The start output MUST print one `Sandbox: local`, `Sandbox: off`, or
+`Sandbox: remote (always on)` line immediately beside the Isolation grade.
+The Dashboard projects `sandbox` as a sibling of `execution_host` in its Header
+and displays it alongside that host's grade, never inside the grade.
+A Sandbox is **never an Isolation grade**, and neither a Lane's Execution-host
+placement nor a host's grade determines the Run's Sandbox state. Integration's
+feedback loops remain outside it. A historical trace without the Event leaves
+the optional Header field absent (unknown, never inferred as `off`); an unknown
+state is displayed as `unknown`.
+
+This adds one Event type in fixture revision 1.10, retaining envelope compatibility
+schema 1. Python produces it and both Dashboard view models consume it; dormant
+shell/PowerShell Paths keep their Contract support baselines under ADR-0091.
+The remote state defines the disclosure seam for a remotely launched Orchestrator;
+it does not add a remote provider or infer residence from a Lane host.
+
 **Host yield policy (contract 2.32, #817).** `wrapper.run.start` MUST carry `host_yield`, a
 sibling of `host_metering`, naming the **Host yield policy** (§4) the Run actually applied. Its
 states are `utility` when the macOS QoS clamp was applied, `none` when the operator opted out
@@ -2332,15 +2357,16 @@ and 2.27 with the per-attempt account and inline Skipped marker (ADR-0075),
 and 2.29 with the Python-only non-execution Task-type exclusion (ADR-0088),
 and 2.30 with execution profile selection and Skill exposure (ADR-0078),
 and 2.31 with Reviewer read-only access (ADR-0078/0086),
-and 2.32 with the Host yield disclosure (§4, §12, #817).
+and 2.32 with the Host yield disclosure (§4, §12, #817),
+and 2.34 with the Sandbox disclosure (§12, #864).
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
 it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1), then 2.29 with the Python-only non-execution Task-type exclusion.
-Event revision 1.9 and Dashboard revision 1.24 record current provenance;
-the Dashboard projection is unchanged. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
+Event revision 1.10 and Dashboard revision 1.25 record current provenance;
+the Dashboard adds the optional Header Sandbox state. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;
 the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility
 schema remains 1 and historical streams' interpretation is unchanged.
