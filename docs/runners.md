@@ -17,7 +17,8 @@ Release 0.11.2, contract 2.26 and Event schema 1. Each retains its existing
 serial loop and carried Attempt-lifecycle and Ending debt. Their Orchestrators
 and installers read their own [Path manifests](../git-loopy/paths/README.md),
 never Python's root Release version. The Rust Dashboard helper belongs to
-Python; no Rust Orchestrator path exists today.
+Python; no Rust Orchestrator path exists today, though one is planned
+([ADR-0013](adr/0013-multi-language-runner-family.md)).
 
 | Orchestrator            | Status                         | Language                     | Platforms              | Quickstart                                                        |
 | ----------------------- | ------------------------------ | ---------------------------- | ---------------------- | ---------------------------------------------------------------- |
@@ -26,7 +27,7 @@ Python; no Rust Orchestrator path exists today.
 | **PowerShell**          | Dormant at 0.11.2               | PowerShell 7+ (no `jq`)      | Windows, Linux, macOS  | [`git-loopy/powershell/README.md`](../git-loopy/powershell/README.md) |
 
 Use the active Python path for current Releases. The dormant quickstarts
-describe their own pinned baselines, not feature parity with current Python.
+describe their own declared Path baselines, not feature parity with current Python.
 Compatibility is limited to each path's declared
 [Wrapper contract](wrapper-contract.md) support. CI still runs all existing
 [Conformance suites](../git-loopy/conformance/README.md); per-path gate selection
@@ -50,15 +51,16 @@ feature changes. The family was designed to grow in value-first phases
 - **Phase 2 — live TUI + distribution.** The single shared `git-loopy-tui`
   binary renders the Event schema for every terminal-attached port, including the
   Python member, plus prebuilt binaries and
-  **package-manager distribution** (Homebrew, `winget`/`scoop`). The shell
+  **package-manager distribution** (Homebrew, `winget`/`scoop`) under
+  `artifact-bearing` distribution mode. The shell
   Orchestrator now **supervises** that helper — selection precedence, clone-local
   then `PATH` discovery, the `--schema-version` compatibility gate, and a
   permanent fall back to plain JSONL on any helper failure — see
   [its README](../git-loopy/shell/README.md#the-live-interface-git-loopy-tui).
-  A tagged Release now also builds the helper itself: seven prebuilt, checksummed,
-  attested artifacts from pinned cargo-dist tooling, described once in
-  [`tui-artifacts.json`](../git-loopy/conformance/tui-artifacts.json) and listed
-  in [the helper's README](../git-loopy/tui/README.md#release-artifacts).
+  Under `artifact-bearing` distribution mode, a tagged Release builds the helper
+  itself: seven prebuilt, checksummed, attested artifacts from pinned cargo-dist
+  tooling, described once in [`tui-artifacts.json`](../git-loopy/conformance/tui-artifacts.json)
+  and listed in [the helper's README](../git-loopy/tui/README.md#release-artifacts).
   A **stable** Release additionally has to prove its platform trust — Developer ID
   signing with the hardened runtime and an accepted Apple notary verdict on macOS,
   a hardware-backed signing service with a readable publisher on Windows — before
@@ -104,15 +106,15 @@ feature changes. The family was designed to grow in value-first phases
   reads no `routing.measured.toml` is conforming rather than behind.
 - **Phase 4 — telemetry.** OpenTelemetry (OTLP) emission from the native
   Orchestrators (the Python member offers it today via its `otel` extra).
-- **Phase 5 — Parallel mode.** Issue-clone **Lanes** / **Rolling dispatch** /
-  **Integration** across the family. The Python member schedules Lanes today;
-  the shell and PowerShell Orchestrators declare `parallel_mode` unsupported in
-  their capability manifest and refuse a **Lane cap** above 1 rather than
-  accepting it and running serially. See
+- **Phase 5 — Parallel mode.** The Python path implements Issue-clone
+  **Lanes** / **Rolling dispatch** / **Integration**. The dormant shell and
+  PowerShell baselines do not support Parallel mode; their Orchestrators declare
+  `parallel_mode` unsupported in their capability manifest and refuse a
+  **Lane cap** above 1 rather than accepting it and running serially. See
   [`docs/parallel-mode.md`](parallel-mode.md).
 
 The rest of this page documents the Python reference member in depth. The
-Wrapper contract defines the common surface, but the paths' pinned baselines
+Wrapper contract defines the common surface, but the paths' declared Path baselines
 and implemented behavior differ: the Python member charges each Strike to the
 issue its session worked and never stops on Strikes, while the shell and
 PowerShell Orchestrators keep one Run-wide count of consecutive no-progress

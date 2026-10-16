@@ -52,10 +52,8 @@ an agent asked to double-check its own work.
 it turns well-shaped issues into bounded, observable, autonomous delivery. It
 orchestrates a **Runner family** around one shared **Wrapper contract**. The
 Python Orchestrator is the active reference path across Linux, macOS, and
-Windows. The shell and PowerShell implementations remain in the repository as
-dormant paths at Release 0.11.2; they do not advance with the active Python
-Release. The Rust Dashboard helper belongs to the Python path, and a Rust
-Orchestrator is planned.
+Windows. See the [Runner family guide](docs/runners.md) for the status of the
+retained shell and PowerShell paths and the planned Rust Orchestrator.
 
 Models produce code quickly, but an unstructured prompt-to-code process loses
 intent, overruns useful context, and hides whether the result is actually good.
@@ -87,11 +85,12 @@ work needs it.
 | --- | --- | --- |
 | **Issue-driven Iterations** | One Active issue per Iteration, a fresh context each time, and durable state in commits and tracker history | [concepts](docs/concepts.md), [wrapper contract](docs/wrapper-contract.md) |
 | **Your feedback loops as the gate** | The loops declared in `AGENTS.md` — lint, tests, builds — are what a change must survive, run by code and returned to the agent as evidence | [`AGENTS.md`](AGENTS.md) |
-| **Task-type routing** | Seven recognized task types have configurable model-and-effort routes; `planning` and `review` are control tasks, while only execution types enter the issue Pool | [customization](docs/customization.md), [task-type exclusions](docs/adr/0088-only-execution-task-types-run-and-a-planning-or-review-typed-issue-is-a-pool-exclusion.md) |
+| **Task-type routing** | Seven recognized task types have configurable model-and-effort routes. In current source, only execution Task types run; a ready issue typed `planning` or `review` is reported as a Pool exclusion | [customization](docs/customization.md), [task-type exclusions](docs/adr/0088-only-execution-task-types-run-and-a-planning-or-review-typed-issue-is-a-pool-exclusion.md) |
 | **Measured routing** *(in progress)* | Routes calibrated from what Runs actually cost and deliver, rather than from a static opinion | [ADR-0027](docs/adr/0027-routing-is-calibrated-by-measurement.md) |
-| **Named Planner** *(current source)* | `git-loopy plan` launches the pinned Planner in the loop engineer's own Copilot CLI, outside a Run and without approving its proposed ticket graph | [planning command](git-loopy/python/README.md#planning-git-loopy-plan), [ADR-0087](docs/adr/0087-the-planner-is-generated-from-the-pin-and-launched-into-the-loop-engineers-harness.md) |
+| **Named Planner** *(current source)* | `git-loopy plan` launches the catalog-defined Planner profile in the loop engineer's own Copilot CLI, outside a Run and without approving its proposed ticket graph | [planning command](git-loopy/python/README.md#planning-git-loopy-plan), [ADR-0087](docs/adr/0087-the-planner-is-generated-from-the-pin-and-launched-into-the-loop-engineers-harness.md) |
 | **Task-specific Agent profiles** *(current source)* | Installed profiles bind execution work to its Required and Permitted Skills; Reviewer sessions are read-only, and planning stays outside Runs | [Skill policy](docs/skill-policy.md), [ADR-0078](docs/adr/0078-one-agent-profile-per-task-type.md) |
 | **Parallel Lanes** *(current source)* | Issue-clone-isolated Lanes work several `parallel-safe` issues at once, with a serialized, bounded-green Integration stage. A Run with no Lane work uses the serial Iteration driver and says so | [parallel mode](docs/parallel-mode.md) |
+| **Copilot Sandbox** *(current source)* | The Python Run honors Copilot's effective Sandbox policy and refuses when required enforcement is unavailable | [Local Copilot Sandbox](docs/parallel-mode.md#local-copilot-sandbox), [ADR-0093](docs/adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md) |
 | **Live interface** | Per-Iteration activity, context fill, observed tokens, and billed cost while the Run is happening — via the shared `git-loopy-tui` helper on a terminal, or the line printer everywhere else | [runners](docs/runners.md) |
 | **Closed-world Skill policy** | Exactly the Skills a Run may load — no ambient context bloat from whatever is installed on the host | [skill policy](docs/skill-policy.md) |
 
@@ -104,7 +103,7 @@ work needs it.
 
 ```bash
 # Install the current published Release once, user-global.
-uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.11.3#subdirectory=git-loopy/python"
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.11.2#subdirectory=git-loopy/python"
 
 # In the repository you want it to work on:
 cd ~/code/my-project
@@ -116,10 +115,10 @@ git-loopy init
 git-loopy
 ```
 
-This installs the latest stable **v0.11.3** Release. The README also describes
-current-source features added after that tag, including the named Planner,
-activated Agent profiles, and Issue-clone Lanes; use an Edge install for those
-until a later Release includes them.
+This installs the latest published stable **v0.11.2** Release. The current
+source is at 0.11.3 and includes the named Planner, activated Agent profiles,
+Issue-clone Lanes, and Copilot Sandbox support; use an Edge install for those
+until v0.11.3 is published.
 
 The terminal interface is included in the base installation. An older install
 command that names the removed `[tui]` extra still succeeds, but your package
@@ -146,16 +145,13 @@ git-loopy config list             # the effective settings a Run would use
 > gated, and autonomous work has nothing to prove itself against. Declare the
 > commands you already trust before your first Run.
 
-Python is required for the current active Release. The
-[shell](git-loopy/shell/README.md) and
-[PowerShell](git-loopy/powershell/README.md) implementations are retained as
-dormant 0.11.2 paths, not current alternatives; see the
-[Runner family status](docs/runners.md).
+Python is required for the current active Release; see the
+[Runner family status](docs/runners.md) for the retained paths.
 
 ### Installation identity and channels
 
-The default command installs the published **v0.11.3 Release**. Its
-installation identity is therefore `git-loopy 0.11.3`: `git-loopy --version`
+The default command installs the published **v0.11.2 Release**. Its
+installation identity is therefore `git-loopy 0.11.2`: `git-loopy --version`
 and `wrapper.run.start` report that exact Release version.
 
 To install another named, published Release, replace the tag with the Release
@@ -295,6 +291,11 @@ a completed batch requires a separate user invocation. The catalog also retires
 if a saved Skill policy still enables the retired name.
 
 ## The complete workflow, start to finish
+
+> **Version note:** Step 4, the task-specific Agent session in Step 6, and the
+> diagram below use current-source features added after v0.11.2. They require
+> an Edge install until v0.11.3 is published. With v0.11.2, invoke
+> `/to-tickets` directly in Copilot; issue binding at Pickup is already present.
 
 1. **Start with the vague idea.** Use `/grill-with-docs` for repository or domain
    work and `/grill-me` for a general plan. When the answers live in someone
