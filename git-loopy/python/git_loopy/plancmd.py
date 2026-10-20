@@ -83,6 +83,8 @@ def run_plan(args: argparse.Namespace, *, passthrough: list[str]) -> int:
         ):
             if value is not None:
                 argv.extend((flag, value))
+        if args.yolo:
+            argv.append("--yolo")
         prompt = "/to-tickets"
         if args.planning_document:
             prompt += " " + args.planning_document
@@ -170,7 +172,9 @@ def _build_root(profile: AgentProfile, *, skills: Path) -> Path:
         agents = staged / ".github/agents"
         agents.mkdir(parents=True)
         (agents / _AGENT_FILE).write_text(
-            "---\nname: Planner\nuser-invocable: true\ndisable-model-invocation: true\n"
+            "---\nname: Planner\n"
+            "description: Draft a task graph from planning documents for human approval.\n"
+            "user-invocable: true\ndisable-model-invocation: true\n"
             "skills:\n" + "".join(f"  - {name}\n" for name in profile.required)
             + "---\n\n" + profile.instructions + "\n",
             encoding="utf-8",

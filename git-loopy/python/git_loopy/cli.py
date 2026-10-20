@@ -678,6 +678,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--yolo",
+        action="store_true",
+        help=(
+            "Explicitly select the Run's existing automatic permission approvals. "
+            "Configured denials, profile restrictions and Sandbox enforcement still apply."
+        ),
+    )
+    parser.add_argument(
         "--deny-tool",
         dest="deny_tools",
         action="append",
@@ -809,7 +817,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
 
     plan = _add_command(
         sub, "plan", allow_abbrev=False,
-        usage="git-loopy plan [planning document] [--model M] "
+        usage="git-loopy plan [planning document] [--yolo] [--model M] "
         "[--reasoning-effort E] [--context-tier T] [-- copilot arguments...]",
         description=(
             "Launch the pinned Planner in your own Copilot CLI, outside every Run. "
@@ -818,6 +826,13 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
     plan.add_argument("planning_document", nargs="?", help="Planning document to decompose.")
+    plan.add_argument(
+        "--yolo", action="store_true",
+        help=(
+            "Allow Planner tools, paths and URLs without confirmation in Copilot. "
+            "Does not approve the proposed task graph."
+        ),
+    )
     plan.add_argument("--model", metavar="M", help="Override Routing's model.")
     plan.add_argument(
         "--reasoning-effort", metavar="E", choices=sorted(REASONING_EFFORTS),

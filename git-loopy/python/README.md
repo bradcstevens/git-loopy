@@ -364,18 +364,25 @@ interactive Copilot CLI:
 
 ```bash
 git-loopy plan https://github.com/owner/repo/issues/123
+git-loopy plan https://github.com/owner/repo/issues/123 --yolo
 git-loopy plan "docs/spec.md" --model gpt-6.1-sol --reasoning-effort xhigh
 git-loopy plan --context-tier long_context -- --add-dir ../design-notes
 ```
 
 The stable command shape is
-`git-loopy plan [planning document] [--model M] [--reasoning-effort E] [--context-tier T] [-- copilot arguments...]`.
+`git-loopy plan [planning document] [--yolo] [--model M] [--reasoning-effort E] [--context-tier T] [-- copilot arguments...]`.
 It appears under **Planning** in help and `commands --json`. With no document,
 the initial prompt is simply `/to-tickets`.
 
 This is **not a Run**: it creates no Run records, picks up no issue, and opens
 no SDK session. The Planner drafts a complete graph for the Loop engineer's
 approval; launching it grants no execution approval (ADR-0071).
+
+`--yolo` forwards Copilot's permission mode for this session: tools, paths and
+URLs are allowed without confirmation. Omit it to retain your harness's normal
+permission settings. It changes permissions, not the Planner's interactive
+workflow or the requirement for human approval of the proposed graph. Existing
+Copilot denials and Sandbox policy still apply.
 
 Before launch, git-loopy refreshes its installed catalog and verifies that the
 profiles match the pin. A matching install needs no network. An unreachable
@@ -1125,6 +1132,9 @@ uv run --project git-loopy/python git-loopy
 # Cap at 50 iterations.
 uv run --project git-loopy/python git-loopy 50
 
+# Explicit spelling of the Run's existing automatic permission approvals.
+uv run --project git-loopy/python git-loopy --yolo
+
 # Pick a different model + reasoning effort for one run. Flags are the top of
 # the chain (flag > env > project config > global config > built-in default).
 uv run --project git-loopy/python git-loopy --model gpt-5.6-sol --reasoning-effort max
@@ -1172,6 +1182,12 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 `--no-reasoning`. `git-loopy --version` prints exactly
 `git-loopy <VERSION>` and does not require a repository, Config, GitHub,
 Copilot, network access, or the TUI.
+
+Python Runs already auto-approve ordinary tool, path and URL permission
+requests. `--yolo` is an explicit spelling of that existing default, not an
+escalation: configured denials, Skill policy, read-only Reviewer restrictions,
+cross-session history isolation and Sandbox enforcement remain in force.
+It adds no persistent Config setting and grants no task-graph approval.
 
 ### Unfinished Lane work
 
@@ -1503,7 +1519,7 @@ CLI flags (`--version`, `--model ID`, `--reasoning-effort EFFORT`,
 `--context-tier TIER`,
 `--route-policy POLICY`,
 `-v` / `-vv` / `-vvv`,
-`--no-reasoning`, `--enable-skill` / `--disable-skill`, `--deny-tool`,
+`--no-reasoning`, `--yolo`, `--enable-skill` / `--disable-skill`, `--deny-tool`,
 `--deny-skill` (deprecated), `--select-model` / `--no-select-model`,
 `--issue N`)
 are the runner's only non-positional flags. `--model` / `--reasoning-effort`
