@@ -19,7 +19,7 @@ from git_loopy.run_residence import discover_resident_runs
 
 __all__ = ["run_runs"]
 
-_HEADINGS = ("RUN", "STATE", "STARTED", "SCOPE")
+_HEADINGS = ("RUN", "STATE", "STARTED", "SCOPE", "RESIDENCE")
 
 
 def run_runs(
@@ -69,10 +69,11 @@ def _table(runs: tuple[DiscoveredRun, ...]) -> list[str]:
     ]
 
 
-def _row(run: DiscoveredRun) -> tuple[str, str, str, str]:
+def _row(run: DiscoveredRun) -> tuple[str, str, str, str, str]:
     return (
         run.run_id,
         run.liveness.value,
         run.started_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
         str(run.scope),
+        run.residence,
     )

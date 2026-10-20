@@ -2,14 +2,16 @@
 
 Issue #862 implements the whole-Run placement seam from
 [ADR-0093](adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md),
-and #870 adds detached Azure launch. Lane Issue clones are a separate workspace concern
+and #870 adds detached Azure launch; #872 connects its client operations.
+Lane Issue clones are a separate workspace concern
 ([parallel mode](parallel-mode.md)); they do not change where the whole Run
 resides.
 
 `git_loopy.run_residence.RunResidence` owns a whole Run's placement and
 transport. This is independent of a Lane's Execution host. The only production
-provider registered for ordinary client commands is `local`; registering another provider cannot change what a plain
-`git-loopy` invocation selects.
+provider used by a plain Run is `local`. Client commands additionally register
+`remote` when this clone has launch receipts; registration cannot change what a
+plain `git-loopy` invocation selects.
 
 ## Interface
 
@@ -44,7 +46,9 @@ be replaced. The registry is process-local, not a machine-wide Run index.
 its authoritative residence, and retains the existing newest-first order.
 `runs`, `attach`, and `stop` share this listing and the existing explicit
 identity resolver. Ambiguity across providers refuses rather than guessing.
-The local-only table and command messages are unchanged.
+The listing appends a `RESIDENCE` column for every Run, including local-only
+listings, preserving the existing leading columns that release smoke reads.
+Local Attach and Stop messages are unchanged.
 
 `launch_run` defaults explicitly to `local`. `teardown_run` refuses live and
 unprovable Runs before routing to the owning provider. It is not called when
@@ -222,9 +226,9 @@ Launch acknowledges only after the guest records its `remote` Sandbox
 disclosure. Compute is disclosed as **metered to the Azure subscription**,
 without an estimate, both at launch and in the Run-start record.
 
-**Delivery boundary:** automatic salvage/VM teardown is #871; remote `runs`,
-`attach` and Stop transport is #872. Until those land, inspect the VM through
-Azure's execution API; its files are under `/var/lib/git-loopy/` and its Run
+**Delivery boundary:** automatic salvage/VM teardown is #871. Remote `runs`,
+`attach` and Stop are available through the provider's execution-API channel.
+For launch diagnostics, the VM's files are under `/var/lib/git-loopy/` and its Run
 trace is under `repository/.git-loopy/logs/`. The VM and imported disk remain
 after the Run ends and continue to incur Azure charges until reclaimed.
 Preserve and push salvage before deleting them. A failed pre-launch VM is
@@ -237,3 +241,54 @@ guest payload, real Azure SDK/REST wire requests over an offline transport,
 image-build inputs, remote always-on Sandbox routing, and a real detached child
 that writes its evidence after the fake launching client has exited. No live
 Azure resources or credentials are required by the suite.
+
+## Remote clients (#872)
+
+The launcher records a nonsecret receipt under
+`<shared-git-directory>/git-loopy/remote-runs/<run-id>.json` before VM creation.
+It contains the Run identity, launch time, originating worktree and Azure
+target, not credentials. Recording before creation keeps an unconfirmed
+launch addressable after its client disappears. All registered worktrees
+share those receipts; an independent clone of the same origin does not.
+Changing project Config does not redirect an existing Run.
+
+Fresh `runs`, `attach` and `stop` clients register the Azure residence only
+when receipts exist. They resolve the receipt's target with the existing
+Azure CLI identity, enumerate its launch label with the SDK's paginated
+`list_sandboxes`, and require an exact, unique match. A missing or non-running
+VM supplies `unknown` liveness, never permission to resume or delete it.
+A Running VM is not proof of a live Run: a bounded `executeShellCommand`
+invokes `git_loopy.remote_control`, which discovers the exact Run and probes
+its guest control artifact's advisory lock. Access failures, invalid
+responses and ambiguous resources refuse rather than produce partial listings.
+Runs launched by installations predating these receipts are not retroactively
+assigned to a clone; inspect those through Azure's execution API.
+
+Attach uses incremental, byte-offset execution reads (at most 256 KiB per
+response), not an interactive guest shell. Only complete trace lines enter a
+private temporary mirror, preserving multi-byte characters across responses.
+The existing local Dashboard renders that mirror in the viewing machine's
+Display zone, with the same line-printer fallback and terminal restoration.
+Its local lock is only a transport adapter: it is released as ended only after
+the provider proves the guest Run dead and the trace has been drained.
+A transport fault ends the client with failure, not a false Run ending.
+`q`, a line-printer interrupt and a Dashboard fault never Stop the Run or
+delete Azure resources. Multiple clients have independent mirrors.
+
+Dashboard Stop requests are relayed with their original identities. The
+public Stop command prints its identity before delivery, retries a lost
+execution response with that same identity, and waits for the guest's
+`wrapper.stop.requested` stage. The guest uses the same durable Stop submission
+and stage allocation as local: drain first, cancellation second, no third
+stage, and no escalation on redelivery. A timeout or connection failure is
+unconfirmed; retry with the printed `--request-id`, not a new invocation that
+would deliberately escalate. The acknowledgment wait excludes initial
+delivery, and individual Azure requests have bounded connection/read timeouts.
+Neither client invents Wind-down Events or waits for draining work to finish.
+
+`test_remote_clients.py` exercises the public commands with a fake execution
+provider and real guest control locks/Stop artifacts, including Dashboard
+streaming, Detach, both Stop stages, lost responses, transport failure,
+Unicode chunk boundaries and clone isolation. A fake HTTP transport also
+exercises the pinned Azure SDK's label enumeration and execution wire format,
+without live Azure access.

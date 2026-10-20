@@ -1225,7 +1225,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         description=(
             "List the Runs belonging to this clone — the worktree you are in "
             "and every worktree it has registered — newest first, with the Run "
-            "identity to target, the worktree the Run was started in, and "
+            "identity to target, its local or remote residence, the originating worktree, and "
             "whether it is still running. Liveness is read from each Run's own "
             "control artifact, so a Run that ended is reported as ended and a "
             "liveness this host cannot read is reported as unknown rather than "
@@ -1234,6 +1234,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "starts no work, stops nothing, and reclaims nothing (see "
             "`git-loopy sweep` for that). `git-loopy attach` and "
             "`git-loopy stop` name a Run through this same listing."
+            " Remote Runs use this clone's launch receipts and existing Azure CLI sign-in."
         ),
     )
 
@@ -1251,6 +1252,8 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "Navigation stays in this client. Attach does not request a Stop "
             "and does not open a channel into an Execution host, whether that "
             "host is local or GitHub Actions.\n\n"
+            "For remote residence, the provider streams the guest trace through "
+            "Azure's execution API to the same local Dashboard.\n\n"
             "A usable Dashboard helper draws the Run. `q` is Detach: this "
             "client only, the terminal returns to the shell, and the worker "
             "and other clients are unchanged. A missing or unusable helper is "
@@ -1689,7 +1692,7 @@ def _run_runs(_args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"git-loopy: runs requires a git repository: {exc}", file=sys.stderr)
         return 1
-    return runscmd.run_runs(repo_root=repo_root)
+    return _run_resident_client(repo_root, lambda: runscmd.run_runs(repo_root=repo_root))
 
 
 def _run_attach(args: argparse.Namespace) -> int:
@@ -1706,7 +1709,9 @@ def _run_attach(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"git-loopy: attach requires a git repository: {exc}", file=sys.stderr)
         return 1
-    return attachcmd.run_attach(repo_root=repo_root, run_id=args.run_id)
+    return _run_resident_client(
+        repo_root, lambda: attachcmd.run_attach(repo_root=repo_root, run_id=args.run_id),
+    )
 
 
 def _run_stop(args: argparse.Namespace) -> int:
@@ -1726,12 +1731,27 @@ def _run_stop(args: argparse.Namespace) -> int:
     timeout = (
         stopcmd.DEFAULT_STOP_ACK_TIMEOUT if args.timeout is None else args.timeout
     )
-    return stopcmd.run_stop(
+    return _run_resident_client(repo_root, lambda: stopcmd.run_stop(
         repo_root=repo_root,
         run_id=args.run_id,
         request_id=args.request_id,
         timeout=timeout,
-    )
+    ))
+
+
+def _run_resident_client(repo_root: Path, command: Callable[[], int]) -> int:
+    from git_loopy.git import GitError, SubprocessGitClient
+    from git_loopy.run_discovery import RunTargetError
+    from git_loopy.run_residence import client_residences
+
+    try:
+        with client_residences(git=SubprocessGitClient(repo_root)):
+            return command()
+    except ImportError:
+        print("git-loopy: Install the [remote] extra through your configured package feed.", file=sys.stderr)
+    except (GitError, RunTargetError) as exc:
+        print(f"git-loopy: {exc}", file=sys.stderr)
+    return 1
 
 
 def _run_info(

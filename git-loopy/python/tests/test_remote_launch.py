@@ -189,6 +189,13 @@ def test_real_provider_creates_with_suspend_disabled_and_no_guest_credential(rep
     assert "SECRET_" not in guest_inputs
     assert "offline-azure-credential" not in guest_inputs
     assert "registry-user" not in guest_inputs
+    from git_loopy.git import SubprocessGitClient
+    from git_loopy.remote_runs import remote_run_receipts
+
+    receipt, = remote_run_receipts(SubprocessGitClient(repository))
+    assert receipt.run_id == transport.created["labels"]["git-loopy-launch"]
+    assert receipt.target == TARGET
+    assert receipt.scope == repository
 
 
 def test_fake_provider_worker_survives_its_launching_client_exiting(tmp_path):
@@ -295,6 +302,7 @@ def test_image_build_uses_committed_toolchain_and_preserves_corporate_feeds(
             with zipfile.ZipFile(next(layer.glob("*.whl"))) as wheel:
                 assert wheel.read("git_loopy/VERSION").decode().strip() == plan.version
                 assert "git_loopy/remote_guest.py" in wheel.namelist()
+                assert "git_loopy/remote_control.py" in wheel.namelist()
             script = (layer / "prerequisites.sh").read_text()
             for requirement in ("slirp4netns", "libslirp", "bubblewrap", "iptables", "extended/x86_64"):
                 assert requirement in script
@@ -385,6 +393,11 @@ def test_provider_retains_possibly_running_vm_but_reclaims_prelaunch_failure(
     else:
         assert transport.deleted == []
         assert "retained" in str(error.value)
+        from git_loopy.git import SubprocessGitClient
+        from git_loopy.remote_runs import remote_run_receipts
+
+        receipt, = remote_run_receipts(SubprocessGitClient(repository))
+        assert receipt.run_id == transport.created["labels"]["git-loopy-launch"]
 
 
 def test_forwarded_policy_is_saved_at_the_runtime_settings_path(tmp_path, monkeypatch):

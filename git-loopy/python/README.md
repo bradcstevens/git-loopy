@@ -1242,10 +1242,12 @@ and the forwarded Copilot Sandbox policy is **always enforced**, even when its
 `enabled` preference is false. Compute is **metered to the Azure subscription**,
 with no estimate. Closing the launching client does not stop the Run.
 
-Automatic remote teardown and remote client commands remain separate delivery
-work (#871/#872). Until they land, use Azure's execution API to inspect
-`/var/lib/git-loopy/orchestrator.log`, preserve salvage, and reclaim the VM and
-disk after the Run. See the [remote launch reference](../../docs/run-residence.md#detached-azure-launch-870)
+Use `runs`, `attach <run-id>` and `stop <run-id>` from the launching clone just
+as for a local Run. The client uses its existing Azure CLI login and the
+Container Apps execution API; no guest login or credential copy is needed.
+Automatic remote teardown remains separate delivery work (#871). Preserve
+salvage and reclaim the VM and disk after the Run; client Detach deletes neither.
+See the [remote launch reference](../../docs/run-residence.md#detached-azure-launch-870)
 for image prerequisites, corporate package feeds, credential handling and
 unconfirmed-launch recovery.
 
@@ -1258,18 +1260,20 @@ git-loopy runs
 ```
 
 ```
-RUN                         STATE    STARTED               SCOPE
-01K6Z9QWERTYUIOPASDFGHJKLZ  live     2026-09-19T11:04:02Z  /src/app
-01K6Z7H4TCXV0YQ9M2N8B3RJ5D  dead     2026-09-19T09:51:40Z  /src/app-worktree
-01K6Z4B1GKAP7WS3E6D9F2TQXN  unknown  2026-09-18T22:17:09Z  /src/app
+RUN                         STATE    STARTED               SCOPE              RESIDENCE
+01K6Z9QWERTYUIOPASDFGHJKLZ   live     2026-09-19T11:04:02Z  /src/app           remote
+01K6Z7H4TCXV0YQ9M2N8B3RJ5D  dead     2026-09-19T09:51:40Z  /src/app-worktree  local
+01K6Z4B1GKAP7WS3E6D9F2TQXN  unknown  2026-09-18T22:17:09Z  /src/app           remote
 ```
 
 Every Run of **this clone** — the worktree you invoked it from plus every other
 worktree `git worktree list` registers — newest first. Run it from any of those
 worktrees and you get the same listing, including Runs that were started from a
 different one. **Lane workspaces** (**Issue clones**) are not separate Run
-residences and are not included in this list. `RUN` is the full Run identity,
-and `SCOPE` is the worktree the Run published its artefacts in;
+residences and are not included in this list. Remote launches recorded by this
+clone are listed alongside local Runs. `RUN` is the full Run identity,
+`RESIDENCE` is `local` or `remote`, and `SCOPE` is the originating worktree
+(the launching worktree for a remote Run);
 together they are what `git-loopy attach` and `git-loopy stop` target, so the
 two cannot disagree about which Runs exist.
 
@@ -1294,7 +1298,14 @@ never treated as permission to control or reclaim its work, which is the same
 rule `git-loopy sweep` already follows.
 
 The listing is purely observational: it starts no agent work, sends no Stop,
-reclaims nothing, and never reaches your issue tracker. It needs only `git`.
+reclaims nothing, and never reaches your issue tracker. Local-only listing
+needs only `git`. When the clone has remote launch receipts, install the
+`remote` extra and use the intended operator's existing Azure CLI login.
+The remote provider reads the guest's actual control lock, not the VM's
+running state. Missing or suspended VMs are `unknown`, never resumed by a
+client. An Azure access or execution failure refuses the whole listing rather
+than silently omitting remote Runs. Changing `[remote]` does not forget old
+Runs: each receipt retains its launch target.
 
 An attached Dashboard requests **Stop** with `s`. That writes one durable
 request beside the Run's control artifact (`<trace>.control.stops/`); it does
@@ -1346,6 +1357,13 @@ live one. Attach opens no channel into an Execution host. A Run whose
 contributions are local and a Run whose contributions are on GitHub Actions
 are observed the same way: through the Run's own trace and control artifact.
 
+For remote residence, bounded execution-API reads stream the guest trace into
+a temporary client-only mirror. The same local Dashboard and line printer
+render it in the viewing machine's Display zone. Stop requests retain their
+identities when relayed to the guest; only the guest Orchestrator's Events
+acknowledge them. A transport fault restores the terminal and reports failure,
+not a finished Run. Detach removes only this client's mirror.
+
 **Stop** is `git-loopy stop`, or `s` in an attached Dashboard. Attach does not
 write one. Shell and PowerShell do not attach and do not provide this command.
 
@@ -1360,7 +1378,8 @@ git-loopy stop 01K6Z9QWERTYUIOPASDFGHJKLZ --request-id cli-0123abcd
 ```
 
 Requests the same two-stage **Wind-down** an attached Dashboard requests with
-`s`. No Dashboard helper and no remote-control service is required. The Run
+`s`. No Dashboard helper is required. Local Stop needs no remote-control
+service; remote Stop uses Azure's execution API. The Run
 identity is required. Resolution is the same clone-scoped listing as
 `git-loopy runs`: this worktree and every worktree it has registered, never
 another clone, and never the newest Run by default. A Run whose liveness this

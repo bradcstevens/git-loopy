@@ -182,6 +182,23 @@ def residence_provider(name: str = "local") -> RunResidence:
         raise RunTargetError(f"Run residence {name!r} is not registered.") from None
 
 
+@contextmanager
+def client_residences(*, git: GitClient) -> Iterator[None]:
+    """Fresh clients reconnect only to targets this clone recorded at launch."""
+    from git_loopy.remote_runs import remote_run_receipts
+
+    if "remote" in _PROVIDERS or not remote_run_receipts(git):
+        yield
+        return
+    import os
+
+    from git_loopy.azure_remote import AzureRemoteProvider
+    from git_loopy.remote_launch import RemoteResidence
+
+    with register_residence(RemoteResidence(AzureRemoteProvider({}, os.environ), os.environ)):
+        yield
+
+
 def launch_run(request: RunLaunch, *, residence: str = "local") -> int:
     """Route explicitly; registration cannot change a plain Run's residence."""
     return residence_provider(residence).launch(request)

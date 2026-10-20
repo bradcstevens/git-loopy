@@ -9,19 +9,20 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, NoReturn, Protocol
 
 from git_loopy.config import RunConfig
 from git_loopy.persist import make_run_id
 from git_loopy.release_version import read_runtime_release_version
-from git_loopy.run_discovery import RunTargetError
-from git_loopy.run_residence import RunLaunch
+from git_loopy.run_discovery import DiscoveredRun, RunLiveness, RunTargetError
+from git_loopy.run_residence import AttachChannel, RunLaunch
+from git_loopy.remote_runs import RemoteRunReceipt, remote_run_receipts
 
 if TYPE_CHECKING:
     from git_loopy.git import GitClient
-    from git_loopy.run_discovery import DiscoveredRun
+    from git_loopy.remote_control import RemoteSnapshot
 
 
 class RemoteLaunchError(RunTargetError):
@@ -61,6 +62,12 @@ class RemotePlan:
 
 class RemoteLaunchProvider(Protocol):
     def launch(self, plan: RemotePlan) -> str: ...
+
+
+class RemoteProvider(RemoteLaunchProvider, Protocol):
+    def inspect(
+        self, receipt: RemoteRunReceipt, *, offset: int = 0, request_id: str | None = None,
+    ) -> RemoteSnapshot | None: ...
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -157,29 +164,51 @@ def launch_remote(
 
 
 class RemoteResidence:
-    """Launch registration only; remote client operations are separate delivery."""
+    """Whole-Run clients address only launches recorded by this clone."""
 
     name = "remote"
 
-    def __init__(self, provider: RemoteLaunchProvider, env: Mapping[str, str]) -> None:
+    def __init__(self, provider: RemoteProvider, env: Mapping[str, str]) -> None:
         self._provider = provider
         self._env = env
+        self._receipts: dict[str, RemoteRunReceipt] = {}
 
     def launch(self, request: RunLaunch) -> int:
         launch_remote(request, provider=self._provider, env=self._env)
         return 0
 
-    def discover(self, *, git: GitClient) -> NoReturn:
-        raise RemoteLaunchError("Remote Run listing is not available yet; use Azure's execution API.")
+    def discover(self, *, git: GitClient) -> tuple[DiscoveredRun, ...]:
+        from git_loopy.remote_control import GUEST_REPOSITORY
 
-    def open_attach(self, run: DiscoveredRun, *, repo_root: Path) -> NoReturn:
-        raise RemoteLaunchError("Remote Attach is not available yet; use Azure's execution API.")
+        found = []
+        self._receipts = {receipt.run_id: receipt for receipt in remote_run_receipts(git)}
+        for receipt in self._receipts.values():
+            snapshot = self._provider.inspect(receipt)
+            if snapshot is None:
+                trace = GUEST_REPOSITORY / ".git-loopy" / "logs" / f"{receipt.run_id}.jsonl"
+                found.append(DiscoveredRun(
+                    receipt.run_id, receipt.scope, receipt.started_at, RunLiveness.UNKNOWN,
+                    trace, trace.with_suffix(".control"), "remote",
+                ))
+            else:
+                found.append(replace(snapshot.run, scope=receipt.scope, residence="remote"))
+        return tuple(found)
+
+    def open_attach(self, run: DiscoveredRun, *, repo_root: Path) -> AttachChannel:
+        from git_loopy.remote_client import RemoteAttachChannel
+
+        return RemoteAttachChannel(self._provider, self._receipts[run.run_id], repo_root)
 
     def request_stop(
         self, run: DiscoveredRun, *, request_id: str, timeout: float,
         output: Callable[[str], None],
-    ) -> NoReturn:
-        raise RemoteLaunchError("Remote Stop is not available yet; use Azure's execution API.")
+    ) -> int:
+        from git_loopy.remote_client import request_remote_stop
+
+        return request_remote_stop(
+            self._provider, self._receipts[run.run_id],
+            request_id=request_id, timeout=timeout, output=output,
+        )
 
     def teardown(self, run: DiscoveredRun) -> NoReturn:
         raise RemoteLaunchError(

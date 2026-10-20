@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import json
+import base64
+import shlex
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Mapping, Protocol, cast
 
 from git_loopy.azure_target import AzureSandboxProvider, _credential_reference
 from git_loopy.remote_image import PackageFeeds, RemoteImage, build_remote_image
 from git_loopy.remote_launch import RemoteLaunchError, RemotePlan
 from git_loopy.remote_setup import AzureTarget
+from git_loopy.remote_control import RemoteSnapshot
+from git_loopy.remote_runs import RemoteRunReceipt, record_remote_run
+from git_loopy.run_discovery import RunTargetError
 
 if TYPE_CHECKING:
     from azure.core.credentials import TokenCredential
@@ -31,10 +37,69 @@ class AzureRemoteProvider:
         image_builder: ImageBuilder = build_remote_image,
     ) -> None:
         self._project = project
-        self._feeds = PackageFeeds.from_environment(env)
+        self._env = env
         self._credential = credential
         self._transport = transport
         self._image_builder = image_builder
+
+    def inspect(
+        self, receipt: RemoteRunReceipt, *, offset: int = 0, request_id: str | None = None,
+    ) -> RemoteSnapshot | None:
+        from azure.containerapps.sandbox import (
+            SandboxGroupClient, SandboxGroupManagementClient, endpoint_for_region,
+        )
+        from azure.identity import AzureCliCredential
+
+        target = receipt.target
+        try:
+            with ExitStack() as stack:
+                credential = self._credential
+                if credential is None:
+                    credential = stack.enter_context(AzureCliCredential(process_timeout=10))
+                management = stack.enter_context(SandboxGroupManagementClient(
+                    credential, subscription_id=target.subscription,
+                    resource_group=target.resource_group, transport=self._transport,
+                    logging_enable=False, retry_total=0, connection_timeout=10, read_timeout=30,
+                ))
+                endpoint = endpoint_for_region(management.get_group(target.sandbox_group).location)
+                group = stack.enter_context(SandboxGroupClient(
+                    endpoint, credential, subscription_id=target.subscription,
+                    resource_group=target.resource_group, sandbox_group=target.sandbox_group,
+                    transport=self._transport, logging_enable=False, retry_total=0,
+                    connection_timeout=10, read_timeout=30,
+                ))
+                matches = list(group.list_sandboxes(labels={"git-loopy-launch": receipt.run_id}))
+                if not matches:
+                    return None
+                if len(matches) != 1 or matches[0].labels.get("git-loopy-launch") != receipt.run_id:
+                    raise RunTargetError("Azure returned an ambiguous remote Run; refusing to guess.")
+                if matches[0].state != "Running":
+                    return None
+                sandbox = stack.enter_context(group.get_sandbox_client(matches[0].id))
+                payload = base64.b64encode(json.dumps({
+                    "run_id": receipt.run_id, "offset": offset, "request_id": request_id,
+                }).encode()).decode("ascii")
+                result = sandbox.exec(shlex.join([
+                    "/opt/git-loopy/bin/python", "-m", "git_loopy.remote_control", payload,
+                ]))
+                if result.exit_code != 0:
+                    raise RunTargetError(
+                        f"Remote Run {receipt.run_id} control failed; inspect the guest artifacts. "
+                        "No operation was acknowledged."
+                    )
+                snapshot = RemoteSnapshot.decode(result.stdout, run_id=receipt.run_id, offset=offset)
+                if request_id is not None and (
+                    snapshot.submission is None or snapshot.submission.request_id != request_id
+                ):
+                    raise RunTargetError("Remote Stop response did not identify this request.")
+                return snapshot
+        except RunTargetError:
+            raise
+        except Exception:
+            raise RunTargetError(
+                f"Cannot contact remote Run {receipt.run_id}; check Azure CLI sign-in and target access. "
+                "Liveness and any submitted Stop are unconfirmed; retry Stop with the same request id."
+            ) from None
 
     def launch(self, plan: RemotePlan) -> str:
         from azure.containerapps.sandbox import (
@@ -47,6 +112,7 @@ class AzureRemoteProvider:
         from azure.identity import AzureCliCredential
 
         target = AzureTarget.from_config(self._project)
+        feeds = PackageFeeds.from_environment(self._env)
         raw = self._project.get("remote")
         registry = cast(dict[str, object], raw).get("registry") if isinstance(raw, dict) else None
         if not isinstance(registry, str):
@@ -88,7 +154,7 @@ class AzureRemoteProvider:
                     action=EgressRuleAction(type="Deny"),
                 ))
                 with self._image_builder(
-                    plan, registry=registry, subscription=target.subscription, feeds=self._feeds,
+                    plan, registry=registry, subscription=target.subscription, feeds=feeds,
                 ) as image:
                     disk = group.begin_create_disk_image(
                         image.reference,
@@ -138,6 +204,11 @@ class AzureRemoteProvider:
                     f"/resourceGroups/{target.resource_group}"
                     f"/sandboxGroups/{target.sandbox_group}/sandboxes"
                 )
+                from git_loopy.git import SubprocessGitClient
+
+                record_remote_run(SubprocessGitClient(plan.source), RemoteRunReceipt(
+                    plan.launch_id, plan.source, datetime.now(timezone.utc), target,
+                ))
                 creation_attempted = True
                 failure = (
                     f"Azure VM creation is unconfirmed (launch {plan.launch_id}); "
@@ -169,7 +240,7 @@ class AzureRemoteProvider:
                         "Azure did not disable auto-suspend/auto-delete; refusing the remote Run."
                     )
                 document = json.loads(plan.guest_payload())
-                document["feeds"] = self._feeds.environment()
+                document["feeds"] = feeds.environment()
                 sandbox.write_file("/var/lib/git-loopy/launch.json", json.dumps(document))
                 launch_attempted = True
                 failure = (
