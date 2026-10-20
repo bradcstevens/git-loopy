@@ -123,6 +123,7 @@ from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import (
+    cast,
     Any,
     Awaitable,
     Callable,
@@ -147,6 +148,9 @@ from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
 from git_loopy import sources as sources_module
 from git_loopy import session_outcome as session_outcome_module
+from git_loopy.account_control import (
+    AccountClient, AccountControl, account_interruption, session_error_for_control,
+)
 from git_loopy import sweep as sweep_module
 from git_loopy.publication import PendingPublication, PublicationError, PublicationJournal
 from git_loopy.staircase import PriceStaircase, StaircaseRefusal
@@ -889,7 +893,7 @@ def _report_session_outcome(
     what the three flattened warnings this replaced could not say — they knew a
     session had produced nothing and never knew the account had been refused.
     """
-    if record.outcome is None:
+    if record.outcome is None and not account_interruption(record.error):
         return
     error = record.error
     detail = ""
@@ -904,7 +908,7 @@ def _report_session_outcome(
     diag.warning(
         "session for #%s ended %s [termination=%s]%s",
         ref,
-        record.outcome.value,
+        record.outcome.value if record.outcome is not None else "preserved_progress",
         record.termination.value,
         detail,
     )
@@ -1414,13 +1418,20 @@ class _Loop:
         self._prompt_text = prompt_text
         self._writers = writers
         self._sinks = sinks
-        self._client = client
+        self._account = AccountControl(emit=self._emit)
+        self._client = cast(CopilotClient, AccountClient(client, self._account, ordinary=True))
+        self._auxiliary_client = cast(
+            CopilotClient, AccountClient(client, self._account, ordinary=False)
+        )
         self._sandbox_settings = sandbox_settings
         self._sandbox_state = sandbox_state(sandbox_settings, residence=residence)
         self._issue_clone_setup = issue_clone_setup
         self._skill_preflight = skill_preflight
         self._skill_exposure = skill_preflight.exposure
         self._source = source
+        self._account_tracker = route_tracker
+        self._account_issues: set[int | str] = set()
+        self._account_base_issues: set[int | str] = set()
         self._diag = diag
         #: The invocation's **Pin** until it is spent, then ``None`` (#430).
         #: Read wherever a Pickup names or promotes the Pin, so a Pin whose
@@ -1546,7 +1557,7 @@ class _Loop:
         self._bump_classifier = PickupBumpClassifier(
             pair=classifier_pair,
             propose=SessionBumpClassProposer(
-                client=self._client,
+                client=self._auxiliary_client,
                 config=self._config,
                 event_log=self._writers.event_log,
                 sinks=self._sinks,
@@ -1611,7 +1622,7 @@ class _Loop:
             else _make_dynamic_router(
                 dynamic_routing.prerequisites,
                 selector_assess=SessionRouteSelector(
-                    client=self._client,
+                    client=self._auxiliary_client,
                     config=self._config,
                     event_log=self._writers.event_log,
                     sinks=self._sinks,
@@ -1678,6 +1689,8 @@ class _Loop:
         if getattr(self, "_stop_drain_requested", False):
             return
         self._stop_drain_requested = True
+        if hasattr(self, "_account"):
+            self._account.interrupt()
         self._announce_wind_down(cause="operator_stop", stage="drain", draining=draining)
 
     def request_stop_cancel(
@@ -2248,11 +2261,10 @@ class _Loop:
 
             # 5) Run the SDK session. How it ends is *data* (#403): the ending
             #    and, where there was a failure, its structured identity are
-            #    resolved below rather than spent on a log line, because the
-            #    attempt lifecycle is keyed off the ending and a sentence is not
-            #    a key. Recording only — nothing here aborts the Run, waits, or
-            #    leaves the issue alone, so an account-level condition is still
-            #    attributed to the issue whose Iteration met it.
+            #    resolved below rather than spent on a log line. AccountClient
+            #    controls Run admission at the endpoint; finalization preserves
+            #    the actual session record while exempting account failures
+            #    from issue penalties and completion/publication backstops.
             send_timeout = self._config.send_timeout_seconds
             termination = session_outcome_module.SessionTermination.COMPLETED
             raised: session_outcome_module.SessionError | None = None
@@ -2357,10 +2369,13 @@ class _Loop:
                         exc, origin="session_lifecycle"
                     )
                 finally:
+                    ending_error = session_error_for_control(session_watch, raised)
                     if issue_git is not None:
+                        account_failed = self._account_affected(ending_error)
                         sandbox_commits, checkpoint_sha = self._finish_serial_clone(
                             issue_git, clone_branch, pre_sha, active, iter_num,
-                            publish=not operator_cancelled and not sandbox_failed,
+                            publish=not operator_cancelled and not sandbox_failed and not account_failed,
+                            account_failed=account_failed,
                         )
 
             # 6) Post-iteration accounting.
@@ -2386,9 +2401,18 @@ class _Loop:
             # 7) Completion backstop — source-specific. The GitHub backend
             #    closes the issue via gh; the PRDs backend always returns
             #    [] (the agent owns the `git mv ... done/` step).
+            if self._account_affected(ending_error):
+                self._account_issues.add(active.ref)
+                if issue_git is None and new_commits:
+                    self._account_base_issues.add(active.ref)
+                self._diagnose_account_closure(active.ref)
+            else:
+                self._account_issues.discard(active.ref)
+                self._account_base_issues.discard(active.ref)
             with telemetry.span("git_loopy.enforce_closures"):
-                completions = self._handle_completions_safely(
-                    pool, new_commits, leased_pool=True
+                completions = (
+                    [] if self._account_affected(ending_error)
+                    else self._handle_completions_safely(pool, new_commits, leased_pool=True)
                 )
 
             if issue_binding.active_ref is None:
@@ -2462,13 +2486,19 @@ class _Loop:
             #    locally. Non-fatal: a missing remote/upstream, an auth failure,
             #    or a non-fast-forward warns and the loop carries on. Like the
             #    Checkpoint, a push is NOT Strike progress (it creates no commit).
-            self._maybe_push(
-                iter_num,
-                new_commits,
-                checkpoint_sha,
-                active_ref=active.ref,
-                active_kind=active.kind,
-            )
+            if self._account_base_issues or active.ref in self._account_issues:
+                self._diag.warning(
+                    "account failure: withholding automatic base push; "
+                    "commits and Checkpoint remain recoverable locally"
+                )
+            else:
+                self._maybe_push(
+                    iter_num,
+                    new_commits,
+                    checkpoint_sha,
+                    active_ref=active.ref,
+                    active_kind=active.kind,
+                )
 
             # 10) Resolve this Iteration's ending; the ending charges its Strike.
             commits_in_iter = len(new_commits)
@@ -2492,9 +2522,7 @@ class _Loop:
             session_ending = session_outcome_module.resolve_session_outcome(
                 termination=termination,
                 progressed=made_progress,
-                error=session_outcome_module.strongest_error(
-                    session_watch.error, raised
-                ),
+                error=ending_error,
                 content_filtered=session_watch.content_filtered,
                 no_more_tasks=session_watch.no_more_tasks,
             )
@@ -2534,7 +2562,7 @@ class _Loop:
 
     def _finish_serial_clone(
         self, clone: git_module.GitClient, branch: str, base: str,
-        active: AfkReadyItem, iter_num: int, *, publish: bool,
+        active: AfkReadyItem, iter_num: int, *, publish: bool, account_failed: bool = False,
     ) -> tuple[list[git_module.Commit], str | None]:
         """Import durable serial work before merging; salvage never needs a Sandbox."""
         try:
@@ -2547,6 +2575,8 @@ class _Loop:
                 # Published serial Checkpoints reach origin through the base auto-push.
                 clone.root, branch=branch, checkpoint=not publish,
             )
+            if account_failed:
+                return commits, checkpoint
             if not publish or not self._leased(active.ref, "publication onto base", kind=active.kind):
                 return [], None
             try:
@@ -2954,7 +2984,7 @@ class _Loop:
         )
         meter = RoutingCostMeter(self._session_observer, on_routing_credits=on_credits)
         proposer = SessionTaskTypeProposer(
-            client=self._client,
+            client=self._auxiliary_client,
             config=self._config,
             event_log=self._writers.event_log,
             sinks=self._sinks,
@@ -4097,11 +4127,11 @@ class _Loop:
         items here would hide every PR-head advance from progress detection
         and earn Strikes for an Iteration that was progressing.
         """
-        guarded = pool
+        guarded = [item for item in pool if item.ref not in self._account_issues]
         if leased_pool:
             guarded = [
                 item
-                for item in pool
+                for item in guarded
                 if item.kind != "issue" or self._leased(item.ref, "issue close")
             ]
         try:
@@ -4141,6 +4171,24 @@ class _Loop:
         if self._release_lane_ownership is not None and self._attempts.strikes(ref) > before:
             self._release_lane_ownership(ref)
         _report_session_outcome(self._diag, ref=ref, record=record)
+
+    def _diagnose_account_closure(self, ref: int | str) -> None:
+        """Do not turn an Agent-owned early close into verified completion."""
+        if self._account_tracker is None or not isinstance(ref, int):
+            return
+        try:
+            issue = self._account_tracker.issue_view(ref)
+        except Exception as exc:
+            self._diag.warning("account failure: could not read #%s closure state: %s", ref, exc)
+            return
+        if issue.state.upper() == "CLOSED":
+            self._diag.warning(
+                "account failure: issue #%s was already closed; preserving its state, "
+                "not verified completion and not reopening", ref,
+            )
+
+    def _account_affected(self, error: session_outcome_module.SessionError | None) -> bool:
+        return account_interruption(error) or self._account.cause == "probe_unconfirmed"
 
     def _observe_ingested_consumption(self, event: Mapping[str, Any]) -> None:
         """Charge the Run's AI-credit meter for one **ingested** remote Event.
@@ -4188,6 +4236,8 @@ class _Loop:
         where a Lane's ending and the accounting scope that finalizes it are
         different moments.
         """
+        if self._account_affected(record.error):
+            return
         self._escalation.observe(ref, record.outcome)
         self._attempt_evidence.observe(ref, record.outcome)
         before = self._attempts.strikes(ref)
@@ -4352,6 +4402,16 @@ class _Loop:
                         outcome_label = RUN_OUTCOME_OPERATOR_STOP
                         exit_code = exit_code_for(RUN_OUTCOME_OPERATOR_STOP)
                         break
+                    if getattr(self, "_account", None) is not None and self._account.state:
+                        if not await self._account.ready(may_start=(
+                            self._config.max_iterations == 0
+                            or iter_num < self._config.max_iterations
+                        )):
+                            outcome_label, exit_code = (
+                                RUN_OUTCOME_OPERATOR_STOP if self._stop_drain_requested
+                                else "account_failure"
+                            ), 1
+                            break
                     iter_num += 1
                     if (
                         self._config.max_iterations != 0
@@ -4399,6 +4459,13 @@ class _Loop:
                 raise
         finally:
             await self._settle_preparation_pass()
+            if (
+                getattr(self, "_account", None) is not None and self._account.state
+                and outcome_label not in (RUN_OUTCOME_OPERATOR_STOP, RUN_OUTCOME_INTERRUPTED, "crashed")
+            ):
+                if self._account.state != "stopping":
+                    self._account.stop("no_eligible_probe")
+                outcome_label, exit_code = "account_failure", 1
             # Final wrapper.run.end always emits — even on early break or crash.
             try:
                 self._emit(
@@ -4410,6 +4477,7 @@ class _Loop:
                         if outcome_label in _RUN_OUTCOMES_MID_ITERATION
                         else iter_num
                     ),
+                    **(self._account.end_payload() if hasattr(self, "_account") else {}),
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 self._diag.warning("wrapper.run.end emit failed: %s", exc)
@@ -4446,6 +4514,7 @@ class _LaneWork:
     reclaimed: bool = False
     source_imported: bool = False
     publication_sha: str | None = None
+    account_interrupted: bool = False
     has_checkpoints: bool = False
     # Publications already on base when this Lane was cut. Drift is the
     # later count minus this snapshot; a cut this Run did not observe has
@@ -4507,7 +4576,7 @@ class _IntegrationStage:
     the exact tree that failed rather than a fresh one.
 
     Attributes:
-        branch: The throwaway Integration branch, reaped on every path.
+        branch: The Integration branch; retained when account control interrupts Recovery.
         path: Where that branch is checked out.
         git: A :class:`~git_loopy.git.GitClient` bound to :attr:`path`.
     """
@@ -4871,6 +4940,7 @@ class _ParallelLoop:
             residence=residence,
             issue_clone_setup=self._setup_issue_clone,
         )
+        self._client = self._serial._client
         if self._scheduler is not None:
             self._serial._release_lane_ownership = self._scheduler.release_attempt
 
@@ -5130,12 +5200,20 @@ class _ParallelLoop:
                 except asyncio.CancelledError:
                     pass
             await self._serial._settle_preparation_pass()
+            if (
+                self._serial._account.state
+                and outcome_label not in (RUN_OUTCOME_OPERATOR_STOP, RUN_OUTCOME_INTERRUPTED, "crashed")
+            ):
+                if self._serial._account.state != "stopping":
+                    self._serial._account.stop("no_eligible_probe")
+                outcome_label, exit_code = "account_failure", 1
             try:
                 self._serial._emit(
                     events_module.WRAPPER_RUN_END,
                     iter_num=None,
                     outcome=outcome_label,
                     iterations_run=iterations_run,
+                    **self._serial._account.end_payload(),
                     **(
                         {"refusals": self._terminal_refusals}
                         if outcome_label in ("all_blocked", "all_skipped")
@@ -5205,6 +5283,15 @@ class _ParallelLoop:
                     exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
                     iter_num,
                 )
+            if self._serial._account.state:
+                if not await self._serial._account.ready(may_start=(
+                    self._config.max_iterations == 0
+                    or iter_num < self._config.max_iterations
+                )):
+                    return (
+                        RUN_OUTCOME_OPERATOR_STOP if self._serial._stop_drain_requested
+                        else "account_failure"
+                    ), 1, iter_num
             iter_num += 1
             if (
                 self._config.max_iterations != 0
@@ -5288,6 +5375,18 @@ class _ParallelLoop:
                         exit_code_for("preflight_failed"),
                         scheduler._units_spent,
                     )
+                if self._serial._account.state:
+                    if self._pending:
+                        self._capacity_freed.clear()
+                        await self._await_capacity()
+                        continue
+                    if not await self._serial._account.ready(
+                        may_start=scheduler.remaining_units != 0,
+                    ):
+                        return (
+                            RUN_OUTCOME_OPERATOR_STOP if self._serial._stop_drain_requested
+                            else "account_failure"
+                        ), 1, scheduler._units_spent
                 if self._serial._stop_drain_requested:
                     return (
                         RUN_OUTCOME_OPERATOR_STOP,
@@ -5329,7 +5428,10 @@ class _ParallelLoop:
                 # Reserve only that prefix before latching; ordinary work never
                 # gets a reservation in the gap, which contains no await.
                 reservations = (
-                    scheduler.reserve(only=priority_demand[0])
+                    scheduler.reserve(
+                        only=priority_demand[0],
+                        limit=1 if self._serial._account.state == "probing" else None,
+                    )
                     if priority_demand is not None and priority_demand[0]
                     else ()
                 )
@@ -5343,7 +5445,9 @@ class _ParallelLoop:
                         priority_serial_latched = True
                         self._prepare_serial_drain(serial_required)
                 if priority_demand is None or not priority_demand[0]:
-                    reservations = scheduler.reserve()
+                    reservations = scheduler.reserve(
+                        limit=1 if self._serial._account.state == "probing" else None,
+                    )
                 if spending_refill_turn:
                     self._report_refill_turn(
                         reservations=len(reservations),
@@ -6382,7 +6486,7 @@ class _ParallelLoop:
             pin_refused()
             scheduler.release(reservation)
             return
-        if scheduler.stop_latched:
+        if scheduler.stop_latched or not self._serial._account.ordinary_available:
             scheduler.release(reservation)
             return
         model = resolution.model
@@ -6501,7 +6605,40 @@ class _ParallelLoop:
             self._finalize_contribution(contribution, published=False)
             return
         supervision_started = time.monotonic()
-        outcome = await host.run_contribution(request)
+        # Local sessions use AccountClient; an external host's admission is
+        # this dispatch boundary, and its positive evidence arrives in Events.
+        external_probe = (
+            self._serial._account.admit(ordinary=True)
+            if self._execution_host is not None else False
+        )
+        try:
+            outcome = await host.run_contribution(request)
+        except BaseException:
+            self._serial._account.finished(external_probe, successful=False)
+            raise
+        if self._execution_host is not None:
+            interaction = False
+            for event in outcome.events:
+                error = session_outcome_module.SessionError.from_event(event)
+                if error is not None:
+                    self._serial._account.refuse(error)
+                    interaction = False
+                elif (
+                    event.get("type") == events_module.ASSISTANT_MESSAGE
+                    and event.get("content")
+                ) or (
+                    event.get("type") == events_module.USAGE_TOKENS
+                    and (event.get("output") or 0) > 0
+                    and not event.get("content_filtered")
+                ):
+                    interaction = True
+            if outcome.ending is not None and outcome.ending.error is not None:
+                self._serial._account.refuse(outcome.ending.error)
+            self._serial._account.finished(
+                external_probe,
+                successful=interaction and outcome.ending is not None
+                and outcome.ending.termination is session_outcome_module.SessionTermination.COMPLETED,
+            )
         self._account_supervised_contribution(
             contribution, host, since=supervision_started
         )
@@ -6570,6 +6707,8 @@ class _ParallelLoop:
         lane_work.branch = outcome.branch
         lane_outcome = outcome.ending
         assert lane_outcome is not None
+        if lane_outcome.error is not None:
+            self._serial._account.refuse(lane_outcome.error)
         try:
             lane_outcome = self._prepare_lane_publication(lane_work, lane_outcome)
         except git_module.GitError as exc:
@@ -6610,6 +6749,16 @@ class _ParallelLoop:
         self._emit_contribution_event(
             contribution, events_module.WRAPPER_CONTRIBUTION_WORK_FINISHED
         )
+        if self._serial._account_affected(lane_outcome.error):
+            self._serial._account_issues.add(lane_work.item.ref)
+            self._serial._diagnose_account_closure(lane_work.item.ref)
+            scheduler.finish_terminal_failure(
+                contribution, reoffer=False, reason="account_failure",
+            )
+            scheduler.release_attempt(contribution.ref)
+            self._finalize_contribution(contribution, published=False)
+            return
+        self._serial._account_issues.discard(lane_work.item.ref)
         disposition = scheduler.finish_work(
             contribution, changed=lane_outcome.progressed
         )
@@ -6762,7 +6911,13 @@ class _ParallelLoop:
         disposition = self._scheduler.finish_terminal_failure(
             contribution,
             reoffer=reoffer and outcome.classification != "breach",
-            reason=_terminal_reason_for(outcome),
+            reason=(
+                "account_failure"
+                if self._serial._account_affected(
+                    outcome.ending.error if outcome.ending is not None else None
+                )
+                else _terminal_reason_for(outcome)
+            ),
         )
         assert disposition == rolling_scheduler.TERMINAL
         if lane_work.reclaimed:
@@ -6873,6 +7028,9 @@ class _ParallelLoop:
         it was reused.
         """
         for remote_event in remote_events:
+            error = session_outcome_module.SessionError.from_event(remote_event)
+            if error is not None:
+                self._serial._account.refuse(error)
             envelope = dict(remote_event)
             envelope.update(
                 contribution_id=contribution.contribution_id,
@@ -7167,7 +7325,7 @@ class _ParallelLoop:
             scope.agent_seconds += max(0.0, time.monotonic() - agent_started)
         return _LaneSessionSignals(
             termination=termination,
-            error=session_outcome_module.strongest_error(watch.error, raised),
+            error=session_error_for_control(watch, raised),
             content_filtered=watch.content_filtered,
             no_more_tasks=watch.no_more_tasks,
         )
@@ -7387,7 +7545,12 @@ class _ParallelLoop:
             # makes meanwhile is not misreported as this contribution's.
             latched_before = self._scheduler.serial_latched
             newly_admitted = self._scheduler.finalize(
-                contribution, published=published
+                contribution, published=published,
+                reason=(
+                    "account_failure"
+                    if lane_work is not None and lane_work.account_interrupted
+                    else None
+                ),
             )
             if latched_before != self._scheduler.serial_latched:
                 # §5.2: an unpublished contribution requests serial service of
@@ -7586,7 +7749,7 @@ class _ParallelLoop:
         )
         contribution.strike_reaction = strike_reaction
         if (
-            strike_reaction == rolling_scheduler.STRIKE_ADD
+            (strike_reaction == rolling_scheduler.STRIKE_ADD or contribution.reason == "account_failure")
             and self._scheduler is not None
         ):
             self._scheduler.release_attempt(contribution.ref)
@@ -7660,7 +7823,9 @@ class _ParallelLoop:
         A conflicting merge or red gate hands the same stage to bounded Recovery
         (:meth:`_auto_resolve_lane`, #63). A timeout re-runs the gate without an
         Agent, within that same bound (#904). A gate that cannot run at all hands
-        off without claiming the change is red. The stage is reaped on every path.
+        off without claiming the change is red. Cleanup follows every path;
+        account-interrupted Recovery retains a salvaged branch, or the
+        workspace itself if salvage fails.
         """
         ref = contribution.ref
         stage = self._open_integration_stage(ref)
@@ -7708,7 +7873,9 @@ class _ParallelLoop:
                 contribution, lane_work, stage, conflicted=False, gate_result=result
             )
         finally:
-            self._reap_integration_stage(stage, ref)
+            self._reap_integration_stage(
+                stage, ref, preserve=lane_work.account_interrupted,
+            )
 
     def _lane_workspace_run_id(self, ref: int | str) -> str:
         attempt = self._lane_setup_attempts.get(ref, 1)
@@ -7760,9 +7927,9 @@ class _ParallelLoop:
         return _IntegrationStage(branch=branch, path=path, git=git, issue_clone=sandboxed)
 
     def _reap_integration_stage(
-        self, stage: _IntegrationStage, ref: int | str
+        self, stage: _IntegrationStage, ref: int | str, *, preserve: bool = False,
     ) -> None:
-        """Tear down the private stage on every path (#219 §4.16, criterion #9)."""
+        """Reclaim the stage without discarding account-interrupted Recovery."""
         if stage.issue_clone:
             try:
                 if stage.git.is_dirty() or stage.git.has_untracked():
@@ -7778,6 +7945,26 @@ class _ParallelLoop:
                     "integration #%s: Issue clone salvage failed; preserving %s: %s",
                     ref, stage.path, exc,
                 )
+            return
+        if preserve:
+            try:
+                if stage.git.is_dirty() or stage.git.has_untracked():
+                    stage.git.add_all()
+                    stage.git.commit(checkpoint_message(ref))
+                # This worktree shares the source object store: retaining its
+                # branch retains both Recovery commits and any Checkpoint.
+                # Never force removal if salvage failed or new dirt appeared.
+                self._git.remove_worktree(stage.path, force=False)
+            except git_module.GitError as exc:
+                self._diag.error(
+                    "integration #%s: account-interrupted Recovery salvage failed; "
+                    "preserving %s and %s: %s", ref, stage.path, stage.branch, exc,
+                )
+                return
+            self._diag.warning(
+                "integration #%s: account-interrupted Recovery retained on %s",
+                ref, stage.branch,
+            )
             return
         try:
             self._git.remove_worktree(stage.path, force=True)
@@ -7803,6 +7990,13 @@ class _ParallelLoop:
         was cut and this merge is the verified result exactly.
         """
         ref = contribution.ref
+        if self._serial._account_base_issues:
+            lane_work.account_interrupted = True
+            self._diag.warning(
+                "integration #%s: withholding publication over unverified "
+                "account-failed serial commits; work remains recoverable", ref,
+            )
+            return False
         if not self._leased(lane_work.item, "publication onto base"):
             # **The fence** (ADR-0033 §4.4), immediately before the write and
             # not once at the start of Integration: a gate, a merge and any
@@ -8321,6 +8515,9 @@ class _ParallelLoop:
                 and gate_result.failure.timed_out
             )
             if not timed_out:
+                if self._serial._account.state is not None:
+                    lane_work.account_interrupted = True
+                    return False
                 scope = self._contribution_iter.get(contribution.contribution_id)
                 if scope is not None:
                     scope.recovery_attempts += 1
@@ -8336,6 +8533,11 @@ class _ParallelLoop:
                     contribution, lane_work, stage, attempt, conflicted=conflicted,
                     gate_failure=gate_result.failure if gate_result else None,
                 )
+                if self._serial._account.state is not None:
+                    lane_work.account_interrupted = True
+                    self._serial._account_issues.add(ref)
+                    self._serial._diagnose_account_closure(ref)
+                    return False
             gate_result = await self._integration_gate(
                 ref, f"auto-resolution attempt {attempt}", stage.path
             )
@@ -8390,7 +8592,7 @@ class _ParallelLoop:
         scope = self._contribution_iter.get(contribution.contribution_id)
         try:
             async with IterationSession(
-                self._client,
+                self._serial._auxiliary_client,
                 config=self._config,
                 event_log=self._writers.event_log,
                 sinks=self._sinks,

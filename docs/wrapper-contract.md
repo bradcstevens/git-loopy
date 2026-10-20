@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.36 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.38 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -2377,7 +2377,8 @@ and 2.29 with the Python-only non-execution Task-type exclusion (ADR-0088),
 and 2.30 with execution profile selection and Skill exposure (ADR-0078),
 and 2.31 with Reviewer read-only access (ADR-0078/0086),
 and 2.32 with the Host yield disclosure (§4, §12, #817),
-and 2.34 with the Sandbox disclosure (§12, #864).
+and 2.34 with the Sandbox disclosure (§12, #864),
+and 2.38 with Python Run-wide account control (§19.1, #676).
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
@@ -3217,6 +3218,84 @@ remains pinned by `event-schema.json`.
 
 Contract 2.35 adds this enforcement fixture without changing the Event schema,
 the Event/Dashboard fixture revisions, or historical streams' interpretation.
+
+## 19.1 Python Run-wide account control (#676)
+
+Terminal, account-identifying harness refusal is Run control, not an issue failure.
+The Python Runner requires an account code/type or an explicitly account-identifying
+message at the session endpoint (for example, premium-request exhaustion or invalid
+credentials, not generic permission denial or filesystem quota);
+a bare HTTP 403/429, classifier kind alone, arbitrary tool stderr, or recovered
+`model.call_failure` does not authorize it. A normal SDK return and commits made
+before the refusal do not override this evidence. Unknown, network, server and
+bad-request failures retain their existing policy.
+
+Quota exhaustion or authentication refusal stops new account-dependent sessions:
+workers, Reviewers, selectors, classifiers and Recovery share one admission gate.
+Already-started sessions drain through the existing bounded completion/cancellation
+paths and their work is salvaged. Only independently proved results may finish
+ordinary gated, Lease-fenced publication and closure. No account, credential or
+model fallback is authorized.
+Account-interrupted Recovery retains its Integration branch and Checkpoints dirty
+repairs before reclaiming the workspace; a failed salvage preserves the workspace
+instead of forcing removal. This applies with or without a Sandbox.
+
+A terminal rate refusal pauses admission under one Run-wide cooldown. The Run
+allows at most two retry admissions and 120 cumulative seconds of cooldown.
+Fallbacks are 30 seconds, then 60 seconds; a valid provider delay is a minimum
+(the larger of it and the fallback is used). Missing timing uses the fallback;
+invalid timing stops with `invalid_retry_delay`. A delay beyond the remaining
+budget stops with `wait_budget_exhausted`, never retries early. The pinned SDK's
+typed terminal error currently has no retry-delay field; it therefore supplies
+missing timing, not a guessed delay parsed from prose.
+
+Concurrent refusals coalesce: missing timing does not reset the clock or consume
+another retry. An explicit later provider minimum can extend that same deadline
+only within the remaining budget. After cooldown, at most one ordinary eligible
+worker is admitted as the probe, under the usual Pin, eligibility, Lease, routing
+and cap constraints. No paid health-check or auxiliary session is a probe.
+Positive successful harness interaction is required to reopen admission; absence
+of an error or a commit alone is not health. Success does not reset either budget.
+An unconfirmed probe, no eligible probe, an exhausted retry budget, or a cap that
+prevents a retry terminates explicitly. Quota/auth stops dominate a rate pause.
+Operator Stop interrupts cooldown promptly and keeps `operator_stop` primary;
+hard deadlines remain in force.
+
+An affected session records its actual ending, work, elapsed time and credits but
+charges no issue Strike, Attempt transition, escalation or adverse route-quality
+evidence. Earlier legitimate history is never refunded. An already-granted
+session consumes its Iteration/Lane-work unit; cooldown consumes none. Unaffected
+issue failures keep their ordinary accounting. The completion backstop excludes
+affected issues, including attempts that left commits. An already-closed affected
+issue is diagnosed, preserved and not treated as verified completion; it is never
+automatically reopened. A Checkpoint does not prove completion. Preventing
+Agent-owned early closure remains #913's separate obligation.
+
+The terminal reason is **`account_failure` / exit 1**, carrying `account_error`
+(the original Session error identity) and `account_cause` on `wrapper.run.end`.
+These fields also retain evidence when a deliberate `operator_stop` takes priority.
+An affected Lane's terminal contribution reason is `account_failure`, unpublished.
+
+### Account Event (Event fixture 1.11; envelope compatibility 1)
+
+Python alone produces **`wrapper.account.state`**, at Run scope (`iter: null`):
+
+| Field | Meaning |
+| --- | --- |
+| `state` | `cooldown`, `probing`, or `stopping` |
+| `kind` | Original `quota_exhausted`, `authentication_failed`, or `rate_limited` |
+| `cause` | Specific transition/stopping cause, pinned in `event-schema.json` |
+| `retries_remaining` | Remaining Run-wide retry admissions, initially 2 |
+| `wait_remaining_seconds` | Unreserved cumulative cooldown budget, initially 120 |
+| `admission_open` | True only on `probing` / `probe_succeeded`, after positive interaction |
+
+Dashboard Headers expose this as Run-level `account` state, never a new issue
+Status. Historical silence is unknown. The successful-probe record retains the
+spent budgets while reopening admission; a consumer must not leave that Run
+displayed as paused. `python_event_types` extends the common Event catalogue
+without adding a literal or behavior obligation to dormant adapters.
+`account-control.json` pins Python-only exit and Event cases. Shell/PowerShell
+frozen Path baselines and account behavior remain unchanged.
 
 ## 20. Changing this contract
 

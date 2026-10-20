@@ -174,6 +174,7 @@ ExitReason = Literal[
     "preflight_failed",
     "usage_error",
     "operator_stop",
+    "account_failure",
 ]
 
 
@@ -187,6 +188,7 @@ def exit_code_for(reason: ExitReason) -> int:
         "all_blocked",
         "preflight_failed",
         "operator_stop",
+        "account_failure",
     }:
         return 1
     if reason == "usage_error":

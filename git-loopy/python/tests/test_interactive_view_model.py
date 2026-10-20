@@ -10,6 +10,31 @@ import pytest
 from git_loopy.interactive import view_model
 
 
+def test_account_control_is_run_level_and_retains_budgets_without_issue_status():
+    from git_loopy.interactive.state import LiveRunState
+
+    state = LiveRunState()
+    assert "account" not in view_model.project_run_view(state, None, issue=42)["dashboard"]["header"]
+    for phase, cause, opened in [
+        ("cooldown", "rate_refusal", False),
+        ("probing", "probe_admitted", False),
+        ("probing", "probe_succeeded", True),
+        ("stopping", "terminal_refusal", False),
+    ]:
+        state.render({
+            "type": "wrapper.account.state", "iter": None, "state": phase,
+            "kind": "rate_limited", "cause": cause, "retries_remaining": 1,
+            "wait_remaining_seconds": 90.0, "admission_open": opened,
+        })
+        projected = view_model.project_run_view(state, None, issue=42)["dashboard"]
+        assert projected["header"]["account"] == {
+            "state": phase, "kind": "rate_limited", "cause": cause,
+            "retries_remaining": 1, "wait_remaining_seconds": 90.0,
+            "admission_open": opened,
+        }
+        assert projected["queue"]["rows"] == []
+
+
 def test_view_model_module_has_no_renderer_dependency() -> None:
     source = Path(view_model.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)

@@ -1149,7 +1149,7 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
         if name not in _NOT_EVENT_TYPES
         and isinstance(value := getattr(events_module, name), str)
     }
-    assert actual == _EVENT_SCHEMA["event_types"]
+    assert actual == (_EVENT_SCHEMA["event_types"] | _EVENT_SCHEMA["python_event_types"])
 
 
 def test_wrapper_dashboard_fault_is_retired_and_unreusable() -> None:
@@ -1358,8 +1358,8 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     retaining envelope compatibility 1 and historical silence as unknown.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.10"
-    assert _EVENT_SCHEMA["contract_version"] == "2.34"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.11"
+    assert _EVENT_SCHEMA["contract_version"] == "2.38"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1436,6 +1436,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         | set(_EVENT_SCHEMA["run_control_types"])
         | {"wrapper.release.advanced"}
         | {"wrapper.sandbox.resolved"}
+        | {"wrapper.account.state"}
         # Calibration lifecycle records are no **Run**'s Insight (#371): they
         # carry no ``run_id``, and nothing a Calibration buys is delivered work.
         | set(_EVENT_SCHEMA["calibration_identity"]["lifecycle_types"])
@@ -1749,6 +1750,8 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         # #643: the candidates a Rolling terminal decision refused, which the
         # Unbound-Run notice reads as the Pool. Optional, so the wire stays 1.2.
         "wrapper.run.end": {
+            "account_optional": ["account_error", "account_cause"],
+            "account_note": "Python account_failure exits 1. Original Session error identity and stopping cause accompany it. operator_stop stays primary when deliberate, while these fields retain the observed account evidence.",
             "refusals_optional": ["refusals"],
             "refusals_entry_keys": ["issue", "reason"],
             "refusals_note": (
@@ -2616,7 +2619,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.25"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.26"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
