@@ -21,6 +21,14 @@ git-loopy
 root [`README.md`](../../README.md) for positioning, and
 [`docs/runners.md`](../../docs/runners.md) for the full runner reference.
 
+A Lane contribution's frozen summary separates **Session time**, **Integration
+time** (the remaining time, including the queue wait, gate and Recovery), and
+**Total wall-clock time**. It uses the recorded `agent_seconds` and
+`lifecycle_seconds`; Session time plus Integration time equals the total within
+display rounding. Serial Iterations retain their single **Duration** figure and
+show no Integration time. This is a human-summary projection, not an Event
+contract or durable run-summary schema change.
+
 Each finished attempt carries its observed **Ending** beside the unchanged issue
 **Status**: on the issue's `wrapper.iteration.end` row for serial work, or on
 `wrapper.contribution.end` for its Lane. The Queue explains it inline (for example,
