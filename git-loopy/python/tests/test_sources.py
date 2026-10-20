@@ -117,6 +117,28 @@ def _make_issue(
     )
 
 
+def test_checkpoint_breadcrumb_survives_the_recent_comment_window(tmp_path):
+    breadcrumb = (
+        "<!-- git-loopy:checkpoint -->\n"
+        "Checkpoint preserved at `refs/heads/git-loopy-checkpoints/issue-42/abc123`.\n"
+        "The next attempt starts from base, not this Checkpoint."
+    )
+    comments = (
+        gh_module.Comment(body=breadcrumb, author="runner", created_at="2026-10-01"),
+        *(gh_module.Comment(body=f"Later discussion {i}", author="human",
+                            created_at=f"2026-10-{i:02}")
+          for i in range(2, 8)),
+    )
+    gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, comments=comments)],
+    )
+    source = GitHubIssueSource(_silent_logger(), gh=gh)
+    (item,) = source.collect_pool().items
+    assert breadcrumb in item.rendered_block
+    assert item.rendered_block.count("refs/heads/git-loopy-checkpoints/issue-42/abc123") == 1
+
+
 # --------------------------------------------------------------------------- #
 # is_afk_ready                                                                #
 # --------------------------------------------------------------------------- #

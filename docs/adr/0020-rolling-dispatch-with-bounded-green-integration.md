@@ -2,6 +2,13 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0004](0004-runner-checkpoint-and-push-durability.md) (#905):**
+only a Lane's agent commits buy Integration admission. Trailing Checkpoints are
+preserved under issue-addressed remote refs, never merged onto base. A
+Checkpoint-only contribution ends no-progress with its session ending; a mixed
+contribution publishes only through its last agent commit. The finished Lane
+branch remains a Breadcrumb, and retries still start from base.
+
 **Implemented amendment ([#418](https://github.com/bradcstevens/git-loopy/issues/418)):**
 the Python Runner's publication boundary is now **publish locally, acknowledge upstream
 durability, then close**, in that order. Integration pushes current base, including any

@@ -2,6 +2,31 @@
 
 **Status:** accepted
 
+**Implemented amendment ([#905](https://github.com/bradcstevens/git-loopy/issues/905)):**
+in Python Parallel mode, a Lane's Checkpoint is durable unfinished work, never
+publication onto base. After local import or remote materialization, Integration
+receives only the last agent commit before trailing Checkpoints. If every new
+commit is a Checkpoint, the contribution ends **no-progress** with its session
+ending (such as timeout), publishes nothing, and leaves its issue open. A history
+with a Checkpoint already inside the agent portion is refused rather than merging
+that Checkpoint onto base.
+
+The Runner pushes the Checkpoint to the immutable, issue-addressed remote branch
+`refs/heads/git-loopy-checkpoints/issue-<N>/<checkpoint-sha>`, using base's configured
+upstream remote or `origin` when base has no upstream. This namespace is separate
+from disposable Lane branches and Sweep's reserved local branch namespace. The
+Run log names the ref, and a Lease-fenced issue comment records it with explicit
+inspection instructions. Briefs retain the latest such Breadcrumb even outside
+the recent-comment window. A retry still cuts its Lane from base; it never adopts
+the Checkpoint automatically.
+
+A missing remote, denied Lease fence, or failed push warns and retains the local
+Lane branch. It never publishes the Checkpoint onto base as a fallback; any agent
+portion can still be gated and published independently. Failed issue comments
+also warn through the tracker adapter. Serial mode is unchanged: its Checkpoint
+stays on the current branch and uses the best-effort auto-push below. This amends
+ADR-0020's admission of any durable Lane branch: only agent commits buy admission.
+
 **Implemented amendment ([#418](https://github.com/bradcstevens/git-loopy/issues/418)):**
 the Python Runner's Parallel Integration now pushes current base to its configured
 upstream after the green merge and any Release-line commit, before attempting tracker

@@ -320,6 +320,7 @@ from git_loopy.task_type_writer import TaskTypeLabelClient
 from git_loopy.telemetry import otel as telemetry
 from git_loopy.ui import Renderer, RunSummary, get_console
 from git_loopy.wrapper import (
+    CHECKPOINT_COMMENT_MARKER,
     checkpoint_message,
     is_checkpoint_message,
     did_iteration_make_progress,
@@ -4423,6 +4424,8 @@ class _LaneWork:
     pre_sha: str | None = None
     reclaimed: bool = False
     source_imported: bool = False
+    publication_sha: str | None = None
+    has_checkpoints: bool = False
     # Publications already on base when this Lane was cut. Drift is the
     # later count minus this snapshot; a cut this Run did not observe has
     # no snapshot, and the observation is null rather than a guessed zero.
@@ -6541,6 +6544,22 @@ class _ParallelLoop:
         lane_work.branch = outcome.branch
         lane_outcome = outcome.ending
         assert lane_outcome is not None
+        try:
+            lane_outcome = self._prepare_lane_publication(lane_work, lane_outcome)
+        except git_module.GitError as exc:
+            self._diag.error(
+                "lane #%s: cannot separate Checkpoints from publication; "
+                "preserving %s unpublished: %s", ref, lane_work.branch, exc,
+            )
+            self._finish_terminal_host_failure(
+                contribution, lane_work,
+                execution_host_module.ContributionFailure(
+                    reason="checkpoint_publication_unverified",
+                    classification="stall", ending=None, detail=str(exc),
+                ),
+                reoffer=False,
+            )
+            return
         scope = self._contribution_iter.get(contribution.contribution_id)
         if scope is not None:
             scope.ending = lane_outcome.outcome
@@ -6555,8 +6574,7 @@ class _ParallelLoop:
         # One progress fact per contribution (#403): the ending the outcome
         # carries is what the scheduler is told, so a contribution's
         # disposition can never contradict the ending just reported for it.
-        # Re-deriving it from the completion SHA would be a second answer the
-        # local runner's own commit accounting can disagree with.
+        # Preparation excludes Checkpoints for every host before this boundary.
         #
         # The Lane-work boundary (#681, ADR-0065): only a session that returned
         # a captured outcome reaches it, so every host failure, a pre-session
@@ -6685,6 +6703,8 @@ class _ParallelLoop:
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
         outcome: execution_host_module.ContributionFailure,
+        *,
+        reoffer: bool = True,
     ) -> None:
         """Finalize a host failure before it can reach Integration."""
         assert self._scheduler is not None
@@ -6715,7 +6735,7 @@ class _ParallelLoop:
 
         disposition = self._scheduler.finish_terminal_failure(
             contribution,
-            reoffer=outcome.classification != "breach",
+            reoffer=reoffer and outcome.classification != "breach",
             reason=_terminal_reason_for(outcome),
         )
         assert disposition == rolling_scheduler.TERMINAL
@@ -7136,10 +7156,10 @@ class _ParallelLoop:
         Returns:
             ``(changed, checkpoint_ok)`` for
             :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finish_work`
-            (#219 §3.7-3.10): ``changed`` is ``True`` iff the branch carries
-            durable work — an agent commit or a successful Checkpoint commit
-            both count (§3.9) — and ``checkpoint_ok`` is ``False`` only on an
-            actual Checkpoint *failure*, never on "nothing to checkpoint".
+            (#219 §3.7-3.10, amended by #905): ``changed`` is ``True`` iff the
+            branch carries agent commits, not Checkpoints. ``checkpoint_ok``
+            is ``False`` only on an actual Checkpoint *failure*, never on
+            "nothing to checkpoint".
         """
         wt_git = lane_work.git
         ref = lane_work.item.ref
@@ -7156,18 +7176,94 @@ class _ParallelLoop:
                 new_commits = []
 
         for c in new_commits:
+            event_type = (
+                events_module.WRAPPER_CHECKPOINT_RECORDED
+                if is_checkpoint_message(c.message)
+                else events_module.WRAPPER_COMMIT_RECORDED
+            )
             self._serial._emit(
-                events_module.WRAPPER_COMMIT_RECORDED,
+                event_type,
                 iter_num=None,
                 sha=c.sha,
                 subject=c.subject,
                 date=c.date,
+                issue=ref,
                 lane_issue=ref,
             )
 
-        checkpoint_sha, checkpoint_ok = self._maybe_checkpoint_lane(lane_work)
-        changed = bool(new_commits) or checkpoint_sha is not None
+        _, checkpoint_ok = self._maybe_checkpoint_lane(lane_work)
+        changed = any(not is_checkpoint_message(c.message) for c in new_commits)
         return changed, checkpoint_ok
+
+    def _prepare_lane_publication(
+        self, lane_work: _LaneWork,
+        ending: session_outcome_module.SessionOutcomeRecord,
+    ) -> session_outcome_module.SessionOutcomeRecord:
+        """Keep the completed Lane intact; Integration receives only its agent tip."""
+        if lane_work.pre_sha is None:
+            raise git_module.GitError(["log"], 1, "Lane base revision is unknown")
+        tip = self._git.branch_tip(lane_work.branch).sha
+        commits = self._git.commits_between(lane_work.pre_sha, tip)
+        checkpoints = [c for c in commits if is_checkpoint_message(c.message)]
+        if not checkpoints:
+            return ending
+        lane_work.has_checkpoints = True
+        self._preserve_lane_checkpoint(lane_work, checkpoints[0].sha)
+        agent_commits = [c for c in commits if not is_checkpoint_message(c.message)]
+        if agent_commits:
+            lane_work.publication_sha = agent_commits[0].sha
+            if any(
+                is_checkpoint_message(c.message)
+                for c in self._git.commits_between(
+                    lane_work.pre_sha, lane_work.publication_sha
+                )
+            ):
+                raise git_module.GitError(
+                    ["log"], 1, "agent history includes a Checkpoint; refusing to publish it"
+                )
+        return session_outcome_module.resolve_session_outcome(
+            termination=ending.termination,
+            progressed=bool(agent_commits),
+            error=ending.error,
+            content_filtered=(
+                ending.outcome is session_outcome_module.SessionOutcome.CONTENT_FILTERED
+            ),
+            no_more_tasks=(
+                ending.outcome is session_outcome_module.SessionOutcome.NO_MORE_TASKS
+            ),
+        )
+
+    def _preserve_lane_checkpoint(self, lane_work: _LaneWork, sha: str) -> None:
+        """Push an immutable, issue-addressed Breadcrumb, never a base fallback."""
+        ref = f"refs/heads/git-loopy-checkpoints/issue-{lane_work.item.ref}/{sha}"
+        try:
+            upstream = self._git.upstream()
+            remote = upstream[0] if upstream is not None else "origin"
+            if not self._git.remote_url(remote):
+                raise git_module.GitError(["push"], 1, f"no remote {remote!r}")
+            if not self._leased(lane_work.item, "Checkpoint preservation push"):
+                raise git_module.GitError(["push"], 1, "Checkpoint push Lease fence denied")
+            if not self._git.push_ref(remote, ref, sha, None):
+                raise git_module.GitError(["push"], 1, "Checkpoint ref already differs")
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "lane #%s: Checkpoint push to %s failed; keeping local branch %s, "
+                "never publishing the Checkpoint onto base: %s",
+                lane_work.item.ref, ref, lane_work.branch, exc,
+            )
+            return
+        self._diag.info(
+            "lane #%s: Checkpoint preserved at %s on %s", lane_work.item.ref, ref, remote
+        )
+        if self._leased(lane_work.item, "Checkpoint breadcrumb comment"):
+            self._source.comment(
+                lane_work.item.ref,
+                f"{CHECKPOINT_COMMENT_MARKER}\n"
+                f"Checkpoint preserved at `{ref}` on remote `{remote}` (commit `{sha}`).\n\n"
+                "This is unfinished work, not published onto base. The next attempt starts "
+                "from base, not this Checkpoint. Inspect it explicitly if useful:\n\n"
+                f"```sh\ngit fetch {remote} {ref}\ngit show FETCH_HEAD\n```",
+            )
 
     def _maybe_checkpoint_lane(
         self, lane_work: _LaneWork
@@ -7531,14 +7627,16 @@ class _ParallelLoop:
             if stage.issue_clone:
                 try:
                     stage.git.fetch_sha(
-                        str(self._git.root), f"refs/heads/{lane_work.branch}", lane_work.branch,
+                        str(self._git.root),
+                        lane_work.publication_sha or f"refs/heads/{lane_work.branch}",
+                        lane_work.branch,
                     )
                 except git_module.GitError as exc:
                     self._diag.error("integration #%s: could not import contribution: %s", ref, exc)
                     self._fallback_lane_to_serial(lane_work)
                     return False
             try:
-                stage.git.merge(lane_work.branch)
+                stage.git.merge(lane_work.publication_sha or lane_work.branch)
             except git_module.GitError as exc:
                 # A conflicting merge, unwound inside the private stage — base
                 # was never touched, so there is nothing to undo there.
@@ -7677,10 +7775,17 @@ class _ParallelLoop:
             return False
         try:
             pre_base = self._git.head_sha()
+            stage_commits = stage.git.commits_between(pre_base, stage.git.head_sha())
         except git_module.GitError as exc:
             self._diag.warning(
-                "integration #%s: base head_sha failed: %s; not publishing",
+                "integration #%s: publication history read failed: %s; not publishing",
                 ref, exc,
+            )
+            return False
+        if any(is_checkpoint_message(c.message) for c in stage_commits):
+            self._diag.warning(
+                "integration #%s: refusing to publish a Checkpoint from the private stage",
+                ref,
             )
             return False
         try:
@@ -7790,7 +7895,8 @@ class _ParallelLoop:
                 release_target=next_line.target,
                 release_version=next_line.version,
             )
-        self._delete_branch_safely(contribution.ref, lane_work.branch)
+        if not lane_work.has_checkpoints:
+            self._delete_branch_safely(contribution.ref, lane_work.branch)
         return True
 
     def _push_publication(
@@ -8186,13 +8292,13 @@ class _ParallelLoop:
         """
         if conflicted:
             situation = (
-                f"Branch {lane_work.branch} could not be merged into this "
+                f"Revision {lane_work.publication_sha or lane_work.branch} could not be merged into this "
                 "integration worktree (the conflicting merge was aborted). "
                 "Merge it, "
             )
         else:
             situation = (
-                f"Branch {lane_work.branch} is already merged into this "
+                f"Revision {lane_work.publication_sha or lane_work.branch} is already merged into this "
                 "integration worktree, but its feedback loops are red. Fix "
                 "them, "
             )

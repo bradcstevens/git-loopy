@@ -205,6 +205,7 @@ def exit_code_for(reason: ExitReason) -> int:
 #: (or ``unattributed``) — deliberately NOT ``#N``, so a Checkpoint never opens
 #: a GitHub cross-reference on the issue every iteration.
 CHECKPOINT_TRAILER_KEY = "GitLoopy-Checkpoint"
+CHECKPOINT_COMMENT_MARKER = "<!-- git-loopy:checkpoint -->"
 
 #: Attribution value when the active issue could not be inferred.
 _CHECKPOINT_UNATTRIBUTED = "unattributed"

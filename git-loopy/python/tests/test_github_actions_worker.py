@@ -237,9 +237,9 @@ def test_the_session_ending_is_written_beside_the_events_for_the_completion_reco
     )
 
     result = json.loads((tmp_path / worker.RESULT_FILENAME).read_text())
-    assert result["ending"]["progressed"] is True
+    assert result["ending"]["progressed"] is False
     assert result["ending"]["termination"] == "completed"
-    assert result["ending"]["outcome"] is None
+    assert result["ending"]["outcome"] == "no_progress"
     assert result["checkpoint_failed"] is False
 
 

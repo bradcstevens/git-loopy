@@ -1165,6 +1165,25 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 `git-loopy <VERSION>` and does not require a repository, Config, GitHub,
 Copilot, network access, or the TUI.
 
+### Unfinished Lane work
+
+Only agent commits advance base in Parallel mode. The Runner still captures
+uncommitted Lane work as a **Checkpoint**, but Integration merges only through
+the last agent commit. A Checkpoint-only contribution publishes nothing, ends
+no-progress with its session ending (for example, timeout), and leaves the issue open.
+
+Checkpoints are pushed to
+`refs/heads/git-loopy-checkpoints/issue-<N>/<checkpoint-sha>` on base's upstream
+remote, or `origin` without an upstream. The Run log and an issue comment name the
+ref; later briefs retain the latest Checkpoint Breadcrumb even after newer comments
+displace it from the five-comment window. Follow the comment's `git fetch` and
+`git show FETCH_HEAD` instructions to inspect it. New attempts still start from
+base, not from unlanded work.
+
+If preservation fails, the Run warns and keeps the local Lane branch; it never
+publishes the Checkpoint onto base as a fallback. Serial Checkpoints remain on
+the current branch and retain their existing best-effort auto-push behavior.
+
 ---
 
 ## Setting up an Azure target (`git-loopy remote setup`)

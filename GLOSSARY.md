@@ -374,9 +374,13 @@ _Avoid_: error message, failure string, exception.
 
 **Checkpoint**:
 A runner-authored commit that captures any uncommitted or untracked changes the agent
-left at a serial **Iteration** or Lane-work boundary, so subsequent work starts from a
-clean durable branch. It is close-keyword-free (never auto-closes an issue) and does
-not count as Strike progress. Distinct from the agent's own commits.
+left at a serial **Iteration** or Lane-work boundary. In Serial mode it stays on the
+current branch. In **Parallel mode** it stays off base: the Runner preserves it under
+an issue-addressed remote ref, names it in the Run log and on the issue, and includes
+that **Breadcrumb** in later briefs. A retry still starts from base, never from the
+Checkpoint automatically. A failed push warns and retains the local Lane branch,
+never using base as a fallback. It is close-keyword-free (never auto-closes an issue)
+and does not count as Strike progress. Distinct from the agent's own commits.
 _Avoid_: autosave, stash, snapshot.
 
 ### Issues and attribution
@@ -1887,10 +1891,14 @@ _Avoid_: cleanup, garbage collection, prune, reap (as the name for this step).
 
 **Integration**:
 The serialized **Parallel mode** stage that consumes the **Integration backlog** one
-contribution at a time. It merges each finished Lane branch into a private **Integration
-stage**, re-runs the feedback loops *there*, and only then publishes the verified result
+contribution at a time. It merges each Lane's contribution only through its last agent
+commit, excluding trailing **Checkpoints**, into a private **Integration stage**,
+re-runs the feedback loops *there*, and only then publishes the verified result
 to the base branch and closes the issue — the issue is closed only after its contribution
 is verifiably published green.
+A Checkpoint-only contribution publishes nothing and ends **no-progress** with its
+session ending, leaving the issue open. Checkpoints are preserved separately as
+issue-addressed remote **Breadcrumbs**, not as base advancement.
 Where base has a configured upstream, the Python Runner also requires an acknowledged
 push of current base there before closure; a failed push leaves the issue open with its
 work on local base. With no upstream, local is the whole publication.
@@ -2202,7 +2210,8 @@ _Avoid_: Run placement, Run host, remote Execution host (an Execution host place
   **Consumption** its own telemetry already carries.
 - A **Checkpoint** is authored by the runner (not the agent) at a serial
   **Iteration** or Lane-work boundary and is attributed to the **Active issue**, but
-  never counts as **Strike** progress.
+  never counts as **Strike** progress. A Lane's Checkpoint stays off base and is
+  preserved separately; only the Lane's agent commits enter **Integration**.
 - **Consumption** is attributed to a scope: a serial **Iteration** or parallel
   **Lane contribution** (a **Summary** row's Cost), or an **Active issue** (the
   **Queue**'s per-issue Cost). Both resolve Cost through the same **Cost denomination**,

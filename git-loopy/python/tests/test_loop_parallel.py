@@ -8663,6 +8663,9 @@ def test_lane_commits_in_an_issue_clone_without_changing_source_refs(
         assert not any(
             e["type"] == "wrapper.checkpoint.recorded" for e in _logged_events(tmp_path)
         )
+    elif leave_dirty:
+        assert source.head_sha() == base
+        assert not (tmp_path / "contribution.txt").exists()
     else:
         assert (tmp_path / "contribution.txt").read_text() == "issue 42\n"
     if offline and leave_dirty:
