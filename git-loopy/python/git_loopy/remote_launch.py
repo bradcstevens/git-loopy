@@ -172,6 +172,7 @@ class RemoteResidence:
         self._provider = provider
         self._env = env
         self._receipts: dict[str, RemoteRunReceipt] = {}
+        self._control_root: Path | None = None
 
     def launch(self, request: RunLaunch) -> int:
         launch_remote(request, provider=self._provider, env=self._env)
@@ -181,9 +182,24 @@ class RemoteResidence:
         from git_loopy.remote_control import GUEST_REPOSITORY
 
         found = []
+        self._control_root = git.common_git_dir()
         self._receipts = {receipt.run_id: receipt for receipt in remote_run_receipts(git)}
         for receipt in self._receipts.values():
-            snapshot = self._provider.inspect(receipt)
+            try:
+                snapshot = self._provider.inspect(receipt)
+            except ImportError:
+                print(
+                    f"git-loopy: Remote Run {receipt.run_id} liveness is unknown; "
+                    "install the [remote] extra through your configured package feed.",
+                    file=sys.stderr,
+                )
+                snapshot = None
+            except RunTargetError as exc:
+                print(
+                    f"git-loopy: Remote Run {receipt.run_id} liveness is unknown: {exc}",
+                    file=sys.stderr,
+                )
+                snapshot = None
             if snapshot is None:
                 trace = GUEST_REPOSITORY / ".git-loopy" / "logs" / f"{receipt.run_id}.jsonl"
                 found.append(DiscoveredRun(
@@ -197,7 +213,7 @@ class RemoteResidence:
     def open_attach(self, run: DiscoveredRun, *, repo_root: Path) -> AttachChannel:
         from git_loopy.remote_client import RemoteAttachChannel
 
-        return RemoteAttachChannel(self._provider, self._receipts[run.run_id], repo_root)
+        return RemoteAttachChannel(self._provider, self._receipt(run), repo_root)
 
     def request_stop(
         self, run: DiscoveredRun, *, request_id: str, timeout: float,
@@ -206,9 +222,21 @@ class RemoteResidence:
         from git_loopy.remote_client import request_remote_stop
 
         return request_remote_stop(
-            self._provider, self._receipts[run.run_id],
+            self._provider, self._receipt(run),
             request_id=request_id, timeout=timeout, output=output,
+            outbox=self._stop_outbox(run),
         )
+
+    def _receipt(self, run: DiscoveredRun) -> RemoteRunReceipt:
+        try:
+            return self._receipts[run.run_id]
+        except KeyError:
+            raise RunTargetError("Remote Run was not discovered in this clone.") from None
+
+    def _stop_outbox(self, run: DiscoveredRun) -> Path:
+        if self._control_root is None:
+            raise RunTargetError("Remote Run was not discovered in this clone.")
+        return self._control_root / "git-loopy" / "remote-stops" / run.run_id
 
     def teardown(self, run: DiscoveredRun) -> NoReturn:
         raise RemoteLaunchError(

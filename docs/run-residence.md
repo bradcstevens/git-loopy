@@ -22,8 +22,10 @@ plain `git-loopy` invocation selects.
   path. The remote launch provider owns its configured infrastructure target
   and immutable-base validation.
 - `discover(git=...)`: enumerates only Runs associated with this clone's
-  control domain and supplies their proven liveness. Failure raises
+  control domain and supplies their proven liveness. Enumeration failure raises
   `RunTargetError`; it must not masquerade as an empty or partial listing.
+  A known remote receipt whose guest lock cannot be inspected remains a row
+  with `unknown` liveness and an explicit diagnostic.
 - `open_attach(run, repo_root=...)`: opens an `AttachChannel`, whose `observe`
   method follows the Run until Detach or end. Artifact paths belong to the
   provider and need not exist on the viewing machine.
@@ -260,7 +262,10 @@ VM supplies `unknown` liveness, never permission to resume or delete it.
 A Running VM is not proof of a live Run: a bounded `executeShellCommand`
 invokes `git_loopy.remote_control`, which discovers the exact Run and probes
 its guest control artifact's advisory lock. Access failures, invalid
-responses and ambiguous resources refuse rather than produce partial listings.
+responses, unavailable SDK support and ambiguous resources produce an explicit
+diagnostic and `unknown` liveness for that known receipt. They never hide it
+or prevent control of a proven local Run. Unreadable/corrupt receipts still
+refuse the listing because the Control domain itself cannot be enumerated.
 Runs launched by installations predating these receipts are not retroactively
 assigned to a clone; inspect those through Azure's execution API.
 
@@ -274,6 +279,17 @@ the provider proves the guest Run dead and the trace has been drained.
 A transport fault ends the client with failure, not a false Run ending.
 `q`, a line-printer interrupt and a Dashboard fault never Stop the Run or
 delete Azure resources. Multiple clients have independent mirrors.
+
+Dashboard Stop requests are staged durably under
+`<shared-git-directory>/git-loopy/remote-stops/<run-id>/`, separately from the
+temporary trace. Each client has its own control artifact there, so concurrent
+clients do not share a lock. Delivery markers are written only after the guest
+confirms the durable request. Stop records and markers are retained; ordinary
+Detach reclaims clients that never requested Stop. A client failure does not
+discard an unforwarded request: the next Attach or Stop redelivers pending
+identities in their original order before admitting a new Stop. While the
+viewing machine is disconnected, these are **pending**, not an acknowledged
+Wind-down; a later client is needed to retry delivery. Listing never sends them.
 
 Dashboard Stop requests are relayed with their original identities. The
 public Stop command prints its identity before delivery, retries a lost

@@ -1303,8 +1303,10 @@ needs only `git`. When the clone has remote launch receipts, install the
 `remote` extra and use the intended operator's existing Azure CLI login.
 The remote provider reads the guest's actual control lock, not the VM's
 running state. Missing or suspended VMs are `unknown`, never resumed by a
-client. An Azure access or execution failure refuses the whole listing rather
-than silently omitting remote Runs. Changing `[remote]` does not forget old
+client. An Azure access or execution failure diagnoses that known remote Run
+as `unknown`, without hiding it or blocking control of a proven local Run.
+Unreadable launch receipts still refuse a partial listing.
+Changing `[remote]` does not forget old
 Runs: each receipt retains its launch target.
 
 An attached Dashboard requests **Stop** with `s`. That writes one durable
@@ -1361,8 +1363,12 @@ For remote residence, bounded execution-API reads stream the guest trace into
 a temporary client-only mirror. The same local Dashboard and line printer
 render it in the viewing machine's Display zone. Stop requests retain their
 identities when relayed to the guest; only the guest Orchestrator's Events
-acknowledge them. A transport fault restores the terminal and reports failure,
-not a finished Run. Detach removes only this client's mirror.
+acknowledge them. Pending Dashboard Stop requests are retained in the clone's
+shared git directory even if this client dies before forwarding them. The next
+Attach or Stop redelivers them before a new Stop; `runs` remains observational.
+A disconnected client's pending request is not an acknowledged Wind-down.
+A transport fault restores the terminal and reports failure, not a finished
+Run. Detach removes only this client's temporary trace, never pending requests.
 
 **Stop** is `git-loopy stop`, or `s` in an attached Dashboard. Attach does not
 write one. Shell and PowerShell do not attach and do not provide this command.

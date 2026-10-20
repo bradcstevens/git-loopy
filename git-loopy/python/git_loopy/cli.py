@@ -1747,8 +1747,6 @@ def _run_resident_client(repo_root: Path, command: Callable[[], int]) -> int:
     try:
         with client_residences(git=SubprocessGitClient(repo_root)):
             return command()
-    except ImportError:
-        print("git-loopy: Install the [remote] extra through your configured package feed.", file=sys.stderr)
     except (GitError, RunTargetError) as exc:
         print(f"git-loopy: {exc}", file=sys.stderr)
     return 1

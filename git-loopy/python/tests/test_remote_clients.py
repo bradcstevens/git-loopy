@@ -405,3 +405,128 @@ def test_trace_mirror_preserves_unicode_across_bounded_execution_chunks(
     with register_residence(RemoteResidence(FakeProvider(guest), {})):
         assert cli.main(["attach", receipt.run_id]) == 0
     assert seen.read_bytes() == trace.read_bytes()
+
+
+@pytest.mark.parametrize("unavailable", [ImportError("SDK missing"), RuntimeError("Azure unavailable")])
+def test_remote_inspection_failure_does_not_block_local_clients(
+    remote_run, tmp_path, monkeypatch, capsys, unavailable,
+):
+    from git_loopy.remote_launch import RemoteResidence
+    from git_loopy.run_discovery import RunTargetError
+    from tests.test_stop_command import _read_run_id, _spawn, _stop_process
+
+    local, guest, receipt, _ = remote_run
+
+    class Unavailable(FakeProvider):
+        def inspect(self, receipt, **kwargs):
+            if isinstance(unavailable, ImportError):
+                raise unavailable
+            raise RunTargetError(str(unavailable))
+
+    worker = _spawn(local, "watch")
+    try:
+        local_id = _read_run_id(worker)
+        dashboard(tmp_path, monkeypatch, "")
+        with register_residence(RemoteResidence(Unavailable(guest), {})):
+            assert cli.main(["runs"]) == 0
+            captured = capsys.readouterr()
+            row = next(line for line in captured.out.splitlines() if receipt.run_id in line)
+            assert "unknown" in row
+            assert captured.err
+            assert cli.main(["attach", local_id]) == 0
+            assert cli.main(["stop", local_id, "--request-id", "local-remains-controllable"]) == 0
+            assert "acknowledged drain" in capsys.readouterr().out
+            assert cli.main(["stop", receipt.run_id]) == 1
+    finally:
+        _stop_process(worker)
+
+
+@pytest.mark.timeout(20)
+@pytest.mark.parametrize("retry_client", ["attach", "stop"])
+def test_unforwarded_dashboard_stop_survives_client_failure_and_is_redelivered(
+    remote_run, tmp_path, monkeypatch, capsys, retry_client,
+):
+    from pathlib import Path
+    from git_loopy.remote_launch import RemoteResidence
+    from git_loopy.run_discovery import RunTargetError
+    from git_loopy.stop_request import read_stop_requests
+
+    _, guest, receipt, trace = remote_run
+    queued = tmp_path / "queued-control"
+    dashboard(tmp_path, monkeypatch, (
+        "submit_stop(control, 'durable-dashboard-stop')\n"
+        f"Path({str(queued)!r}).write_text(str(control))\n"
+        "time.sleep(15)\n"
+    ))
+
+    class Disconnected(AcknowledgingProvider):
+        offline = True
+
+        def inspect(self, receipt, *, offset=0, request_id=None):
+            if request_id and self.offline:
+                raise RunTargetError("Stop delivery is unconfirmed.")
+            return super().inspect(receipt, offset=offset, request_id=request_id)
+
+    provider = Disconnected(guest, trace)
+    with register_residence(RemoteResidence(provider, {})):
+        assert cli.main(["attach", receipt.run_id]) == 1
+    control = Path(queued.read_text())
+    assert read_stop_requests(control)[0].request_id == "durable-dashboard-stop"
+    assert "retained" in capsys.readouterr().err
+    assert read_stop_requests(trace.with_suffix(".control")) == ()
+
+    provider.offline = False
+    dashboard(tmp_path, monkeypatch, "")
+    with register_residence(RemoteResidence(provider, {})):
+        if retry_client == "attach":
+            assert cli.main(["attach", receipt.run_id]) == 0
+            assert provider.stages == ["drain"]
+        else:
+            assert cli.main(["stop", receipt.run_id, "--request-id", "deliberate-second"]) == 0
+            assert provider.stages == ["drain", "cancel"]
+    assert read_stop_requests(trace.with_suffix(".control"))[0].request_id == "durable-dashboard-stop"
+
+
+@pytest.mark.timeout(20)
+def test_pending_stop_survives_abrupt_client_death_without_turning_runs_into_delivery(
+    remote_run, tmp_path, monkeypatch,
+):
+    import textwrap
+    from git_loopy.remote_launch import RemoteResidence
+    from git_loopy.stop_request import read_stop_requests
+
+    local, guest, receipt, trace = remote_run
+    child = textwrap.dedent("""
+        import os, sys
+        from pathlib import Path
+        from git_loopy import cli, run_sidecar
+        from git_loopy.remote_control import inspect_run
+        from git_loopy.remote_launch import RemoteResidence
+        from git_loopy.run_residence import register_residence
+        from git_loopy.stop_request import submit_stop
+
+        class Provider:
+            def inspect(self, receipt, *, offset=0, request_id=None):
+                return inspect_run(Path(sys.argv[1]), receipt.run_id,
+                                   offset=offset, request_id=request_id)
+
+        def dashboard_crash(**kwargs):
+            submit_stop(kwargs["control_path"], "client-died")
+            os._exit(0)
+
+        run_sidecar.observe_existing_run = dashboard_crash
+        with register_residence(RemoteResidence(Provider(), {})):
+            cli.main(["attach", sys.argv[2]])
+    """)
+    subprocess.run(
+        [sys.executable, "-c", child, str(guest), receipt.run_id], cwd=local,
+        check=True, timeout=10,
+    )
+    provider = AcknowledgingProvider(guest, trace)
+    dashboard(tmp_path, monkeypatch, "")
+    with register_residence(RemoteResidence(provider, {})):
+        assert cli.main(["runs"]) == 0
+        assert read_stop_requests(trace.with_suffix(".control")) == ()
+        assert cli.main(["attach", receipt.run_id]) == 0
+    assert provider.stages == ["drain"]
+    assert read_stop_requests(trace.with_suffix(".control"))[0].request_id == "client-died"

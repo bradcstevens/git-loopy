@@ -87,12 +87,7 @@ class AzureRemoteProvider:
                         f"Remote Run {receipt.run_id} control failed; inspect the guest artifacts. "
                         "No operation was acknowledged."
                     )
-                snapshot = RemoteSnapshot.decode(result.stdout, run_id=receipt.run_id, offset=offset)
-                if request_id is not None and (
-                    snapshot.submission is None or snapshot.submission.request_id != request_id
-                ):
-                    raise RunTargetError("Remote Stop response did not identify this request.")
-                return snapshot
+                return RemoteSnapshot.decode(result.stdout, run_id=receipt.run_id, offset=offset)
         except RunTargetError:
             raise
         except Exception:
