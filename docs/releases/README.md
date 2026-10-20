@@ -324,6 +324,49 @@ release-only real-host smoke ADR-0059 requires is a condition of the Promotion.
 `publish_release`. A failed, blocked, inconclusive, or borrowed smoke publishes
 nothing.
 
+### The Installation proof
+
+`git_loopy.release_installation` proves the installation a source-only Release
+ships, without a smoke credential, sandbox repository, Run, or spend
+([ADR-0094](../adr/0094-a-promotion-proves-the-installation-it-ships-and-declares-the-live-proof-it-cannot-obtain.md)).
+It takes a Rehearsal's Publication input, recomputes its proof and archive
+digest, and installs that archive in a private `uv tool` installation. Of the
+installed candidate it observes the matching Release version, `init`, `runs`,
+`attach` and `stop` in `commands --json`, cancelled `init --global` saving no
+Config in a real terminal, and `init --yes --global` saving Config.
+
+```bash
+python -m git_loopy.release_installation \
+  --publication-input "$RUNNER_TEMP/publication-input.json" \
+  --workspace "$RUNNER_TEMP/installation-proof" \
+  --evidence-output "$RUNNER_TEMP/installation-evidence.json"
+```
+
+The workspace must not exist; evidence belongs outside it. The proof reclaims
+its private installation, home, Config and extracted source on every verdict.
+It preserves package-feed environment settings and the installer's configured
+index rather than selecting a public fallback. The observations have fixed
+timeouts (installation 900 seconds, version and inventory 60 each, terminal
+setup 180, saved setup 300); no smoke limits are needed.
+
+The verdict vocabulary and exit codes match the Release smoke: `passed` (0),
+`failed` (1), `blocked` (2), `inconclusive` (3). A candidate defect fails;
+unavailable services, including an unreachable pinned Skill catalog during
+`init`, block. An unavailable pseudo-terminal makes cancelled setup
+inconclusive. Failed observations outrank blocked ones, which outrank
+inconclusive ones. Only all four observed boundaries and successful cleanup
+pass. Diagnostics distinguish an upstream outage from invalid catalog content.
+
+Every verdict writes evidence of kind `git-loopy.release-installation/1`,
+carrying the candidate's proof, each observation, cleanup residue and a content
+digest. `confirm_installation_evidence` refuses non-passed, edited, incomplete
+or borrowed evidence. This is **not** Release smoke evidence:
+`confirm_smoke_evidence` still accepts only a full passed smoke on every
+Execution host. Nothing composes a smoke verdict from this proof. Promotion
+consumption is separate delivery work; this entry point publishes
+nothing and is not an Integration feedback loop. Its offline coverage is
+`tests/test_release_installation.py`.
+
 ### The release smoke
 
 A rehearsal proves content. The **release smoke** proves the operator path of
