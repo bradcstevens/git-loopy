@@ -1917,12 +1917,12 @@ _Avoid_: merge (as the name for this step), landing.
 
 **Recovery**:
 The bounded, runner-driven repair of a **Lane contribution** whose private merge
-conflicted, or whose feedback loops failed or could not run, in its **Integration stage**.
-Each attempt is a fresh **Agent** on the contribution's own **Routed pair**, working in
-that same stage and counted outside the **Lane cap**; the stage is re-gated after every
-attempt, and the first green one is published like any other **Integration**. There are
-at most three attempts. Recovery's **Consumption** and commits belong to the originating
-contribution, and it spends none of the Run's iteration cap.
+conflicted or whose feedback loops ran and failed, using a fresh **Agent** on its own
+**Routed pair** in the same **Integration stage**, outside the **Lane cap** and the Run's
+iteration cap; its **Consumption** and commits belong to that contribution.
+A timed-out gate is inconclusive, so it is re-run without an Agent within the same
+three-attempt bound; persistent timeouts end in **Recovery handoff**, not a red judgment
+of the change (ADR-0020).
 _Avoid_: auto-resolution, resolution session, retry, rescue.
 
 **Recovery handoff**:

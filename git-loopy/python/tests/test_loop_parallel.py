@@ -5659,13 +5659,174 @@ def test_parallel_lane_runs_worktree_setup_before_own_session(
         assert own_session_index >= sessions_at_setup
 
 
+def test_parallel_gate_timeout_then_pass_needs_no_recovery_agent(
+    tmp_path, monkeypatch
+) -> None:
+    """An inconclusive gate is re-run in place, not described as red to an Agent."""
+    _git, gh, client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    gate = FakeGateRunner(by_issue={42: [_gate_timeout(), True]})
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    endings = [
+        e for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.contribution.end" and e["issue"] == 42
+    ]
+    assert len(endings) == 1
+    assert endings[0]["published"] is True
+    assert endings[0]["summary"]["recovery_attempts"] == 0
+    assert len([p for p in gate.calls if p.name == "issue-42"]) == 2
+    assert not [
+        c for c in client.create_calls
+        if "/integrate/" in c["working_directory"]
+    ]
+    assert gh.issue_view(42).state == "CLOSED"
+
+
+def _gate_timeout():
+    return loop_module.gate_module.GateResult.red(
+        ("Python suite",),
+        LoopFailure(
+            name="Python suite",
+            command="uv run pytest",
+            returncode=None,
+            output_tail="",
+            timed_out=True,
+            timeout_seconds=1800.0,
+        ),
+    )
+
+
+def test_parallel_gate_timeouts_exhaust_shared_bound_and_name_row(
+    tmp_path, monkeypatch
+) -> None:
+    """Exhaustion is a Recovery handoff, explicitly caused by a gate timeout."""
+    _git, gh, client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    gate = FakeGateRunner(by_issue={42: [_gate_timeout()] * 4})
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    events = _logged_events(tmp_path)
+    ending = next(
+        e for e in events
+        if e["type"] == "wrapper.contribution.end" and e["issue"] == 42
+    )
+    assert ending["published"] is False
+    assert ending["reason"] == "serial_fallback"
+    assert ending["gate_timeout"] == {
+        "name": "Python suite", "timeout_seconds": 1800.0,
+    }
+    assert ending["summary"]["recovery_attempts"] == 0
+    assert len([p for p in gate.calls if p.name == "issue-42"]) == 4
+    assert not [
+        c for c in client.create_calls
+        if "/integrate/" in c["working_directory"]
+    ]
+    assert not [e for e in events if e["type"] == "wrapper.integration.recovery_started"]
+    assert any(
+        e["type"] == "wrapper.serial.requested" and e["issue"] == 42
+        for e in events
+    )
+    assert gh.issue_view(42).state == "OPEN"
+    comments = [body for ref, body in gh.issue_comment_calls if ref == 42]
+    assert len(comments) == 1
+    assert "Python suite" in comments[0] and "timed out" in comments[0]
+    reports = [
+        line for line in _diag_log(tmp_path).splitlines()
+        if "integration #42:" in line and "Recovery handoff" in line
+    ]
+    assert len(reports) == 1
+    assert "Python suite" in reports[0] and "timed out after 1800s" in reports[0]
+
+
+@pytest.mark.parametrize("timeouts", [0, 1, 2])
+def test_parallel_red_gate_gets_recovery_from_current_result(
+    tmp_path, monkeypatch, timeouts
+) -> None:
+    """A red result, with or without earlier timeouts, buys one truthful brief."""
+    _git, gh, client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    red = loop_module.gate_module.GateResult.red(
+        ("Shell syntax",),
+        LoopFailure("Shell syntax", "bash -n check.sh", 2, "syntax error"),
+    )
+    gate = FakeGateRunner(by_issue={42: [_gate_timeout()] * timeouts + [red, True]})
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    events = _logged_events(tmp_path)
+    recovery = [e for e in events if e["type"] == "wrapper.integration.recovery_started"]
+    assert [(e["issue"], e["attempt"], e["max_attempts"]) for e in recovery] == [
+        (42, timeouts + 1, 3)
+    ]
+    briefs = [
+        session.send_and_wait_calls[0][0]
+        for call, session in zip(client.create_calls, client.created)
+        if "/integrate/" in call["working_directory"]
+    ]
+    assert len(briefs) == 1
+    assert "feedback loops are red" in briefs[0]
+    assert "Shell syntax" in briefs[0] and "exited 2" in briefs[0]
+    assert "Python suite" not in briefs[0]
+    assert "timed out" not in briefs[0]
+    ending = next(
+        e for e in events
+        if e["type"] == "wrapper.contribution.end" and e["issue"] == 42
+    )
+    assert ending["published"] is True
+    assert ending["summary"]["recovery_attempts"] == 1
+    assert "gate_timeout" not in ending
+    assert gh.issue_view(42).state == "CLOSED"
+
+
+def test_parallel_timeout_after_recovery_does_not_buy_another_agent(
+    tmp_path, monkeypatch
+) -> None:
+    _git, _gh, client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    gate = FakeGateRunner(by_issue={42: [False, _gate_timeout(), True]})
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    ending = next(
+        e for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.contribution.end" and e["issue"] == 42
+    )
+    assert ending["published"] is True
+    assert ending["summary"]["recovery_attempts"] == 1
+    assert "gate_timeout" not in ending
+    assert len([
+        c for c in client.create_calls if "/integrate/" in c["working_directory"]
+    ]) == 1
+
+
+def test_parallel_gate_that_cannot_run_hands_off_without_a_red_brief(
+    tmp_path, monkeypatch
+) -> None:
+    _git, gh, client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+
+    class UnavailableGate(FakeGateRunner):
+        def run(self, worktree):
+            raise loop_module.gate_module.GateError("no runnable feedback loops")
+
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: UnavailableGate())
+    assert asyncio.run(loop_module.run(cfg)) == 0
+    assert not [
+        c for c in client.create_calls if "/integrate/" in c["working_directory"]
+    ]
+    assert all("could not run" in body for _, body in gh.issue_comment_calls)
+    assert len(gh.issue_comment_calls) == 2
+
+
 def test_parallel_integration_reports_a_timed_out_loop_as_a_timeout(
     tmp_path, monkeypatch
 ) -> None:
-    """A loop that exceeds its bound is red *as a timeout* (#374).
+    """A loop that exceeds its bound is reported as a timeout (#374, #904).
 
     A timeout is not a test failure and must not read as one in the record an
-    operator reads to explain a red Integration: the diagnostic names the loop
+    operator reads to explain an inconclusive Integration: the diagnostic names the loop
     **and** says it timed out, so a hung toolchain is not mistaken for a
     contribution that broke the suite.
     """
