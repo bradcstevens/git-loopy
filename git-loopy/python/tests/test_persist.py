@@ -30,6 +30,7 @@ import re
 import subprocess
 import sys
 import textwrap
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -661,6 +662,98 @@ def test_create_writers_can_disable_stderr_mirroring(
 
     assert capsys.readouterr().err == ""
     assert "diag only in file" in bundle.diagnostics_path.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def _denver_tz(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    import time
+
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is POSIX-only")
+    monkeypatch.setenv("TZ", "America/Denver")
+    time.tzset()
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+
+_RUN_LOG_LINE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2} [A-Z]+ .+$"
+)
+
+
+@pytest.mark.usefixtures("_denver_tz")
+def test_run_log_stamps_local_time_with_its_real_utc_offset(tmp_path: Path) -> None:
+    """#903: a UTC-6 host's Run log reads local time with ``-06:00``, never ``Z``."""
+    bundle = create_writers(
+        tmp_path,
+        run_id=_FIXED_RUN_ID,
+        started_at=_FIXED_TS,
+        mirror_diagnostics_to_stderr=False,
+    )
+    formatter = bundle.diagnostics.handlers[0].formatter
+    assert formatter is not None
+    instant = datetime(2026, 10, 15, 20, 36, 37, 289000, tzinfo=timezone.utc)
+    record = logging.LogRecord(
+        "x", logging.INFO, __file__, 1, "preflight ok", None, None
+    )
+    record.created = instant.timestamp()
+    record.msecs = 289.0
+
+    assert formatter.format(record) == "2026-10-15T14:36:37.289-06:00 INFO preflight ok"
+
+    winter = datetime(2026, 12, 15, 20, 36, 37, tzinfo=timezone.utc)
+    record.created = winter.timestamp()
+    assert formatter.format(record).startswith("2026-12-15T13:36:37.000-07:00 ")
+
+
+@pytest.mark.usefixtures("_denver_tz")
+def test_runner_module_warnings_reach_the_run_log_stamped_and_mirrored(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#903: Lease loss and renewal failures land in the Run log, stamped,
+    and the stderr mirror matches the file."""
+    bundle = create_writers(tmp_path, run_id=_FIXED_RUN_ID, started_at=_FIXED_TS)
+    capsys.readouterr()
+
+    bundle.diagnostics.info("preflight ok")
+    logging.getLogger("git_loopy.lease_heartbeat").warning(
+        "Lease lost for issue %s, Run %s: %s", 7, _FIXED_RUN_ID, "ttl_elapsed"
+    )
+    logging.getLogger("git_loopy.issue_lease").error("Lease renewal failed")
+    logging.getLogger("git_loopy.lease_heartbeat").info("below the bridge level")
+
+    lines = bundle.diagnostics_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+    for line in lines:
+        assert _RUN_LOG_LINE.match(line), line
+        assert not line.split(" ", 1)[0].endswith("Z")
+    assert lines[1].endswith(
+        f"WARNING Lease lost for issue 7, Run {_FIXED_RUN_ID}: ttl_elapsed"
+    )
+    assert lines[2].endswith("ERROR Lease renewal failed")
+    assert capsys.readouterr().err.splitlines() == lines
+
+
+def test_a_new_run_log_takes_over_the_runner_module_bridge(tmp_path: Path) -> None:
+    """Only the newest Run log receives Runner-module warnings, once."""
+    first = create_writers(
+        tmp_path, run_id=_FIXED_RUN_ID, started_at=_FIXED_TS,
+        mirror_diagnostics_to_stderr=False,
+    )
+    other = tmp_path / "other"
+    other.mkdir()
+    second = create_writers(
+        other, started_at=_FIXED_TS, mirror_diagnostics_to_stderr=False
+    )
+
+    logging.getLogger("git_loopy.lease_heartbeat").warning("Lease lost")
+
+    assert not first.diagnostics_path.exists()
+    text = second.diagnostics_path.read_text(encoding="utf-8")
+    assert text.count("Lease lost") == 1
 
 
 def test_writers_bundle_is_frozen() -> None:
