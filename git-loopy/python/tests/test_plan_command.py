@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from git_loopy import cli, skill_install
 from tests.profile_fixtures import seed_profile_install
@@ -95,13 +96,32 @@ def test_plan_execs_routed_planner_with_a_private_copy(
         ".github/skills/research/SKILL.md",
         ".github/skills/to-tickets/SKILL.md",
     ]
-    assert (root / ".github/agents/git-loopy-planner.agent.md").read_text(encoding="utf-8") == (
-        "---\nname: Planner\nuser-invocable: true\ndisable-model-invocation: true\n"
+    agent = (root / ".github/agents/git-loopy-planner.agent.md").read_text(encoding="utf-8")
+    frontmatter = yaml.safe_load(agent.split("---", 2)[1])
+    assert isinstance(frontmatter.get("description"), str) and frontmatter["description"].strip()
+    assert agent == (
+        "---\nname: Planner\n"
+        "description: Draft a task graph from planning documents for human approval.\n"
+        "user-invocable: true\ndisable-model-invocation: true\n"
         "skills:\n  - to-tickets\n---\n\nDraft a complete graph for human approval.\n"
     )
     assert not any(path.is_symlink() for path in root.rglob("*"))
     assert not (planning_home / ".copilot").exists()
     assert not (Path.cwd() / ".git-loopy").exists()
+
+
+@pytest.mark.parametrize("flags", [
+    ["--yolo", "spec.md"],
+    ["spec.md", "--yolo"],
+])
+def test_plan_yolo_opts_into_harness_permissions(
+    planning_home: Path, harness: list[list[str]], flags: list[str],
+) -> None:
+    assert cli.main(["plan", *flags]) == 0
+    assert harness[0][5:] == [
+        "--model", "gpt-6.1-sol", "--reasoning-effort", "xhigh",
+        "--yolo", "-i", "/to-tickets spec.md",
+    ]
 
 
 @pytest.mark.parametrize("where", [

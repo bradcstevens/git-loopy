@@ -2109,6 +2109,52 @@ async def test_iteration_session_sdk_session_property_raises_outside_context(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("flags", [[], ["--yolo"]])
+@pytest.mark.parametrize("profile", ["implementation", "review"])
+def test_run_yolo_preserves_auto_approval_and_permission_denials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    fake_client: FakeCopilotClient, reviewer_exposure: SkillExposure,
+    flags: list[str], profile: str,
+) -> None:
+    from git_loopy import cli, loop
+    from git_loopy.config import RunConfig
+
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "unselected")
+    decisions: dict[str, str] = {}
+
+    async def run(config: RunConfig, **kwargs: Any) -> int:
+        with EventLogWriter(tmp_path / "yolo.jsonl") as log:
+            async with IterationSession(
+                fake_client, config=config, event_log=log, sinks=SinkFanout(()),
+                run_id=_FIXED_RUN_ID, iter_num=1, profile_key=profile,
+                skill_exposure=reviewer_exposure, working_directory=str(tmp_path),
+            ) as session:
+                requests = {
+                    "read": _access_request(
+                        {"kind": "read", "path": str(tmp_path / "README.md")}, "read",
+                    ),
+                    "write": _access_request(
+                        {"kind": "write", "file_name": str(tmp_path / "out.txt"), "diff": "+ok"},
+                        "write",
+                    ),
+                    "denied-tool": _make_permission_request(tool_name="blocked-tool"),
+                    "history": _make_permission_request(tool_name="session_store_sql"),
+                }
+                for name, request in requests.items():
+                    decisions[name] = session.on_permission_request(request, {}).kind
+        return 0
+
+    monkeypatch.setattr(loop, "run", run)
+    assert cli.main([*flags, "--deny-tool", "blocked-tool"]) == 0
+    assert decisions == {
+        "read": "approve-once",
+        "write": "reject" if profile == "review" else "approve-once",
+        "denied-tool": "reject",
+        "history": "reject",
+    }
+
+
 async def test_integration_approve_path_writes_permission_event(
     fake_client: FakeCopilotClient,
     event_log: EventLogWriter,
