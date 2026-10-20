@@ -37,6 +37,10 @@ _PERMANENT_WRITE_FAILURE = re.compile(
 )
 _TRANSIENT_WRITE_FAILURE = re.compile(
     r"\b(?:HTTP\s+|requested URL returned error:\s*)(?:429|5\d\d)\b|"
+    # GitHub's push wording names the server error without a status code:
+    # ``remote: Internal Server Error``.
+    r"\b(?:internal server error|bad gateway|service unavailable|"
+    r"gateway time-?out)\b|"
     r"rate limit exceeded|secondary rate limit|too many requests|"
     r"could not resolve host|temporary failure in name resolution|"
     r"failed to connect|unable to connect|"
