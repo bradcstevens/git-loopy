@@ -87,9 +87,9 @@ without reserving it for a later, possibly obsolete model.
 
 ### Terminal Integration evidence (accepted design, not yet shipped)
 
-[#293](https://github.com/bradcstevens/git-loopy/issues/293) decided that a Lane
-contribution which exhausts its permitted **Integration Recovery** and falls back
-to serial work must amend its originating **Attempt evidence** row to
+[#293](https://github.com/bradcstevens/git-loopy/issues/293) decided that a
+**Lane contribution** whose permitted **Recovery** is exhausted and ends in a
+**Recovery handoff** to the serial path must amend its originating **Attempt evidence** row to
 `DID_NOT_INTEGRATE` (`did_not_integrate`). It is the same attempt, not another
 one: preserve its resolved model, effort, context tier and position in the
 issue's per-Run history. Amend before the next Pickup constructs selector input,
