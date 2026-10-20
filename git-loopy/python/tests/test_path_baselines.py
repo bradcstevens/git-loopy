@@ -62,8 +62,11 @@ def test_committed_paths_declare_identity_and_carried_debt() -> None:
             {"fixture": "status-endings.json", "issue": ending},
         ]
         carried = {row["fixture"]: row["issue"] for row in baseline["owed_waivers"]}
+        sandbox = register["fixtures"]["sandbox.json"][key]
+        assert sandbox["kind"] == "waived_owed"
+        assert sandbox["issue"] == {"shell": 866, "powershell": 868}[key]
         assert carried == {
             fixture: rows[key]["issue"]
             for fixture, rows in register["fixtures"].items()
-            if rows[key]["kind"] == "waived_owed"
+            if rows[key]["kind"] == "waived_owed" and fixture != "sandbox.json"
         }

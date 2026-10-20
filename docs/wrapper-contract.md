@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.34 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.35 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -3147,7 +3147,59 @@ is required or permitted by an execution profile.
 `agent-profiles.json` revision 2 pins the union and each missing-Required-Skill
 refusal through Python preflight. Its dormant-path waivers remain unchanged.
 
-## 19. Changing this contract
+## 19. Sandbox (contract 2.35, MUST)
+
+Every Orchestrator owes the Sandbox rules in
+[ADR-0093](adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md).
+A **Sandbox** is GitHub Copilot's own local sandbox, not an **Isolation grade**.
+It contains Agent commands, not the Runner's Integration feedback loops.
+
+- **Resolve before work.** A local Run requires a Sandbox when the operator's
+  effective Copilot policy enables it or managed policy requires it. Python's
+  remote residence always requires it. Unknown policy or enforcement is a
+  refusal, not an opt-out. A required but unsupported or blocked Sandbox MUST
+  refuse preflight before any work Agent starts, with a diagnostic; it MUST
+  NOT silently run unsandboxed or disclose `off`.
+- **Forward the operator's policy.** Every serial Iteration, Lane and Recovery
+  Agent MUST receive the policy before its first prompt. Preserve operator
+  options, including unknown future options, network rules, authentication
+  settings and existing filesystem grants. Enable the required Sandbox and
+  disable bypass approval, adding only the Issue clone read/write and the
+  source object store and git config read-only. Do not mutate the source
+  settings or grant the shared source git directory.
+- **Deny every bypass.** Per-command bypass and permissive requests MUST be
+  denied even when the operator's `allowBypass` is true. Record
+  `tool.permission_denied` with `reason: "sandbox_escalation_denied"` and the
+  tool-call identity. An ordinary command remains subject to existing
+  permission policy; Sandbox enforcement is not a blanket command denial.
+- **Fail closed during execution.** Failure to apply or establish the required
+  Sandbox MUST expose no usable Agent session. Any tool execution reporting
+  anything other than `sandboxed=true`, including a missing attestation, MUST
+  abort the Agent with an explicit Sandbox failure. Subagent execution earns
+  no exemption.
+- **Disclose once.** Emit `wrapper.sandbox.resolved` exactly once per Run,
+  immediately after `wrapper.run.start`, with no Iteration attribution or
+  policy contents. Its state is `local`, `off`, or Python remote residence's
+  `remote`; print the corresponding `Sandbox: local`, `Sandbox: off`, or
+  `Sandbox: remote (always on)` line once, immediately beside the unchanged
+  Isolation grade (§12). Starting another Lane or Recovery MUST NOT repeat
+  the Run disclosure.
+
+[`sandbox.json`](../git-loopy/conformance/sandbox.json) pins these decisions
+through per-member production adapters. Cases without a `distributions`
+override oblige Python, shell and PowerShell; remote residence and Python-only
+Lane/Recovery lifecycle cases are explicitly scoped. Python claims the fixture.
+Shell owes #866 and PowerShell owes #868 in `fixture-claims.json`, as ADR-0093's
+explicit Sandbox obligation rather than an inferred advance of their Contract
+support. This is a narrow exception to ADR-0091's no-new-debt rule: their frozen
+2.26 Path baselines and existing carried waivers do not change. The TUI helper
+opens no Agent and resolves no policy; its Sandbox disclosure consumption
+remains pinned by `event-schema.json`.
+
+Contract 2.35 adds this enforcement fixture without changing the Event schema,
+the Event/Dashboard fixture revisions, or historical streams' interpretation.
+
+## 20. Changing this contract
 
 1. Update this document and bump the **Contract version**.
 2. Add or update the corresponding **Conformance** fixture(s).

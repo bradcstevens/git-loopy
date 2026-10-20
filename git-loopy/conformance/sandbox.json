@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.35",
+  "distributions": ["python", "shell", "powershell"],
+  "policy_cases": [
+    {
+      "id": "forward-operator-policy-and-only-git-grants",
+      "settings": {
+        "enabled": false,
+        "allowBypass": true,
+        "addCurrentWorkingDirectory": false,
+        "futureOperatorOption": {"preserve": [1, 2]},
+        "auth": {"git": true, "gh": false},
+        "userPolicy": {
+          "network": {"allowedHosts": ["github.com"]},
+          "filesystem": {
+            "readonlyPaths": ["/operator/hooks"],
+            "readwritePaths": ["/operator/scratch"],
+            "deniedPaths": ["/secrets"]
+          }
+        }
+      },
+      "readwrite_paths": ["/issue"],
+      "readonly_paths": ["/source/objects", "/operator/.gitconfig"],
+      "expected": {
+        "enabled": true,
+        "allowBypass": false,
+        "addCurrentWorkingDirectory": false,
+        "futureOperatorOption": {"preserve": [1, 2]},
+        "auth": {"git": true, "gh": false},
+        "userPolicy": {
+          "network": {"allowedHosts": ["github.com"]},
+          "filesystem": {
+            "readonlyPaths": ["/operator/hooks", "/source/objects", "/operator/.gitconfig"],
+            "readwritePaths": ["/operator/scratch", "/issue"],
+            "deniedPaths": ["/secrets"]
+          }
+        }
+      }
+    },
+    {
+      "id": "empty-policy-adds-no-implicit-grants",
+      "settings": {},
+      "readwrite_paths": [],
+      "readonly_paths": [],
+      "expected": {"enabled": true, "allowBypass": false}
+    }
+  ],
+  "permission_cases": [
+    {
+      "id": "ordinary-command-remains-approved",
+      "allow_bypass": true,
+      "request_bypass": false,
+      "request_permissive": false,
+      "expected": {"decision": "approve-once", "denials": []}
+    },
+    {
+      "id": "operator-allowed-bypass-is-denied",
+      "allow_bypass": true,
+      "request_bypass": true,
+      "request_permissive": false,
+      "expected": {"decision": "reject", "denials": ["sandbox_escalation_denied"]}
+    },
+    {
+      "id": "operator-denied-bypass-stays-denied",
+      "allow_bypass": false,
+      "request_bypass": true,
+      "request_permissive": false,
+      "expected": {"decision": "reject", "denials": ["sandbox_escalation_denied"]}
+    },
+    {
+      "id": "permissive-request-is-also-a-bypass",
+      "allow_bypass": true,
+      "request_bypass": false,
+      "request_permissive": true,
+      "expected": {"decision": "reject", "denials": ["sandbox_escalation_denied"]}
+    },
+    {
+      "id": "combined-escalations-record-one-denial",
+      "allow_bypass": true,
+      "request_bypass": true,
+      "request_permissive": true,
+      "expected": {"decision": "reject", "denials": ["sandbox_escalation_denied"]}
+    }
+  ],
+  "preflight_cases": [
+    {
+      "id": "local-disabled-needs-no-host-support",
+      "enabled": false, "managed": false, "supported": false, "blocked": false,
+      "residence": "local", "unavailable": null,
+      "expected": {"refused": false, "state": "off", "host_checked": false}
+    },
+    {
+      "id": "local-enabled-forwards-policy",
+      "enabled": true, "managed": false, "supported": true, "blocked": false,
+      "residence": "local", "unavailable": null,
+      "expected": {"refused": false, "state": "local", "host_checked": true}
+    },
+    {
+      "id": "managed-requirement-overrides-disabled-preference",
+      "enabled": false, "managed": true, "supported": true, "blocked": false,
+      "residence": "local", "unavailable": null,
+      "expected": {"refused": false, "state": "local", "host_checked": true}
+    },
+    {
+      "id": "enabled-unsupported-refuses",
+      "enabled": true, "managed": false, "supported": false, "blocked": false,
+      "residence": "local", "unavailable": null,
+      "expected": {"refused": true, "error_contains": "Required Sandbox is unavailable"}
+    },
+    {
+      "id": "managed-unsupported-refuses",
+      "enabled": false, "managed": true, "supported": false, "blocked": false,
+      "residence": "local", "unavailable": null,
+      "expected": {"refused": true, "error_contains": "Required Sandbox is unavailable"}
+    },
+    {
+      "id": "blocked-enforcement-is-never-off",
+      "enabled": false, "managed": false, "supported": true, "blocked": true,
+      "residence": "local", "unavailable": null,
+      "expected": {"refused": true, "error_contains": "managed Sandbox enforcement is blocked"}
+    },
+    {
+      "id": "unknown-settings-refuses",
+      "enabled": false, "managed": false, "supported": true, "blocked": false,
+      "residence": "local", "unavailable": "settings",
+      "expected": {"refused": true, "error_contains": "Could not determine"}
+    },
+    {
+      "id": "unknown-enforcement-refuses",
+      "enabled": false, "managed": false, "supported": true, "blocked": false,
+      "residence": "local", "unavailable": "enforcement",
+      "expected": {"refused": true, "error_contains": "Could not determine"}
+    },
+    {
+      "id": "unknown-host-support-refuses",
+      "enabled": true, "managed": false, "supported": true, "blocked": false,
+      "residence": "local", "unavailable": "host_support",
+      "expected": {"refused": true, "error_contains": "Could not determine"}
+    },
+    {
+      "id": "remote-is-always-on",
+      "distributions": ["python"],
+      "enabled": false, "managed": false, "supported": true, "blocked": false,
+      "residence": "remote", "unavailable": null,
+      "expected": {"refused": false, "state": "remote", "host_checked": true}
+    },
+    {
+      "id": "remote-unsupported-refuses",
+      "distributions": ["python"],
+      "enabled": false, "managed": false, "supported": false, "blocked": false,
+      "residence": "remote", "unavailable": null,
+      "expected": {"refused": true, "error_contains": "Required Sandbox is unavailable"}
+    }
+  ],
+  "execution_cases": [
+    {"id": "attested-tool-completes", "sandboxed": true, "expected": {"breach": false, "aborts": 0}},
+    {"id": "unsandboxed-tool-aborts", "sandboxed": false, "expected": {"breach": true, "aborts": 1}},
+    {"id": "unattested-tool-aborts", "sandboxed": null, "expected": {"breach": true, "aborts": 1}}
+  ],
+  "disclosure_cases": [
+    {
+      "id": "off", "enabled": false, "managed": false, "residence": "local",
+      "expected": {"state": "off", "label": "off", "events": 1, "lines": 1, "agents": 1}
+    },
+    {
+      "id": "serial", "enabled": true, "managed": false, "residence": "local",
+      "expected": {"state": "local", "label": "local", "events": 1, "lines": 1, "agents": 1}
+    },
+    {
+      "id": "serial-dirty", "distributions": ["python"],
+      "enabled": true, "managed": false, "residence": "local",
+      "expected": {"state": "local", "label": "local", "events": 1, "lines": 1, "agents": 1}
+    },
+    {
+      "id": "serial-cancel", "distributions": ["python"],
+      "enabled": true, "managed": false, "residence": "local",
+      "expected": {"state": "local", "label": "local", "events": 1, "lines": 1, "agents": 1}
+    },
+    {
+      "id": "lane", "distributions": ["python"],
+      "enabled": true, "managed": false, "residence": "local",
+      "expected": {"state": "local", "label": "local", "events": 1, "lines": 1, "agents": 1}
+    },
+    {
+      "id": "recovery", "distributions": ["python"],
+      "enabled": true, "managed": false, "residence": "local",
+      "expected": {"state": "local", "label": "local", "events": 1, "lines": 1, "agents": 2}
+    },
+    {
+      "id": "managed", "enabled": false, "managed": true, "residence": "local",
+      "expected": {"state": "local", "label": "local", "events": 1, "lines": 1, "agents": 1}
+    },
+    {
+      "id": "remote", "distributions": ["python"],
+      "enabled": false, "managed": false, "residence": "remote",
+      "expected": {"state": "remote", "label": "remote (always on)", "events": 1, "lines": 1, "agents": 1}
+    }
+  ]
+}
