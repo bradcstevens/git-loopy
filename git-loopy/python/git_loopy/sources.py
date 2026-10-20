@@ -72,6 +72,7 @@ from git_loopy.route_identity import (
     is_route_projection_comment,
 )
 from git_loopy.wrapper import (
+    CHECKPOINT_COMMENT_MARKER,
     actionable_close_refs,
     exit_code_for,
     extract_close_refs,
@@ -1739,6 +1740,7 @@ def _format_github_issue_block(issue: gh_module.Issue) -> str:
         key=lambda c: c.created_at,
         reverse=True,
     )[:5]
+    body += _checkpoint_brief(issue.comments, recent)
     if not recent:
         return f"{header}\n{body}"
 
@@ -1753,6 +1755,20 @@ def _format_github_issue_block(issue: gh_module.Issue) -> str:
 def _visible_labels(labels: Sequence[str]) -> tuple[str, ...]:
     """The issue's labels minus this Runner's own observational Route label."""
     return tuple(label for label in labels if not is_route_label(label))
+
+
+def _checkpoint_brief(
+    comments: Sequence[gh_module.Comment], recent: Sequence[gh_module.Comment],
+) -> str:
+    """Keep the latest preserved Checkpoint discoverable beyond the comment window."""
+    checkpoint = max(
+        (c for c in comments if c.body.startswith(CHECKPOINT_COMMENT_MARKER)),
+        key=lambda c: c.created_at,
+        default=None,
+    )
+    if checkpoint is None or checkpoint in recent:
+        return ""
+    return f"\n\n--- Preserved Checkpoint ---\n{checkpoint.body}"
 
 
 def _visible_comments(
@@ -1791,6 +1807,7 @@ def _format_github_pr_block(pr: gh_module.PullRequest) -> str:
         key=lambda c: c.created_at,
         reverse=True,
     )[:5]
+    body += _checkpoint_brief(pr.comments, recent)
     if not recent:
         return f"{header}\n{body}"
 

@@ -184,6 +184,7 @@ class IterationSnapshot:
     contribution_id: str | None = None
     lane: int | str | None = None
     contribution_reason: str | None = None
+    agent_seconds: float = 0.0
 
     def measurement_observed(self, key: str) -> bool:
         """Whether this Iteration's producer actually observed ``key``.
@@ -462,6 +463,8 @@ class RunSummary:
                 "skill_call_count",
                 "skills_consulted",
                 "peak_context_window",
+                "agent_seconds",
+                "lifecycle_seconds",
             )
             if summary.get(key) is None
         )
@@ -488,6 +491,7 @@ class RunSummary:
         snap.normalized_duration_seconds = _rollup_float(
             summary.get("lifecycle_seconds")
         )
+        snap.agent_seconds = _rollup_float(summary.get("agent_seconds"))
         observed_tokens = summary.get("observed_tokens")
         snap.normalized_observed_tokens = (
             None if observed_tokens is None else _rollup_int(observed_tokens)
@@ -794,9 +798,23 @@ class RunSummary:
             body.append(f"  •  Issue #{snap.issue_num}", style=STYLES["meta"])
         body.append("\n")
 
-        # Duration + model line
-        body.append("Duration: ", style=STYLES["meta"])
-        body.append(f"{snap.duration_seconds:.2f}s")
+        if snap.contribution_id is not None:
+            agent_observed = snap.measurement_observed("agent_seconds")
+            lifecycle_observed = snap.measurement_observed("lifecycle_seconds")
+            body.append("Session time: ", style=STYLES["meta"])
+            body.append(_observed_text(agent_observed, f"{snap.agent_seconds:.2f}s"))
+            body.append("    Integration time: ", style=STYLES["meta"])
+            body.append(_observed_text(
+                agent_observed and lifecycle_observed,
+                f"{snap.duration_seconds - snap.agent_seconds:.2f}s",
+            ))
+            body.append("\nTotal wall-clock time: ", style=STYLES["meta"])
+            body.append(_observed_text(
+                lifecycle_observed, f"{snap.duration_seconds:.2f}s"
+            ))
+        else:
+            body.append("Duration: ", style=STYLES["meta"])
+            body.append(f"{snap.duration_seconds:.2f}s")
         body.append("    Model: ", style=STYLES["meta"])
         body.append(snap.model if snap.model is not None else "—")
         body.append("\n")

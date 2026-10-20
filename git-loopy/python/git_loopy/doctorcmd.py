@@ -207,8 +207,9 @@ def run_doctor(
         env=environment,
     )
     for check in environment_preflight.checks:
+        verdict = "warning" if check.warning else "passed" if check.passed else "failed"
         output_fn(
-            f"{check.name} | {'passed' if check.passed else 'failed'} | "
+            f"{check.name} | {verdict} | "
             f"{check.message}"
         )
 

@@ -3,6 +3,12 @@
   "contract_version": "2.0",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
+    "sandbox.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_sandbox_conformance.py drives policy forwarding, bypass permissions, Run preflight and tool attestation through the production seams; test_sandbox_run.py consumes disclosure cases through complete serial, Lane and Recovery Runs, asserting once-only Events and terminal output."},
+      "shell": {"kind": "waived_owed", "reason": "ADR-0093 explicitly assigns the Sandbox obligation to every Orchestrator. The shell adapter and invocation port are owed separately from its frozen ADR-0091 baseline debt.", "issue": 866},
+      "powershell": {"kind": "waived_owed", "reason": "ADR-0093 explicitly assigns the Sandbox obligation to every Orchestrator. The PowerShell adapter and invocation port are owed separately from its frozen ADR-0091 baseline debt.", "issue": 868},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The TUI helper opens no Agent session and resolves no Sandbox policy. Its disclosure consumption is claimed through event-schema.json; sandbox.json pins Orchestrator enforcement and once-only production."}
+    },
     "host-yield.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives every case through default_host_yield, parse_host_yield and host_yield_disclosure under a patched platform, and python/tests/test_host_yield.py proves the Config resolution and the process boundary that applies the clamp."},
       "shell": {"kind": "waived_out_of_scope", "reason": "ADR-0091: this fixture is introduced at contract 2.32, above the dormant shell Path baseline's Contract support 2.26; no new implementation debt is owed."},

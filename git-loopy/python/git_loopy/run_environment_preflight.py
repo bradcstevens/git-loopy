@@ -9,10 +9,12 @@ import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 
 from . import gate, labels
 from .copilot_client import resolve_copilot_base_directory
 from .gh import GhError, GitHubClient, SubprocessGitHubClient, SubprocessLabelClient
+from .process_cleanup import kill_and_release
 
 __all__ = [
     "RunEnvironmentCheck",
@@ -21,6 +23,7 @@ __all__ = [
 ]
 
 ExecutableFinder = Callable[[str], str | None]
+_PYTHON_STARTUP_TIMEOUT_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,7 @@ class RunEnvironmentCheck:
     detail: str
     remedy: str | None = None
     location: Path | None = None
+    warning: bool = False
 
     @property
     def message(self) -> str:
@@ -57,12 +61,17 @@ class RunEnvironmentPreflight:
         """Every failed precondition, in evaluation order."""
         return tuple(check for check in self.checks if not check.passed)
 
+    @property
+    def warnings(self) -> tuple[RunEnvironmentCheck, ...]:
+        """Advisories that do not prevent a Run from starting."""
+        return tuple(check for check in self.checks if check.warning)
+
 
 def resolve_run_environment_preflight(
     *,
     repo_root: Path,
     issue_source: str,
-    executable_finder: ExecutableFinder = shutil.which,
+    executable_finder: ExecutableFinder | None = None,
     github_client: GitHubClient | None = None,
     label_client: labels.LabelReconcileClient | None = None,
     env: Mapping[str, str] | None = None,
@@ -80,6 +89,10 @@ def resolve_run_environment_preflight(
     ``gh`` is only asked for by the GitHub source; local-markdown Runs
     deliberately do not depend on it.
     """
+    environment = {**os.environ, **(env or {})}
+    if executable_finder is None:
+        def executable_finder(name: str) -> str | None:
+            return shutil.which(name, path=environment.get("PATH"))
     checks = [
         _tool_check("git", executable_finder),
         _tool_check("copilot", executable_finder),
@@ -99,7 +112,59 @@ def resolve_run_environment_preflight(
     ca_check = _copilot_proxy_ca_check(os.environ if env is None else env)
     if ca_check is not None:
         checks.append(ca_check)
+    shim_check = _python_shim_check(repo_root, environment, executable_finder)
+    if shim_check is not None:
+        checks.append(shim_check)
     return RunEnvironmentPreflight(checks=tuple(checks))
+
+
+def _python_startup(
+    executable: str, repo_root: Path, environment: Mapping[str, str],
+) -> tuple[str, float]:
+    started = perf_counter()
+    process = subprocess.Popen(
+        [executable, "-c", "import sys; print(sys.executable)"],
+        cwd=repo_root, env=environment, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8", errors="replace", start_new_session=os.name == "posix",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=_PYTHON_STARTUP_TIMEOUT_SECONDS)
+    except BaseException:
+        kill_and_release(process, grace_seconds=1)
+        raise
+    elapsed_ms = (perf_counter() - started) * 1000
+    if process.returncode != 0:
+        raise ValueError(f"exit {process.returncode}: {stderr.strip()[-500:]}")
+    interpreter = stdout.strip()
+    if not interpreter or not Path(interpreter).is_absolute() or "\n" in interpreter:
+        raise ValueError("probe did not report an absolute interpreter path")
+    return interpreter, elapsed_ms
+
+
+def _python_shim_check(
+    repo_root: Path, environment: Mapping[str, str], finder: ExecutableFinder,
+) -> RunEnvironmentCheck | None:
+    executable = finder("python3")
+    if executable is None:
+        return None
+    path = Path(executable).absolute()
+    if path.parent.name != "shims" and path.resolve().parent.name != "shims":
+        return None
+    detail = f"python3 shim {path}"
+    try:
+        interpreter, shim_ms = _python_startup(str(path), repo_root, environment)
+        detail += f" ({shim_ms:.1f} ms); interpreter {interpreter}"
+        if Path(interpreter).resolve() == path.resolve():
+            raise ValueError("shim returned itself, not its backing interpreter")
+        _, interpreter_ms = _python_startup(interpreter, repo_root, environment)
+        detail += f" ({interpreter_ms:.1f} ms)"
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        detail += f"; could not measure Python startup: {exc}"
+    return RunEnvironmentCheck(
+        name="Python startup", passed=True, warning=True, location=path,
+        detail=detail + "; repeated shim startup can slow feedback loops; PATH unchanged",
+    )
 
 
 # Documented by `copilot sandbox ca --help`; never infer trust from output text.

@@ -20,6 +20,7 @@ from git_loopy.release_version import (
     BUMP_CLASS_KEYS,
     BumpClassError,
     ReleaseLine,
+    ReleaseLineAlreadyReportedError,
     is_release_target_label,
     pickup_release_target_label,
     resolve_bump_class,
@@ -185,6 +186,8 @@ class PickupBumpClassifier:
             return item
         try:
             last_stable, current_line = self.release_line()
+        except ReleaseLineAlreadyReportedError:
+            return item
         except Exception as exc:  # noqa: BLE001 - classification is non-fatal
             self._report(
                 item,

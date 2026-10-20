@@ -20,6 +20,7 @@ from tests.test_loop_parallel import (
     _capture_parallel_loops, _logged_events, _make_issue, _pinned_config, _wire_rolling_run,
 )
 from tests.test_run_sandbox import Runtime
+from tests.test_sandbox_conformance import sandbox_cases
 
 
 def test_required_unsupported_sandbox_never_starts_an_agent(tmp_path, monkeypatch, capsys):
@@ -65,10 +66,10 @@ def test_required_policy_is_not_silently_dropped_by_a_remote_lane_host(tmp_path,
     assert "GIT_LOOPY_EXECUTION_HOST=local" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("kind", [
-    "off", "serial", "serial-dirty", "serial-cancel", "lane", "recovery", "managed", "remote",
-])
-def test_sandboxed_agents_commit_in_issue_clones(tmp_path, monkeypatch, capsys, kind):
+@pytest.mark.parametrize("case", sandbox_cases("disclosure_cases"), ids=lambda case: case["id"])
+def test_sandboxed_agents_commit_in_issue_clones(tmp_path, monkeypatch, capsys, case):
+    kind = case["id"]
+    expected_disclosure = case["expected"]
     parallel = kind in {"lane", "recovery"}
     enabled = kind != "off"
     labels = ["ready-for-agent"] + (["parallel-safe"] if parallel else [])
@@ -171,28 +172,26 @@ def test_sandboxed_agents_commit_in_issue_clones(tmp_path, monkeypatch, capsys, 
             installed_skills_dir=kwargs["installed_skills_dir"],
         )
 
-    runtime = Client(enabled=enabled and kind not in {"managed", "remote"}, managed=kind == "managed")
+    runtime = Client(enabled=case["enabled"], managed=case["managed"])
     monkeypatch.setattr(loop, "_make_client", lambda: runtime)
     monkeypatch.setattr(loop, "_discover_skill_catalog", discover)
-    residence = {"residence": "remote"} if kind == "remote" else {}
-    asyncio.run(loop.run(_pinned_config(42, max_iterations=1), **residence))
+    asyncio.run(loop.run(_pinned_config(42, max_iterations=1), residence=case["residence"]))
     events = _logged_events(tmp_path)
     start = next(i for i, event in enumerate(events) if event["type"] == "wrapper.run.start")
     disclosures = [event for event in events if event["type"] == "wrapper.sandbox.resolved"]
-    assert len(disclosures) == 1
+    assert len(disclosures) == expected_disclosure["events"]
     assert events[start + 1] == disclosures[0]
-    expected_state = "remote" if kind == "remote" else ("local" if enabled else "off")
-    assert disclosures[0]["state"] == expected_state
+    assert disclosures[0]["state"] == expected_disclosure["state"]
     assert disclosures[0]["iter"] is None
     assert "userPolicy" not in disclosures[0]
     output = capsys.readouterr().out.splitlines()
     sandbox_lines = [i for i, line in enumerate(output) if line.strip().startswith("Sandbox:")]
-    assert len(sandbox_lines) == 1
+    assert len(sandbox_lines) == expected_disclosure["lines"]
     line = sandbox_lines[0]
-    label = "remote (always on)" if kind == "remote" else expected_state
+    label = expected_disclosure["label"]
     assert output[line].strip() == f"Sandbox: {label}"
     assert output[line - 1].strip() == "Isolation grade: workspace separation only"
-    assert len(observed) == (2 if kind == "recovery" else 1)
+    assert len(observed) == expected_disclosure["agents"]
     if kind == "serial-cancel":
         assert source.head_sha() == base
         assert not (tmp_path / "contribution.txt").exists()

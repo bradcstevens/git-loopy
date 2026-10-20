@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import math
 import subprocess
 import time
 import zipfile
@@ -600,6 +601,7 @@ class GitHubActionsExecutionHost:
         capacity: int,
         workflow_ref: str,
         send_timeout_seconds: float,
+        gate_timeout_seconds: float | None = None,
         poll_interval_seconds: float = 5.0,
         timeout_seconds: float = CONTRIBUTION_JOB_TIMEOUT_SECONDS,
         clock: Callable[[], float] = time.monotonic,
@@ -617,6 +619,12 @@ class GitHubActionsExecutionHost:
         self._capacity = capacity
         self._workflow_ref = workflow_ref
         self._send_timeout_seconds = send_timeout_seconds
+        self._gate_timeout_seconds = (
+            resolve_gate_timeout_seconds(environ)
+            if gate_timeout_seconds is None else gate_timeout_seconds
+        )
+        if not math.isfinite(self._gate_timeout_seconds) or self._gate_timeout_seconds <= 0:
+            raise ValueError("execution host gate timeout must be positive and finite")
         self._poll_interval_seconds = poll_interval_seconds
         self._timeout_seconds = timeout_seconds
         self._clock = clock
@@ -698,7 +706,7 @@ class GitHubActionsExecutionHost:
                     {
                         "base_revision": base_revision,
                         "gate_timeout_seconds": (
-                            f"{resolve_gate_timeout_seconds(environ):g}"
+                            f"{self._gate_timeout_seconds:g}"
                         ),
                         "preflight_token": token,
                     },

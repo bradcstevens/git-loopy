@@ -69,6 +69,12 @@ were created with `path:shell` and `path:powershell`, respectively, replacing
 #732. Their issues stay open for resumption; #553 and #554 remain unchanged
 here because #797 owns their label migration.
 
+ADR-0093 separately assigns the new Sandbox obligation to every Orchestrator.
+`sandbox.json` records the shell port in #866 and PowerShell port in #868 as
+owed waivers, the explicit exception to ADR-0091's no-new-debt rule. They are
+not historical baseline debt and do not change either manifest's frozen
+Release, Contract support or carried `owed_waivers`.
+
 No published helper exists at or below this baseline. A default dormant
 installation therefore reports no eligible helper; the launcher remains usable
 in plain mode, and `--no-tui` / `-NoTui` skips helper installation. A compatible

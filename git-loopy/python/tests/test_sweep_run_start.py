@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,10 +27,12 @@ from git_loopy import gh as gh_module
 from git_loopy import loop as loop_module
 from git_loopy.config import RunConfig
 from git_loopy.git import lane_branch_name
+from git_loopy.route_reuse import MAX_HISTORY_LOGS
 from git_loopy.run_control import RunControlArtifact, advisory_locking_available
 from git_loopy.skill_catalog import build_skill_catalog
 from tests.fakes import FakeGitClient, FakeGitHubClient
 from tests.test_iteration_end_to_end import FakeCopilotClient
+from tests.test_sweep_retention import _artifacts, _run
 
 
 @pytest.fixture(autouse=True)
@@ -91,6 +96,61 @@ def test_a_run_reclaims_the_residue_of_a_run_whose_lock_is_free(empty_pool_run) 
     assert drive() == 0
 
     assert git.worktree_removes == [lane_path]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="native macOS Run boundary proof")
+@pytest.mark.parametrize("crash", [False, True])
+def test_run_holds_idle_sleep_assertion_through_startup_and_releases_on_exit(
+    empty_pool_run, monkeypatch: pytest.MonkeyPatch, crash: bool,
+) -> None:
+    git, drive = empty_pool_run()
+    observed: list[str] = []
+
+    def make_client():
+        report = subprocess.check_output(["pmset", "-g", "assertions"], text=True)
+        owned = [
+            line for line in report.splitlines()
+            if f"pid {os.getpid()}(" in line and "git-loopy Run" in line
+        ]
+        assert len(owned) == 1, report
+        observed.extend(owned)
+        if crash:
+            raise RuntimeError("startup crash")
+        return FakeCopilotClient(scripted_events=[])
+
+    monkeypatch.setattr(loop_module, "_make_client", make_client)
+    assert drive() == (1 if crash else 0)
+    assert observed
+    report = subprocess.check_output(["pmset", "-g", "assertions"], text=True)
+    assert not any(
+        f"pid {os.getpid()}(" in line and "git-loopy Run" in line
+        for line in report.splitlines()
+    ), report
+    diagnostics = "\n".join(
+        path.read_text() for path in (git.root / ".git-loopy" / "logs").glob("*.log")
+    )
+    assert "idle-sleep assertion: held" in diagnostics
+    assert "idle-sleep assertion: released" in diagnostics
+
+
+def test_run_refuses_when_requested_idle_sleep_assertion_cannot_be_held(
+    empty_pool_run, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from git_loopy import host_sleep
+
+    git, drive = empty_pool_run()
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    def unavailable():
+        raise OSError("assertion refused")
+
+    monkeypatch.setattr(host_sleep, "_acquire_assertion", unavailable)
+    assert drive() == 1
+    diagnostics = "\n".join(
+        path.read_text() for path in (git.root / ".git-loopy" / "logs").glob("*.log")
+    )
+    assert "idle-sleep assertion: not held" in diagnostics
+    assert "GIT_LOOPY_PREVENT_IDLE_SLEEP=off" in diagnostics
 
 
 def test_a_run_sweeps_against_the_branch_it_publishes_to(empty_pool_run) -> None:
@@ -174,3 +234,25 @@ def test_a_sweep_never_reaches_the_wire_or_the_durable_record(empty_pool_run) ->
     assert [row["issues"] for row in summary["iterations"]] == [[]]
     assert [row["commits"] for row in summary["iterations"]] == [0]
     assert [row["strikes"] for row in summary["iterations"]] == [0]
+
+
+def test_start_of_run_retention_reports_without_events_or_strikes(empty_pool_run) -> None:
+    git, drive = empty_pool_run()
+    logs = git.root / ".git-loopy" / "logs"
+    old = [_run(logs, number, control=False) for number in range(MAX_HISTORY_LOGS + 1)]
+
+    assert drive() == 0
+
+    # The starting Run already has diagnostics, so it occupies a window slot.
+    assert all(not path.exists() for trace in old[:2] for path in _artifacts(trace))
+    assert all(trace.exists() for trace in old[2:])
+    current = next(trace for trace in logs.glob("*.jsonl") if trace not in old)
+    events = [json.loads(line) for line in current.read_text().splitlines()]
+    assert not any("sweep" in event["type"] or "retention" in event["type"] for event in events)
+    assert events[-1]["type"] == "wrapper.run.end"
+    diagnostics = current.with_suffix(".log").read_text()
+    for trace in old[:2]:
+        assert f"start-of-Run sweep reclaimed Run logs: {trace.with_suffix('')}" in diagnostics
+    summary = json.loads(next((git.root / ".git-loopy" / "runs").glob("*.json")).read_text())
+    assert [row["strikes"] for row in summary["iterations"]] == [0]
+    assert [row["issues"] for row in summary["iterations"]] == [[]]

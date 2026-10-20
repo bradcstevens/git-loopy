@@ -102,6 +102,7 @@ _RUN_TEST_MODULES = frozenset(
         "test_iteration_end_to_end.py",
         "test_loop_parallel.py",
         "test_parallel_publication.py",
+        "test_lane_checkpoints.py",
         "test_rate_card_run_start.py",
         "test_recorded_setup_flow.py",
         "test_routing_durability_conformance.py",
@@ -382,3 +383,22 @@ def zoneless_viewer(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     finally:
         monkeypatch.undo()
         time.tzset()
+
+
+@pytest.fixture(autouse=True)
+def _detach_run_log_bridge() -> Iterator[None]:
+    """Drop the Runner-module bridge a test's Run log installed (#903).
+
+    The bridge is process-wide, so left in place it would forward a later
+    test's module warnings into an earlier test's Run log and its captured
+    stderr.
+    """
+    yield
+    import logging
+
+    from git_loopy import persist
+
+    parent = logging.getLogger(persist._RUN_LOG_BRIDGE_PARENT)
+    for handler in list(parent.handlers):
+        if isinstance(handler, persist._RunLogBridge):
+            parent.removeHandler(handler)

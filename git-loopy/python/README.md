@@ -21,6 +21,14 @@ git-loopy
 root [`README.md`](../../README.md) for positioning, and
 [`docs/runners.md`](../../docs/runners.md) for the full runner reference.
 
+A Lane contribution's frozen summary separates **Session time**, **Integration
+time** (the remaining time, including the queue wait, gate and Recovery), and
+**Total wall-clock time**. It uses the recorded `agent_seconds` and
+`lifecycle_seconds`; Session time plus Integration time equals the total within
+display rounding. Serial Iterations retain their single **Duration** figure and
+show no Integration time. This is a human-summary projection, not an Event
+contract or durable run-summary schema change.
+
 Each finished attempt carries its observed **Ending** beside the unchanged issue
 **Status**: on the issue's `wrapper.iteration.end` row for serial work, or on
 `wrapper.contribution.end` for its Lane. The Queue explains it inline (for example,
@@ -1165,6 +1173,25 @@ surface including verbosity flags (`-v`, `-vv`, `-vvv`) and
 `git-loopy <VERSION>` and does not require a repository, Config, GitHub,
 Copilot, network access, or the TUI.
 
+### Unfinished Lane work
+
+Only agent commits advance base in Parallel mode. The Runner still captures
+uncommitted Lane work as a **Checkpoint**, but Integration merges only through
+the last agent commit. A Checkpoint-only contribution publishes nothing, ends
+no-progress with its session ending (for example, timeout), and leaves the issue open.
+
+Checkpoints are pushed to
+`refs/heads/git-loopy-checkpoints/issue-<N>/<checkpoint-sha>` on base's upstream
+remote, or `origin` without an upstream. The Run log and an issue comment name the
+ref; later briefs retain the latest Checkpoint Breadcrumb even after newer comments
+displace it from the five-comment window. Follow the comment's `git fetch` and
+`git show FETCH_HEAD` instructions to inspect it. New attempts still start from
+base, not from unlanded work.
+
+If preservation fails, the Run warns and keeps the local Lane branch; it never
+publishes the Checkpoint onto base as a fallback. Serial Checkpoints remain on
+the current branch and retain their existing best-effort auto-push behavior.
+
 ---
 
 ## Setting up an Azure target (`git-loopy remote setup`)
@@ -1219,6 +1246,38 @@ Run residence, and leaves plain Runs local. A saved target is not proof that a
 remote Run can start. See [Azure target setup](../../docs/run-residence.md#azure-target-setup-869)
 for the exact egress-policy rules and provider boundary.
 
+## Starting a remote Run (`git-loopy remote`)
+
+```bash
+git-loopy remote 10 --execution-host local
+```
+
+Accepts the plain Run's arguments and starts the whole Orchestrator detached in
+an Azure Container Apps Sandbox microVM. Publish the local default branch and
+the target's `.devcontainer` to origin first. A `github-actions` Lane host is
+refused; Agents and Integration may still use CI.
+
+After `remote setup`, add `registry = "yourregistry"` to the project's
+`[remote]` table, naming an existing ACR you can push to. The launcher also needs
+Docker, the Dev Container CLI, and its existing Azure CLI login. It creates no
+registry or role assignments. The devcontainer supplies the repository's
+toolchain and `gh`; git-loopy at the launching installation's version and Linux
+Sandbox prerequisites are layered on.
+
+The VM starts with auto-suspend disabled, credentials remain in the egress proxy,
+and the forwarded Copilot Sandbox policy is **always enforced**, even when its
+`enabled` preference is false. Compute is **metered to the Azure subscription**,
+with no estimate. Closing the launching client does not stop the Run.
+
+Use `runs`, `attach <run-id>` and `stop <run-id>` from the launching clone just
+as for a local Run. The client uses its existing Azure CLI login and the
+Container Apps execution API; no guest login or credential copy is needed.
+Automatic remote teardown remains separate delivery work (#871). Preserve
+salvage and reclaim the VM and disk after the Run; client Detach deletes neither.
+See the [remote launch reference](../../docs/run-residence.md#detached-azure-launch-870)
+for image prerequisites, corporate package feeds, credential handling and
+unconfirmed-launch recovery.
+
 ---
 
 ## Listing this clone's Runs (`git-loopy runs`)
@@ -1228,18 +1287,20 @@ git-loopy runs
 ```
 
 ```
-RUN                         STATE    STARTED               SCOPE
-01K6Z9QWERTYUIOPASDFGHJKLZ  live     2026-09-19T11:04:02Z  /src/app
-01K6Z7H4TCXV0YQ9M2N8B3RJ5D  dead     2026-09-19T09:51:40Z  /src/app-worktree
-01K6Z4B1GKAP7WS3E6D9F2TQXN  unknown  2026-09-18T22:17:09Z  /src/app
+RUN                         STATE    STARTED               SCOPE              RESIDENCE
+01K6Z9QWERTYUIOPASDFGHJKLZ   live     2026-09-19T11:04:02Z  /src/app           remote
+01K6Z7H4TCXV0YQ9M2N8B3RJ5D  dead     2026-09-19T09:51:40Z  /src/app-worktree  local
+01K6Z4B1GKAP7WS3E6D9F2TQXN  unknown  2026-09-18T22:17:09Z  /src/app           remote
 ```
 
 Every Run of **this clone** — the worktree you invoked it from plus every other
 worktree `git worktree list` registers — newest first. Run it from any of those
 worktrees and you get the same listing, including Runs that were started from a
 different one. **Lane workspaces** (**Issue clones**) are not separate Run
-residences and are not included in this list. `RUN` is the full Run identity,
-and `SCOPE` is the worktree the Run published its artefacts in;
+residences and are not included in this list. Remote launches recorded by this
+clone are listed alongside local Runs. `RUN` is the full Run identity,
+`RESIDENCE` is `local` or `remote`, and `SCOPE` is the originating worktree
+(the launching worktree for a remote Run);
 together they are what `git-loopy attach` and `git-loopy stop` target, so the
 two cannot disagree about which Runs exist.
 
@@ -1264,7 +1325,16 @@ never treated as permission to control or reclaim its work, which is the same
 rule `git-loopy sweep` already follows.
 
 The listing is purely observational: it starts no agent work, sends no Stop,
-reclaims nothing, and never reaches your issue tracker. It needs only `git`.
+reclaims nothing, and never reaches your issue tracker. Local-only listing
+needs only `git`. When the clone has remote launch receipts, install the
+`remote` extra and use the intended operator's existing Azure CLI login.
+The remote provider reads the guest's actual control lock, not the VM's
+running state. Missing or suspended VMs are `unknown`, never resumed by a
+client. An Azure access or execution failure diagnoses that known remote Run
+as `unknown`, without hiding it or blocking control of a proven local Run.
+Unreadable launch receipts still refuse a partial listing.
+Changing `[remote]` does not forget old
+Runs: each receipt retains its launch target.
 
 An attached Dashboard requests **Stop** with `s`. That writes one durable
 request beside the Run's control artifact (`<trace>.control.stops/`); it does
@@ -1316,6 +1386,17 @@ live one. Attach opens no channel into an Execution host. A Run whose
 contributions are local and a Run whose contributions are on GitHub Actions
 are observed the same way: through the Run's own trace and control artifact.
 
+For remote residence, bounded execution-API reads stream the guest trace into
+a temporary client-only mirror. The same local Dashboard and line printer
+render it in the viewing machine's Display zone. Stop requests retain their
+identities when relayed to the guest; only the guest Orchestrator's Events
+acknowledge them. Pending Dashboard Stop requests are retained in the clone's
+shared git directory even if this client dies before forwarding them. The next
+Attach or Stop redelivers them before a new Stop; `runs` remains observational.
+A disconnected client's pending request is not an acknowledged Wind-down.
+A transport fault restores the terminal and reports failure, not a finished
+Run. Detach removes only this client's temporary trace, never pending requests.
+
 **Stop** is `git-loopy stop`, or `s` in an attached Dashboard. Attach does not
 write one. Shell and PowerShell do not attach and do not provide this command.
 
@@ -1330,7 +1411,8 @@ git-loopy stop 01K6Z9QWERTYUIOPASDFGHJKLZ --request-id cli-0123abcd
 ```
 
 Requests the same two-stage **Wind-down** an attached Dashboard requests with
-`s`. No Dashboard helper and no remote-control service is required. The Run
+`s`. No Dashboard helper is required. Local Stop needs no remote-control
+service; remote Stop uses Azure's execution API. The Run
 identity is required. Resolution is the same clone-scoped listing as
 `git-loopy runs`: this worktree and every worktree it has registered, never
 another clone, and never the newest Run by default. A Run whose liveness this
@@ -1394,6 +1476,7 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 | `GIT_LOOPY_CREDIT_BUDGET_USD_PER_HOUR` | unset (contraction unavailable) | The authoritative AI-credit ceiling adaptation judges this Run's burn against. Without it, credit pressure is unknown rather than estimated. Credit never gates capacity or expansion; it only contracts the effective Lane limit under sustained burn. A malformed or non-positive value reads as unset rather than aborting the Run. |
 | `GIT_LOOPY_HOST_LOAD_BUDGET`       | `1.0`                           | The tolerated run-queue depth **per CPU**, so `1.0` means "keep every core busy but do not queue". Host/setup pressure is reported as the ratio of the observed one-minute load average per CPU to this budget. Host-load observability starts and ceilings the controller at the bound Execution host's declared capacity; a platform without a load average remains at the static-safe limit. Same malformed-reads-as-default rule. |
 | `GIT_LOOPY_HOST_YIELD` | `utility` on macOS; `none` elsewhere | **Host yield policy** for local Run work, including the Copilot runtime, tool descendants and Integration feedback loops. The Dashboard client is not clamped. `none` opts out; environment overrides project Config, then global Config. Unknown values refuse; non-macOS scheduling is unchanged. See [operator guidance](../../docs/customization.md#host-yield-policy-on-macos). |
+| `GIT_LOOPY_PREVENT_IDLE_SLEEP` | `true` | Local macOS Runs hold a process-owned idle-system-sleep assertion until exit, including crash cleanup. Display sleep and screen lock are unchanged; remote Runs/Execution hosts and other platforms are unaffected. `false`/`off`/`no`/`0` opt out. Environment overrides project Config, then global Config; invalid values refuse. The diagnostics log records the assertion state and explains Lease TTLs elapsed after a forced suspension. See [operator guidance](../../docs/customization.md#idle-system-sleep). |
 | `GIT_LOOPY_ENABLED_SKILLS`            | unset                          | **Exact replacement** of the configured base **Skill policy** (ADR-0015) for one Run — comma-separated canonical Skill names. *Presence*, not content, is what counts: an explicitly empty value is a real empty policy (which then fails preflight for omitting the **Required Skills**), while leaving it unset keeps the project / global `enabled_skills`. Because it replaces the base policy it also suppresses the one-time legacy-Config migration offer. See [`docs/skill-policy.md`](../../docs/skill-policy.md). |
 | `GIT_LOOPY_DENY_TOOLS`                | _(empty)_                      | Comma-separated tool denylist. **Unioned** with `--deny-tool` CLI flags — CLI does NOT override env (security-positive divergence).                                                                              |
 | `GIT_LOOPY_DENY_SKILLS`               | _(empty)_                      | **Deprecated** final guard (contract §17.2): comma-separated skill denylist for the `skill` meta-tool's `arguments.skill` field. **Unioned** with `--deny-skill` CLI flags and across config tiers — it only ever subtracts, and a denial that would remove a Required Skill is a validation failure rather than a quiet subtraction. Prefer omitting the name from `enabled_skills`. |
@@ -1401,6 +1484,20 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 | `OTEL_EXPORTER_OTLP_ENDPOINT`     | unset                          | Presence (non-empty) also enables OTel tracing — matches the conventional OTel-ecosystem activation pattern.                                                                                                     |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`      | `7200` (2 h)                   | Per-Iteration `send_and_wait` timeout. The SDK's default of `60` is far too short for autonomous Iterations that frequently run 30+ minutes.                                                                      |
 | `GIT_LOOPY_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker. Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. When requested on a non-TTY run, the run warns and falls back to the configured model. |
+
+The gate bound follows environment > project `gate_timeout_seconds` > global
+`gate_timeout_seconds` > 3600 seconds. Set it with
+`git-loopy config set --project gate_timeout_seconds 5400` (or `--global`).
+It remains one finite, positive hang-catching bound for every row. Invalid
+environment or numeric Config bounds warn and fall through; `config set`
+rejects them. Every attempted gate row logs its duration beside the bound, and
+strictly more than half the bound produces one warning naming the row.
+
+`git-loopy doctor` also reports `python3` version-manager shims with both the
+shim and backing interpreter paths and their measured startup times. Run
+preflight shares this non-blocking advisory. No shim means no Python-startup
+report; probe failures are explicit warnings. Neither `PATH` nor feedback-loop
+rows are changed. See [feedback-loop guidance](../../docs/customization.md#feedback-loops).
 
 CLI flags (`--version`, `--model ID`, `--reasoning-effort EFFORT`,
 `--context-tier TIER`,
@@ -1473,6 +1570,7 @@ demotion_threshold = 3
 include_prs = true
 otel_enabled = false
 send_timeout_seconds = 7200
+gate_timeout_seconds = 3600  # one finite hang-catching bound for every gate row
 enabled_skills = ["tdd", "code-review"]
 deny_tools = ["bash"]
 deny_skills = []   # deprecated final guard — prefer omitting from enabled_skills
@@ -1482,7 +1580,8 @@ The **persisted** knobs are `model`, `reasoning_effort`, `context_tier`, `route_
 `classifier_model`,
 `classifier_effort`, `issue_source`,
 `include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`,
-`host_yield`, `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
+`host_yield`, `prevent_idle_sleep`, `send_timeout_seconds`, `gate_timeout_seconds`,
+`enabled_skills`, and the two denylists. The
 model/effort **capability gate** (below) still applies to a config-supplied
 model. The two denylists are
 **unioned** across all four sources (CLI ∪ env ∪ project ∪ global) — never
@@ -1602,7 +1701,8 @@ The settable keys are exactly the [persisted knobs](#persistent-config-configtom
 above (`model`, `reasoning_effort`, `context_tier`, `route_policy`,
 `classifier_model`, `classifier_effort`,
 `issue_source`, `max_nmt_strikes`, `demotion_threshold`,
-`include_prs`, `otel_enabled`, `host_yield`, `send_timeout_seconds`,
+`include_prs`, `otel_enabled`, `host_yield`, `prevent_idle_sleep`, `send_timeout_seconds`,
+`gate_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
 
@@ -2544,6 +2644,28 @@ single invocation share the same stem, so `ls .git-loopy/logs/` and
 
 The run-summary JSON schema is documented at the top of
 [`git_loopy/persist.py`](git_loopy/persist.py).
+
+### Run-log retention (`git-loopy sweep`)
+
+The start-of-Run sweep and `git-loopy sweep` keep the newest
+`route_reuse.MAX_HISTORY_LOGS` Runs (currently 64) in each registered worktree's
+`.git-loopy/logs/`, ordered by Run stem rather than file modification time.
+Live and unknown Runs count toward that window. An older Run is reclaimed only
+when its control lock is free, or when it has no control artifact and its trace
+contains a `wrapper.run.end` Event. Held locks and unprovable liveness are
+preserved; a host without advisory locking never reclaims a Run with a control
+artifact.
+
+Reclamation deletes the whole stem's `.jsonl`, `.log`, `.control` and
+`.control.stops/` together, without compression. Non-Run files are untouched,
+and `.git-loopy/runs/` summaries are kept indefinitely. Nothing outside this
+clone's registered worktrees is scanned.
+
+Use `git-loopy sweep --dry-run` to list the Run stems that would be reclaimed
+without deleting anything. Both sweep entry points report reclaimed stems and
+stay silent when there is nothing to reclaim. Retention emits no Event or Strike,
+and a Run never prunes its own logs on exit. See
+[ADR-0095](../../docs/adr/0095-run-traces-are-retained-by-count-at-the-route-reuse-window.md).
 
 ---
 

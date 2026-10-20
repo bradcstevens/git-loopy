@@ -74,6 +74,8 @@ def test_runs_enumerates_a_registered_residence(repo, capsys):
     assert "01FAKERUN" in report
     assert "live" in report
     assert str(repo) in report
+    assert "RESIDENCE" in report
+    assert "fake" in report
     assert cli.main(["runs"]) == 0
     assert capsys.readouterr().out == "No Runs have been recorded in this clone.\n"
 

@@ -6640,7 +6640,7 @@ def test_a_lane_scheduling_distribution_emits_the_membership_read(
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     cfg = RunConfig(

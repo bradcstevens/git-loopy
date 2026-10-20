@@ -237,6 +237,7 @@ from git_loopy.rate_card import RateCard
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
     ReleaseLine,
+    ReleaseLineAlreadyReportedError,
     ReleaseNotesWrite,
     ReleaseVersionError,
     advance_release_line,
@@ -269,6 +270,7 @@ from git_loopy.rolling_pool import RollingPool, is_parallel_safe
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.run_readback import run_start_payload
 from git_loopy.host_yield import host_yield_disclosure
+from git_loopy.host_sleep import IdleSleepAssertion, SuspensionClock
 from git_loopy.run_start_disclosures import run_start_disclosures
 from git_loopy.issue_pin import (
     PIN_READ_BOUND,
@@ -320,6 +322,7 @@ from git_loopy.task_type_writer import TaskTypeLabelClient
 from git_loopy.telemetry import otel as telemetry
 from git_loopy.ui import Renderer, RunSummary, get_console
 from git_loopy.wrapper import (
+    CHECKPOINT_COMMENT_MARKER,
     checkpoint_message,
     is_checkpoint_message,
     did_iteration_make_progress,
@@ -426,6 +429,7 @@ def _make_execution_host(
     placement: str,
     *,
     send_timeout_seconds: float,
+    gate_timeout_seconds: float | None = None,
 ) -> execution_host_module.ExecutionHost | None:
     """Construct the **Execution host** the operator named, or ``None`` for local.
 
@@ -456,6 +460,7 @@ def _make_execution_host(
             capacity=actions_host_module.github_actions_capacity(),
             workflow_ref=actions_host_module.workflow_ref(client),
             send_timeout_seconds=send_timeout_seconds,
+            gate_timeout_seconds=gate_timeout_seconds,
         )
     raise ValueError(f"no adapter exists for execution host {placement!r}")
 
@@ -487,7 +492,11 @@ def _make_task_type_label_client() -> gh_module.SubprocessTaskTypeLabelClient:
     return gh_module.SubprocessTaskTypeLabelClient()
 
 
-def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
+def _make_gate_runner(
+    *,
+    timeout_seconds: float | None = None,
+    diagnostics: logging.Logger | None = None,
+) -> gate_module.AgentsMdGateRunner:
     """Construct the per-invocation runner-side Integration gate (#60, ADR-0009).
 
     Factored to its own module-level function — mirroring :func:`_make_git_client`
@@ -504,14 +513,15 @@ def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
     own session), so :func:`run` does not call this factory. It ships now purely as
     the injectable seam the parallel slices consume.
 
-    The per-loop wall-clock bound (#374) is resolved here from
-    ``GIT_LOOPY_GATE_TIMEOUT_SECONDS``, env-only and inside the factory exactly as
-    :func:`_make_worktree_setup` resolves ``GIT_LOOPY_WORKTREE_SETUP`` — both are
-    Parallel-mode-only seam knobs, and keeping the factory zero-argument is what
-    lets every Integration test keep monkeypatching it with a bare ``lambda:``.
+    A Run supplies its resolved Config bound and Run log. Standalone callers
+    retain the environment/default resolution.
     """
     return gate_module.AgentsMdGateRunner(
-        timeout_seconds=gate_module.resolve_gate_timeout_seconds(os.environ)
+        timeout_seconds=(
+            gate_module.resolve_gate_timeout_seconds(os.environ)
+            if timeout_seconds is None else timeout_seconds
+        ),
+        diagnostics=diagnostics,
     )
 
 
@@ -600,6 +610,7 @@ def _make_lease_lifecycle(
     *,
     run_id: str,
     diag: logging.Logger,
+    residence: RunResidenceName = "local",
 ) -> LeaseLifecycle | None:
     """Construct this Run's **Lease** lifecycle, or ``None`` when it holds none.
 
@@ -621,11 +632,19 @@ def _make_lease_lifecycle(
     """
     if config.issue_source != "github":
         return None
+    try:
+        suspension_clock = SuspensionClock.for_local_macos(
+            local=residence == "local" and config.execution_host == "local",
+        )
+    except OSError as exc:
+        diag.warning("Run suspension diagnostics unavailable: %s", exc)
+        suspension_clock = None
     return build_lease_lifecycle(
         git,
         run_id=run_id,
         env=os.environ,
         warn=lambda message: diag.warning("%s", message),
+        suspension_clock=suspension_clock,
     )
 
 
@@ -4303,6 +4322,7 @@ class _Loop:
                 repository_visibility=_repository_visibility(self._source),
                 inside_ci=_publishing_from_ci(os.environ),
                 host_yield=host_yield_disclosure(self._config.host_yield),
+                remote_residence=self._sandbox_state == "remote",
             ),
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
@@ -4422,6 +4442,8 @@ class _LaneWork:
     pre_sha: str | None = None
     reclaimed: bool = False
     source_imported: bool = False
+    publication_sha: str | None = None
+    has_checkpoints: bool = False
     # Publications already on base when this Lane was cut. Drift is the
     # later count minus this snapshot; a cut this Run did not observe has
     # no snapshot, and the observation is null rather than a guessed zero.
@@ -4631,6 +4653,7 @@ class _ParallelLoop:
         self._rate_card = rate_card
         self._git = git
         self._release_line: ReleaseLine | None = None
+        self._release_line_unreadable = False
         self._last_stable_release_version: str | None = None
         self._materializer = materialization_module.ContributionMaterializer(git)
         self._prompt_text = prompt_text
@@ -5048,6 +5071,7 @@ class _ParallelLoop:
                 repository_visibility=_repository_visibility(self._source),
                 inside_ci=_publishing_from_ci(os.environ),
                 host_yield=host_yield_disclosure(self._config.host_yield),
+                remote_residence=self._serial._sandbox_state == "remote",
             )
         )
         self._serial._emit(
@@ -6539,6 +6563,22 @@ class _ParallelLoop:
         lane_work.branch = outcome.branch
         lane_outcome = outcome.ending
         assert lane_outcome is not None
+        try:
+            lane_outcome = self._prepare_lane_publication(lane_work, lane_outcome)
+        except git_module.GitError as exc:
+            self._diag.error(
+                "lane #%s: cannot separate Checkpoints from publication; "
+                "preserving %s unpublished: %s", ref, lane_work.branch, exc,
+            )
+            self._finish_terminal_host_failure(
+                contribution, lane_work,
+                execution_host_module.ContributionFailure(
+                    reason="checkpoint_publication_unverified",
+                    classification="stall", ending=None, detail=str(exc),
+                ),
+                reoffer=False,
+            )
+            return
         scope = self._contribution_iter.get(contribution.contribution_id)
         if scope is not None:
             scope.ending = lane_outcome.outcome
@@ -6553,8 +6593,7 @@ class _ParallelLoop:
         # One progress fact per contribution (#403): the ending the outcome
         # carries is what the scheduler is told, so a contribution's
         # disposition can never contradict the ending just reported for it.
-        # Re-deriving it from the completion SHA would be a second answer the
-        # local runner's own commit accounting can disagree with.
+        # Preparation excludes Checkpoints for every host before this boundary.
         #
         # The Lane-work boundary (#681, ADR-0065): only a session that returned
         # a captured outcome reaches it, so every host failure, a pre-session
@@ -6683,6 +6722,8 @@ class _ParallelLoop:
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
         outcome: execution_host_module.ContributionFailure,
+        *,
+        reoffer: bool = True,
     ) -> None:
         """Finalize a host failure before it can reach Integration."""
         assert self._scheduler is not None
@@ -6713,7 +6754,7 @@ class _ParallelLoop:
 
         disposition = self._scheduler.finish_terminal_failure(
             contribution,
-            reoffer=outcome.classification != "breach",
+            reoffer=reoffer and outcome.classification != "breach",
             reason=_terminal_reason_for(outcome),
         )
         assert disposition == rolling_scheduler.TERMINAL
@@ -7134,10 +7175,10 @@ class _ParallelLoop:
         Returns:
             ``(changed, checkpoint_ok)`` for
             :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finish_work`
-            (#219 §3.7-3.10): ``changed`` is ``True`` iff the branch carries
-            durable work — an agent commit or a successful Checkpoint commit
-            both count (§3.9) — and ``checkpoint_ok`` is ``False`` only on an
-            actual Checkpoint *failure*, never on "nothing to checkpoint".
+            (#219 §3.7-3.10, amended by #905): ``changed`` is ``True`` iff the
+            branch carries agent commits, not Checkpoints. ``checkpoint_ok``
+            is ``False`` only on an actual Checkpoint *failure*, never on
+            "nothing to checkpoint".
         """
         wt_git = lane_work.git
         ref = lane_work.item.ref
@@ -7154,18 +7195,94 @@ class _ParallelLoop:
                 new_commits = []
 
         for c in new_commits:
+            event_type = (
+                events_module.WRAPPER_CHECKPOINT_RECORDED
+                if is_checkpoint_message(c.message)
+                else events_module.WRAPPER_COMMIT_RECORDED
+            )
             self._serial._emit(
-                events_module.WRAPPER_COMMIT_RECORDED,
+                event_type,
                 iter_num=None,
                 sha=c.sha,
                 subject=c.subject,
                 date=c.date,
+                issue=ref,
                 lane_issue=ref,
             )
 
-        checkpoint_sha, checkpoint_ok = self._maybe_checkpoint_lane(lane_work)
-        changed = bool(new_commits) or checkpoint_sha is not None
+        _, checkpoint_ok = self._maybe_checkpoint_lane(lane_work)
+        changed = any(not is_checkpoint_message(c.message) for c in new_commits)
         return changed, checkpoint_ok
+
+    def _prepare_lane_publication(
+        self, lane_work: _LaneWork,
+        ending: session_outcome_module.SessionOutcomeRecord,
+    ) -> session_outcome_module.SessionOutcomeRecord:
+        """Keep the completed Lane intact; Integration receives only its agent tip."""
+        if lane_work.pre_sha is None:
+            raise git_module.GitError(["log"], 1, "Lane base revision is unknown")
+        tip = self._git.branch_tip(lane_work.branch).sha
+        commits = self._git.commits_between(lane_work.pre_sha, tip)
+        checkpoints = [c for c in commits if is_checkpoint_message(c.message)]
+        if not checkpoints:
+            return ending
+        lane_work.has_checkpoints = True
+        self._preserve_lane_checkpoint(lane_work, checkpoints[0].sha)
+        agent_commits = [c for c in commits if not is_checkpoint_message(c.message)]
+        if agent_commits:
+            lane_work.publication_sha = agent_commits[0].sha
+            if any(
+                is_checkpoint_message(c.message)
+                for c in self._git.commits_between(
+                    lane_work.pre_sha, lane_work.publication_sha
+                )
+            ):
+                raise git_module.GitError(
+                    ["log"], 1, "agent history includes a Checkpoint; refusing to publish it"
+                )
+        return session_outcome_module.resolve_session_outcome(
+            termination=ending.termination,
+            progressed=bool(agent_commits),
+            error=ending.error,
+            content_filtered=(
+                ending.outcome is session_outcome_module.SessionOutcome.CONTENT_FILTERED
+            ),
+            no_more_tasks=(
+                ending.outcome is session_outcome_module.SessionOutcome.NO_MORE_TASKS
+            ),
+        )
+
+    def _preserve_lane_checkpoint(self, lane_work: _LaneWork, sha: str) -> None:
+        """Push an immutable, issue-addressed Breadcrumb, never a base fallback."""
+        ref = f"refs/heads/git-loopy-checkpoints/issue-{lane_work.item.ref}/{sha}"
+        try:
+            upstream = self._git.upstream()
+            remote = upstream[0] if upstream is not None else "origin"
+            if not self._git.remote_url(remote):
+                raise git_module.GitError(["push"], 1, f"no remote {remote!r}")
+            if not self._leased(lane_work.item, "Checkpoint preservation push"):
+                raise git_module.GitError(["push"], 1, "Checkpoint push Lease fence denied")
+            if not self._git.push_ref(remote, ref, sha, None):
+                raise git_module.GitError(["push"], 1, "Checkpoint ref already differs")
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "lane #%s: Checkpoint push to %s failed; keeping local branch %s, "
+                "never publishing the Checkpoint onto base: %s",
+                lane_work.item.ref, ref, lane_work.branch, exc,
+            )
+            return
+        self._diag.info(
+            "lane #%s: Checkpoint preserved at %s on %s", lane_work.item.ref, ref, remote
+        )
+        if self._leased(lane_work.item, "Checkpoint breadcrumb comment"):
+            self._source.comment(
+                lane_work.item.ref,
+                f"{CHECKPOINT_COMMENT_MARKER}\n"
+                f"Checkpoint preserved at `{ref}` on remote `{remote}` (commit `{sha}`).\n\n"
+                "This is unfinished work, not published onto base. The next attempt starts "
+                "from base, not this Checkpoint. Inspect it explicitly if useful:\n\n"
+                f"```sh\ngit fetch {remote} {ref}\ngit show FETCH_HEAD\n```",
+            )
 
     def _maybe_checkpoint_lane(
         self, lane_work: _LaneWork
@@ -7531,14 +7648,16 @@ class _ParallelLoop:
             if stage.issue_clone:
                 try:
                     stage.git.fetch_sha(
-                        str(self._git.root), f"refs/heads/{lane_work.branch}", lane_work.branch,
+                        str(self._git.root),
+                        lane_work.publication_sha or f"refs/heads/{lane_work.branch}",
+                        lane_work.branch,
                     )
                 except git_module.GitError as exc:
                     self._diag.error("integration #%s: could not import contribution: %s", ref, exc)
                     self._fallback_lane_to_serial(lane_work)
                     return False
             try:
-                stage.git.merge(lane_work.branch)
+                stage.git.merge(lane_work.publication_sha or lane_work.branch)
             except git_module.GitError as exc:
                 # A conflicting merge, unwound inside the private stage — base
                 # was never touched, so there is nothing to undo there.
@@ -7677,10 +7796,17 @@ class _ParallelLoop:
             return False
         try:
             pre_base = self._git.head_sha()
+            stage_commits = stage.git.commits_between(pre_base, stage.git.head_sha())
         except git_module.GitError as exc:
             self._diag.warning(
-                "integration #%s: base head_sha failed: %s; not publishing",
+                "integration #%s: publication history read failed: %s; not publishing",
                 ref, exc,
+            )
+            return False
+        if any(is_checkpoint_message(c.message) for c in stage_commits):
+            self._diag.warning(
+                "integration #%s: refusing to publish a Checkpoint from the private stage",
+                ref,
             )
             return False
         try:
@@ -7794,7 +7920,8 @@ class _ParallelLoop:
                 release_target=next_line.target,
                 release_version=next_line.version,
             )
-        self._delete_branch_safely(contribution.ref, lane_work.branch)
+        if not lane_work.has_checkpoints:
+            self._delete_branch_safely(contribution.ref, lane_work.branch)
         return True
 
     def _push_publication(
@@ -7864,6 +7991,8 @@ class _ParallelLoop:
             # read behind `_read_release_line`.
             last_stable, current_line = self._read_release_line()
             bump_class = resolve_bump_class(item.labels, last_stable)
+        except ReleaseLineAlreadyReportedError:
+            return None
         except (ReleaseVersionError, git_module.GitError) as exc:
             # Pickup already named a label fault; a refused label must not
             # silently advance the line either way.
@@ -7933,10 +8062,20 @@ class _ParallelLoop:
         if self._release_line is not None:
             assert self._last_stable_release_version is not None
             return self._last_stable_release_version, self._release_line
-        (
-            self._last_stable_release_version,
-            self._release_line,
-        ) = read_repository_release_line(self._repo_root, self._git)
+        if self._release_line_unreadable:
+            raise ReleaseLineAlreadyReportedError("Release line already reported unreadable")
+        try:
+            (
+                self._last_stable_release_version,
+                self._release_line,
+            ) = read_repository_release_line(self._repo_root, self._git)
+        except ReleaseVersionError as exc:
+            # Warn once per Run; later Pickups and Integrations stay silent.
+            self._release_line_unreadable = True
+            self._diag.warning(
+                "%s; the Bump class is skipped for this Run", exc
+            )
+            raise ReleaseLineAlreadyReportedError(str(exc)) from exc
         return self._last_stable_release_version, self._release_line
 
     def _restore_release_line(
@@ -8190,13 +8329,13 @@ class _ParallelLoop:
         """
         if conflicted:
             situation = (
-                f"Branch {lane_work.branch} could not be merged into this "
+                f"Revision {lane_work.publication_sha or lane_work.branch} could not be merged into this "
                 "integration worktree (the conflicting merge was aborted). "
                 "Merge it, "
             )
         else:
             situation = (
-                f"Branch {lane_work.branch} is already merged into this "
+                f"Revision {lane_work.publication_sha or lane_work.branch} is already merged into this "
                 "integration worktree, but its feedback loops are red. Fix "
                 "them, "
             )
@@ -8309,6 +8448,37 @@ async def run(
     routing_preflight: RunRoutingPreflight | None = None,
     residence: RunResidenceName = "local",
 ) -> int:
+    """Drive one Run, releasing its process-owned idle-sleep assertion on exit."""
+    assertion = IdleSleepAssertion(
+        enabled=config.prevent_idle_sleep,
+        local=residence == "local" and config.execution_host == "local",
+    )
+    try:
+        return await _run_with_sleep_assertion(
+            config, assertion=assertion, driver=driver, rate_card=rate_card,
+            staircase=staircase, run_id=run_id, started_at=started_at,
+            mirror_diagnostics_to_stderr=mirror_diagnostics_to_stderr,
+            host_capabilities=host_capabilities, routing_preflight=routing_preflight,
+            residence=residence,
+        )
+    finally:
+        assertion.close()
+
+
+async def _run_with_sleep_assertion(
+    config: RunConfig,
+    *,
+    assertion: IdleSleepAssertion,
+    driver: InteractiveDriver | None = None,
+    rate_card: RateCard | None = None,
+    staircase: "PriceStaircase | None" = None,
+    run_id: str | None = None,
+    started_at: datetime | None = None,
+    mirror_diagnostics_to_stderr: bool = True,
+    host_capabilities: HostCapabilityReport | None = None,
+    routing_preflight: RunRoutingPreflight | None = None,
+    residence: RunResidenceName = "local",
+) -> int:
     """Drive one ``git-loopy`` invocation to completion.
 
     Constructs the long-lived per-run state (writers, summary, renderer,
@@ -8378,6 +8548,7 @@ async def run(
             observed_host = _make_execution_host(
                 config.execution_host,
                 send_timeout_seconds=config.send_timeout_seconds,
+                gate_timeout_seconds=config.gate_timeout_seconds,
             )
         except (ValueError, actions_host_module.ActionsError) as exc:
             print(
@@ -8453,6 +8624,15 @@ async def run(
         )
         return 1
     diag = writers.diagnostics
+    try:
+        assertion.start(diag)
+    except OSError as exc:
+        diag.error(
+            "Run refused: cannot prevent idle system sleep: %s; "
+            "set GIT_LOOPY_PREVENT_IDLE_SLEEP=off to opt out", exc,
+        )
+        control.close()
+        return exit_code_for("preflight_failed")
 
     # A free control lock proves its Run cannot still own a Lane workspace.
     # This is intentionally Event-free: reclaiming someone else's residue is
@@ -8477,6 +8657,8 @@ async def run(
                 len(sweep_report.branches),
                 len(sweep_report.directories),
             )
+            for stem in sweep_report.runs:
+                diag.info("start-of-Run sweep reclaimed Run logs: %s", stem)
 
     if config.execution_host not in events_module.PYTHON_EXECUTION_HOSTS:
         supported = ", ".join(events_module.PYTHON_EXECUTION_HOSTS) or "(none)"
@@ -8506,6 +8688,7 @@ async def run(
             else _make_execution_host(
                 config.execution_host,
                 send_timeout_seconds=config.send_timeout_seconds,
+                gate_timeout_seconds=config.gate_timeout_seconds,
             )
         )
     except (ValueError, actions_host_module.ActionsError) as exc:
@@ -8563,6 +8746,8 @@ async def run(
             _make_label_client() if config.issue_source == "github" else None
         ),
     )
+    for warning in environment_preflight.warnings:
+        diag.warning("%s", warning.message)
     if not environment_preflight.passed:
         for failure in environment_preflight.failures:
             diag.error("%s", failure.message)
@@ -8865,7 +9050,9 @@ async def run(
     # the serial driver and every Lane consult the same object. `None` — the
     # PRDs backend, or a clone whose `origin` names no repository — restores
     # exactly the pre-ADR-0033 behaviour of one Run, unguarded, everywhere.
-    lease = _make_lease_lifecycle(config, git, run_id=writers.run_id, diag=diag)
+    lease = _make_lease_lifecycle(
+        config, git, run_id=writers.run_id, diag=diag, residence=residence,
+    )
     loop: _ParallelLoop
     try:
         loop = _ParallelLoop(
@@ -8881,7 +9068,9 @@ async def run(
             skill_preflight=skill_preflight,
             source=source,
             diag=diag,
-            gate_runner=_make_gate_runner(),
+            gate_runner=_make_gate_runner(
+                timeout_seconds=config.gate_timeout_seconds, diagnostics=diag,
+            ),
             worktree_setup=_make_worktree_setup(),
             include_prs=include_prs,
             rate_card=rate_card,
@@ -8937,6 +9126,10 @@ async def run(
                                 loop, control.path, diag
                             )
                         )
+                        suspension_watcher = (
+                            asyncio.create_task(lease.watch_suspensions())
+                            if lease is not None else None
+                        )
                         try:
                             if driver is None:
                                 exit_code = await loop.drive()
@@ -8947,6 +9140,12 @@ async def run(
                                 exit_code = await driver.run(loop.drive)
                         finally:
                             watcher.cancel()
+                            if suspension_watcher is not None:
+                                suspension_watcher.cancel()
+                                try:
+                                    await suspension_watcher
+                                except asyncio.CancelledError:
+                                    pass
                             try:
                                 await watcher
                             except asyncio.CancelledError:

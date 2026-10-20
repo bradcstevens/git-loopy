@@ -168,6 +168,27 @@ and the `background` clamp throttles deadline-bound tests too far. See
 the measured trade-off. Automated policy checks read process priority and
 never create CPU load.
 
+### Idle system sleep
+
+A live local Python Run on macOS also prevents **idle system sleep** until it
+exits, including when detached from its Dashboard. Display sleep and screen
+lock are unchanged. macOS releases the process-owned assertion even if the Run
+crashes or is killed. Remote Execution hosts, remote Run residences and other
+platforms are unaffected.
+
+This is independent of `host_yield`. To opt out, set `prevent_idle_sleep = false`
+in Config, run `git-loopy config set --project prevent_idle_sleep false` (or
+`--global`), or use `GIT_LOOPY_PREVENT_IDLE_SLEEP=off` for one invocation.
+Precedence is **environment > project Config > global Config > true**.
+The environment accepts `true/false`, `yes/no`, `on/off` or `1/0`; invalid values
+refuse. The Run diagnostics log records whether its assertion is held. An
+assertion that cannot be acquired refuses the Run with an opt-out remedy.
+
+Lid close and other forced suspension can still put the host to sleep. After a
+suspension longer than the Lease TTL, one diagnostic names the duration and
+the Leases whose TTLs elapsed during it. This explains renewal loss; it never
+reclaims a Lease or substitutes for the remote ownership fence.
+
 ## Skills reference
 
 Three different things supply Skills, and they are not interchangeable:
@@ -240,14 +261,31 @@ worth knowing before you fill it in:
   hour) and its whole process tree is killed when it exceeds it, so one loop waiting
   on a socket, a prompt or a lock cannot block Integration forever. A loop that
   exceeds its bound is a red gate naming that loop, reported as a *timeout* rather
-  than as a test failure. Set `GIT_LOOPY_GATE_TIMEOUT_SECONDS` when your slowest
-  honest loop needs more room — there is no value meaning "unbounded", and `inf` is
-  refused along with the rest.
+  than as a test failure. Set `gate_timeout_seconds` in project or global Config
+  when your slowest honest loop needs more room, for example
+  `git-loopy config set --project gate_timeout_seconds 5400`.
+  `GIT_LOOPY_GATE_TIMEOUT_SECONDS` overrides both scopes. There is one bound for
+  every row, sized to catch hangs rather than budget performance. There is no
+  value meaning "unbounded": non-positive and non-finite values are refused.
+  Invalid environment or numeric Config values warn and fall through to the
+  next tier; `config set` rejects them without writing.
+- **Every attempted row is timed.** The Run log names the row and outcome with
+  its duration and bound, including passed, failed and timed-out rows. A row
+  that takes strictly more than half its bound produces one warning. Timing
+  includes process startup and, on timeout, bounded process-tree cleanup.
 
 git-loopy's own [`AGENTS.md`](../AGENTS.md) is the worked example: it declares one
 row per Runner-family member, ordered cheapest-first so a fail-fast gate reports the
 cheap signal soonest, with tools resolved through `PATH` rather than host-specific
 paths (Integration runs in a throwaway worktree on whatever host the operator has).
+
+`git-loopy doctor` and Run preflight warn when `python3` on `PATH` resolves
+through a `shims` directory (including pyenv, asdf and mise). The report names
+the shim and its backing interpreter and measures each startup in the project
+directory. Each probe is bounded to ten seconds; an unavailable or timed-out
+probe is reported, not mistaken for a healthy interpreter. This advisory does
+not block a Run. No Python row is reported without a shim, and neither doctor
+(including `--apply`) nor the Run rewrites `PATH` or the feedback-loop commands.
 
 If you're on Azure or Microsoft tech, add **Azure conventions** and **Microsoft tooling** sections to `AGENTS.md` documenting the `SecurityControl=Ignore` tag and the `disableLocalAuth: false` default for Foundry resources. Otherwise skip them.
 

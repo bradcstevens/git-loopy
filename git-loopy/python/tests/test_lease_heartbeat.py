@@ -66,7 +66,12 @@ def test_lease_renews_while_the_calling_thread_is_blocked(tmp_path: Path) -> Non
         heartbeat.stop()
 
 
-def test_failed_renewals_stop_at_ttl_without_a_new_write(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "message", ["Connection reset by peer", "remote: Internal Server Error"]
+)
+def test_failed_renewals_stop_at_ttl_without_a_new_write(
+    tmp_path: Path, message: str
+) -> None:
     clock = Clock([60, 53, 53, 53, 53])
     git = FakeGitClient(tmp_path)
     transport = LeaseTransport(
@@ -75,9 +80,7 @@ def test_failed_renewals_stop_at_ttl_without_a_new_write(tmp_path: Path) -> None
     )
     hold = transport.claim(390, run_id=OWNER, now=1000, host="laptop", pid=42)
     assert hold is not None
-    failures = [
-        GitError(["git", "push"], 128, "Connection reset by peer") for _ in range(16)
-    ]
+    failures = [GitError(["git", "push"], 128, message) for _ in range(16)]
     git.push_ref_errors = failures.copy()
     heartbeat = LeaseHeartbeat(
         transport, hold, clock=clock, monotonic=clock, wait=clock.wait
@@ -171,7 +174,17 @@ def test_a_late_renewal_cannot_retry_beyond_the_remaining_ttl(tmp_path: Path) ->
         heartbeat.stop()
 
 
-def test_transient_failure_recovers_on_the_next_heartbeat(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("returncode", "message"),
+    [
+        (128, "Connection reset by peer"),
+        # Run 01M50MF3K5TGBMQTVKXKFMPJ6J: GitHub's push wording carries no code.
+        (1, "remote: Internal Server Error"),
+    ],
+)
+def test_transient_failure_recovers_on_the_next_heartbeat(
+    tmp_path: Path, returncode: int, message: str
+) -> None:
     clock = Clock([60, 53, 60])
     git = FakeGitClient(tmp_path)
     transport = LeaseTransport(
@@ -181,7 +194,7 @@ def test_transient_failure_recovers_on_the_next_heartbeat(tmp_path: Path) -> Non
     hold = transport.claim(390, run_id=OWNER, now=1000, host="laptop", pid=42)
     assert hold is not None
     git.push_ref_errors = [
-        GitError(["git", "push"], 128, "Connection reset by peer") for _ in range(4)
+        GitError(["git", "push"], returncode, message) for _ in range(4)
     ]
     heartbeat = LeaseHeartbeat(
         transport, hold, clock=clock, monotonic=clock, wait=clock.wait

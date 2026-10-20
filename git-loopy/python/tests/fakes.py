@@ -315,6 +315,10 @@ class FakeGitClient:
     def commits_between(self, pre: str, head: str) -> list[Commit]:
         if pre == head:
             return []
+        if not any(c.sha == head for c in self._log):
+            for child in self._branches.values():
+                if any(c.sha == head for c in child._log):
+                    return child.commits_between(pre, head)
         pre_idx = self._index(pre)
         head_idx = self._index(head)
         # Commits after ``pre`` up to and including ``head``, newest-first
@@ -489,9 +493,16 @@ class FakeGitClient:
                 (models a conflicting landing — nothing is appended).
         """
         child = self._branches.get(branch)
+        merge_branch = branch
+        if child is None:
+            for name, candidate in self._branches.items():
+                if any(c.sha == branch for c in candidate._log):
+                    child = candidate
+                    merge_branch = name
+                    break
         if child is None:
             raise GitError(["git", "merge", "--no-ff", branch], 1, f"merge: {branch}")
-        if self._branch_conflicts(branch):
+        if self._branch_conflicts(merge_branch):
             # A scripted conflict: base is left mid-merge (nothing landed) for
             # the caller to :meth:`abort_merge`.
             raise GitError(
@@ -502,6 +513,8 @@ class FakeGitClient:
         for commit in child._log:
             if commit.sha not in known:
                 self._log.append(commit)
+            if commit.sha == branch:
+                break
 
     def probe_remote_ref(self, remote: str, ref: str) -> str | None:
         """Return the scripted remote contribution or Lease ref SHA, if present."""

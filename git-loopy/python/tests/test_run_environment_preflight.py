@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import textwrap
 import subprocess
+import os
+import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +15,48 @@ from git_loopy.gh import GhError, Repo
 from git_loopy import labels
 from git_loopy import run_environment_preflight
 from git_loopy.run_environment_preflight import resolve_run_environment_preflight
+
+
+@pytest.mark.skipif(os.name != "posix", reason="executable shell shim")
+@pytest.mark.parametrize("kind", ["plain", "missing", "shim", "failed", "invalid", "timeout"])
+def test_python_probe_resolves_the_supplied_path_and_reports_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str,
+) -> None:
+    directory = tmp_path / ("bin" if kind == "plain" else "shims")
+    directory.mkdir()
+    executable = directory / "python3"
+    marker = tmp_path / "probe-cwd"
+    if kind != "missing":
+        body = {
+            "failed": "exit 7",
+            "invalid": "echo not-an-interpreter",
+            "timeout": "/bin/sleep 30",
+        }.get(kind, f'exec {shlex.quote(sys.executable)} "$@"')
+        executable.write_text(
+            f"#!/bin/sh\npwd > {shlex.quote(str(marker))}\n{body}\n"
+        )
+        executable.chmod(0o755)
+    if kind == "timeout":
+        monkeypatch.setattr(run_environment_preflight, "_PYTHON_STARTUP_TIMEOUT_SECONDS", 0.2)
+    environment = {**os.environ, "PATH": str(directory)}
+    result = resolve_run_environment_preflight(
+        repo_root=tmp_path, issue_source="prds", env=environment,
+    )
+    if kind in {"plain", "missing"}:
+        assert not result.warnings
+        assert not marker.exists()
+    else:
+        assert len(result.warnings) == 1
+        check = result.warnings[0]
+        assert check.passed
+        assert str(executable) in check.message
+        assert marker.read_text().strip() == str(tmp_path.resolve())
+        if kind == "shim":
+            assert str(sys.executable) in check.message
+            assert "could not measure" not in check.message
+        else:
+            assert "could not measure" in check.message
+    assert environment["PATH"] == str(directory)
 
 
 class _FakeTracker:
@@ -306,7 +351,7 @@ def test_environment_preflight_continues_after_failures_to_report_every_check(
         label_client=_FakeLabelTracker(()),
     )
 
-    assert calls == ["git", "copilot", "gh"]
+    assert calls == ["git", "copilot", "gh", "python3"]
     assert [check.name for check in result.failures] == [
         "git",
         "copilot",

@@ -73,7 +73,7 @@ def test_classification_can_discover_a_saved_static_route_without_leaderboard_ac
     )
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=fake_git, scripted_events=[])
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     transport = _BilledRoutingClient(client)
     monkeypatch.setattr(loop_module, "_make_client", lambda: transport)
     labels = _RecordingTaskTypeLabelClient()
@@ -169,7 +169,7 @@ def test_reported_in_flight_billing_closes_admission_before_session_completion(
     else:
         fake_git = _wire_repo(tmp_path)
         monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
         client = _ParallelFakeClient(
             fake_git=fake_git,
             scripted_events=[

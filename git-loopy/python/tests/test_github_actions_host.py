@@ -300,13 +300,18 @@ def test_one_reservation_becomes_exactly_one_dispatch_for_that_issue() -> None:
     assert inputs["dispatch_token"] == dispatch_token(make_request())
 
 
-def test_the_actions_host_preflights_the_clean_base_once_per_run() -> None:
+@pytest.mark.parametrize("bound", [None, 125.5])
+def test_the_actions_host_preflights_the_clean_base_once_per_run(bound: float | None) -> None:
     """The Run owns this once-only gate; no Lane contribution has begun yet."""
     client = _FakeActionsClient(
         sightings=[_completed_run()],
         polls=[_completed_run()],
     )
-    host = _host(client)
+    host = GitHubActionsExecutionHost(
+        client=client, capacity=4, workflow_ref="main",
+        send_timeout_seconds=21600, gate_timeout_seconds=bound,
+        sleep=_instant, poll_interval_seconds=0,
+    )
 
     outcome = asyncio.run(host.run_preflight(run_id=RUN_ID, base_revision=BASE))
 
@@ -317,7 +322,7 @@ def test_the_actions_host_preflights_the_clean_base_once_per_run() -> None:
             "main",
             {
                 "base_revision": BASE,
-                "gate_timeout_seconds": "3600",
+                "gate_timeout_seconds": "3600" if bound is None else "125.5",
                 "preflight_token": preflight_token(RUN_ID),
             },
         )

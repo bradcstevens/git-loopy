@@ -98,6 +98,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Collection, Literal, Mapping
 
 from git_loopy import settings
+from git_loopy.gate import resolve_gate_timeout_seconds
 from git_loopy.config import (
     DEFAULT_MAX_NMT_STRIKES,
     DEFAULT_SEND_TIMEOUT_SECONDS,
@@ -131,6 +132,7 @@ from git_loopy.skill_policy import (
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps dispatch import-light
     from git_loopy.run_residence import RunLaunch
+    from git_loopy.run_sandbox import RunResidenceName
     from git_loopy.installation import InstalledAsset
     from git_loopy.labels import LabelBootstrapClient
     from git_loopy.rate_card import RateCard
@@ -216,7 +218,7 @@ _COMMAND_SPECS = (
     _CommandSpec(
         "remote",
         "Run control",
-        "remote setup records and validates an Azure Run residence target.",
+        "remote launches a detached Azure Run; remote setup records its target.",
     ),
     _CommandSpec(
         "runs",
@@ -828,7 +830,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
 
     remote = _add_command(
         sub, "remote",
-        description="Configure Azure Run residence. Remote Run launch is not yet available.",
+        description="Launch with `git-loopy remote [Run arguments]`, or configure its Azure target.",
     )
     remote_sub = remote.add_subparsers(dest="remote_action", required=True)
     remote_setup = remote_sub.add_parser(
@@ -1224,7 +1226,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         description=(
             "List the Runs belonging to this clone — the worktree you are in "
             "and every worktree it has registered — newest first, with the Run "
-            "identity to target, the worktree the Run was started in, and "
+            "identity to target, its local or remote residence, the originating worktree, and "
             "whether it is still running. Liveness is read from each Run's own "
             "control artifact, so a Run that ended is reported as ended and a "
             "liveness this host cannot read is reported as unknown rather than "
@@ -1233,6 +1235,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "starts no work, stops nothing, and reclaims nothing (see "
             "`git-loopy sweep` for that). `git-loopy attach` and "
             "`git-loopy stop` name a Run through this same listing."
+            " Remote Runs use this clone's launch receipts and existing Azure CLI sign-in."
         ),
     )
 
@@ -1250,6 +1253,8 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "Navigation stays in this client. Attach does not request a Stop "
             "and does not open a channel into an Execution host, whether that "
             "host is local or GitHub Actions.\n\n"
+            "For remote residence, the provider streams the guest trace through "
+            "Azure's execution API to the same local Dashboard.\n\n"
             "A usable Dashboard helper draws the Run. `q` is Detach: this "
             "client only, the terminal returns to the shell, and the worker "
             "and other clients are unchanged. A missing or unusable helper is "
@@ -1688,7 +1693,7 @@ def _run_runs(_args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"git-loopy: runs requires a git repository: {exc}", file=sys.stderr)
         return 1
-    return runscmd.run_runs(repo_root=repo_root)
+    return _run_resident_client(repo_root, lambda: runscmd.run_runs(repo_root=repo_root))
 
 
 def _run_attach(args: argparse.Namespace) -> int:
@@ -1705,7 +1710,9 @@ def _run_attach(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"git-loopy: attach requires a git repository: {exc}", file=sys.stderr)
         return 1
-    return attachcmd.run_attach(repo_root=repo_root, run_id=args.run_id)
+    return _run_resident_client(
+        repo_root, lambda: attachcmd.run_attach(repo_root=repo_root, run_id=args.run_id),
+    )
 
 
 def _run_stop(args: argparse.Namespace) -> int:
@@ -1725,12 +1732,25 @@ def _run_stop(args: argparse.Namespace) -> int:
     timeout = (
         stopcmd.DEFAULT_STOP_ACK_TIMEOUT if args.timeout is None else args.timeout
     )
-    return stopcmd.run_stop(
+    return _run_resident_client(repo_root, lambda: stopcmd.run_stop(
         repo_root=repo_root,
         run_id=args.run_id,
         request_id=args.request_id,
         timeout=timeout,
-    )
+    ))
+
+
+def _run_resident_client(repo_root: Path, command: Callable[[], int]) -> int:
+    from git_loopy.git import GitError, SubprocessGitClient
+    from git_loopy.run_discovery import RunTargetError
+    from git_loopy.run_residence import client_residences
+
+    try:
+        with client_residences(git=SubprocessGitClient(repo_root)):
+            return command()
+    except (GitError, RunTargetError) as exc:
+        print(f"git-loopy: {exc}", file=sys.stderr)
+    return 1
 
 
 def _run_info(
@@ -2340,6 +2360,26 @@ def _resolve_host_yield(
             except ValueError as exc:
                 raise settings.SettingsError(f"{source}: {exc}") from exc
     return default_host_yield()
+
+
+def _resolve_prevent_idle_sleep(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> bool:
+    key = "GIT_LOOPY_PREVENT_IDLE_SLEEP"
+    if key in env:
+        value = env[key].strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+        raise settings.SettingsError(f"{key} must be a boolean (true/false)")
+    for scope, table in (("project", project), ("global", global_)):
+        value = settings.table_bool(table, "prevent_idle_sleep", scope=scope)
+        if value is not None:
+            return value
+    return True
 
 
 def _resolve_denylist(
@@ -3091,7 +3131,8 @@ def resolve_config(
     so it is exhaustively unit-testable. The persisted (config-tiered) knobs are
     ``model``, ``reasoning_effort``, ``max_nmt_strikes``, ``issue_source``,
     ``include_prs``, ``enabled_skills``, ``deny_tools``, ``deny_skills``,
-    ``otel_enabled``, ``host_yield``, ``send_timeout_seconds`` and the
+    ``otel_enabled``, ``host_yield``, ``prevent_idle_sleep``,
+    ``send_timeout_seconds``, ``gate_timeout_seconds`` and the
     ``[routing]`` table. The
     per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``,
     temporary Skill overlays) are NEVER read from a config
@@ -3214,7 +3255,11 @@ def resolve_config(
         otel_enabled=_otel_enabled(env, project, global_),
         execution_host=execution_host,
         host_yield=_resolve_host_yield(env, project, global_),
+        prevent_idle_sleep=_resolve_prevent_idle_sleep(env, project, global_),
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
+        gate_timeout_seconds=resolve_gate_timeout_seconds(
+            env, project=project, global_=global_, warn=warn,
+        ),
         routing=routing,
         context_tier=context_tier,
         context_tier_override=(
@@ -3452,6 +3497,11 @@ def main(argv: list[str] | None = None) -> int:
         if removed_env_error is not None:
             print(f"git-loopy: error: {removed_env_error}", file=sys.stderr)
             return 1
+
+    if argv and argv[0] == "remote" and argv[1:2] != ["setup"]:
+        from git_loopy.remote_launch import run_remote_command
+
+        return run_remote_command(argv[1:])
 
     # Pre-dispatch on the first token: a reserved subcommand
     # routes to its own parser, so the bare run's optional positional
@@ -3805,6 +3855,7 @@ async def _drive_line_printer(
     mirror_diagnostics_to_stderr: bool = True,
     host_capabilities: object | None = None,
     routing_preflight: object | None = None,
+    residence: "RunResidenceName" = "local",
 ) -> int:
     """Resolve the **Rate card**, then drive the line-printer loop (#331).
 
@@ -3834,6 +3885,7 @@ async def _drive_line_printer(
         mirror_diagnostics_to_stderr=mirror_diagnostics_to_stderr,
         host_capabilities=host_capabilities,
         routing_preflight=routing_preflight,
+        residence=residence,
     )
 
 

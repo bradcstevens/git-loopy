@@ -2,14 +2,16 @@
 
 Issue #862 implements the whole-Run placement seam from
 [ADR-0093](adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md),
-not remote residence. Lane Issue clones are a separate workspace concern
+and #870 adds detached Azure launch; #872 connects its client operations.
+Lane Issue clones are a separate workspace concern
 ([parallel mode](parallel-mode.md)); they do not change where the whole Run
 resides.
 
 `git_loopy.run_residence.RunResidence` owns a whole Run's placement and
 transport. This is independent of a Lane's Execution host. The only production
-provider is `local`; registering another provider cannot change what a plain
-`git-loopy` invocation selects.
+provider used by a plain Run is `local`. Client commands additionally register
+`remote` when this clone has launch receipts; registration cannot change what a
+plain `git-loopy` invocation selects.
 
 ## Interface
 
@@ -17,11 +19,13 @@ provider is `local`; registering another provider cannot change what a plain
   arguments, and base revision. Returns the existing driver/client exit code.
   Local runs in the invoking worktree at `HEAD` (or its exact SHA), never
   switches a checkout, and uses the existing Config/preflight/TTY/line-printer
-  path. A future remote provider owns its configured infrastructure target
+  path. The remote launch provider owns its configured infrastructure target
   and immutable-base validation.
 - `discover(git=...)`: enumerates only Runs associated with this clone's
-  control domain and supplies their proven liveness. Failure raises
+  control domain and supplies their proven liveness. Enumeration failure raises
   `RunTargetError`; it must not masquerade as an empty or partial listing.
+  A known remote receipt whose guest lock cannot be inspected remains a row
+  with `unknown` liveness and an explicit diagnostic.
 - `open_attach(run, repo_root=...)`: opens an `AttachChannel`, whose `observe`
   method follows the Run until Detach or end. Artifact paths belong to the
   provider and need not exist on the viewing machine.
@@ -44,7 +48,9 @@ be replaced. The registry is process-local, not a machine-wide Run index.
 its authoritative residence, and retains the existing newest-first order.
 `runs`, `attach`, and `stop` share this listing and the existing explicit
 identity resolver. Ambiguity across providers refuses rather than guessing.
-The local-only table and command messages are unchanged.
+The listing appends a `RESIDENCE` column for every Run, including local-only
+listings, preserving the existing leading columns that release smoke reads.
+Local Attach and Stop messages are unchanged.
 
 `launch_run` defaults explicitly to `local`. `teardown_run` refuses live and
 unprovable Runs before routing to the owning provider. It is not called when
@@ -61,9 +67,9 @@ control locks, traces, and Stop acknowledgments.
 
 ## Azure target setup (#869)
 
-The Python Runner supports **setup only**; this does not yet register a remote
-`RunResidence`, launch a VM, or change a plain Run's `local` default. The future
-Azure residence consumes `remote_setup.AzureTarget.from_config(project_table)`.
+Setup does not register a remote `RunResidence`, launch a VM, or change a plain
+Run's `local` default. Azure launch consumes
+`remote_setup.AzureTarget.from_config(project_table)`.
 Setup's `SandboxProvider.validate_target` seam is read-only and independent of
 the existing Run transport/lifecycle interface.
 
@@ -92,7 +98,7 @@ The Azure preview API attaches an egress policy to a **sandbox**, not its group.
 `--credential-policy` therefore names an existing operator-owned template sandbox
 in the selected group. Keep it available; setup neither creates nor deletes it.
 This reference is a documented mapping to the current Azure API, not an invented
-group-level rule resource. The future launch provider must revalidate and apply
+group-level rule resource. The launch provider revalidates and applies
 that policy before executing any guest code; a saved setup is not permanent
 authorization or proof that a remote Run can start.
 
@@ -157,3 +163,148 @@ API contracts were verified against that installed SDK and:
 - [Azure Sandbox architecture and its two API planes](https://learn.microsoft.com/azure/container-apps/sandboxes-overview#architecture)
 - [Egress policy scope, first-match evaluation and secret-reference transforms](https://learn.microsoft.com/azure/container-apps/sandboxes-egress-policies)
 - [Python SDK quickstart and SandboxGroup Data Owner access](https://learn.microsoft.com/azure/container-apps/sandboxes-quickstart-python-sdk)
+
+## Detached Azure launch (#870)
+
+`git-loopy remote [Run arguments]` resolves the same Run Config as a plain Run.
+It registers the remote residence only for this launch; a plain Run stays local.
+Before allocating a VM it refuses an unpublished local default branch, a missing
+devcontainer (including one not published to origin), or a `github-actions` Lane
+Execution host. Origin must be a credential-free `github.com` HTTPS or SSH URL;
+the guest always clones its HTTPS form at the verified default-branch revision.
+
+In addition to `remote setup`, configure an **existing** Azure Container Registry:
+
+```toml
+[remote]
+subscription = "11111111-2222-3333-4444-555555555555"
+resource_group = "agents"
+sandbox_group = "runs"
+credential_policy = "github-policy"
+registry = "yourregistry"
+```
+
+Re-running setup preserves `registry`. The launching machine needs Docker with
+Linux x64 builds, the Dev Container CLI (`devcontainer`), and Azure CLI access to
+push/delete images in that registry and import/create resources in the Sandbox
+group. Install tools through your approved feeds. Launch never creates a
+registry, grants a role, signs in, or answers an authorization prompt.
+
+The Dev Container CLI builds the committed `.devcontainer/devcontainer.json`
+or `.devcontainer.json`, not untracked laptop files. Its build receives an
+isolated home and an allowlisted environment, not the operator's credentials.
+The devcontainer must supply `gh`, and its build must use approved package
+sources. The added layer supports Azure Linux 3 and Debian/Ubuntu: it installs
+slirp4netns/libslirp, bubblewrap, iptables, Git, Python and Node/npm. Azure Linux
+uses Microsoft's signed extended repository. `/dev/net/tun` is initialized
+after microVM boot. A wheel made from the launching git-loopy installation
+preserves its Release version and dependency metadata; the SDK's exact CLI pin
+is installed from npm, including its mandatory Linux x64 package. Missing
+packages fail rather than changing versions or falling back to a public feed.
+
+Python/npm feeds come from `UV_DEFAULT_INDEX`/`PIP_INDEX_URL` and
+`npm_config_registry`/`NPM_CONFIG_REGISTRY`; `NUGET_SOURCE` selects NuGet's source.
+When unset, the Microsoft corporate package-feed defaults are retained in the
+isolated build and guest home. These are package indexes, not HTTP proxies.
+Credential-bearing feed URLs and direct-URL installation dependencies are
+refused. Registry authentication uses an Azure CLI token on the host, over
+stdin to Docker and in the disk-image import request; it never enters a build
+argument or the guest. Temporary OCI tags and local build directories are
+reclaimed after disk import.
+
+Every VM is **created with auto-suspend and auto-delete disabled**. The pinned
+Azure SDK's create helper cannot express disabled auto-suspend, so launch uses
+the same `2026-02-01-preview` REST creation contract through Azure Core, then
+reads the policy back. All other provider operations use the pinned SDK.
+The egress policy contains secret references only; launch additionally denies
+Copilot's token-exchange endpoint so a derived credential cannot return to the
+guest. The guest uses public nonsecret auth placeholders. No laptop token,
+Azure credential, Copilot home, or general environment is copied into it.
+
+The operator's Copilot `sandbox` block is forwarded unchanged. The detached
+Orchestrator calls the existing Run path with `residence="remote"` and local
+Lanes, requiring Sandbox enforcement even when `sandbox.enabled=false`.
+Launch acknowledges only after the guest records its `remote` Sandbox
+disclosure. Compute is disclosed as **metered to the Azure subscription**,
+without an estimate, both at launch and in the Run-start record.
+
+**Delivery boundary:** automatic salvage/VM teardown is #871. Remote `runs`,
+`attach` and Stop are available through the provider's execution-API channel.
+For launch diagnostics, the VM's files are under `/var/lib/git-loopy/` and its Run
+trace is under `repository/.git-loopy/logs/`. The VM and imported disk remain
+after the Run ends and continue to incur Azure charges until reclaimed.
+Preserve and push salvage before deleting them. A failed pre-launch VM is
+reclaimed; an unconfirmed execution request retains it because the detached
+Orchestrator may already be running. The error identifies the VM or launch label
+to inspect before retrying.
+
+`test_remote_launch.py` covers the public command, fake-provider refusals and
+guest payload, real Azure SDK/REST wire requests over an offline transport,
+image-build inputs, remote always-on Sandbox routing, and a real detached child
+that writes its evidence after the fake launching client has exited. No live
+Azure resources or credentials are required by the suite.
+
+## Remote clients (#872)
+
+The launcher records a nonsecret receipt under
+`<shared-git-directory>/git-loopy/remote-runs/<run-id>.json` before VM creation.
+It contains the Run identity, launch time, originating worktree and Azure
+target, not credentials. Recording before creation keeps an unconfirmed
+launch addressable after its client disappears. All registered worktrees
+share those receipts; an independent clone of the same origin does not.
+Changing project Config does not redirect an existing Run.
+
+Fresh `runs`, `attach` and `stop` clients register the Azure residence only
+when receipts exist. They resolve the receipt's target with the existing
+Azure CLI identity, enumerate its launch label with the SDK's paginated
+`list_sandboxes`, and require an exact, unique match. A missing or non-running
+VM supplies `unknown` liveness, never permission to resume or delete it.
+A Running VM is not proof of a live Run: a bounded `executeShellCommand`
+invokes `git_loopy.remote_control`, which discovers the exact Run and probes
+its guest control artifact's advisory lock. Access failures, invalid
+responses, unavailable SDK support and ambiguous resources produce an explicit
+diagnostic and `unknown` liveness for that known receipt. They never hide it
+or prevent control of a proven local Run. Unreadable/corrupt receipts still
+refuse the listing because the Control domain itself cannot be enumerated.
+Runs launched by installations predating these receipts are not retroactively
+assigned to a clone; inspect those through Azure's execution API.
+
+Attach uses incremental, byte-offset execution reads (at most 256 KiB per
+response), not an interactive guest shell. Only complete trace lines enter a
+private temporary mirror, preserving multi-byte characters across responses.
+The existing local Dashboard renders that mirror in the viewing machine's
+Display zone, with the same line-printer fallback and terminal restoration.
+Its local lock is only a transport adapter: it is released as ended only after
+the provider proves the guest Run dead and the trace has been drained.
+A transport fault ends the client with failure, not a false Run ending.
+`q`, a line-printer interrupt and a Dashboard fault never Stop the Run or
+delete Azure resources. Multiple clients have independent mirrors.
+
+Dashboard Stop requests are staged durably under
+`<shared-git-directory>/git-loopy/remote-stops/<run-id>/`, separately from the
+temporary trace. Each client has its own control artifact there, so concurrent
+clients do not share a lock. Delivery markers are written only after the guest
+confirms the durable request. Stop records and markers are retained; ordinary
+Detach reclaims clients that never requested Stop. A client failure does not
+discard an unforwarded request: the next Attach or Stop redelivers pending
+identities in their original order before admitting a new Stop. While the
+viewing machine is disconnected, these are **pending**, not an acknowledged
+Wind-down; a later client is needed to retry delivery. Listing never sends them.
+
+Dashboard Stop requests are relayed with their original identities. The
+public Stop command prints its identity before delivery, retries a lost
+execution response with that same identity, and waits for the guest's
+`wrapper.stop.requested` stage. The guest uses the same durable Stop submission
+and stage allocation as local: drain first, cancellation second, no third
+stage, and no escalation on redelivery. A timeout or connection failure is
+unconfirmed; retry with the printed `--request-id`, not a new invocation that
+would deliberately escalate. The acknowledgment wait excludes initial
+delivery, and individual Azure requests have bounded connection/read timeouts.
+Neither client invents Wind-down Events or waits for draining work to finish.
+
+`test_remote_clients.py` exercises the public commands with a fake execution
+provider and real guest control locks/Stop artifacts, including Dashboard
+streaming, Detach, both Stop stages, lost responses, transport failure,
+Unicode chunk boundaries and clone isolation. A fake HTTP transport also
+exercises the pinned Azure SDK's label enumeration and execution wire format,
+without live Azure access.

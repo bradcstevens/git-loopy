@@ -232,12 +232,9 @@ async def run_contribution_job(
     observed = await session_runner(request, log)
     if isinstance(observed, SessionTermination):
         observed = SessionObservation(termination=observed)
-    checkpoint_ok = checkpoint_dirty_tree(git, request["issue_ref"])
     after = _head_sha(git)
-    # Progress is *the branch moved*, and nothing else. A Checkpoint that fails
-    # cannot retract commits the agent already made, so folding the two
-    # together would discard a whole contribution's real work because a residue
-    # of uncommitted scratch could not be captured beside it.
+    checkpoint_ok = checkpoint_dirty_tree(git, request["issue_ref"])
+    # Read before the host's Checkpoint: preserving residue is not agent progress.
     progressed = before != after
     checkpoint_error = (
         None

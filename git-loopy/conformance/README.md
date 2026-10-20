@@ -10,6 +10,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 
 | Fixture | Contract decision |
 | --- | --- |
+| `sandbox.json` | **Sandbox** (§19, contract 2.35, ADR-0093): unchanged operator policy plus only explicit git grants, unconditional bypass/permissive refusal, required-but-unenforceable preflight refusal, tool attestation, and once-only Run disclosure beside the Isolation grade. Python drives its production policy/session/preflight seams and complete Runs; shell owes #866 and PowerShell owes #868. Remote residence and Python-only lifecycle cases carry `distributions` overrides; the TUI helper's Event consumption stays in `event-schema.json` |
 | `agent-profiles.json` | **Agent profiles and session isolation** (§18, contracts 2.28/2.30/2.31, ADR-0076/0078/0086): memory disabled and cross-session history refused; Python execution-profile selection, single non-inferable registration, Required preload and exact profile exposure, including distinct `skill_outside_profile` refusal. Reviewer access excludes edit tools and records `profile_read_only` refusals for writes, ref-moving git and tracker commands from Agents and Subagents, while reads and exact snapshotted feedback loops remain available; execution profiles retain full access. Python drives the production session seam; the TUI helper opens no session, and the dormant shell/PowerShell paths owe nothing above Contract support 2.26 (ADR-0091) |
 | `status-endings.json` | Real-session producer obligations for ADR-0075, contract 2.26: all five Endings, ordinary advancement omission, declarations refuted by progress, and timeout/crash beside advanced or closed. Python claims emission; shell owes #834 and PowerShell owes #835 (carried dormant debt split from #732); Rust consumes the resulting facts through the Dashboard fixture |
 | `rolling-priority.json` | Python-only **Rolling dispatch** Priority crossing (§3.2, contract 2.25, #720): complete one-unit Runs pin Priority serial-first, ordinary Lane-first, Priority Parallel-safe Lane work, stronger serial and Parallel-safe Pins, and creation-instant ordering among Priority serial candidates. `python/tests/test_loop_parallel.py` consumes every case through the production Run and observes actual bindings, first-work Events and verified closures; its further regressions prove admission refusals, full drain, serial/refill alternation and retries. Shell, PowerShell and Rust are explicitly waived as out of scope in `fixture-claims.json` |
@@ -51,6 +52,42 @@ rows frozen at contract 2.26: neither implements an Attempt lifecycle (#553,
 stays Python's; the dormant runtime identity suites read their own manifests.
 The manifest member `tui` still uses the legacy register name `rust` until the
 dependent support-scoped register migration lands.
+
+`sandbox.json` is the explicit ADR-0093 exception to ADR-0091's no-new-debt
+rule for dormant paths. Its shell and PowerShell port obligations are recorded
+separately from their unchanged 2.26 Path baselines, not added to the historical
+baseline audit.
+
+### Sandbox adapters
+
+`sandbox.json` is data, not an SDK transcript. Each member selects its own
+`distributions` cases (the top-level list applies when a case omits it) and
+translates inputs at its native production boundary:
+
+- `policy_cases` compare the complete effective policy, before the first
+  prompt, with `expected`, and leave the source settings unchanged.
+- `permission_cases` submit the bypass/permissive flags and compare the
+  decision and recorded denial reasons, including the ordinary-command control.
+- `preflight_cases` supply operator settings, managed enforcement and host
+  support, or make the named observation unavailable. Refusal is an explicit
+  error, never `off`; successful resolution compares state and policy.
+  `error_contains` pins the diagnostic fragment and `host_checked` pins whether
+  host support is required.
+- `execution_cases` deliver tool-completion attestations and compare the
+  breach and abort count, including a missing attestation.
+- `disclosure_cases` drive complete Runs: `off`, enabled `serial`, and
+  `managed` are family-wide; Python additionally exercises `serial-dirty`,
+  `serial-cancel`, `lane`, `recovery` and `remote`. Compare the emitted state,
+  Event and terminal-line counts, label and Agent count with `expected`.
+  The Event follows Run start with null Iteration attribution; the terminal
+  line follows the unchanged Isolation grade. A Recovery starts two Agents
+  but owes only one disclosure.
+
+Python's adapter is `python/tests/test_sandbox_conformance.py`, with Run
+disclosure in `python/tests/test_sandbox_run.py`. Its fake runtime is only a
+transport substitute: the production session and Run code make every decision.
+The shell and PowerShell ports must call their own production seams, not copy
+the Python decision logic or merely parse this fixture.
 
 Event fixture revision 1.5 (contract 2.23, #418) adds the contribution-stamped
 `wrapper.integration.push_failed` and pins a rejected upstream publication stream.

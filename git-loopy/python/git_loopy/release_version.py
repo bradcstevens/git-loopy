@@ -69,6 +69,10 @@ class ReleaseVersionError(ValueError):
     """Release metadata is missing, unreadable, or invalid."""
 
 
+class ReleaseLineAlreadyReportedError(ReleaseVersionError):
+    """The Release line was unreadable and the Run already warned about it once."""
+
+
 class BumpClassRefusal(Enum):
     """Why issue labels cannot resolve to one Release-version bump class."""
 

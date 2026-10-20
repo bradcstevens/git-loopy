@@ -745,6 +745,29 @@ class InstalledCandidate:
     detail: str
 
 
+def run_installation_command(
+    args: Sequence[str], *, env: Mapping[str, str], timeout: float,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Bound a setup command and reclaim its children, including a hung fetch."""
+    with subprocess.Popen(
+        args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, start_new_session=os.name != "nt",
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+        finally:
+            if os.name != "nt":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            elif process.poll() is None:
+                process.kill()
+            process.wait()
+
+
 def install_candidate(
     candidate: BoundCandidate,
     *,
@@ -790,13 +813,10 @@ def install_candidate(
         raise CandidateInstallationError(
             f"git-loopy resolves to {resolved}, not the clean installation {executable}"
         )
-    result = subprocess.run(  # noqa: S603 - the candidate's own command
+    result = run_installation_command(
         [str(executable), "--version"],
         env=env,
-        capture_output=True,
-        text=True,
         timeout=60,
-        check=False,
     )
     reported = result.stdout.strip().removeprefix("git-loopy").strip()
     if result.returncode != 0 or reported != candidate.version:
@@ -1788,7 +1808,6 @@ def cancel_in_pty(
             os.execve(str(executable), [str(executable), *args], dict(env))
         finally:
             os._exit(127)
-    fcntl.ioctl(descriptor, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
     captured = bytearray()
     reached = False
     sent = False
@@ -1796,6 +1815,7 @@ def cancel_in_pty(
     settle_until: float | None = None
     status: int | None = None
     try:
+        fcntl.ioctl(descriptor, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
         while time.monotonic() < deadline:
             ready, _, _ = select.select([descriptor], [], [], 0.1)
             if ready:
@@ -1843,6 +1863,15 @@ def cancel_in_pty(
                 os.kill(pid, signal.SIGKILL)
                 os.waitpid(pid, 0)
     finally:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if status is None:
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
         os.close(descriptor)
     text = captured.decode("utf-8", errors="replace")
     code = None if status is None else os.waitstatus_to_exitcode(status)
@@ -1874,13 +1903,10 @@ class UvToolInstaller:
         install_env["UV_TOOL_DIR"] = str(tool_dir)
         install_env["UV_TOOL_BIN_DIR"] = str(bin_dir)
         try:
-            result = subprocess.run(  # noqa: S603 - uv from PATH, arguments fixed
+            result = run_installation_command(
                 [uv, "tool", "install", "--force", str(source)],
                 env=install_env,
-                capture_output=True,
-                text=True,
                 timeout=900,
-                check=False,
             )
         except subprocess.TimeoutExpired as exc:
             raise SmokeBlocked(f"installing the candidate timed out: {exc}") from exc

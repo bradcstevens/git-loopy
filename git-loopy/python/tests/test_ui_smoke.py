@@ -60,6 +60,7 @@ from git_loopy.events import (
 from git_loopy.ui import IterationSnapshot, Renderer, RunSummary, get_console
 from git_loopy.ui.console import STYLES
 from git_loopy.usage import UsageTally
+from git_loopy.rollup import IterationRollupAccumulator, contribution_end_payload
 
 
 # ---------------------------------------------------------------------------
@@ -859,6 +860,10 @@ def test_iteration_end_normalized_rollup_replaces_renderer_counters() -> None:
     }
     assert snap.issues == ({"issue": 42, "status": "advanced"},)
     out = buf.getvalue()
+    assert "Duration: 12.25s" in out
+    assert "Integration time:" not in out
+    assert "Session time:" not in out
+    assert "Total wall-clock time:" not in out
     assert "Observed tokens: 120" in out
     assert "Peak Context fill: 12,000 / 32,000  (38%)" in out
 
@@ -2557,6 +2562,85 @@ def _contribution_summary(
         "skill_call_count": 1,
         "skills_consulted": ["tdd"],
     }
+
+
+@pytest.mark.parametrize("published", [True, False])
+def test_contribution_panel_separates_session_from_queue_gate_and_recovery(
+    published: bool,
+) -> None:
+    renderer, summary, buf = _make_renderer()
+    now = 100.0
+    rollup = IterationRollupAccumulator(
+        denomination=summary.denomination, monotonic=lambda: now
+    )
+    identity = {
+        "iter": None, "contribution_id": "c-42",
+        "issue": 42, "lane_issue": 42, "lane_id": "L1",
+    }
+
+    def emit(event_type: str, **payload: Any) -> None:
+        event = {"type": event_type, **identity, **payload}
+        rollup.observe(event)
+        renderer.render(event)
+
+    emit(events_module.WRAPPER_CONTRIBUTION_START)
+    now = 106.125
+    emit(events_module.WRAPPER_CONTRIBUTION_WORK_FINISHED)
+    now = 114.125  # Eight seconds waiting for Integration.
+    emit(events_module.WRAPPER_INTEGRATION_STARTED)
+    now = 116.125  # Two seconds in the first gate.
+    emit(events_module.WRAPPER_INTEGRATION_RECOVERY_STARTED, attempt=1)
+    now = 124.375  # Five seconds in Recovery, then 3.25 re-gating and publishing.
+    emit(
+        events_module.WRAPPER_CONTRIBUTION_END,
+        **contribution_end_payload(
+            rollup.finish(iter_num=0, strikes=0, lane_issue=42),
+            published=published,
+            reason="published" if published else "recovery_exhausted",
+            strike_reaction="none",
+            reasoning_effort="high", recovery_attempts=1, agent_seconds=6.125,
+        ),
+    )
+
+    out = buf.getvalue()
+    assert "Session time: 6.12s" in out
+    assert "Integration time: 18.25s" in out
+    assert "Total wall-clock time: 24.38s" in out
+    displayed = re.findall(
+        r"(?:Session time|Integration time|Total wall-clock time): ([\d.]+)s", out
+    )
+    session, integration, total = map(Decimal, displayed)
+    assert abs(session + integration - total) <= Decimal("0.01")
+    assert summary.completed[0].duration_seconds == 24.375
+
+
+@pytest.mark.parametrize(
+    ("agent_seconds", "lifecycle_seconds", "session", "integration", "total"),
+    [
+        (0.0, 0.0, "0.00s", "0.00s", "0.00s"),
+        (None, 9.0, "—", "—", "9.00s"),
+        (4.0, None, "4.00s", "—", "—"),
+    ],
+)
+def test_contribution_panel_distinguishes_zero_and_unavailable_timing(
+    agent_seconds, lifecycle_seconds, session, integration, total,
+) -> None:
+    renderer, _summary, buf = _make_renderer()
+    identity = {"iter": None, "contribution_id": "c-42", "issue": 42, "lane_id": "L1"}
+    renderer.render({"type": events_module.WRAPPER_CONTRIBUTION_START, **identity})
+    renderer.render({
+        "type": events_module.WRAPPER_CONTRIBUTION_END,
+        **identity,
+        "summary": {
+            **_contribution_summary(tokens_in=0, cost_usd=0, closure_outcome="closed"),
+            "agent_seconds": agent_seconds,
+            "lifecycle_seconds": lifecycle_seconds,
+        },
+    })
+    out = buf.getvalue()
+    assert f"Session time: {session}" in out
+    assert f"Integration time: {integration}" in out
+    assert f"Total wall-clock time: {total}" in out
 
 
 def test_overlapping_contributions_each_reach_the_summary_as_their_own_row() -> None:

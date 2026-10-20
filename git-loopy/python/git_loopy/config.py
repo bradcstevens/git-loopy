@@ -29,6 +29,7 @@ Design notes:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
@@ -37,6 +38,9 @@ from typing import Any, Callable, Iterable, Literal, Mapping
 
 from git_loopy.static_route import RoutePolicy
 from git_loopy.host_yield import default_host_yield
+
+# One hang-catching bound for every feedback-loop row, not a performance budget.
+DEFAULT_GATE_TIMEOUT_SECONDS = 3600.0
 
 __all__ = [
     "RunConfig",
@@ -49,6 +53,7 @@ __all__ = [
     "SUPPORTED_MODELS",
     "DEFAULT_MAX_NMT_STRIKES",
     "DEFAULT_SEND_TIMEOUT_SECONDS",
+    "DEFAULT_GATE_TIMEOUT_SECONDS",
     "TASK_TYPE_LABEL_PREFIX",
     "TASK_TYPE_KEYS",
     "EXECUTION_TASK_TYPE_KEYS",
@@ -862,7 +867,10 @@ class RunConfig:
     otel_enabled: bool = False
     execution_host: str = "local"
     host_yield: str = field(default_factory=default_host_yield)
+    #: Local macOS Runs hold a process-owned idle-system-sleep assertion.
+    prevent_idle_sleep: bool = True
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
+    gate_timeout_seconds: float = DEFAULT_GATE_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     context_tier: str = DEFAULT_CONTEXT_TIER
     context_tier_override: bool = False
@@ -883,6 +891,12 @@ class RunConfig:
     escalation_rung: tuple[str, str] | None = None
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.gate_timeout_seconds, bool)
+            or not math.isfinite(self.gate_timeout_seconds)
+            or self.gate_timeout_seconds <= 0
+        ):
+            raise ValueError("gate_timeout_seconds must be a positive finite number")
         if self.issue_source not in ("github", "prds"):
             raise ValueError(
                 f"issue_source must be 'github' or 'prds', got "

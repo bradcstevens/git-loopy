@@ -91,7 +91,9 @@ def _config_to_payload(config: RunConfig) -> dict[str, Any]:
         "otel_enabled": config.otel_enabled,
         "execution_host": config.execution_host,
         "host_yield": config.host_yield,
+        "prevent_idle_sleep": config.prevent_idle_sleep,
         "send_timeout_seconds": config.send_timeout_seconds,
+        "gate_timeout_seconds": config.gate_timeout_seconds,
         "routing": {
             key: [model, effort]
             for key, (model, effort) in sorted(config.routing.items())
@@ -156,7 +158,9 @@ def _config_from_payload(payload: dict[str, Any]) -> RunConfig:
         otel_enabled=bool(payload.get("otel_enabled", False)),
         execution_host=str(payload.get("execution_host", "local")),
         host_yield=parse_host_yield(payload.get("host_yield", default_host_yield())),
+        prevent_idle_sleep=bool(payload.get("prevent_idle_sleep", True)),
         send_timeout_seconds=float(payload.get("send_timeout_seconds", 7200.0)),
+        gate_timeout_seconds=float(payload.get("gate_timeout_seconds", 3600.0)),
         routing=routing,
         context_tier=str(payload.get("context_tier", "default")),
         context_tier_override=bool(payload.get("context_tier_override", False)),
@@ -502,6 +506,7 @@ def attach_to_run(
     config: RunConfig,
     owner_alive: Callable[[], bool] | None = None,
     poll_interval: float = 0.05,
+    refresh: Callable[[], None] | None = None,
 ) -> _WatchOutcome:
     """Attach to a Run, or attach again. There is no reconnect operation.
 
@@ -517,6 +522,7 @@ def attach_to_run(
         config=config,
         owner_alive=owner_alive,
         poll_interval=poll_interval,
+        refresh=refresh,
     )
 
 
@@ -527,6 +533,7 @@ def _follow_trace_with_renderer(
     config: RunConfig,
     owner_alive: Callable[[], bool] | None = None,
     poll_interval: float = 0.05,
+    refresh: Callable[[], None] | None = None,
 ) -> _WatchOutcome:
     """Render the worker's trace to its end and report what watching established.
 
@@ -545,6 +552,8 @@ def _follow_trace_with_renderer(
     follower = TraceFollower(trace_path, control_path, owner_alive=owner_alive)
     traced = False
     while True:
+        if refresh is not None:
+            refresh()
         batch = follower.poll()
         for line in batch.lines:
             try:
@@ -1088,6 +1097,7 @@ def observe_existing_run(
     output: Callable[[str], None] = print,
     warn: Callable[[str], None] | None = None,
     poll_interval: float = 0.05,
+    refresh: Callable[[], None] | None = None,
 ) -> int:
     """Observe a Run this process did not start. There is no reconnect.
 
@@ -1125,6 +1135,7 @@ def observe_existing_run(
                 warn=reporter,
                 poll_interval=poll_interval,
                 owner=owner,
+                refresh=refresh,
             )
         except KeyboardInterrupt:
             owner.restore()
@@ -1179,6 +1190,7 @@ def _observe_existing_run(
     warn: Callable[[str], None],
     poll_interval: float,
     owner: _TerminalOwner,
+    refresh: Callable[[], None] | None = None,
 ) -> int:
     output(f"Attached to Run {run_id}.")
     try:
@@ -1190,8 +1202,10 @@ def _observe_existing_run(
         warn(_UNUSABLE_HELPER)
     else:
         code = _run_dashboard_helper(
-            helper, trace_path, control_path, repository, warn, owner
+            helper, trace_path, control_path, repository, warn, owner, refresh,
         )
+        if refresh is not None:
+            refresh()
         if code is None:
             owner.restore()
             warn(_UNUSABLE_HELPER)
@@ -1212,6 +1226,7 @@ def _observe_existing_run(
         control_path,
         config=RunConfig(),
         poll_interval=poll_interval,
+        refresh=refresh,
     )
     _print_unbound_run_notice(trace_path, repository)
     return _report_follower(
@@ -1270,6 +1285,7 @@ def _run_dashboard_helper(
     repository: str | None,
     warn: Callable[[str], None],
     owner: _TerminalOwner,
+    refresh: Callable[[], None] | None = None,
 ) -> int | None:
     """Run the helper once. ``None`` means it could not be started.
 
@@ -1288,8 +1304,15 @@ def _run_dashboard_helper(
         return None
     owner.note_helper_started()
     try:
-        return process.wait()
-    except KeyboardInterrupt:
+        if refresh is None:
+            return process.wait()
+        while True:
+            refresh()
+            try:
+                return process.wait(timeout=.05)
+            except subprocess.TimeoutExpired:
+                continue
+    finally:
         if process.poll() is None:
             process.terminate()
             try:
@@ -1297,7 +1320,6 @@ def _run_dashboard_helper(
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=2)
-        raise
 
 
 def _report_helper_exit(

@@ -52,7 +52,7 @@ def test_saved_authority_requires_durable_provenance_and_pickup(
     git.remote_urls = {"origin": "git@github.com:x/y.git"}
     client = _ParallelFakeClient(fake_git=git, scripted_events=[], serial_closes=True)
     tracker = loop_module._make_github_client()
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(
         loop_module.execution_host_module, "local_execution_host_capacity", lambda: 2,
     )

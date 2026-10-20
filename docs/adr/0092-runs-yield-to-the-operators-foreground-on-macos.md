@@ -45,6 +45,44 @@ parity and Wrapper/Event disclosure are separate follow-ups
 policies, load budgets and process reaping remain open in #788. This is a
 scheduling policy, not resource isolation or a CPU quota.
 
+## A live local Run prevents idle system sleep
+
+The Python Runner also holds a process-owned IOKit
+`PreventUserIdleSystemSleep` assertion from the point its Run becomes
+liveness-visible through cleanup. It is released on every return or exception;
+macOS releases it on process death, including a hard kill. No helper process
+can retain it after the Run dies. The detached Run owns it, not an attached
+Dashboard client, so Detach does not release it.
+
+Keeping unattended work awake takes nothing from the operator's foreground.
+This assertion changes neither display sleep nor screen lock, asserts no user
+activity, and changes no system power settings. It is independent of the
+Host yield policy. It applies only to a local Run with a local Execution host
+on macOS; remote Run residences, remote Execution hosts and other platforms
+are unchanged.
+
+`prevent_idle_sleep` defaults to `true`, with **GIT_LOOPY_PREVENT_IDLE_SLEEP >
+project Config > global Config > default**. `false` opts out. Invalid values
+are errors. The Run diagnostics log says `held`, `disabled`, `remote` or
+`unsupported`; an acquisition failure says `not held` and refuses with the
+opt-out remedy instead of silently promising protection it could not obtain.
+
+The host can still suspend, for example on lid close. A shared per-Run
+suspension clock compares macOS continuous time (includes sleep) with absolute
+time (excludes sleep), so CPU contention, blocking work and wall-clock
+corrections are not called suspension. On resume after more than the configured
+Lease TTL, one diagnostic gives the suspension duration and the held Leases
+whose last acknowledged TTL elapsed during it, including contributions waiting
+for Integration. The observer polls independently of Agent output and checks
+before Pickup, fencing and release can change the held set. Already elapsed or
+released Leases are not attributed to a later suspension.
+
+This is an explanation of renewal loss, not an ownership judgment.
+[ADR-0033](0033-one-issue-one-run-lease.md) is unchanged: the remote fence still
+decides ownership, terminal loss remains latched, and no Lease is taken back.
+Injected-clock tests pin the TTL threshold and once-only report; native,
+load-free checks prove the assertion's type, owner and normal/crash cleanup.
+
 ## Load-free proof
 
 Automated checks read `ps -o pri` through the real CLI and detached-worker

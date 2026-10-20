@@ -21,6 +21,11 @@ Three rules make that safe:
 * **Emptiness owns the directories.** Only an empty directory is removed, which
   is what lets the same pass be pointed at a directory git-loopy shares.
 
+**Retention** additionally reclaims old Run logs as whole stems (ADR-0095).
+The newest route-reuse window is kept per worktree regardless of liveness.
+Outside it, a free control lock proves completion; a legacy Run without a
+control artifact instead needs a ``wrapper.run.end`` record in its trace.
+
 Nothing here is contract-visible: a sweep emits no **Event** — not even a
 Checkpoint one for the **Salvage** it performs — produces no **Strike**, and
 never appears as work in a Run's **Summary**. A Run that swept an issue's
@@ -29,18 +34,27 @@ residue did not work that issue.
 
 from __future__ import annotations
 
+import json
+import logging
+import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from git_loopy import git as git_module
+from git_loopy.events import WRAPPER_RUN_END
 from git_loopy.gh import GhError, GitHubClient
-from git_loopy.run_control import is_run_alive
+from git_loopy.persist import parse_run_stem
+from git_loopy.route_reuse import MAX_HISTORY_LOGS
+from git_loopy.run_control import control_path_for_trace, is_run_alive
+from git_loopy.stop_request import stops_directory
 from git_loopy.wrapper import checkpoint_message, is_checkpoint_message
 
 __all__ = ["SweepReport", "resolve_base_ref", "sweep"]
 
 _BRANCH_RE = git_module.RESERVED_BRANCH_RE
+_LOG = logging.getLogger(__name__)
 
 
 def resolve_base_ref(git: git_module.GitClient) -> str:
@@ -77,10 +91,12 @@ class SweepReport:
     worktrees: tuple[Path, ...] = ()
     branches: tuple[str, ...] = ()
     directories: tuple[Path, ...] = ()
+    #: Reclaimed Run stems, including their logs-directory scope.
+    runs: tuple[Path, ...] = ()
 
     @property
     def reclaimed_anything(self) -> bool:
-        return bool(self.worktrees or self.branches or self.directories)
+        return bool(self.worktrees or self.branches or self.directories or self.runs)
 
 
 @dataclass(frozen=True)
@@ -184,6 +200,76 @@ def _liveness_by_run(
         return cache[run_id]
 
     return alive
+
+
+def _reclaim_old_runs(
+    control_dirs: list[Path], *, dry_run: bool, liveness: Callable[[Path], bool | None]
+) -> list[Path]:
+    """Keep the route-reuse window per directory, then reclaim proven-dead stems."""
+    reclaimed: list[Path] = []
+    for logs in control_dirs:
+        if any(path.is_symlink() for path in (logs, logs.parent, logs.parent.parent)):
+            continue
+        try:
+            entries = list(logs.iterdir())
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            _LOG.warning("Retention skipped %s: %s", logs, exc)
+            continue
+        stems: set[str] = set()
+        for entry in entries:
+            for suffix in (".jsonl", ".log", ".control", ".control.stops"):
+                if entry.name.endswith(suffix):
+                    stem = entry.name.removesuffix(suffix)
+                    if parse_run_stem(stem) is not None:
+                        stems.add(stem)
+                    break
+        for stem in sorted(stems, reverse=True)[MAX_HISTORY_LOGS:]:
+            trace = logs / f"{stem}.jsonl"
+            control = control_path_for_trace(trace)
+            diagnostics = trace.with_suffix(".log")
+            stops = stops_directory(control)
+            if any(path.is_symlink() for path in (trace, control, diagnostics, stops)):
+                continue
+            try:
+                if not _run_finished(trace, control, liveness):
+                    continue
+                if not dry_run:
+                    if stops.exists():
+                        shutil.rmtree(stops)
+                    diagnostics.unlink(missing_ok=True)
+                    trace.unlink(missing_ok=True)
+                    # Keep the proof until the other artifacts are gone, so a
+                    # failed deletion can be retried by the next sweep.
+                    control.unlink(missing_ok=True)
+            except (OSError, UnicodeError) as exc:
+                _LOG.warning("Retention skipped %s: %s", logs / stem, exc)
+                continue
+            reclaimed.append(logs / stem)
+    return reclaimed
+
+
+def _run_finished(
+    trace: Path, control: Path, liveness: Callable[[Path], bool | None]
+) -> bool:
+    """An absent lock needs a real run-end record, never a textual mention."""
+    try:
+        mode = control.stat().st_mode
+    except FileNotFoundError:
+        try:
+            with trace.open(encoding="utf-8") as stream:
+                for line in stream:
+                    try:
+                        record = json.loads(line)
+                    except (ValueError, RecursionError):
+                        continue
+                    if isinstance(record, dict) and record.get("type") == WRAPPER_RUN_END:
+                        return True
+        except FileNotFoundError:
+            pass
+        return False
+    return stat.S_ISREG(mode) and liveness(control) is False
 
 
 def _reap_empty_directories(
@@ -487,10 +573,11 @@ def sweep(
 ) -> SweepReport:
     """Reclaim the residue of every Run that can be proven dead.
 
-    Three passes in the only order that is safe: workspaces first, because it
+    Workspace passes in the only order that is safe: workspaces first, because it
     is the workspace pass that discovers which branches hold work nobody has
     seen; branches second; and empty directories last, so the parents of
-    everything just reclaimed are reaped in the same sweep.
+    everything just reclaimed are reaped in the same sweep. Run-log Retention
+    follows, after every workspace and branch has read its liveness evidence.
 
     Args:
         git: The clone to sweep. Its worktree listing supplies the candidates
@@ -501,7 +588,8 @@ def sweep(
             names where to look in every *other* registered worktree
             (:func:`_control_dirs`), because the namespace being swept spans the
             whole clone. A Run whose artifact is unlocked or absent everywhere
-            is dead, and only its residue is touched.
+            is dead for workspace reclamation. Retention instead requires a
+            run-end record when the artifact is absent.
         base_branch: The branch this clone publishes to
             (:func:`resolve_base_ref`), which Lane branches are resolved
             against.
@@ -516,7 +604,8 @@ def sweep(
         clones = git.list_issue_clones()
     except git_module.GitError:
         clones = []
-    run_liveness = _liveness_by_run(_control_dirs(control_dir, worktrees), liveness)
+    control_dirs = _control_dirs(control_dir, worktrees)
+    run_liveness = _liveness_by_run(control_dirs, liveness)
     reclaimed_paths, withheld = _reclaim_dead_workspaces(
         git=git, worktrees=[*worktrees, *clones], dry_run=dry_run, liveness=run_liveness,
     )
@@ -539,9 +628,11 @@ def sweep(
         _reap_empty_directories(
             root, dry_run=dry_run, reaped=directories, reclaimed=reclaimed
         )
+    runs = _reclaim_old_runs(control_dirs, dry_run=dry_run, liveness=liveness)
 
     return SweepReport(
         worktrees=tuple(reclaimed_paths),
         branches=tuple(branches),
         directories=tuple(directories),
+        runs=tuple(runs),
     )
