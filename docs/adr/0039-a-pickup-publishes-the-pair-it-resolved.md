@@ -73,6 +73,23 @@ The line deliberately does *not* repeat the Pickup's selection reason or its pos
 order. Those are on the record, in the replay, and on the Dashboard's own Pickup log line; adding
 them here would make the routing answer harder to find on the line that exists to give it.
 
+## Requested and observed identity stay separate
+
+[#290](https://github.com/bradcstevens/git-loopy/issues/290) distinguishes two
+surfaces: **`Routed:`** reports the requested settings from the **Routing resolution**;
+**`Billed as:`** reports the harness-observed model identifier from **Consumption**.
+Neither replaces the other. The observed identifier is preserved verbatim, including
+any suffix, so the operator can compare what was requested with what the harness
+reported without losing the original evidence.
+
+There is deliberately **no suffix parsing and no inferred mismatch flag**. Plain
+string inequality cannot establish that a requested effort or context tier failed
+to take effect, and a prefix comparison would both interpret a vendor-owned naming
+scheme and miss the tier distinction the evidence exists to preserve.
+[ADR-0019](0019-roster-derived-from-the-pinned-harness.md)'s "parse nothing" rule
+therefore bounds [ADR-0018](0018-harness-reported-cost.md)'s observed-identity
+evidence: display both facts, do not manufacture a verdict between them.
+
 ## Consequences
 
 - `RoutingResolution` projects its own wire form (`as_pickup_payload`). A serial **Iteration** and

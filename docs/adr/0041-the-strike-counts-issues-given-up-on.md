@@ -81,6 +81,23 @@ serial turn only once every Lane has drained. A serial Pickup that binds nothing
 has walked the whole Pool — both halves — with nothing in flight behind it, so there is no later
 turn at which the answer could differ.
 
+## Content filtering does not authorize a fallback model
+
+[#292](https://github.com/bradcstevens/git-loopy/issues/292)'s deliberate departure from
+Anthropic's fallback-model advice applies here as in
+[ADR-0040](0040-a-bounded-number-of-attempts-per-issue-per-run.md). The normalized
+content-filter signal does not establish the vendor's category or distinguish vendor
+filtering from platform filtering. Retrying on the generic rung can return to the
+filtering model; creating a different destination would add a second configured target
+the routing decision rejected. There is no content-filter fallback model and no automatic
+model switch.
+
+This records a routing boundary, not a new Strike disposition. It does not restore this
+ADR's superseded Run-wide ceiling or ADR-0040's immediate-skip rules.
+[ADR-0070](0070-a-strike-is-charged-to-the-issue.md) remains the accounting decision;
+current account-condition behavior is governed separately by
+[#676](https://github.com/bradcstevens/git-loopy/issues/676).
+
 ## What this does not do
 
 *Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md) (#703): rolling dispatch now

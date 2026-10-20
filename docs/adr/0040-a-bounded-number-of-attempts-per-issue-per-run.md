@@ -69,9 +69,18 @@ position was derived from the rung's ledger, which meant a same-pair crash retry
 as a first attempt — contract §14 already said it should not, and nothing could make it true.
 
 The **content-filtered** row declines a tempting third option: routing a filtered session to a
-*different* model. Declined on cost rather than on availability — the generic rung would escalate
-a filtered turn into the model that filtered it, which is the one destination guaranteed not to
-help.
+*different* model. [#292](https://github.com/bradcstevens/git-loopy/issues/292) deliberately
+departs from Anthropic's advice to read `stop_details` and retry on a fallback model.
+Copilot's normalized content-filter signal establishes that a call was filtered, not the
+vendor's category or whether the vendor rather than the platform filtered it. The generic
+rung can lead back to the filtering model, and a fallback would introduce the second
+configured target the routing decision declined to create. There is **no content-filter
+fallback model and no automatic model switch**.
+
+That routing boundary does not reinstate the table's historical immediate-skip rules:
+[ADR-0070](0070-a-strike-is-charged-to-the-issue.md) supersedes its lifecycle accounting,
+and current account-condition behavior is governed separately by
+[#676](https://github.com/bradcstevens/git-loopy/issues/676).
 
 ## Skipping is a Pickup filter, never a Pool filter
 
