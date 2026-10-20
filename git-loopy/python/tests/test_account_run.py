@@ -632,3 +632,44 @@ def test_probe_needs_positive_harness_interaction_even_when_it_commits(
         assert tracker.issue_view(42).state == "OPEN"
     assert sends == 2
     assert not [e for e in events if e["type"] == "wrapper.strike"]
+
+
+@pytest.mark.parametrize("probe_work", ["checkpoint", "progress", "completion", "unverified"])
+def test_account_health_does_not_authorize_old_close_bearing_commits(tmp_path, monkeypatch, probe_work):
+    sends, clock = 0, Clock()
+    monkeypatch.setattr(loop, "AccountControl", partial(
+        AccountControl, clock=clock, sleep=clock.sleep,
+    ))
+
+    async def script(session, tracker):
+        nonlocal sends
+        sends += 1
+        git = session._fake_git
+        if sends == 1:
+            git.simulate_agent_commit(subject="fix: incomplete work", body="Closes #42")
+            return
+        session._scripted_events = [_sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE,
+            AssistantMessageData(message_id="healthy", content="Account interaction succeeded"),
+        )]
+        if probe_work == "checkpoint":
+            git.dirty = True
+        else:
+            git.simulate_agent_commit(
+                subject="fix: subsequent work",
+                body="Closes #42" if probe_work in ("completion", "unverified") else "",
+            )
+        if probe_work == "unverified":
+            def refuse_close(*args, **kwargs):
+                raise RuntimeError("Tracker could not verify completion")
+            tracker.issue_close = refuse_close
+
+    rc, events, client, tracker, git = _run(
+        tmp_path, monkeypatch, code="rate_limit_exceeded", maximum=2, session_hook=script,
+    )
+    assert rc == 0 and sends == 2
+    assert any(e.get("cause") == "probe_succeeded" for e in events)
+    verified = probe_work == "completion"
+    assert git.push_calls == int(verified)
+    assert tracker.issue_view(42).state == ("CLOSED" if verified else "OPEN")
+    assert bool([e for e in events if e["type"] == "wrapper.auto_close"]) is verified

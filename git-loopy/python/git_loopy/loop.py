@@ -2406,13 +2406,12 @@ class _Loop:
                 if issue_git is None and new_commits:
                     self._account_base_issues.add(active.ref)
                 self._diagnose_account_closure(active.ref)
-            else:
-                self._account_issues.discard(active.ref)
-                self._account_base_issues.discard(active.ref)
             with telemetry.span("git_loopy.enforce_closures"):
                 completions = (
                     [] if self._account_affected(ending_error)
-                    else self._handle_completions_safely(pool, new_commits, leased_pool=True)
+                    else self._handle_completions_safely(
+                        pool, new_commits, leased_pool=True, account_completion_ref=active.ref,
+                    )
                 )
 
             if issue_binding.active_ref is None:
@@ -4095,6 +4094,7 @@ class _Loop:
         new_commits: list[git_module.Commit],
         *,
         leased_pool: bool = False,
+        account_completion_ref: int | str | None = None,
     ) -> list[Any]:
         """Call ``source.handle_completions`` with crash containment.
 
@@ -4127,7 +4127,21 @@ class _Loop:
         items here would hide every PR-head advance from progress detection
         and earn Strikes for an Iteration that was progressing.
         """
-        guarded = [item for item in pool if item.ref not in self._account_issues]
+        # Account health is not task completion. Only a fresh, close-bearing
+        # agent commit from the current bound work may re-enter the ordinary
+        # completion/Lease checks for a protected issue. Checkpoints and old
+        # refused commits cannot supply that evidence.
+        fresh_closes = {
+            ref
+            for commit in new_commits
+            if not is_checkpoint_message(commit.message)
+            for ref in extract_close_refs(commit.message)
+        }
+        guarded = [
+            item for item in pool
+            if item.ref not in self._account_issues
+            or (item.ref == account_completion_ref and item.ref in fresh_closes)
+        ]
         if leased_pool:
             guarded = [
                 item
@@ -4135,11 +4149,15 @@ class _Loop:
                 if item.kind != "issue" or self._leased(item.ref, "issue close")
             ]
         try:
-            return list(
+            completions = list(
                 self._source.handle_completions(
                     pool=guarded, new_commits=new_commits
                 )
             )
+            for completion in completions:
+                self._account_issues.discard(completion.ref)
+                self._account_base_issues.discard(completion.ref)
+            return completions
         except Exception as exc:  # pragma: no cover - defensive
             self._diag.warning(
                 "source.handle_completions raised %s: %s; "
@@ -6758,7 +6776,6 @@ class _ParallelLoop:
             scheduler.release_attempt(contribution.ref)
             self._finalize_contribution(contribution, published=False)
             return
-        self._serial._account_issues.discard(lane_work.item.ref)
         disposition = scheduler.finish_work(
             contribution, changed=lane_outcome.progressed
         )
@@ -8451,7 +8468,7 @@ class _ParallelLoop:
             )
             landed = []
         for completion in self._serial._handle_completions_safely(
-            [item], landed, leased_pool=True
+            [item], landed, leased_pool=True, account_completion_ref=item.ref,
         ):
             self._emit_contribution_event(
                 contribution,

@@ -3270,6 +3270,10 @@ affected issues, including attempts that left commits. An already-closed affecte
 issue is diagnosed, preserved and not treated as verified completion; it is never
 automatically reopened. A Checkpoint does not prove completion. Preventing
 Agent-owned early closure remains #913's separate obligation.
+Restored account health does not release this publication protection. A later
+ordinary attempt must supply a fresh close-bearing Agent commit and pass the
+ordinary Lease-fenced, source-verified completion boundary; Checkpoints,
+non-closing progress and failed closure verification leave the protection intact.
 
 The terminal reason is **`account_failure` / exit 1**, carrying `account_error`
 (the original Session error identity) and `account_cause` on `wrapper.run.end`.
