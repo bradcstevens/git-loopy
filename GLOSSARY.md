@@ -1875,7 +1875,8 @@ _Avoid_: branch prefix, runner branches, worktree directory.
 
 **Sweep**:
 Reclaiming residue **no live Run owns** — a dead Run's **Lane workspaces**, its resolved
-branches, and the empty directories every reclaimed workspace leaves behind. It runs at the
+branches, the empty directories every reclaimed workspace leaves behind, and old Run logs
+under **Retention**. It runs at the
 start of every Run, for that Run's dead predecessors, and on demand as `git-loopy sweep`
 (with a dry run) for when nothing is running at all. Liveness needs no new mechanism: the
 per-Run control artifact's advisory lock already says *lock free ⇒ Run dead ⇒ its
@@ -1888,6 +1889,13 @@ never chose to commit, so a salvaged branch outlives the sweep that rescued it. 
 invisible: it emits no **Event**, produces no **Strike**, never appears in a Run's
 **Summary**, and prints nothing when it reclaimed nothing.
 _Avoid_: cleanup, garbage collection, prune, reap (as the name for this step).
+
+**Retention**:
+The count-based history window that keeps each worktree's newest **Runs** for
+**Reusable routes**, with a Run's trace, diagnostics and control artifacts treated as
+one unit. Older Runs may be reclaimed by the **Sweep** only when provably finished;
+live or unknown Runs are preserved, and Run **Summaries** are kept indefinitely.
+_Avoid_: log rotation, expiry, compression, workspace reclamation.
 
 **Integration**:
 The serialized **Parallel mode** stage that consumes the **Integration backlog** one
