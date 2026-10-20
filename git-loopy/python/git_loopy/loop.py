@@ -8359,27 +8359,33 @@ class _ParallelLoop:
         asks the agent to get the private Integration worktree green and commit
         — driving a clean Integration the runner can then publish.
 
-        The brief states which of the two failure states the tree is actually
-        in, because they need different work and a brief that misdescribes the
-        tree wastes one of only K=3 attempts: a **conflicted** stage has had its
-        merge aborted and still needs the Lane branch merged, while a **red**
-        stage already carries the merge and needs the feedback loops fixed.
+        The first conflict brief asks for the aborted merge to be resolved.
+        A subsequent red gate supplies the current failure, even if Integration
+        originally conflicted. The gate cannot prove that the Agent completed
+        that merge, so retain a verification reminder rather than claiming either
+        that it is still aborted or that it has been resolved.
         """
-        if conflicted:
+        revision = lane_work.publication_sha or lane_work.branch
+        if conflicted and gate_failure is None:
             situation = (
-                f"Revision {lane_work.publication_sha or lane_work.branch} could not be merged into this "
+                f"Revision {revision} could not be merged into this "
                 "integration worktree (the conflicting merge was aborted). "
                 "Merge it, "
             )
         else:
+            merge_context = (
+                f"The initial merge of revision {revision} conflicted. Verify its "
+                "merge resolution in this integration worktree; the current"
+                if conflicted else
+                f"Revision {revision} is already merged into this integration "
+                "worktree, but its"
+            )
             detail = (
                 f"Gate row {gate_failure.name!r} {gate_failure.summary}. "
                 if gate_failure is not None else ""
             )
             situation = (
-                f"Revision {lane_work.publication_sha or lane_work.branch} is already merged into this "
-                f"integration worktree, but its feedback loops are red. {detail}Fix "
-                "them, "
+                f"{merge_context} feedback loops are red. {detail}Fix them, "
             )
         return (
             f"Auto-resolution attempt {attempt} of "

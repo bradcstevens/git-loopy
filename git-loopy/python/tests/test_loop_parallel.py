@@ -4410,8 +4410,9 @@ def test_parallel_contribution_waits_behind_a_running_gate_row(
     assert fake_gh.issue_view(43).state == "CLOSED"
 
 
+@pytest.mark.parametrize("timeout_then_red", [False, True])
 def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, timeout_then_red
 ) -> None:
     """A conflicting Lane merge is aborted *privately*, then auto-resolved (#63).
 
@@ -4419,10 +4420,11 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
     cleanly. Under ADR-0020 the conflicting merge is attempted in 42's private
     Integration stage, never on base — so the ``git merge --abort`` that unwinds
     it fires **in that stage**, base is never left mid-merge, and there is
-    nothing to ``git revert``. Recovery then runs the auto-resolution agent in
-    the same stage, which passes on its first attempt here (all-green gate) and
-    publishes 42. Asserts where the abort happened, that base recorded none of
-    it, that both issues closed, and that the Run made progress (no strike).
+    nothing to ``git revert``. Recovery runs in that same stage, either gating
+    green immediately or reaching a timeout then a red gate-only re-run before
+    the last Agent repairs the current red row. Asserts where the abort happened,
+    that base recorded none of it, that both issues closed, and that the Run made
+    progress (no strike).
     """
     fake_git = _wire_repo(tmp_path, merge_conflicts=[42])
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -4441,10 +4443,21 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    # All-green gate: the conflict is a *merge* failure, not a gate failure, so
-    # 42's first auto-resolution attempt (and 43's landing) pass.
+    # Either the first Recovery gates green, or its gate times out, a gate-only
+    # re-run is red, and the last remaining Recovery attempt fixes that red row.
+    results: list[bool | loop_module.gate_module.GateResult] = [True]
+    if timeout_then_red:
+        results = [
+            _gate_timeout(),
+            loop_module.gate_module.GateResult.red(
+                ("Shell syntax",),
+                LoopFailure("Shell syntax", "bash -n check.sh", 2, "syntax error"),
+            ),
+            True,
+        ]
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner(default=True)
+        loop_module, "_make_gate_runner",
+        lambda **_kwargs: FakeGateRunner(by_issue={42: results}),
     )
 
     cfg = RunConfig(
@@ -4467,8 +4480,7 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
     assert fake_git.repo_merge_aborts == [int_path]
     assert fake_git.merge_aborts == 0
 
-    # 42 was recovered by exactly one auto-resolution attempt in its dedicated
-    # integration worktree; 43 landed via the happy path.
+    # Recovery stays in the same stage; the timeout never buys an Agent.
     resolution_dirs = [
         c["working_directory"]
         for c in fake_client.create_calls
@@ -4480,7 +4492,7 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
                 fake_git.common_git_dir(), _run_id(tmp_path), 42
             )
         )
-    ]
+    ] * (2 if timeout_then_red else 1)
     recovery = next(
         session for session in fake_client.created
         if session._working_directory in resolution_dirs
@@ -4501,6 +4513,20 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
     assert fake_gh.issue_view(43).state == "CLOSED"
     assert fake_gh.issue_comment_calls == []
     events = _logged_events(tmp_path)
+    assert [
+        e["attempt"] for e in events
+        if e["type"] == "wrapper.integration.recovery_started" and e["issue"] == 42
+    ] == ([1, 3] if timeout_then_red else [1])
+    if timeout_then_red:
+        briefs = [
+            session.send_and_wait_calls[0][0]
+            for session in fake_client.created
+            if session._working_directory in resolution_dirs
+        ]
+        assert "feedback loops are red" in briefs[-1]
+        assert "Shell syntax" in briefs[-1] and "exited 2" in briefs[-1]
+        assert "could not be merged" not in briefs[-1]
+        assert "Python suite" not in briefs[-1] and "timed out" not in briefs[-1]
     assert [e for e in events if e["type"] == "wrapper.strike"] == []
 
 
