@@ -28,6 +28,7 @@ def _config() -> RunConfig:
         issue_source="github",
         host_yield="none",
         gate_timeout_seconds=125.5,
+        wrap_up_lead_seconds=45.5,
     )
 
 

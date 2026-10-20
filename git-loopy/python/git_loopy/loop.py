@@ -430,6 +430,7 @@ def _make_execution_host(
     placement: str,
     *,
     send_timeout_seconds: float,
+    wrap_up_lead_seconds: float | None = None,
     gate_timeout_seconds: float | None = None,
 ) -> execution_host_module.ExecutionHost | None:
     """Construct the **Execution host** the operator named, or ``None`` for local.
@@ -461,6 +462,7 @@ def _make_execution_host(
             capacity=actions_host_module.github_actions_capacity(),
             workflow_ref=actions_host_module.workflow_ref(client),
             send_timeout_seconds=send_timeout_seconds,
+            wrap_up_lead_seconds=wrap_up_lead_seconds,
             gate_timeout_seconds=gate_timeout_seconds,
         )
     raise ValueError(f"no adapter exists for execution host {placement!r}")
@@ -7136,8 +7138,13 @@ class _ParallelLoop:
                 try:
                     if self._stop_cancel_requested:
                         raise asyncio.CancelledError
+                    from .lane_session import run_lane_session
+
                     await self._await_agent(
-                        sdk_session.send_and_wait(prompt, timeout=send_timeout),
+                        run_lane_session(
+                            sdk_session, prompt, timeout=send_timeout,
+                            lead_time=self._config.wrap_up_lead_seconds,
+                        ),
                         name=(
                             "git-loopy-lane-"
                             f"{contribution.contribution_id}-agent"
@@ -8637,6 +8644,7 @@ async def _run_with_sleep_assertion(
             observed_host = _make_execution_host(
                 config.execution_host,
                 send_timeout_seconds=config.send_timeout_seconds,
+                wrap_up_lead_seconds=config.wrap_up_lead_seconds,
                 gate_timeout_seconds=config.gate_timeout_seconds,
             )
         except (ValueError, actions_host_module.ActionsError) as exc:
@@ -8805,6 +8813,7 @@ async def _run_with_sleep_assertion(
             else _make_execution_host(
                 config.execution_host,
                 send_timeout_seconds=config.send_timeout_seconds,
+                wrap_up_lead_seconds=config.wrap_up_lead_seconds,
                 gate_timeout_seconds=config.gate_timeout_seconds,
             )
         )

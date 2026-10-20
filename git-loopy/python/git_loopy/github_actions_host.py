@@ -601,6 +601,7 @@ class GitHubActionsExecutionHost:
         capacity: int,
         workflow_ref: str,
         send_timeout_seconds: float,
+        wrap_up_lead_seconds: float | None = None,
         gate_timeout_seconds: float | None = None,
         poll_interval_seconds: float = 5.0,
         timeout_seconds: float = CONTRIBUTION_JOB_TIMEOUT_SECONDS,
@@ -619,6 +620,11 @@ class GitHubActionsExecutionHost:
         self._capacity = capacity
         self._workflow_ref = workflow_ref
         self._send_timeout_seconds = send_timeout_seconds
+        from .lane_session import resolve_lead_time
+
+        self._wrap_up_lead_seconds = resolve_lead_time(
+            session_budget(send_timeout_seconds), wrap_up_lead_seconds
+        )
         self._gate_timeout_seconds = (
             resolve_gate_timeout_seconds(environ)
             if gate_timeout_seconds is None else gate_timeout_seconds
@@ -795,7 +801,9 @@ class GitHubActionsExecutionHost:
                 LANE_CONTRIBUTION_WORKFLOW,
                 self._workflow_ref,
                 {
-                    "request": _request_json(request, self._send_timeout_seconds),
+                    "request": _request_json(
+                        request, self._send_timeout_seconds, self._wrap_up_lead_seconds
+                    ),
                     "dispatch_token": token,
                 },
             )
@@ -1211,7 +1219,11 @@ def session_budget(send_timeout_seconds: float) -> float:
     return min(send_timeout_seconds, CONTRIBUTION_SESSION_BUDGET_SECONDS)
 
 
-def _request_json(request: ContributionRequest, send_timeout_seconds: float) -> str:
+def _request_json(
+    request: ContributionRequest,
+    send_timeout_seconds: float,
+    wrap_up_lead_seconds: float,
+) -> str:
     """Serialize the outcome contract's input for the dispatched job.
 
     Carries what the job needs to reproduce the contribution and nothing that
@@ -1236,6 +1248,7 @@ def _request_json(request: ContributionRequest, send_timeout_seconds: float) -> 
             "run_id": request.run_id,
             "disabled_skills": list(_disabled_skills(request.skill_policy)),
             "send_timeout_seconds": session_budget(send_timeout_seconds),
+            "wrap_up_lead_seconds": wrap_up_lead_seconds,
             "profile_key": request.profile_key,
             "catalog_skills": sorted(request.skill_policy.catalog.winners),
         },

@@ -86,6 +86,7 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
         "prevent_idle_sleep",
         "gate_timeout_seconds",
         "send_timeout_seconds",
+        "wrap_up_lead_seconds",
         "deny_tools",
         "deny_skills",
         "enabled_skills",
@@ -95,6 +96,41 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
 def test_coerce_bool_accepts_truthy_and_falsy_tokens() -> None:
     assert configcmd.coerce_value("include_prs", "true") is True
     assert configcmd.coerce_value("otel_enabled", "Yes") is True
+
+
+def test_wrap_up_lead_can_be_saved_and_read(tmp_path):
+    env = _env(tmp_path)
+    out, err = _Sink(), _Sink()
+    assert configcmd.run_set(
+        "wrap_up_lead_seconds", "30.5", scope="project",
+        repo_root=tmp_path, env=env, out=out, err=err,
+    ) == 0
+    assert configcmd.run_get(
+        "wrap_up_lead_seconds", repo_root=tmp_path, env=env, out=out, err=err,
+    ) == 0
+    assert out.lines[-1] == "30.5"
+    assert err.lines == []
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "nan", "inf", "no"])
+def test_config_set_refuses_invalid_wrap_up_lead(bad):
+    with pytest.raises(configcmd.ConfigCommandError, match="wrap_up_lead_seconds"):
+        configcmd.coerce_value("wrap_up_lead_seconds", bad)
+
+
+@pytest.mark.parametrize("lead", ["100", "no", "nan"])
+def test_invalid_effective_wrap_up_lead_is_an_operator_error(tmp_path, lead):
+    out, err = _Sink(), _Sink()
+    assert configcmd.run_get(
+        "wrap_up_lead_seconds", repo_root=tmp_path,
+        env=_env(
+            tmp_path, GIT_LOOPY_SEND_TIMEOUT_SECONDS="100",
+            GIT_LOOPY_WRAP_UP_LEAD_SECONDS=lead,
+        ),
+        out=out, err=err,
+    ) == 1
+    assert "wrap_up_lead_seconds" in err.text
+    assert out.lines == []
 
 
 def test_coerce_bool_rejects_junk() -> None:

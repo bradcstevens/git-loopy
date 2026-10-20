@@ -870,6 +870,8 @@ class RunConfig:
     #: Local macOS Runs hold a process-owned idle-system-sleep assertion.
     prevent_idle_sleep: bool = True
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
+    #: None derives min(900 seconds, one tenth of the host's send timeout).
+    wrap_up_lead_seconds: float | None = None
     gate_timeout_seconds: float = DEFAULT_GATE_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     context_tier: str = DEFAULT_CONTEXT_TIER
@@ -891,6 +893,9 @@ class RunConfig:
     escalation_rung: tuple[str, str] | None = None
 
     def __post_init__(self) -> None:
+        from .lane_session import resolve_lead_time
+
+        resolve_lead_time(self.send_timeout_seconds, self.wrap_up_lead_seconds)
         if (
             isinstance(self.gate_timeout_seconds, bool)
             or not math.isfinite(self.gate_timeout_seconds)

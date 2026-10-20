@@ -456,14 +456,15 @@ def test_the_dispatched_request_is_the_shape_the_worker_parses() -> None:
     )
 
     parsed = worker_module.parse_request(
-        {worker_module.REQUEST_ENV: host_module._request_json(request, 21600.0)}
+        {worker_module.REQUEST_ENV: host_module._request_json(request, 21600.0, 45)}
     )
 
     assert parsed["issue_ref"] == 460
     assert parsed["run_id"] == request.run_id
     assert parsed["profile_key"] == "implementation"
     assert parsed["catalog_skills"] == ["code-review", "tdd"]
-    assert json.loads(host_module._request_json(request, 21600.0)) == parsed
+    assert parsed["wrap_up_lead_seconds"] == 45
+    assert json.loads(host_module._request_json(request, 21600.0, 45)) == parsed
 
 
 def test_the_copilot_permission_scope_is_suppressed_narrowly_for_this_file_alone() -> None:

@@ -2340,6 +2340,25 @@ def _parse_positive_float(raw: str | None) -> float | None:
     return value if value > 0 else None
 
 
+def _resolve_wrap_up_lead_seconds(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> float | None:
+    """Env > project > global > automatic; RunConfig validates against timeout."""
+    raw = env.get("GIT_LOOPY_WRAP_UP_LEAD_SECONDS")
+    if raw is not None and raw.strip():
+        try:
+            return float(raw)
+        except ValueError:
+            raise settings.SettingsError("wrap_up_lead_seconds must be a number") from None
+    for scope, table in (("project", project), ("global", global_)):
+        value = settings.table_float(table, "wrap_up_lead_seconds", scope=scope)
+        if value is not None:
+            return value
+    return None
+
+
 def _resolve_persisted_str(
     env_var: str,
     key: str,
@@ -3255,6 +3274,15 @@ def resolve_config(
     )
     suppressed_by = routing_suppressed_by(args, env)
 
+    from git_loopy.lane_session import resolve_lead_time
+
+    send_timeout = _resolve_send_timeout_seconds(env, project, global_)
+    wrap_up_lead = _resolve_wrap_up_lead_seconds(env, project, global_)
+    try:
+        resolve_lead_time(send_timeout, wrap_up_lead)
+    except ValueError as exc:
+        raise settings.SettingsError(str(exc)) from None
+
     run = RunConfig(
         model=model,
         reasoning_effort=reasoning_effort,
@@ -3271,7 +3299,8 @@ def resolve_config(
         execution_host=execution_host,
         host_yield=_resolve_host_yield(env, project, global_),
         prevent_idle_sleep=_resolve_prevent_idle_sleep(env, project, global_),
-        send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
+        send_timeout_seconds=send_timeout,
+        wrap_up_lead_seconds=wrap_up_lead,
         gate_timeout_seconds=resolve_gate_timeout_seconds(
             env, project=project, global_=global_, warn=warn,
         ),
