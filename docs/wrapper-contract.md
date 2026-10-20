@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.35 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.37 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -1381,6 +1381,48 @@ Envelope and nested timestamps MUST be RFC3339 UTC with a trailing `Z`. Duration
 non-negative seconds measured from a monotonic clock; renderers MUST NOT derive them by
 subtracting wall-clock timestamps.
 
+### Mid-work Membership visibility (contract 2.37, #429)
+
+The Python Orchestrator MUST service one Run-wide **Membership read** cadence
+during active serial Iterations and Parallel work, including when every Lane is
+occupied, the Agent is quiet, or no Dashboard is attached. The interval is
+`RefreshBackoff.maximum`, not a second setting. A runner-owned cooperative tick
+takes the read at its first opportunity at or after that interval; slow servicing
+may delay it and MUST NOT produce a catch-up burst.
+
+The read MUST reuse the shallow source's AFK discriminator and selection order,
+including candidates without `parallel-safe`, without per-issue enrichment.
+It MUST NOT reconcile the dispatch cache, feed Pickup, change FIFO order, demand
+or backoff, latch serial demand, consume Lane capacity, or establish authoritative
+emptiness. An ordinary scheduler read keeps its existing cache reconciliation
+and demand/backoff policy; reusing it for visibility confers no Pickup or
+emptiness authority.
+
+A complete successful due read MUST emit **`wrapper.pool.refreshed`** with its
+existing `issues` payload and Run-scoped envelope (`iter: null`), even when empty
+or unchanged. A suitable existing shallow read and equivalent full-membership
+Event SHOULD service the cadence instead of duplicating work. An eligible-only
+subset is not equivalent to all AFK-shaped candidates. Reads MUST NOT overlap,
+multiply per Lane, or introduce concurrent Event writers.
+
+A failed or incomplete attempt MUST emit no Membership Event, report the existing
+refresh diagnostic, and leave active work running. The attempt consumes the
+visibility interval; output-callback bursts MUST NOT cause immediate retries.
+Ordinary scheduler reads retain their independent demand/backoff policy.
+
+Both Dashboards keep their existing add-only ingestion: a Membership Event may
+add ordinary `queued` rows, but never retire, revive or downgrade existing rows.
+Only a later authoritative `wrapper.afk_ready.collected` may retire a still-queued
+Membership-only row. Empty reads and Event silence are not emptiness claims.
+The local-markdown source implements no shallow Rolling source and emits none.
+
+This is a widened Python emission obligation, not a new Event, payload field,
+Queue status or capability. Event fixture revision **1.10** and compatibility
+schema **1** are unchanged. `event-schema.json`'s `membership_cadence_cases`
+select Python with per-case `distributions`; dormant shell and PowerShell
+baselines remain frozen under ADR-0091. ADR-0042 is the design record; the approved
+#429 brief supersedes its original new-Event/all-Orchestrator obligation.
+
 ### Rolling-dispatch contribution lifecycle
 
 **Rolling dispatch** (Parallel mode) has no barrier round, so a Parallel record belongs to a
@@ -2358,15 +2400,17 @@ and 2.29 with the Python-only non-execution Task-type exclusion (ADR-0088),
 and 2.30 with execution profile selection and Skill exposure (ADR-0078),
 and 2.31 with Reviewer read-only access (ADR-0078/0086),
 and 2.32 with the Host yield disclosure (§4, §12, #817),
-and 2.34 with the Sandbox disclosure (§12, #864).
+and 2.34 with the Sandbox disclosure (§12, #864),
+and 2.37 with the Python mid-work Membership cadence (§12, #429).
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
 it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1), then 2.29 with the Python-only non-execution Task-type exclusion.
-Event revision 1.10 and Dashboard revision 1.25 record current provenance;
-the Dashboard adds the optional Header Sandbox state. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
+Event revision 1.10 and Dashboard revision 1.26 record current provenance;
+the Membership cadence adds no Dashboard projection. Revision 1.25 added the
+optional Header Sandbox state. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;
 the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility
 schema remains 1 and historical streams' interpretation is unchanged.

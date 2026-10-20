@@ -973,6 +973,83 @@ class TestMembershipRead:
 # Module structure                                                             #
 # --------------------------------------------------------------------------- #
 
+class TestVisibilityCadence:
+    def test_due_demand_read_services_visibility_once_in_full_source_order(self) -> None:
+        from git_loopy.rolling_pool import RefreshBackoff
+
+        snapshot = MembershipSnapshot(
+            candidates=(_candidate(19, parallel_safe=False), _candidate(31)),
+            complete=True,
+        )
+        source = ScriptedSource([snapshot])
+        clock = FakeClock()
+        ordinary = []
+        visibility = []
+        pool = _pool(
+            source, clock=clock, backoff=RefreshBackoff(maximum=7),
+            on_membership_read=lambda cs: ordinary.append(tuple(c.ref for c in cs)),
+            on_visibility_read=lambda cs: visibility.append(tuple(c.ref for c in cs)),
+        )
+        pool.start()
+        pool.service(refillable=2)
+        clock.advance(7)
+        pool.service(refillable=2)
+        pool.service_visibility()
+        assert source.membership_calls == 3
+        assert ordinary == [(31,)]
+        assert visibility == [(19, 31)]
+        assert pool.candidate_refs == (31,)
+        assert source.pickup_calls == []
+
+    def test_visibility_neither_reconciles_fifo_nor_resets_demand_backoff(self) -> None:
+        from git_loopy.rolling_pool import RefreshBackoff
+
+        source = ScriptedSource([
+            *([_snapshot([31, 7])] * 4),
+            _snapshot([19, 7]), _snapshot([19, 7]),
+        ])
+        clock = FakeClock()
+        visibility = []
+        pool = _pool(
+            source, clock=clock,
+            backoff=RefreshBackoff(maximum=7),
+            on_visibility_read=lambda cs: visibility.append(tuple(c.ref for c in cs)),
+        )
+        pool.start()
+        pool.service(refillable=3)  # next demand read at 2
+        clock.advance(2)
+        pool.service(refillable=3)  # next at 6
+        clock.advance(4)
+        pool.service(refillable=3)  # next at 13
+        clock.advance(1)
+        pool.service_visibility()
+        pool.service(refillable=3)
+        assert source.membership_calls == 5  # visibility did not open demand's window
+        assert visibility == [(19, 7)]
+        assert pool.candidate_refs == (31, 7)  # no add, removal or reorder
+        assert pool.take().item.ref == 31
+        clock.advance(6)
+        pool.service(refillable=3)
+        assert pool.candidate_refs == (7, 19)  # only demand's read reconciles
+        assert source.pickup_calls == [31]
+
+    def test_reentrant_visibility_and_demand_do_not_overlap_the_read(self) -> None:
+        source = ScriptedSource([_snapshot([31])])
+        clock = FakeClock()
+        seen = []
+        pool = _pool(
+            source, clock=clock,
+            on_visibility_read=lambda cs: seen.append(tuple(c.ref for c in cs)),
+        )
+        pool.start()
+        clock.advance(60)
+        source.on_membership = lambda: (
+            pool.service_visibility(), pool.service(refillable=2)
+        )
+        pool.service_visibility()
+        assert source.membership_calls == 2
+        assert seen == [(31,)]
+
 
 class TestModuleStructure:
     def test_imports_are_constrained(self) -> None:

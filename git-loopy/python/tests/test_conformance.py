@@ -1356,10 +1356,13 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
 
     2.34 adds the Run-scoped Sandbox Event, moving the fixture to 1.10 while
     retaining envelope compatibility 1 and historical silence as unknown.
+
+    2.37 widens Python's Membership emission cadence without changing the
+    existing Event identity, payload, or either schema revision.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.10"
-    assert _EVENT_SCHEMA["contract_version"] == "2.34"
+    assert _EVENT_SCHEMA["contract_version"] == "2.37"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -2616,7 +2619,9 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.25"
+    # 1.26 tracks contract 2.37's existing Membership Event cadence; no
+    # Dashboard projection or Event schema changes.
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.26"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]

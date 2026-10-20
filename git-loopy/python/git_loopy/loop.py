@@ -117,6 +117,7 @@ import os
 import re
 import sys
 import time
+from time import monotonic as _membership_clock
 from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
 from importlib.resources import files
@@ -4525,6 +4526,9 @@ the source. This is the guard between retries while genuinely idle (no Lane
 work in flight, nothing currently refillable, no serial turn granted).
 """
 
+_MEMBERSHIP_SERVICE_INTERVAL = 1.0
+"""Cooperative tick spacing; visibility itself uses ``RefreshBackoff.maximum``."""
+
 
 def run_end_refusal(issue: int | str, reason: str) -> dict[str, int | str]:
     """One ``wrapper.run.end`` ``refusals`` entry (contract 2.12, #643).
@@ -4740,9 +4744,10 @@ class _ParallelLoop:
             self._pool = RollingPool(
                 diag=diag,
                 source=source,
-                clock=time.monotonic,
+                clock=_membership_clock,
                 eligible=self._lane_candidate_eligible,
                 on_membership_read=self._emit_membership_read,
+                on_visibility_read=self._emit_visibility_read,
                 read_refused=self._lane_lease_unreadable,
                 terminal_refused=lambda c: self._serial._attempts.skipped(c.ref),
                 lane_first=self._lane_first_pin,
@@ -5100,7 +5105,7 @@ class _ParallelLoop:
             try:
                 if self._rolling_capable:
                     outcome_label, exit_code, iterations_run = (
-                        await self._drive_rolling()
+                        await self._drive_with_visibility()
                     )
                 else:
                     outcome_label, exit_code, iterations_run = (
@@ -5139,6 +5144,28 @@ class _ParallelLoop:
             except Exception as exc:  # pragma: no cover - defensive
                 self._diag.warning("wrapper.run.end emit failed: %s", exc)
         return exit_code
+
+    async def _drive_with_visibility(self) -> tuple[str, int, int]:
+        """Service one Run-wide cadence, including quiet/unattached sessions.
+
+        Reads and Event writes are synchronous on the same event-loop thread
+        as the driver, never a thread or one poller per Lane. The timeout is a
+        cooperative servicing opportunity, not the Membership interval.
+        """
+        assert self._pool is not None
+        work = asyncio.create_task(self._drive_rolling())
+        try:
+            while True:
+                done, _ = await asyncio.wait(
+                    {work}, timeout=_MEMBERSHIP_SERVICE_INTERVAL
+                )
+                if done:
+                    return work.result()
+                self._pool.service_visibility()
+        finally:
+            if not work.done():
+                work.cancel()
+            await asyncio.gather(work, return_exceptions=True)
 
     def _report_parallel_degraded(self) -> None:
         """Say that Parallel mode degraded entirely to the serial path (#414).
@@ -7465,16 +7492,18 @@ class _ParallelLoop:
     def _emit_membership_read(self, candidates: tuple[PoolCandidate, ...]) -> None:
         """Publish the cache's add-only Membership read at Run scope.
 
-        A Run that has never seen Lane work is a **Serial fallback** Run, and
-        its stream stays byte-for-byte what a serial Run's is: an empty read
-        before the first non-empty one adds no **Queue** row and would only
-        announce a Parallel mode that never engaged. Once membership has been
-        published, every later read is news — including the one that empties
-        the Queue, which is how an operator tells "nothing eligible is left"
-        from "the Run stopped looking".
+        Keep the existing suppression of ordinary startup reads with no
+        eligible Lane candidates. Once membership has been published, later
+        changed reads are news, even when empty. These are add-only sightings,
+        never Queue retirement or an emptiness claim. Due visibility reads
+        use the unconditional publisher below, including in Serial fallback.
         """
         if not candidates and not self._membership_read_visible:
             return
+        self._emit_visibility_read(candidates)
+
+    def _emit_visibility_read(self, candidates: tuple[PoolCandidate, ...]) -> None:
+        """A complete due read is observable even when empty or unchanged."""
         self._membership_read_visible = True
         self._serial._emit(
             events_module.WRAPPER_POOL_REFRESHED,
