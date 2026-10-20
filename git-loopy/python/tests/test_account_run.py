@@ -26,7 +26,7 @@ from tests.test_loop_parallel import (
 
 def _run(tmp_path, monkeypatch, *, parallel=False, code="insufficient_quota",
          commit=False, maximum=5, session_hook=None, refs=(42,), config_overrides=None,
-         gate=None):
+         gate=None, client_type=_ParallelFakeClient, run_timeout=None):
     git = _wire_repo(tmp_path)
     tracker = FakeGitHubClient(
         repo=gh.Repo(owner="x", name="y", default_branch="main"),
@@ -51,15 +51,17 @@ def _run(tmp_path, monkeypatch, *, parallel=False, code="insufficient_quota",
                 await session_hook(self, tracker)
             return await super().send_and_wait(prompt, timeout=timeout, **extra)
 
-    client = _ParallelFakeClient(fake_git=git, scripted_events=[refusal])
+    client = client_type(fake_git=git, scripted_events=[refusal])
     client._session_cls = Session
     monkeypatch.setattr(loop, "_make_git_client", lambda: git)
     monkeypatch.setattr(loop, "_make_github_client", lambda: tracker)
     monkeypatch.setattr(loop, "_make_client", lambda: client)
     monkeypatch.setattr(loop, "_make_gate_runner", lambda **kw: gate or FakeGateRunner())
-    rc = asyncio.run(loop.run(RunConfig(
-        max_iterations=maximum, **(config_overrides or {}),
-    )))
+    async def scenario():
+        run = loop.run(RunConfig(max_iterations=maximum, **(config_overrides or {})))
+        return await asyncio.wait_for(run, run_timeout) if run_timeout else await run
+
+    rc = asyncio.run(scenario())
     return rc, _logged_events(tmp_path), client, tracker, git
 
 
@@ -228,6 +230,34 @@ def test_structured_terminal_exception_is_account_evidence(tmp_path, monkeypatch
     assert end["outcome"] == "account_failure"
     assert end["account_error"]["error_code"] == "insufficient_quota"
     assert not [e for e in events if e["type"] == "wrapper.strike"]
+
+
+@pytest.mark.parametrize("parallel", [False, True])
+@pytest.mark.parametrize("commit", [False, True])
+def test_recovered_call_error_cannot_mask_a_later_terminal_account_exception(
+    tmp_path, monkeypatch, parallel, commit,
+):
+    class EndpointRefusal(Exception):
+        code = "insufficient_quota"
+
+    async def script(session, _tracker):
+        session._on_event(_sdk_event(
+            SessionEventType.MODEL_CALL_FAILURE,
+            ModelCallFailureData(
+                source=ModelCallFailureSource.TOP_LEVEL,
+                error_type="NetworkError", error_message="network error",
+            ),
+        ))
+        raise EndpointRefusal("Endpoint refused the session")
+
+    rc, events, client, tracker, git = _run(
+        tmp_path, monkeypatch, parallel=parallel, commit=commit, session_hook=script,
+    )
+    assert rc == 1 and len(client.created) == 1
+    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close")]
+    assert tracker.issue_view(42).state == "OPEN"
+    assert git.push_calls == 0
+    assert len([e for e in events if e["type"] == "wrapper.commit.recorded"]) == int(commit)
 
 
 @pytest.mark.parametrize("delay,cause", [(121, "wait_budget_exhausted"), ("invalid", "invalid_retry_delay")])
@@ -439,6 +469,61 @@ def test_classifier_account_refusal_admits_no_following_classifier_or_worker(tmp
     assert not tracker.applied
     assert not [e for e in events if e["type"] == "wrapper.strike"]
     assert next(e for e in events if e["type"] == "wrapper.run.end")["outcome"] == "account_failure"
+
+
+@pytest.mark.parametrize("parallel", [False, True])
+def test_probe_setup_failure_stops_unconfirmed_without_another_admission(tmp_path, monkeypatch, parallel):
+    from types import SimpleNamespace
+
+    from copilot.generated.rpc import OptionsApi, SandboxApi
+    from git_loopy.run_sandbox import resolve_run_sandbox
+    from tests.test_run_sandbox import Runtime
+
+    class Client(_ParallelFakeClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.runtime = Runtime(enabled=True)
+            self.rpc = self.runtime.rpc
+            self.updates = 0
+
+        async def request(self, method, params, **kwargs):
+            if method == "session.options.update":
+                self.updates += 1
+                if self.updates > 1:
+                    raise RuntimeError("Sandbox transport failed before send")
+                return {"success": True}
+            assert method == "session.sandbox.getEnforcementStatus"
+            return {"blocked": False, "required": False}
+
+        async def create_session(self, **kwargs):
+            if kwargs.get("available_tools") == []:
+                return await self.runtime.create_session(**kwargs)
+            session = await super().create_session(**kwargs)
+            session.rpc = SimpleNamespace(
+                options=OptionsApi(self, session.session_id),
+                sandbox=SandboxApi(self, session.session_id),
+            )
+            return session
+
+    clock = Clock()
+    monkeypatch.setattr(loop, "resolve_run_sandbox", resolve_run_sandbox)
+    monkeypatch.setattr(loop, "AccountControl", partial(
+        AccountControl, clock=clock, sleep=clock.sleep,
+    ))
+    rc, events, client, tracker, git = _run(
+        tmp_path, monkeypatch, parallel=parallel, code="rate_limit_exceeded",
+        maximum=3, client_type=Client, run_timeout=5,
+    )
+    assert rc == 1 and len(client.created) == 2
+    assert sum(len(session.send_and_wait_calls) for session in client.created) == 1
+    end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert end["outcome"] == "account_failure"
+    assert end["account_cause"] == "probe_unconfirmed"
+    assert end["iterations_run"] == 2
+    assert not [e for e in events if e["type"] == "wrapper.strike"]
+    if parallel:
+        contributions = [e for e in events if e["type"] == "wrapper.contribution.end"]
+        assert contributions[-1]["reason"] == "account_failure"
 
 
 @pytest.mark.parametrize("parallel", [False, True])

@@ -13,7 +13,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from git_loopy import events
-from git_loopy.session_outcome import SessionError, SessionErrorKind, classify_error_kind
+from git_loopy.session_outcome import (
+    SessionError, SessionErrorKind, SessionOutcomeWatch, classify_error_kind, strongest_error,
+)
 
 
 def account_refusal(error: SessionError | None) -> bool:
@@ -49,6 +51,16 @@ def account_interruption(error: SessionError | None) -> bool:
     return account_refusal(error) or (
         error is not None and error.error_type == "AccountAdmissionClosed"
     )
+
+
+def session_error_for_control(
+    watch: SessionOutcomeWatch, raised: SessionError | None,
+) -> SessionError | None:
+    """A terminal account refusal cannot be masked by descriptive call telemetry."""
+    for error in (raised, *reversed(watch.errors)):
+        if account_refusal(error):
+            return error
+    return strongest_error(watch.terminal_error, watch.error, raised)
 
 
 class AccountAdmissionClosed(RuntimeError):
@@ -265,9 +277,22 @@ class _AccountSession:
         self._session = session
         self._finished = finished
         self._control = control
+        self._completed = False
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._session, name)
+
+    def _finish(self, successful: bool) -> None:
+        if not self._completed:
+            self._completed = True
+            self._finished(successful)
+
+    async def disconnect(self) -> None:
+        try:
+            await self._session.disconnect()
+        finally:
+            # Session setup may fail after creation but before the first send.
+            self._finish(False)
 
     async def send_and_wait(self, *args: Any, **kwargs: Any) -> Any:
         ok = False
@@ -282,4 +307,4 @@ class _AccountSession:
             )
             raise
         finally:
-            self._finished(ok)
+            self._finish(ok)

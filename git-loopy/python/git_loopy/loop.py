@@ -148,7 +148,9 @@ from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
 from git_loopy import sources as sources_module
 from git_loopy import session_outcome as session_outcome_module
-from git_loopy.account_control import AccountClient, AccountControl, account_interruption
+from git_loopy.account_control import (
+    AccountClient, AccountControl, account_interruption, session_error_for_control,
+)
 from git_loopy import sweep as sweep_module
 from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
@@ -2364,10 +2366,9 @@ class _Loop:
                         exc, origin="session_lifecycle"
                     )
                 finally:
+                    ending_error = session_error_for_control(session_watch, raised)
                     if issue_git is not None:
-                        account_failed = self._account_affected(
-                            session_watch.terminal_error or session_watch.error or raised
-                        )
+                        account_failed = self._account_affected(ending_error)
                         sandbox_commits, checkpoint_sha = self._finish_serial_clone(
                             issue_git, clone_branch, pre_sha, active, iter_num,
                             publish=not operator_cancelled and not sandbox_failed and not account_failed,
@@ -2397,7 +2398,7 @@ class _Loop:
             # 7) Completion backstop — source-specific. The GitHub backend
             #    closes the issue via gh; the PRDs backend always returns
             #    [] (the agent owns the `git mv ... done/` step).
-            if self._account_affected(session_watch.terminal_error or session_watch.error or raised):
+            if self._account_affected(ending_error):
                 self._account_issues.add(active.ref)
                 if issue_git is None and new_commits:
                     self._account_base_issues.add(active.ref)
@@ -2407,7 +2408,7 @@ class _Loop:
                 self._account_base_issues.discard(active.ref)
             with telemetry.span("git_loopy.enforce_closures"):
                 completions = (
-                    [] if self._account_affected(session_watch.terminal_error or session_watch.error or raised)
+                    [] if self._account_affected(ending_error)
                     else self._handle_completions_safely(pool, new_commits, leased_pool=True)
                 )
 
@@ -2518,9 +2519,7 @@ class _Loop:
             session_ending = session_outcome_module.resolve_session_outcome(
                 termination=termination,
                 progressed=made_progress,
-                error=session_outcome_module.strongest_error(
-                    session_watch.terminal_error, session_watch.error, raised
-                ),
+                error=ending_error,
                 content_filtered=session_watch.content_filtered,
                 no_more_tasks=session_watch.no_more_tasks,
             )
@@ -6907,7 +6906,9 @@ class _ParallelLoop:
             reoffer=reoffer and outcome.classification != "breach",
             reason=(
                 "account_failure"
-                if outcome.ending is not None and account_interruption(outcome.ending.error)
+                if self._serial._account_affected(
+                    outcome.ending.error if outcome.ending is not None else None
+                )
                 else _terminal_reason_for(outcome)
             ),
         )
@@ -7312,7 +7313,7 @@ class _ParallelLoop:
             scope.agent_seconds += max(0.0, time.monotonic() - agent_started)
         return _LaneSessionSignals(
             termination=termination,
-            error=session_outcome_module.strongest_error(watch.terminal_error, watch.error, raised),
+            error=session_error_for_control(watch, raised),
             content_filtered=watch.content_filtered,
             no_more_tasks=watch.no_more_tasks,
         )
