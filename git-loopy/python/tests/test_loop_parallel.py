@@ -103,6 +103,7 @@ import logging
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -4181,6 +4182,230 @@ def test_parallel_integration_never_overlaps_another_contribution(
         ("stage-remove", "issue-42")
     ), f"#43 was not contending for Integration: {timeline}"
 
+    assert fake_gh.issue_view(42).state == "CLOSED"
+    assert fake_gh.issue_view(43).state == "CLOSED"
+
+
+class _HeldGateRunner(FakeGateRunner):
+    """A gate row on one issue's stage that holds its caller like a long loop.
+
+    It blocks on a :class:`threading.Event`, never the event loop, so a Runner
+    that awaits the gate off the loop keeps running around it while a Runner
+    that calls it inline freezes until ``cap`` expires. The test releases it
+    from the Run's own event loop, which a frozen Run can never reach.
+    """
+
+    def __init__(
+        self,
+        *,
+        hold_issue: int,
+        cap: float,
+        on_start: Callable[[], None] = lambda: None,
+        on_release: Callable[[], None] = lambda: None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._hold = f"issue-{hold_issue}"
+        self._cap = cap
+        self._on_start = on_start
+        self._on_release = on_release
+        self.release = threading.Event()
+        self.started_at: float | None = None
+        self.returned_at: float | None = None
+
+    def run(self, worktree: Path):  # type: ignore[no-untyped-def]
+        if Path(worktree).name == self._hold and self.started_at is None:
+            self.started_at = time.monotonic()
+            self._on_start()
+            self.release.wait(self._cap)
+            self._on_release()
+            self.returned_at = time.monotonic()
+        return super().run(worktree)
+
+
+def _issue_43_event_count(tmp_path: Path) -> int:
+    """Complete Event-log lines naming issue 43, read from outside the loop."""
+    count = 0
+    for path in (tmp_path / ".git-loopy" / "logs").glob("*.jsonl"):
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if 43 in (event.get("issue"), event.get("lane_issue")):
+                count += 1
+    return count
+
+
+def test_parallel_lane_send_timeout_fires_while_a_gate_row_runs(
+    tmp_path, monkeypatch
+) -> None:
+    """A gate row longer than a Lane's send timeout does not stall that Lane (#901).
+
+    #42 finishes at once and its Integration gate row then runs far past #43's
+    send timeout. #43's agent never answers, so the Runner must end its session
+    at the timeout — within seconds of it, not when the gate returns — and #43's
+    Events must keep reaching the Event stream while the row is still running.
+    No real loop runs: the row is a held thread, so no host load is involved.
+    """
+    fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    send_timeout = 1.0
+    cfg = dataclass_replace(cfg, send_timeout_seconds=send_timeout, max_iterations=0)
+
+    session_43_started_at: list[float] = []
+    session_43_ended_at: list[float] = []
+    events_at_gate: dict[str, int] = {}
+    gate = _HeldGateRunner(
+        hold_issue=42,
+        cap=8.0,
+        on_start=lambda: events_at_gate.__setitem__(
+            "start", _issue_43_event_count(tmp_path)
+        ),
+        on_release=lambda: events_at_gate.__setitem__(
+            "release", _issue_43_event_count(tmp_path)
+        ),
+    )
+
+    class _UnansweredSession(_ParallelFakeSession):
+        async def send_and_wait(
+            self, prompt: str, *, timeout: float = 60.0, **extra: Any
+        ) -> SessionEvent | None:
+            working = str(self._working_directory or "")
+            if not working.endswith("/issue-43") or session_43_started_at:
+                return await super().send_and_wait(prompt, timeout=timeout, **extra)
+            session_43_started_at.append(time.monotonic())
+            # Stands in for the SDK's own timer, which lives on the event loop.
+            await asyncio.wait_for(asyncio.Event().wait(), timeout)
+            raise AssertionError("unreachable")
+
+        async def disconnect(self) -> None:
+            if str(self._working_directory or "").endswith("/issue-43") and not (
+                session_43_ended_at
+            ):
+                session_43_ended_at.append(time.monotonic())
+                gate.release.set()
+
+    class _Client(_ParallelFakeClient):
+        _session_cls = _UnansweredSession
+
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _Client(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+
+    exit_code = asyncio.run(asyncio.wait_for(loop_module.run(cfg), timeout=30))
+
+    assert gate.started_at is not None and gate.returned_at is not None
+    assert session_43_started_at and session_43_ended_at
+    ended = session_43_ended_at[0]
+    overrun = ended - (session_43_started_at[0] + send_timeout)
+    assert overrun < 2.0, f"#43 overran its send timeout by {overrun:.1f}s"
+    assert ended < gate.returned_at, "#43 was ended only once the gate returned"
+    assert gate.returned_at - gate.started_at < 5.0, "the gate row ran to its cap"
+    assert events_at_gate["release"] > events_at_gate["start"], (
+        f"no #43 Event reached the stream while the row ran: {events_at_gate}"
+    )
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    assert fake_gh.issue_view(42).state == "CLOSED"
+
+
+def test_parallel_contribution_waits_behind_a_running_gate_row(
+    tmp_path, monkeypatch
+) -> None:
+    """Off-loop gating keeps Integration serial (#901, ADR-0009/0020).
+
+    While #42's gate row runs, the rest of the Run keeps working: #43's whole
+    Lane arc completes and its contribution is admitted. It still must not be
+    staged, gated or published until #42's Integration has let go.
+    """
+    fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    cfg = dataclass_replace(cfg, max_iterations=0)
+
+    timeline: list[tuple[str, str]] = []
+    real_add_worktree = fake_git.add_worktree
+    real_remove_worktree = fake_git.remove_worktree
+    gate = _HeldGateRunner(hold_issue=42, cap=5.0)
+
+    def _kind(path: Path) -> str:
+        return "stage" if "integrate" in Path(path).parts else "lane"
+
+    def tracked_add_worktree(path: Path, *, branch: str, base: str):
+        timeline.append((f"{_kind(path)}-add", Path(path).name))
+        return real_add_worktree(path, branch=branch, base=base)
+
+    def tracked_remove_worktree(path: Path, *, force: bool = False) -> None:
+        real_remove_worktree(path, force=force)
+        timeline.append((f"{_kind(path)}-remove", Path(path).name))
+        if _kind(path) == "lane" and Path(path).name == "issue-43":
+            gate.release.set()
+
+    monkeypatch.setattr(fake_git, "add_worktree", tracked_add_worktree)
+    monkeypatch.setattr(fake_git, "remove_worktree", tracked_remove_worktree)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+
+    hold_43 = asyncio.Event()
+
+    class _Client(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            if not str(kwargs.get("working_directory") or "").endswith("/issue-43"):
+                return session
+            real_send_and_wait = session.send_and_wait
+
+            async def held_send_and_wait(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                await hold_43.wait()
+                return await real_send_and_wait(prompt, timeout=timeout, **extra)
+
+            session.send_and_wait = held_send_and_wait  # type: ignore[method-assign]
+            return session
+
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _Client(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        while gate.started_at is None:
+            await asyncio.sleep(0.01)
+        # #43 finishes only once #42's row is already running.
+        hold_43.set()
+        return await asyncio.wait_for(run_task, timeout=30)
+
+    exit_code = asyncio.run(asyncio.wait_for(scenario(), timeout=40))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    stages = [entry for entry in timeline if entry[0].startswith("stage-")]
+    assert stages == [
+        ("stage-add", "issue-42"),
+        ("stage-remove", "issue-42"),
+        ("stage-add", "issue-43"),
+        ("stage-remove", "issue-43"),
+    ], f"Integration stages overlapped: {timeline}"
+    # Non-vacuity: #43's Lane finished while #42's row was still running.
+    assert timeline.index(("lane-remove", "issue-43")) < timeline.index(
+        ("stage-remove", "issue-42")
+    ), f"#43 was not contending for Integration: {timeline}"
+    assert gate.returned_at is not None and gate.started_at is not None
+    assert gate.returned_at - gate.started_at < 4.0, "the gate row ran to its cap"
+
+    published = [
+        event["issue"]
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.integration.published"
+    ]
+    assert published == [42, 43]
     assert fake_gh.issue_view(42).state == "CLOSED"
     assert fake_gh.issue_view(43).state == "CLOSED"
 

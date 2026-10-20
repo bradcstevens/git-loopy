@@ -35,6 +35,8 @@ Public surface:
 * :class:`AgentsMdGateRunner` — the production adapter: read ``<worktree>/AGENTS.md``,
   parse its ``## Feedback loops`` table, and run the runnable commands *in that
   worktree*, **fail-fast** on the first non-zero exit and **bounded** per loop.
+* :func:`run_gate_off_loop` — how a Run awaits a gate: on a worker thread, so a
+  long row never freezes the event loop, with a Stop still reaping the row (#901).
 * :func:`resolve_gate_timeout_seconds` — the per-loop bound's Config resolution.
 * :func:`parse_feedback_loops` — the pure table parser, separately tested.
 
@@ -68,12 +70,15 @@ Design notes:
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 import math
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -94,6 +99,7 @@ __all__ = [
     "GATE_TIMEOUT_ENV_VAR",
     "parse_feedback_loops",
     "resolve_gate_timeout_seconds",
+    "run_gate_off_loop",
     "main",
 ]
 
@@ -107,6 +113,9 @@ GATE_TIMEOUT_ENV_VAR: Final[str] = "GIT_LOOPY_GATE_TIMEOUT_SECONDS"
 #: output. The kill has already gone to the whole process group, so this only
 #: bounds a pathological unreapable grandchild.
 _DRAIN_GRACE_SECONDS: Final[float] = 5.0
+
+#: How often a row run by :func:`run_gate_off_loop` checks for cancellation.
+_CANCEL_POLL_SECONDS: Final[float] = 0.1
 
 # The `## Feedback loops` heading (any heading level, case-insensitive).
 _SECTION_RE: Final[re.Pattern[str]] = re.compile(
@@ -390,8 +399,24 @@ def _kill_and_release(process: subprocess.Popen[str]) -> str:
     return kill_and_release(process, grace_seconds=_DRAIN_GRACE_SECONDS)
 
 
-def _run_bounded(command: str, *, cwd: Path, timeout_seconds: float) -> _Completed:
-    """Run one loop command with ``cwd`` set to ``cwd``, bounded by wall clock."""
+class _GateCancelled(Exception):
+    """The awaiting Integration was cancelled; the row's tree is already reaped."""
+
+
+def _run_bounded(
+    command: str,
+    *,
+    cwd: Path,
+    timeout_seconds: float,
+    cancel: threading.Event | None = None,
+) -> _Completed:
+    """Run one loop command with ``cwd`` set to ``cwd``, bounded by wall clock.
+
+    With ``cancel``, the wait is sliced so a set event kills the loop's whole
+    process group and raises :exc:`_GateCancelled` within one slice.
+    """
+    if cancel is not None and cancel.is_set():
+        raise _GateCancelled(command)
     process = subprocess.Popen(
         command,
         shell=True,
@@ -404,7 +429,7 @@ def _run_bounded(command: str, *, cwd: Path, timeout_seconds: float) -> _Complet
         start_new_session=os.name == "posix",
     )
     try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        stdout, stderr = _communicate_bounded(process, timeout_seconds, cancel)
     except subprocess.TimeoutExpired:
         return _Completed(
             returncode=None,
@@ -423,6 +448,33 @@ def _run_bounded(command: str, *, cwd: Path, timeout_seconds: float) -> _Complet
         output=(stdout or "") + (stderr or ""),
         timed_out=False,
     )
+
+
+def _communicate_bounded(
+    process: subprocess.Popen[str],
+    timeout_seconds: float,
+    cancel: threading.Event | None,
+) -> tuple[str, str]:
+    """``communicate`` within ``timeout_seconds``, polling ``cancel`` if given.
+
+    ``communicate`` may be re-entered after :exc:`subprocess.TimeoutExpired`
+    without losing output, so slicing the wait changes nothing but how soon a
+    cancellation is noticed.
+    """
+    if cancel is None:
+        return process.communicate(timeout=timeout_seconds)
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout_seconds)
+        try:
+            return process.communicate(
+                timeout=min(remaining, _CANCEL_POLL_SECONDS)
+            )
+        except subprocess.TimeoutExpired:
+            if cancel.is_set():
+                raise _GateCancelled(process.args) from None
 
 
 class AgentsMdGateRunner:
@@ -461,12 +513,17 @@ class AgentsMdGateRunner:
         """The per-loop wall-clock bound, in seconds. Always positive."""
         return self._timeout_seconds
 
-    def run(self, worktree: Path) -> GateResult:
+    def run(
+        self, worktree: Path, *, cancel: threading.Event | None = None
+    ) -> GateResult:
         """Run the worktree's feedback loops and report pass/fail.
 
         Args:
             worktree: The directory to gate — during Integration this is the base
                 worktree with the Lane's branch merged in.
+            cancel: Set by :func:`run_gate_off_loop` when the awaiting
+                Integration is cancelled; the running loop's process group is
+                killed and the run abandoned without a result.
 
         Returns:
             A green :class:`GateResult` when every runnable loop exits zero, or a red
@@ -501,6 +558,7 @@ class AgentsMdGateRunner:
                     loop.command,
                     cwd=worktree,
                     timeout_seconds=self._timeout_seconds,
+                    cancel=cancel,
                 )
                 outcome = (
                     "timed out" if completed.timed_out
@@ -541,6 +599,40 @@ class AgentsMdGateRunner:
                     ),
                 )
         return GateResult.green(ran)
+
+
+async def run_gate_off_loop(runner: GateRunner, worktree: Path) -> GateResult:
+    """Await ``runner.run(worktree)`` on a worker thread, never the event loop (#901).
+
+    A gate row may legitimately run for its whole bound, and the Run's Lane
+    send timeouts, Events and Dashboard all live on the event loop, so the row
+    must not occupy it. The result, a :exc:`GateError` included, is exactly
+    what ``runner.run`` returns or raises.
+
+    Cancelling the awaiting task (a Stop) signals an
+    :class:`AgentsMdGateRunner` to kill the running loop's process group, and
+    waits for that reaping before the cancellation propagates, so a row never
+    outlives the private Integration stage it is writing into.
+    """
+    cancel = threading.Event()
+    if isinstance(runner, AgentsMdGateRunner):
+        call = functools.partial(runner.run, worktree, cancel=cancel)
+    else:
+        call = functools.partial(runner.run, worktree)
+    worker = asyncio.get_running_loop().run_in_executor(None, call)
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        cancel.set()
+        while not worker.done():
+            try:
+                await asyncio.wait({worker})
+            except asyncio.CancelledError:
+                # A second Stop gesture: the reaping is bounded, so finish it.
+                continue
+        if not worker.cancelled():
+            worker.exception()
+        raise
 
 
 def main() -> int:

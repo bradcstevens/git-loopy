@@ -17,6 +17,7 @@ Two layers are exercised here:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shlex
 import signal
@@ -40,6 +41,7 @@ from git_loopy.gate import (
     LoopFailure,
     parse_feedback_loops,
     resolve_gate_timeout_seconds,
+    run_gate_off_loop,
 )
 
 requires_posix = pytest.mark.skipif(
@@ -407,6 +409,127 @@ def test_an_interrupted_gate_does_not_orphan_the_loop_it_was_waiting_on(
     assert process.returncode == -signal.SIGKILL, "the loop outlived the interrupt"
     assert process.stdout is not None and process.stdout.closed
     assert process.stderr is not None and process.stderr.closed
+
+
+# --------------------------------------------------------------------------- #
+# run_gate_off_loop — the gate a Run awaits without freezing (#901)            #
+# --------------------------------------------------------------------------- #
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+@requires_posix
+def test_the_event_loop_keeps_running_while_a_gate_row_runs(tmp_path: Path) -> None:
+    """A gate row occupies a worker, never the Run's event loop (#901)."""
+    _write_agents(tmp_path, [("Slow", "sleep 1")])
+    runner = AgentsMdGateRunner(timeout_seconds=10)
+
+    async def scenario() -> tuple[GateResult, int]:
+        ticks = 0
+
+        async def tick() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.05)
+                ticks += 1
+
+        ticker = asyncio.create_task(tick())
+        try:
+            result = await run_gate_off_loop(runner, tmp_path)
+        finally:
+            ticker.cancel()
+        return result, ticks
+
+    result, ticks = asyncio.run(scenario())
+
+    assert result.passed
+    # A frozen loop would tick at most once, after the gate returned.
+    assert ticks >= 5, f"the event loop stalled behind the gate ({ticks} ticks)"
+
+
+@requires_posix
+def test_an_off_loop_gate_timeout_is_reported_exactly_as_before(tmp_path: Path) -> None:
+    """Moving the row off the loop changes no gate result, timeouts included."""
+    _write_agents(tmp_path, [("Hang", "sleep 30 & wait")])
+    runner = AgentsMdGateRunner(timeout_seconds=0.5)
+
+    started = time.monotonic()
+    off_loop = asyncio.run(run_gate_off_loop(runner, tmp_path))
+    elapsed = time.monotonic() - started
+    direct = runner.run(tmp_path)
+
+    assert elapsed < 4
+    assert off_loop.passed is False and off_loop.ran == direct.ran == ("Hang",)
+    assert off_loop.failure is not None and direct.failure is not None
+    assert off_loop.failure.timed_out is True
+    assert off_loop.failure.timeout_seconds == 0.5
+    assert off_loop.failure.summary == direct.failure.summary
+
+
+@requires_posix
+def test_cancelling_an_off_loop_gate_reaps_its_whole_process_group(
+    tmp_path: Path,
+) -> None:
+    """A Stop that cancels Integration kills the row's tree before it propagates.
+
+    The worker thread a row runs on cannot be interrupted by the cancellation
+    itself, so without an explicit signal the row would run on — for up to its
+    hour-long bound — writing into a private Integration stage the Runner is
+    about to reap, and holding the Run's executor open at shutdown.
+    """
+    from git_loopy.persist import create_writers
+
+    writers = create_writers(tmp_path, mirror_diagnostics_to_stderr=False)
+    pid_file = tmp_path / "grandchild.pid"
+    _write_agents(
+        tmp_path, [("Hang", f"sleep 30 & echo $! > {shlex.quote(str(pid_file))}; wait")]
+    )
+    ticks = iter([0.0, 31.0])
+    runner = AgentsMdGateRunner(
+        timeout_seconds=60, diagnostics=writers.diagnostics,
+        clock=lambda: next(ticks),
+    )
+
+    async def scenario() -> float:
+        task = asyncio.create_task(run_gate_off_loop(runner, tmp_path))
+        deadline = time.monotonic() + 5
+        while not pid_file.exists() or not pid_file.read_text().strip():
+            assert time.monotonic() < deadline, "the gate row never started"
+            await asyncio.sleep(0.02)
+        cancelled_at = time.monotonic()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return time.monotonic() - cancelled_at
+
+    took = asyncio.run(scenario())
+    grandchild = int(pid_file.read_text().strip())
+
+    assert took < 4, f"cancellation waited {took:.1f}s on the row"
+    deadline = time.monotonic() + 2
+    while _pid_alive(grandchild) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not _pid_alive(grandchild), "the row's process group outlived the Stop"
+
+    text = writers.diagnostics_path.read_text(encoding="utf-8")
+    assert "Gate row 'Hang': interrupted; duration=31.000s; bound=60s" in text
+    warnings = [line for line in text.splitlines() if "WARNING" in line]
+    assert len(warnings) == 1
+    assert "Gate row 'Hang' exceeded half its bound" in warnings[0]
+
+
+def test_an_off_loop_gate_still_reports_a_gate_that_cannot_run(tmp_path: Path) -> None:
+    """``GateError`` crosses the thread boundary unchanged."""
+    with pytest.raises(GateError):
+        asyncio.run(run_gate_off_loop(AgentsMdGateRunner(), tmp_path))
 
 
 def test_gate_timeout_resolves_from_the_environment() -> None:
