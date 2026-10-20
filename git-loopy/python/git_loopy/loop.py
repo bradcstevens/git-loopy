@@ -8198,9 +8198,9 @@ class _ParallelLoop:
         The first **green**
         attempt publishes that verified stage onto base
         (:meth:`_publish_stage`), closes the issue, deletes the (now-landed)
-        Lane branch, and returns ``True``. If base advances but upstream
-        durability fails, return ``False`` immediately: the work is already
-        on base and must not buy another Recovery session or Release advance.
+        Lane branch, and returns ``True``. A publication refusal returns
+        ``False`` immediately, whether or not base advanced: publication has its
+        own failure handling and a green gate must not buy a Recovery Agent.
         If all K attempts stay red or time out the
         contribution falls back to a serial Iteration
         (:meth:`_fallback_lane_to_serial`) and returns ``False``, keeping its
@@ -8247,10 +8247,9 @@ class _ParallelLoop:
                 break
             if not gate_result.passed:
                 continue
-            pre_publications = self._base_publications
-            published = self._publish_stage(contribution, lane_work, stage)
-            if published or self._base_publications > pre_publications:
-                return published
+            # Leave gate Recovery on green, just as the initial gate does.
+            # Publication failure is not a red gate, even before base advances.
+            return self._publish_stage(contribution, lane_work, stage)
         failure = gate_result.failure if gate_result is not None else None
         if failure is not None and failure.timed_out:
             scope = self._contribution_iter.get(contribution.contribution_id)

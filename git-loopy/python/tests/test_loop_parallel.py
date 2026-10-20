@@ -5710,6 +5710,48 @@ def test_parallel_gate_timeout_then_pass_needs_no_recovery_agent(
     assert gh.issue_view(42).state == "CLOSED"
 
 
+@pytest.mark.parametrize("first_result", ["timeout", "red"])
+def test_parallel_green_rerun_publication_refusal_does_not_start_recovery(
+    tmp_path, monkeypatch, first_result
+) -> None:
+    """A publication refusal is not evidence that a passing gate needs repair."""
+    git, gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+
+    def unreadable_history(_pre, _head):
+        raise git_module.GitError(["git", "log"], 1, "unreadable publication history")
+
+    class PublicationHistoryFailureGate(FakeGateRunner):
+        def run(self, worktree):
+            result = super().run(worktree)
+            if worktree.name == "issue-42" and result.passed:
+                stage_git = git.worktree_client(worktree)
+                assert stage_git is not None
+                monkeypatch.setattr(stage_git, "commits_between", unreadable_history)
+            return result
+
+    gate = PublicationHistoryFailureGate(
+        by_issue={42: [_gate_timeout() if first_result == "timeout" else False, True]}
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    events = [
+        e for e in _logged_events(tmp_path) if e.get("issue") == 42
+    ]
+    ending = next(e for e in events if e["type"] == "wrapper.contribution.end")
+    assert ending["published"] is False
+    assert ending["reason"] == "serial_fallback"
+    assert "gate_timeout" not in ending
+    expected_agents = 0 if first_result == "timeout" else 1
+    assert ending["summary"]["recovery_attempts"] == expected_agents
+    assert len([
+        e for e in events if e["type"] == "wrapper.integration.recovery_started"
+    ]) == expected_agents
+    assert len([path for path in gate.calls if path.name == "issue-42"]) == 2
+    assert gh.issue_view(42).state == "OPEN"
+    assert "integration #42: publication history read failed" in _diag_log(tmp_path)
+
+
 def _gate_timeout():
     return loop_module.gate_module.GateResult.red(
         ("Python suite",),
