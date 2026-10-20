@@ -676,10 +676,7 @@ def _build_diagnostics_logger(
         old.close()
         logger.removeHandler(old)
 
-    fmt = logging.Formatter(
-        fmt="%(asctime)s.%(msecs)03dZ %(levelname)s %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
+    fmt = _RunLogFormatter(fmt="%(asctime)s %(levelname)s %(message)s")
 
     if mirror_to_stderr:
         stream_handler = logging.StreamHandler(sys.stderr)
@@ -692,4 +689,50 @@ def _build_diagnostics_logger(
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 
+    _install_run_log_bridge(logger)
+
     return logger
+
+
+class _RunLogFormatter(logging.Formatter):
+    """Stamp each Run log line with local time and its real UTC offset.
+
+    The Run log is human-facing, so it shows the viewer's local clock
+    (ADR-0058). The offset is resolved at each record's own instant, so a
+    daylight-saving transition mid-Run is stamped correctly. Machine records
+    (Events, Run summaries) keep UTC with ``Z``.
+    """
+
+    def formatTime(  # noqa: N802 - logging.Formatter API
+        self, record: logging.LogRecord, datefmt: str | None = None
+    ) -> str:
+        local = datetime.fromtimestamp(record.created, tz=timezone.utc).astimezone()
+        return local.isoformat(timespec="milliseconds")
+
+
+class _RunLogBridge(logging.Handler):
+    """Forward Runner-module warnings into the current Run log.
+
+    Modules such as ``lease_heartbeat`` and ``issue_lease`` log through
+    ``logging.getLogger(__name__)``. Without this bridge those records fall
+    through to :data:`logging.lastResort` and reach the Run log (via a
+    detached child's stderr) as bare, unstamped lines, or miss it entirely.
+    """
+
+    def __init__(self, target: logging.Logger) -> None:
+        super().__init__(level=logging.WARNING)
+        self.target = target
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.target.handle(record)
+
+
+_RUN_LOG_BRIDGE_PARENT = "git_loopy"
+
+
+def _install_run_log_bridge(target: logging.Logger) -> None:
+    """Point the single process-wide Runner-module bridge at ``target``."""
+    parent = logging.getLogger(_RUN_LOG_BRIDGE_PARENT)
+    for old in [h for h in parent.handlers if isinstance(h, _RunLogBridge)]:
+        parent.removeHandler(old)
+    parent.addHandler(_RunLogBridge(target))
