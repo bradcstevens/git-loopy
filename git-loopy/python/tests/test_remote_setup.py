@@ -213,3 +213,13 @@ def test_malformed_config_refuses_without_echoing_source(tmp_path):
 def test_incomplete_saved_target_has_setup_remediation(table):
     with pytest.raises(RemoteSetupError, match="remote setup"):
         AzureTarget.from_config(table)
+
+
+def test_revalidating_target_preserves_remote_image_registry(tmp_path):
+    path = settings.project_config_path(tmp_path)
+    settings.write_config(path, {"remote": {"registry": "existingregistry"}})
+    (tmp_path / ".devcontainer").mkdir()
+    assert run_setup(
+        TARGET, repo_root=tmp_path, provider=FakeSandboxProvider(), out=lambda _: None,
+    ) == 0
+    assert settings.load_config_table(path)["remote"]["registry"] == "existingregistry"

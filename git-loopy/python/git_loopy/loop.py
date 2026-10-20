@@ -4303,6 +4303,7 @@ class _Loop:
                 repository_visibility=_repository_visibility(self._source),
                 inside_ci=_publishing_from_ci(os.environ),
                 host_yield=host_yield_disclosure(self._config.host_yield),
+                remote_residence=self._sandbox_state == "remote",
             ),
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
@@ -5048,6 +5049,7 @@ class _ParallelLoop:
                 repository_visibility=_repository_visibility(self._source),
                 inside_ci=_publishing_from_ci(os.environ),
                 host_yield=host_yield_disclosure(self._config.host_yield),
+                remote_residence=self._serial._sandbox_state == "remote",
             )
         )
         self._serial._emit(

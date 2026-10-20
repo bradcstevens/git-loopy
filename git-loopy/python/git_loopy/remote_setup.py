@@ -92,7 +92,10 @@ def run_setup(
         table = settings.load_config_table(path)
         provider.validate_target(target)
         _offer_devcontainer(repo_root, ask=ask, out=out)
-        table["remote"] = asdict(target)
+        previous = table.get("remote")
+        table["remote"] = {
+            **(previous if isinstance(previous, dict) else {}), **asdict(target),
+        }
         settings.write_config_atomic(path, table, normalize_enabled_skills=False)
     except RemoteSetupError as exc:
         err(f"git-loopy: error: {exc}")

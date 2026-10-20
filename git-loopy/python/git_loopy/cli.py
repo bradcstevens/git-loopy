@@ -131,6 +131,7 @@ from git_loopy.skill_policy import (
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps dispatch import-light
     from git_loopy.run_residence import RunLaunch
+    from git_loopy.run_sandbox import RunResidenceName
     from git_loopy.installation import InstalledAsset
     from git_loopy.labels import LabelBootstrapClient
     from git_loopy.rate_card import RateCard
@@ -216,7 +217,7 @@ _COMMAND_SPECS = (
     _CommandSpec(
         "remote",
         "Run control",
-        "remote setup records and validates an Azure Run residence target.",
+        "remote launches a detached Azure Run; remote setup records its target.",
     ),
     _CommandSpec(
         "runs",
@@ -828,7 +829,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
 
     remote = _add_command(
         sub, "remote",
-        description="Configure Azure Run residence. Remote Run launch is not yet available.",
+        description="Launch with `git-loopy remote [Run arguments]`, or configure its Azure target.",
     )
     remote_sub = remote.add_subparsers(dest="remote_action", required=True)
     remote_setup = remote_sub.add_parser(
@@ -3453,6 +3454,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"git-loopy: error: {removed_env_error}", file=sys.stderr)
             return 1
 
+    if argv and argv[0] == "remote" and argv[1:2] != ["setup"]:
+        from git_loopy.remote_launch import run_remote_command
+
+        return run_remote_command(argv[1:])
+
     # Pre-dispatch on the first token: a reserved subcommand
     # routes to its own parser, so the bare run's optional positional
     # <max-iterations> can coexist with subcommands (argparse cannot host both
@@ -3805,6 +3811,7 @@ async def _drive_line_printer(
     mirror_diagnostics_to_stderr: bool = True,
     host_capabilities: object | None = None,
     routing_preflight: object | None = None,
+    residence: "RunResidenceName" = "local",
 ) -> int:
     """Resolve the **Rate card**, then drive the line-printer loop (#331).
 
@@ -3834,6 +3841,7 @@ async def _drive_line_printer(
         mirror_diagnostics_to_stderr=mirror_diagnostics_to_stderr,
         host_capabilities=host_capabilities,
         routing_preflight=routing_preflight,
+        residence=residence,
     )
 
 

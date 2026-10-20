@@ -1219,6 +1219,36 @@ Run residence, and leaves plain Runs local. A saved target is not proof that a
 remote Run can start. See [Azure target setup](../../docs/run-residence.md#azure-target-setup-869)
 for the exact egress-policy rules and provider boundary.
 
+## Starting a remote Run (`git-loopy remote`)
+
+```bash
+git-loopy remote 10 --execution-host local
+```
+
+Accepts the plain Run's arguments and starts the whole Orchestrator detached in
+an Azure Container Apps Sandbox microVM. Publish the local default branch and
+the target's `.devcontainer` to origin first. A `github-actions` Lane host is
+refused; Agents and Integration may still use CI.
+
+After `remote setup`, add `registry = "yourregistry"` to the project's
+`[remote]` table, naming an existing ACR you can push to. The launcher also needs
+Docker, the Dev Container CLI, and its existing Azure CLI login. It creates no
+registry or role assignments. The devcontainer supplies the repository's
+toolchain and `gh`; git-loopy at the launching installation's version and Linux
+Sandbox prerequisites are layered on.
+
+The VM starts with auto-suspend disabled, credentials remain in the egress proxy,
+and the forwarded Copilot Sandbox policy is **always enforced**, even when its
+`enabled` preference is false. Compute is **metered to the Azure subscription**,
+with no estimate. Closing the launching client does not stop the Run.
+
+Automatic remote teardown and remote client commands remain separate delivery
+work (#871/#872). Until they land, use Azure's execution API to inspect
+`/var/lib/git-loopy/orchestrator.log`, preserve salvage, and reclaim the VM and
+disk after the Run. See the [remote launch reference](../../docs/run-residence.md#detached-azure-launch-870)
+for image prerequisites, corporate package feeds, credential handling and
+unconfirmed-launch recovery.
+
 ---
 
 ## Listing this clone's Runs (`git-loopy runs`)

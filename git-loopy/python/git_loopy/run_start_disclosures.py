@@ -35,11 +35,18 @@ def run_start_disclosures(
     repository_visibility: str | None,
     inside_ci: bool,
     host_yield: HostYieldState,
+    remote_residence: bool = False,
 ) -> dict[str, dict[str, str | bool | None]]:
     """Project the Run-start facts about host billing, host yield and identity."""
     metering_state, metering_message = _host_metering(
         host_placement, repository_visibility
     )
+    if remote_residence:
+        metering_state = "metered"
+        metering_message = (
+            "Remote Run compute is metered to the Azure subscription. "
+            "Read the provider's charges in Azure billing."
+        )
     disclosures: dict[str, dict[str, str | bool | None]] = {
         "host_metering": {
             "state": metering_state,
