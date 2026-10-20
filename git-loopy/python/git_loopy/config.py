@@ -862,6 +862,8 @@ class RunConfig:
     otel_enabled: bool = False
     execution_host: str = "local"
     host_yield: str = field(default_factory=default_host_yield)
+    #: Local macOS Runs hold a process-owned idle-system-sleep assertion.
+    prevent_idle_sleep: bool = True
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     context_tier: str = DEFAULT_CONTEXT_TIER

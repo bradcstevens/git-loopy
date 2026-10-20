@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -91,6 +94,61 @@ def test_a_run_reclaims_the_residue_of_a_run_whose_lock_is_free(empty_pool_run) 
     assert drive() == 0
 
     assert git.worktree_removes == [lane_path]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="native macOS Run boundary proof")
+@pytest.mark.parametrize("crash", [False, True])
+def test_run_holds_idle_sleep_assertion_through_startup_and_releases_on_exit(
+    empty_pool_run, monkeypatch: pytest.MonkeyPatch, crash: bool,
+) -> None:
+    git, drive = empty_pool_run()
+    observed: list[str] = []
+
+    def make_client():
+        report = subprocess.check_output(["pmset", "-g", "assertions"], text=True)
+        owned = [
+            line for line in report.splitlines()
+            if f"pid {os.getpid()}(" in line and "git-loopy Run" in line
+        ]
+        assert len(owned) == 1, report
+        observed.extend(owned)
+        if crash:
+            raise RuntimeError("startup crash")
+        return FakeCopilotClient(scripted_events=[])
+
+    monkeypatch.setattr(loop_module, "_make_client", make_client)
+    assert drive() == (1 if crash else 0)
+    assert observed
+    report = subprocess.check_output(["pmset", "-g", "assertions"], text=True)
+    assert not any(
+        f"pid {os.getpid()}(" in line and "git-loopy Run" in line
+        for line in report.splitlines()
+    ), report
+    diagnostics = "\n".join(
+        path.read_text() for path in (git.root / ".git-loopy" / "logs").glob("*.log")
+    )
+    assert "idle-sleep assertion: held" in diagnostics
+    assert "idle-sleep assertion: released" in diagnostics
+
+
+def test_run_refuses_when_requested_idle_sleep_assertion_cannot_be_held(
+    empty_pool_run, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from git_loopy import host_sleep
+
+    git, drive = empty_pool_run()
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    def unavailable():
+        raise OSError("assertion refused")
+
+    monkeypatch.setattr(host_sleep, "_acquire_assertion", unavailable)
+    assert drive() == 1
+    diagnostics = "\n".join(
+        path.read_text() for path in (git.root / ".git-loopy" / "logs").glob("*.log")
+    )
+    assert "idle-sleep assertion: not held" in diagnostics
+    assert "GIT_LOOPY_PREVENT_IDLE_SLEEP=off" in diagnostics
 
 
 def test_a_run_sweeps_against_the_branch_it_publishes_to(empty_pool_run) -> None:

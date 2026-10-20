@@ -1468,6 +1468,7 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 | `GIT_LOOPY_CREDIT_BUDGET_USD_PER_HOUR` | unset (contraction unavailable) | The authoritative AI-credit ceiling adaptation judges this Run's burn against. Without it, credit pressure is unknown rather than estimated. Credit never gates capacity or expansion; it only contracts the effective Lane limit under sustained burn. A malformed or non-positive value reads as unset rather than aborting the Run. |
 | `GIT_LOOPY_HOST_LOAD_BUDGET`       | `1.0`                           | The tolerated run-queue depth **per CPU**, so `1.0` means "keep every core busy but do not queue". Host/setup pressure is reported as the ratio of the observed one-minute load average per CPU to this budget. Host-load observability starts and ceilings the controller at the bound Execution host's declared capacity; a platform without a load average remains at the static-safe limit. Same malformed-reads-as-default rule. |
 | `GIT_LOOPY_HOST_YIELD` | `utility` on macOS; `none` elsewhere | **Host yield policy** for local Run work, including the Copilot runtime, tool descendants and Integration feedback loops. The Dashboard client is not clamped. `none` opts out; environment overrides project Config, then global Config. Unknown values refuse; non-macOS scheduling is unchanged. See [operator guidance](../../docs/customization.md#host-yield-policy-on-macos). |
+| `GIT_LOOPY_PREVENT_IDLE_SLEEP` | `true` | Local macOS Runs hold a process-owned idle-system-sleep assertion until exit, including crash cleanup. Display sleep and screen lock are unchanged; remote Runs/Execution hosts and other platforms are unaffected. `false`/`off`/`no`/`0` opt out. Environment overrides project Config, then global Config; invalid values refuse. The diagnostics log records the assertion state and explains Lease TTLs elapsed after a forced suspension. See [operator guidance](../../docs/customization.md#idle-system-sleep). |
 | `GIT_LOOPY_ENABLED_SKILLS`            | unset                          | **Exact replacement** of the configured base **Skill policy** (ADR-0015) for one Run — comma-separated canonical Skill names. *Presence*, not content, is what counts: an explicitly empty value is a real empty policy (which then fails preflight for omitting the **Required Skills**), while leaving it unset keeps the project / global `enabled_skills`. Because it replaces the base policy it also suppresses the one-time legacy-Config migration offer. See [`docs/skill-policy.md`](../../docs/skill-policy.md). |
 | `GIT_LOOPY_DENY_TOOLS`                | _(empty)_                      | Comma-separated tool denylist. **Unioned** with `--deny-tool` CLI flags — CLI does NOT override env (security-positive divergence).                                                                              |
 | `GIT_LOOPY_DENY_SKILLS`               | _(empty)_                      | **Deprecated** final guard (contract §17.2): comma-separated skill denylist for the `skill` meta-tool's `arguments.skill` field. **Unioned** with `--deny-skill` CLI flags and across config tiers — it only ever subtracts, and a denial that would remove a Required Skill is a validation failure rather than a quiet subtraction. Prefer omitting the name from `enabled_skills`. |
@@ -1556,7 +1557,7 @@ The **persisted** knobs are `model`, `reasoning_effort`, `context_tier`, `route_
 `classifier_model`,
 `classifier_effort`, `issue_source`,
 `include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`,
-`host_yield`, `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
+`host_yield`, `prevent_idle_sleep`, `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
 model/effort **capability gate** (below) still applies to a config-supplied
 model. The two denylists are
 **unioned** across all four sources (CLI ∪ env ∪ project ∪ global) — never
@@ -1676,7 +1677,7 @@ The settable keys are exactly the [persisted knobs](#persistent-config-configtom
 above (`model`, `reasoning_effort`, `context_tier`, `route_policy`,
 `classifier_model`, `classifier_effort`,
 `issue_source`, `max_nmt_strikes`, `demotion_threshold`,
-`include_prs`, `otel_enabled`, `host_yield`, `send_timeout_seconds`,
+`include_prs`, `otel_enabled`, `host_yield`, `prevent_idle_sleep`, `send_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
 

@@ -83,6 +83,7 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
         "include_prs",
         "otel_enabled",
         "host_yield",
+        "prevent_idle_sleep",
         "send_timeout_seconds",
         "deny_tools",
         "deny_skills",

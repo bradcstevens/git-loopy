@@ -349,6 +349,7 @@ _KEYS: dict[str, _Key] = {
         _Key("include_prs", _coerce_bool, lambda rc: rc.run.include_prs),
         _Key("otel_enabled", _coerce_bool, lambda rc: rc.run.otel_enabled),
         _Key("host_yield", _coerce_host_yield, lambda rc: rc.run.host_yield),
+        _Key("prevent_idle_sleep", _coerce_bool, lambda rc: rc.run.prevent_idle_sleep),
         _Key(
             "send_timeout_seconds",
             _coerce_timeout,

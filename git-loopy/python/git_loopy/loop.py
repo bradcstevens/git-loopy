@@ -269,6 +269,7 @@ from git_loopy.rolling_pool import RollingPool, is_parallel_safe
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.run_readback import run_start_payload
 from git_loopy.host_yield import host_yield_disclosure
+from git_loopy.host_sleep import IdleSleepAssertion, SuspensionClock
 from git_loopy.run_start_disclosures import run_start_disclosures
 from git_loopy.issue_pin import (
     PIN_READ_BOUND,
@@ -601,6 +602,7 @@ def _make_lease_lifecycle(
     *,
     run_id: str,
     diag: logging.Logger,
+    residence: RunResidenceName = "local",
 ) -> LeaseLifecycle | None:
     """Construct this Run's **Lease** lifecycle, or ``None`` when it holds none.
 
@@ -622,11 +624,19 @@ def _make_lease_lifecycle(
     """
     if config.issue_source != "github":
         return None
+    try:
+        suspension_clock = SuspensionClock.for_local_macos(
+            local=residence == "local" and config.execution_host == "local",
+        )
+    except OSError as exc:
+        diag.warning("Run suspension diagnostics unavailable: %s", exc)
+        suspension_clock = None
     return build_lease_lifecycle(
         git,
         run_id=run_id,
         env=os.environ,
         warn=lambda message: diag.warning("%s", message),
+        suspension_clock=suspension_clock,
     )
 
 
@@ -8411,6 +8421,37 @@ async def run(
     routing_preflight: RunRoutingPreflight | None = None,
     residence: RunResidenceName = "local",
 ) -> int:
+    """Drive one Run, releasing its process-owned idle-sleep assertion on exit."""
+    assertion = IdleSleepAssertion(
+        enabled=config.prevent_idle_sleep,
+        local=residence == "local" and config.execution_host == "local",
+    )
+    try:
+        return await _run_with_sleep_assertion(
+            config, assertion=assertion, driver=driver, rate_card=rate_card,
+            staircase=staircase, run_id=run_id, started_at=started_at,
+            mirror_diagnostics_to_stderr=mirror_diagnostics_to_stderr,
+            host_capabilities=host_capabilities, routing_preflight=routing_preflight,
+            residence=residence,
+        )
+    finally:
+        assertion.close()
+
+
+async def _run_with_sleep_assertion(
+    config: RunConfig,
+    *,
+    assertion: IdleSleepAssertion,
+    driver: InteractiveDriver | None = None,
+    rate_card: RateCard | None = None,
+    staircase: "PriceStaircase | None" = None,
+    run_id: str | None = None,
+    started_at: datetime | None = None,
+    mirror_diagnostics_to_stderr: bool = True,
+    host_capabilities: HostCapabilityReport | None = None,
+    routing_preflight: RunRoutingPreflight | None = None,
+    residence: RunResidenceName = "local",
+) -> int:
     """Drive one ``git-loopy`` invocation to completion.
 
     Constructs the long-lived per-run state (writers, summary, renderer,
@@ -8555,6 +8596,15 @@ async def run(
         )
         return 1
     diag = writers.diagnostics
+    try:
+        assertion.start(diag)
+    except OSError as exc:
+        diag.error(
+            "Run refused: cannot prevent idle system sleep: %s; "
+            "set GIT_LOOPY_PREVENT_IDLE_SLEEP=off to opt out", exc,
+        )
+        control.close()
+        return exit_code_for("preflight_failed")
 
     # A free control lock proves its Run cannot still own a Lane workspace.
     # This is intentionally Event-free: reclaiming someone else's residue is
@@ -8967,7 +9017,9 @@ async def run(
     # the serial driver and every Lane consult the same object. `None` — the
     # PRDs backend, or a clone whose `origin` names no repository — restores
     # exactly the pre-ADR-0033 behaviour of one Run, unguarded, everywhere.
-    lease = _make_lease_lifecycle(config, git, run_id=writers.run_id, diag=diag)
+    lease = _make_lease_lifecycle(
+        config, git, run_id=writers.run_id, diag=diag, residence=residence,
+    )
     loop: _ParallelLoop
     try:
         loop = _ParallelLoop(
@@ -9039,6 +9091,10 @@ async def run(
                                 loop, control.path, diag
                             )
                         )
+                        suspension_watcher = (
+                            asyncio.create_task(lease.watch_suspensions())
+                            if lease is not None else None
+                        )
                         try:
                             if driver is None:
                                 exit_code = await loop.drive()
@@ -9049,6 +9105,12 @@ async def run(
                                 exit_code = await driver.run(loop.drive)
                         finally:
                             watcher.cancel()
+                            if suspension_watcher is not None:
+                                suspension_watcher.cancel()
+                                try:
+                                    await suspension_watcher
+                                except asyncio.CancelledError:
+                                    pass
                             try:
                                 await watcher
                             except asyncio.CancelledError:

@@ -2361,6 +2361,26 @@ def _resolve_host_yield(
     return default_host_yield()
 
 
+def _resolve_prevent_idle_sleep(
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> bool:
+    key = "GIT_LOOPY_PREVENT_IDLE_SLEEP"
+    if key in env:
+        value = env[key].strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+        raise settings.SettingsError(f"{key} must be a boolean (true/false)")
+    for scope, table in (("project", project), ("global", global_)):
+        value = settings.table_bool(table, "prevent_idle_sleep", scope=scope)
+        if value is not None:
+            return value
+    return True
+
+
 def _resolve_denylist(
     cli_values: list[str],
     env_var: str,
@@ -3110,7 +3130,8 @@ def resolve_config(
     so it is exhaustively unit-testable. The persisted (config-tiered) knobs are
     ``model``, ``reasoning_effort``, ``max_nmt_strikes``, ``issue_source``,
     ``include_prs``, ``enabled_skills``, ``deny_tools``, ``deny_skills``,
-    ``otel_enabled``, ``host_yield``, ``send_timeout_seconds`` and the
+    ``otel_enabled``, ``host_yield``, ``prevent_idle_sleep``,
+    ``send_timeout_seconds`` and the
     ``[routing]`` table. The
     per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``,
     temporary Skill overlays) are NEVER read from a config
@@ -3233,6 +3254,7 @@ def resolve_config(
         otel_enabled=_otel_enabled(env, project, global_),
         execution_host=execution_host,
         host_yield=_resolve_host_yield(env, project, global_),
+        prevent_idle_sleep=_resolve_prevent_idle_sleep(env, project, global_),
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
         context_tier=context_tier,

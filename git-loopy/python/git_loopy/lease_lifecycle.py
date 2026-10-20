@@ -14,6 +14,7 @@ Run is holding right now, and the rule that losing one is permanent.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import time
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 from typing import Final, Literal, Mapping, Protocol
 
 from .git import GitError
+from .host_sleep import SuspensionClock
 from .issue_lease import (
     DEFAULT_TTL_SECONDS,
     RENEW_INTERVAL_SECONDS,
@@ -31,7 +33,7 @@ from .issue_lease import (
     decide_lease_action,
     is_permanent_lease_write_refusal,
 )
-from .lease_heartbeat import LeaseHeartbeat
+from .lease_heartbeat import HeartbeatSnapshot, LeaseHeartbeat
 from .repository_identity import repository_from_remote_url
 
 TakeVerdict = Literal["taken", "stolen", "refused", "unavailable"]
@@ -100,6 +102,10 @@ class HeartbeatLike(Protocol):
         """Whether renewal has terminally lost the Lease."""
         ...
 
+    def snapshot(self) -> HeartbeatSnapshot:
+        """Observe the latest acknowledged deadline without a remote read."""
+        ...
+
 
 @dataclass(frozen=True)
 class LeaseTake:
@@ -155,6 +161,7 @@ class LeaseLifecycle:
         warn: Callable[[str], None] = lambda _message: None,
         heartbeats: Callable[[LeaseTransport, LeaseHold], HeartbeatLike]
         | None = LeaseHeartbeat,
+        suspension_clock: SuspensionClock | None = None,
     ) -> None:
         self._transport = transport
         self._run_id = run_id
@@ -169,6 +176,41 @@ class LeaseLifecycle:
         self._lost: set[int] = set()
         self._ever_held = False
         self._disabled = False
+        self._suspension_clock = suspension_clock
+        self._suspension_checked_at = self._clock()
+
+    def check_suspension(self) -> None:
+        """Explain elapsed TTLs once, without turning telemetry into a fence."""
+        if self._suspension_clock is None:
+            return
+        suspended = self._suspension_clock.poll()
+        previous = self._suspension_checked_at
+        now = self._clock()
+        self._suspension_checked_at = now
+        if suspended <= self._ttl_seconds:
+            return
+        expired: list[int] = []
+        for issue, hold in self._holds.items():
+            beat = self._beats.get(issue)
+            if beat is not None:
+                hold = beat.snapshot().hold
+            deadline = hold.record.heartbeat_at + hold.record.ttl_seconds
+            # The observer may run late after wake. Subtracting only sleep
+            # from now would move the cutoff past Leases that expired asleep.
+            if previous < deadline <= now:
+                expired.append(issue)
+        refs = ", ".join(f"#{issue}" for issue in sorted(expired)) or "none"
+        self._warn(
+            f"Run suspended for {suspended:.1f}s; Lease TTLs elapsed during suspension "
+            f"({len(expired)}): {refs}. Remote fences still decide ownership; "
+            "no Lease is reclaimed."
+        )
+
+    async def watch_suspensions(self) -> None:
+        """Observe resume even when no Agent output or side effect is pending."""
+        while self._suspension_clock is not None:
+            self.check_suspension()
+            await asyncio.sleep(1)
 
     def held(self) -> tuple[int, ...]:
         """The issues this Run currently holds a Lease on, lowest first."""
@@ -223,6 +265,7 @@ class LeaseLifecycle:
         it, even once the thief frees it again, or the two Runs simply trade
         the issue back and forth and neither finishes it.
         """
+        self.check_suspension()
         if issue in self._lost:
             return LeaseTake("refused")
         try:
@@ -347,6 +390,7 @@ class LeaseLifecycle:
         outcome the Lease exists to prevent, and §3.4 forbids it: the Run stops
         work on that issue and does not reclaim.
         """
+        self.check_suspension()
         if issue in self._lost:
             return False
         hold = self._holds.get(issue)
@@ -410,6 +454,7 @@ class LeaseLifecycle:
         "it looked free" is the two-agents-one-issue outcome §3.4 forbids. An
         issue never taken, or already released here, never reaches that check.
         """
+        self.check_suspension()
         self._stop_renewal(issue)
         hold = self._holds.pop(issue, None)
         if hold is None:
@@ -492,6 +537,7 @@ def build_lease_lifecycle(
     clock: Callable[[], float] = time.time,
     host: str | None = None,
     pid: int | None = None,
+    suspension_clock: SuspensionClock | None = None,
 ) -> LeaseLifecycle | None:
     """Build this Run's :class:`LeaseLifecycle`, or ``None`` if it can hold none.
 
@@ -547,4 +593,5 @@ def build_lease_lifecycle(
         clock=clock,
         ttl_seconds=resolve_lease_ttl_seconds(env),
         warn=warn,
+        suspension_clock=suspension_clock,
     )

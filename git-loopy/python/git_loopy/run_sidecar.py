@@ -91,6 +91,7 @@ def _config_to_payload(config: RunConfig) -> dict[str, Any]:
         "otel_enabled": config.otel_enabled,
         "execution_host": config.execution_host,
         "host_yield": config.host_yield,
+        "prevent_idle_sleep": config.prevent_idle_sleep,
         "send_timeout_seconds": config.send_timeout_seconds,
         "routing": {
             key: [model, effort]
@@ -156,6 +157,7 @@ def _config_from_payload(payload: dict[str, Any]) -> RunConfig:
         otel_enabled=bool(payload.get("otel_enabled", False)),
         execution_host=str(payload.get("execution_host", "local")),
         host_yield=parse_host_yield(payload.get("host_yield", default_host_yield())),
+        prevent_idle_sleep=bool(payload.get("prevent_idle_sleep", True)),
         send_timeout_seconds=float(payload.get("send_timeout_seconds", 7200.0)),
         routing=routing,
         context_tier=str(payload.get("context_tier", "default")),

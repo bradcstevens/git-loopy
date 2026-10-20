@@ -4,6 +4,7 @@ Clocks are injected and the heartbeat is stubbed, so no test sleeps and none
 depends on a real remote.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from git_loopy.lease_lifecycle import (
     LeaseLifecycle,
     resolve_lease_ttl_seconds,
 )
+from git_loopy.lease_heartbeat import HeartbeatSnapshot
 from tests.fakes import FakeGitClient
 
 
@@ -252,6 +254,9 @@ class StubHeartbeat:
 
     def wait_lost(self, timeout: float | None = None) -> bool:
         return False
+
+    def snapshot(self) -> HeartbeatSnapshot:
+        return HeartbeatSnapshot(self.hold, "running")
 
     @property
     def state(self) -> str:
@@ -491,3 +496,111 @@ def test_a_run_never_reclaims_an_issue_it_was_stolen_from(tmp_path: Path) -> Non
     # The issue is free again, but this Run gave up on it and must stay away.
     assert lifecycle.take(390).verdict == "refused"
     assert lifecycle.held() == ()
+
+
+@pytest.mark.parametrize("suspended", [300, 301, 2760])
+@pytest.mark.parametrize("awake_elapsed", [5, 600])
+def test_resume_reports_one_suspension_and_its_elapsed_lease_ttls(
+    tmp_path: Path, suspended: int, awake_elapsed: int,
+) -> None:
+    from git_loopy.host_sleep import SuspensionClock
+
+    wall, continuous, awake = Clock(), Clock(), Clock()
+    warnings: list[str] = []
+    git = FakeGitClient(tmp_path)
+    lifecycle = LeaseLifecycle(
+        LeaseTransport(git, remote="origin", repository=REPOSITORY),
+        run_id=OWNER, host="laptop", pid=42, clock=wall,
+        suspension_clock=SuspensionClock(continuous=continuous, awake=awake),
+        warn=warnings.append, heartbeats=None,
+    )
+    assert lifecycle.take(95).granted
+    assert lifecycle.take(98).granted
+    assert lifecycle.take(99).granted
+    assert lifecycle.release(99) == "released"
+    # Only continuous time includes suspension. Wall-clock adjustments cannot
+    # create a suspension, and ordinary blocking work advances both clocks.
+    continuous.now += suspended + awake_elapsed
+    awake.now += awake_elapsed
+    wall.now += suspended + awake_elapsed
+    lifecycle.check_suspension()
+    lifecycle.check_suspension()
+    if suspended == 300:
+        assert warnings == []
+        return
+    assert warnings == [
+        f"Run suspended for {suspended:.1f}s; Lease TTLs elapsed during suspension "
+        "(2): #95, #98. Remote fences still decide ownership; no Lease is reclaimed."
+    ]
+    assert not lifecycle.lost(95), "a diagnostic must not latch ownership loss"
+    assert lifecycle.fence(95, "push"), "TTL evidence cannot replace the remote fence"
+    rival = LeaseTransport(git, remote="origin", repository=REPOSITORY)
+    assert rival.claim(95, run_id=RIVAL, now=int(wall.now), host="ci", pid=7)
+    assert not lifecycle.fence(95, "push")
+    assert lifecycle.lost(95)
+    assert lifecycle.take(95).verdict == "refused"
+
+
+def test_busy_execution_and_wall_clock_jump_are_not_suspension(tmp_path: Path) -> None:
+    from git_loopy.host_sleep import SuspensionClock
+
+    wall, continuous, awake = Clock(), Clock(), Clock()
+    warnings: list[str] = []
+    lifecycle = LeaseLifecycle(
+        LeaseTransport(FakeGitClient(tmp_path), remote="origin", repository=REPOSITORY),
+        run_id=OWNER, host="laptop", pid=42, clock=wall,
+        suspension_clock=SuspensionClock(continuous=continuous, awake=awake),
+        warn=warnings.append, heartbeats=None,
+    )
+    assert lifecycle.take(95).granted
+    wall.now += 3600
+    continuous.now += 600
+    awake.now += 600
+    lifecycle.check_suspension()
+    assert warnings == []
+
+
+def test_resume_uses_acknowledged_heartbeats_and_checks_before_releasing(
+    tmp_path: Path,
+) -> None:
+    from git_loopy.host_sleep import SuspensionClock
+
+    wall, continuous, awake = Clock(), Clock(), Clock()
+    beats: dict[int, StubHeartbeat] = {}
+    warnings: list[str] = []
+
+    def heartbeat(transport: LeaseTransport, hold) -> StubHeartbeat:
+        beat = StubHeartbeat(transport, hold)
+        beats[hold.issue] = beat
+        return beat
+
+    lifecycle = LeaseLifecycle(
+        LeaseTransport(FakeGitClient(tmp_path), remote="origin", repository=REPOSITORY),
+        run_id=OWNER, host="laptop", pid=42, clock=wall,
+        suspension_clock=SuspensionClock(continuous=continuous, awake=awake),
+        warn=warnings.append, heartbeats=heartbeat,
+    )
+    assert lifecycle.take(95).granted
+    assert lifecycle.take(98).granted
+    wall.now = continuous.now = awake.now = 2000
+    # #95 renewed; #98 was already expired before the host slept.
+    beat = beats[95]
+    beat.hold = replace(
+        beat.hold, record=replace(beat.hold.record, heartbeat_at=1980),
+    )
+    lifecycle.check_suspension()
+    wall.now += 2760
+    continuous.now += 2760
+    lifecycle.release(95)
+    assert warnings == [
+        "Run suspended for 2760.0s; Lease TTLs elapsed during suspension "
+        "(1): #95. Remote fences still decide ownership; no Lease is reclaimed."
+    ]
+    # A second suspension is a separate observation, not a repeat of #95/#98.
+    wall.now += 301
+    continuous.now += 301
+    lifecycle.check_suspension()
+    assert warnings[-1] == (
+        "Run suspended for 301.0s; Lease TTLs elapsed during suspension "
+        "(0): none. Remote fences still decide ownership; no Lease is reclaimed."
+    )

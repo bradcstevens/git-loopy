@@ -168,6 +168,27 @@ and the `background` clamp throttles deadline-bound tests too far. See
 the measured trade-off. Automated policy checks read process priority and
 never create CPU load.
 
+### Idle system sleep
+
+A live local Python Run on macOS also prevents **idle system sleep** until it
+exits, including when detached from its Dashboard. Display sleep and screen
+lock are unchanged. macOS releases the process-owned assertion even if the Run
+crashes or is killed. Remote Execution hosts, remote Run residences and other
+platforms are unaffected.
+
+This is independent of `host_yield`. To opt out, set `prevent_idle_sleep = false`
+in Config, run `git-loopy config set --project prevent_idle_sleep false` (or
+`--global`), or use `GIT_LOOPY_PREVENT_IDLE_SLEEP=off` for one invocation.
+Precedence is **environment > project Config > global Config > true**.
+The environment accepts `true/false`, `yes/no`, `on/off` or `1/0`; invalid values
+refuse. The Run diagnostics log records whether its assertion is held. An
+assertion that cannot be acquired refuses the Run with an opt-out remedy.
+
+Lid close and other forced suspension can still put the host to sleep. After a
+suspension longer than the Lease TTL, one diagnostic names the duration and
+the Leases whose TTLs elapsed during it. This explains renewal loss; it never
+reclaims a Lease or substitutes for the remote ownership fence.
+
 ## Skills reference
 
 Three different things supply Skills, and they are not interchangeable:
