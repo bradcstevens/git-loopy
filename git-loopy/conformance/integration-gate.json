@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.36",
+  "distributions": ["python"],
+  "timeout_row": {"name": "Python suite", "timeout_seconds": 1800},
+  "red_row": {"name": "Shell syntax", "returncode": 2},
+  "cases": [
+    {
+      "id": "timeout_then_pass",
+      "results": ["timeout", "pass"],
+      "published": true,
+      "reason": "published",
+      "recovery_ordinals": [],
+      "gate_timeout": null
+    },
+    {
+      "id": "timeout_on_every_attempt",
+      "results": ["timeout", "timeout", "timeout", "timeout"],
+      "published": false,
+      "reason": "serial_fallback",
+      "recovery_ordinals": [],
+      "gate_timeout": {"name": "Python suite", "timeout_seconds": 1800}
+    },
+    {
+      "id": "timeout_then_red",
+      "results": ["timeout", "red", "pass"],
+      "published": true,
+      "reason": "published",
+      "recovery_ordinals": [2],
+      "gate_timeout": null
+    },
+    {
+      "id": "red_then_pass",
+      "results": ["red", "pass"],
+      "published": true,
+      "reason": "published",
+      "recovery_ordinals": [1],
+      "gate_timeout": null
+    }
+  ]
+}

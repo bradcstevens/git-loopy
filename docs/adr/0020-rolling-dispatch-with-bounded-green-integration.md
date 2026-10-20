@@ -161,9 +161,16 @@ One long-lived Integrator drains a bounded **Integration backlog**:
   latest published green base. The base branch advances only after the candidate passes the
   full relevant feedback loop. New Lanes therefore observe either the prior green base or
   the newly published green base, never an unverified merge.
-- Merge conflicts, red gates, and gates that cannot run enter the existing dedicated
-  auto-resolution path. Recovery starts immediately outside the Lane cap, is serialized
-  with its candidate, uses the Lane's resolved model pair, and is bounded at K <= 3.
+- Merge conflicts and gates that ran and failed enter the existing dedicated Recovery
+  path. Recovery starts immediately outside the Lane cap, is serialized with its
+  candidate, and uses the Lane's resolved model pair. After the initial merge/gate,
+  at most three attempts remain: each is a Recovery Agent followed by the gate for a
+  conflict or red result, or just a gate re-run for a timeout. A timeout is inconclusive,
+  not red, and starts no Agent; a later red result starts Recovery from that result
+  within the remaining bound. A gate that cannot run at all hands off without a repair
+  Agent. Persistent timeouts take the same unpublished handoff as exhausted Recovery,
+  naming the timed-out row in the contribution's ending, its breadcrumb and one Run log
+  line. Recovery briefs never describe a timed-out gate as red (#904).
   Recovery usage still contributes to 429, AI-credit, and host-pressure signals.
 - Green publication is followed by the existing runner-driven verified issue closure.
   Both must complete before the contribution is finalized as published and resets Strike.

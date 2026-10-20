@@ -3,6 +3,12 @@
   "contract_version": "2.0",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
+    "integration-gate.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_integration_gate_conformance.py drives every result sequence through loop.run with a fake gate, observing contribution endings, Recovery briefs, bounded session ordinals and the one-line timeout handoff log."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "ADR-0091: this fixture is introduced at contract 2.36, above the dormant shell Path baseline's Contract support 2.26; the shell Orchestrator schedules no Parallel Lanes."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "ADR-0091: this fixture is introduced at contract 2.36, above the dormant PowerShell Path baseline's Contract support 2.26; the PowerShell Orchestrator schedules no Parallel Lanes."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The TUI helper makes no Integration gate or Recovery decision; this fixture pins Orchestrator production, not Dashboard projection."}
+    },
     "sandbox.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_sandbox_conformance.py drives policy forwarding, bypass permissions, Run preflight and tool attestation through the production seams; test_sandbox_run.py consumes disclosure cases through complete serial, Lane and Recovery Runs, asserting once-only Events and terminal output."},
       "shell": {"kind": "waived_owed", "reason": "ADR-0093 explicitly assigns the Sandbox obligation to every Orchestrator. The shell adapter and invocation port are owed separately from its frozen ADR-0091 baseline debt.", "issue": 866},

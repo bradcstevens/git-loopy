@@ -1088,23 +1088,24 @@ class FakeGateRunner:
     Every worktree passed to :meth:`run` is recorded in :attr:`calls` for assertions.
     Red results carry ``failure`` (a shared :class:`~git_loopy.gate.LoopFailure`) so a
     test can assert failure detail flows through, exactly as the production runner's
-    does.
+    does. A queue entry may instead be a complete :class:`GateResult`, allowing
+    timeout and red results to alternate without changing the fake's failure state.
     """
 
     def __init__(
         self,
         *,
-        outcomes: Sequence[bool] | None = None,
-        by_worktree: Mapping[Path, Sequence[bool]] | None = None,
-        by_issue: Mapping[int | str, Sequence[bool]] | None = None,
+        outcomes: Sequence[bool | GateResult] | None = None,
+        by_worktree: Mapping[Path, Sequence[bool | GateResult]] | None = None,
+        by_issue: Mapping[int | str, Sequence[bool | GateResult]] | None = None,
         default: bool = True,
         failure: LoopFailure | None = None,
     ) -> None:
-        self._outcomes: list[bool] = list(outcomes) if outcomes else []
-        self._by_worktree: dict[Path, list[bool]] = {
+        self._outcomes: list[bool | GateResult] = list(outcomes) if outcomes else []
+        self._by_worktree: dict[Path, list[bool | GateResult]] = {
             Path(key): list(value) for key, value in (by_worktree or {}).items()
         }
-        self._by_issue: dict[str, list[bool]] = {
+        self._by_issue: dict[str, list[bool | GateResult]] = {
             f"issue-{key}": list(value) for key, value in (by_issue or {}).items()
         }
         self._default = default
@@ -1126,6 +1127,8 @@ class FakeGateRunner:
             passed = self._outcomes.pop(0)
         else:
             passed = self._default
+        if isinstance(passed, GateResult):
+            return passed
         if passed:
             return GateResult.green(("scripted",))
         return GateResult.red(("scripted",), self._failure)

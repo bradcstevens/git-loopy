@@ -4487,6 +4487,7 @@ class _ContributionAccounting:
     recovery_attempts: int = 0
     strikes_at_open: int = 0
     ending: session_outcome_module.SessionOutcome | None = None
+    gate_timeout: gate_module.LoopFailure | None = None
 
 
 @dataclass
@@ -7609,6 +7610,13 @@ class _ParallelLoop:
         self._emit_contribution_event(
             contribution,
             events_module.WRAPPER_CONTRIBUTION_END,
+            **(
+                {"gate_timeout": {
+                    "name": scope.gate_timeout.name,
+                    "timeout_seconds": scope.gate_timeout.timeout_seconds,
+                }}
+                if scope.gate_timeout is not None else {}
+            ),
             **rollup_module.contribution_end_payload(
                 rollup,
                 published=published,
@@ -7649,10 +7657,10 @@ class _ParallelLoop:
         there is nothing to revert on a red gate, and base cannot be observed
         red even transiently.
 
-        A conflicting merge, a red gate, or a gate that cannot run all hand the
-        same stage to bounded auto-resolution (:meth:`_auto_resolve_lane`, #63),
-        which reuses this worktree so the resolution agent sees the exact tree
-        that failed. The stage is reaped on every path.
+        A conflicting merge or red gate hands the same stage to bounded Recovery
+        (:meth:`_auto_resolve_lane`, #63). A timeout re-runs the gate without an
+        Agent, within that same bound (#904). A gate that cannot run at all hands
+        off without claiming the change is red. The stage is reaped on every path.
         """
         ref = contribution.ref
         stage = self._open_integration_stage(ref)
@@ -7687,13 +7695,17 @@ class _ParallelLoop:
                     contribution, lane_work, stage, conflicted=True
                 )
 
-            if await self._gate_green(ref, "post-merge", stage.path):
+            result = await self._integration_gate(ref, "post-merge", stage.path)
+            if result is not None and result.passed:
                 return self._publish_stage(contribution, lane_work, stage)
 
-            # A red / un-runnable gate on the private result: base still has
-            # not moved, so recovery simply continues in the same stage.
+            if result is None:
+                self._fallback_lane_to_serial(lane_work, gate_unavailable=True)
+                return False
+            # Preserve the result until the Recovery decision: a timeout buys
+            # a gate re-run, not an Agent tasked with repairing a red change.
             return await self._auto_resolve_lane(
-                contribution, lane_work, stage, conflicted=False
+                contribution, lane_work, stage, conflicted=False, gate_result=result
             )
         finally:
             self._reap_integration_stage(stage, ref)
@@ -7908,15 +7920,13 @@ class _ParallelLoop:
             )
         return advanced
 
-    async def _gate_green(
+    async def _integration_gate(
         self, ref: int | str, phase: str, worktree: Path | None = None
-    ) -> bool:
-        """Run the injected gate on ``worktree`` (default repo root); ``True`` == green.
+    ) -> gate_module.GateResult | None:
+        """Run the gate without collapsing a timeout into a red result.
 
-        A **red** gate or a :exc:`~git_loopy.gate.GateError` (cannot gate at all)
-        both return ``False`` — the contribution stays unpublished in its private
-        **Integration stage** and drives auto-resolution there; the ``phase``
-        label enriches the diagnostic.
+        ``None`` means the gate could not run at all. Neither that nor a timed-out
+        row justifies a Recovery Agent; the caller decides whether to re-run.
 
         The gate is awaited off the event loop (#901), so Lane send timeouts,
         Events and the Dashboard keep running for the row's whole bound, while
@@ -7927,10 +7937,10 @@ class _ParallelLoop:
             result = await gate_module.run_gate_off_loop(self._gate_runner, target)
         except gate_module.GateError as exc:
             self._diag.warning(
-                "integration #%s: %s gate could not run: %s; treating as red",
+                "integration #%s: %s gate could not run: %s",
                 ref, phase, exc,
             )
-            return False
+            return None
         if not result.passed:
             failure = result.failure
             self._diag.warning(
@@ -7939,8 +7949,7 @@ class _ParallelLoop:
                 failure.name if failure else "unknown",
                 failure.summary if failure else "no detail",
             )
-            return False
-        return True
+        return result
 
     def _abort_stage_merge_safely(
         self, stage: _IntegrationStage, ref: int | str
@@ -8274,19 +8283,21 @@ class _ParallelLoop:
         stage: _IntegrationStage,
         *,
         conflicted: bool,
+        gate_result: gate_module.GateResult | None = None,
     ) -> bool:
         """Bounded auto-resolution inside the private stage (#63, ADR-0009/0020).
 
-        Up to K=:data:`_AUTO_RESOLUTION_MAX_ATTEMPTS` times, runs a fresh
-        resolution agent session pinned to the same
-        :class:`_IntegrationStage` the failed merge/gate happened in
-        (:meth:`_run_resolution_session`) and re-gates it. The first **green**
+        Up to K=:data:`_AUTO_RESOLUTION_MAX_ATTEMPTS` times after the initial gate,
+        re-gates the same :class:`_IntegrationStage`. A conflict or red result
+        first gets a fresh Agent (:meth:`_run_resolution_session`); a timeout
+        gets only the gate re-run. Both spend one slot of the same bound.
+        The first **green**
         attempt publishes that verified stage onto base
         (:meth:`_publish_stage`), closes the issue, deletes the (now-landed)
-        Lane branch, and returns ``True``. If base advances but upstream
-        durability fails, return ``False`` immediately: the work is already
-        on base and must not buy another Recovery session or Release advance.
-        If all K attempts stay red the
+        Lane branch, and returns ``True``. A publication refusal returns
+        ``False`` immediately, whether or not base advanced: publication has its
+        own failure handling and a green gate must not buy a Recovery Agent.
+        If all K attempts stay red or time out the
         contribution falls back to a serial Iteration
         (:meth:`_fallback_lane_to_serial`) and returns ``False``, keeping its
         Lane branch as a breadcrumb.
@@ -8299,32 +8310,55 @@ class _ParallelLoop:
             conflicted: Whether the Lane branch failed to merge at all (as
                 opposed to merging cleanly and gating red) — the two states
                 leave very different trees, so the brief must say which.
+            gate_result: The preceding gate result, retaining the timeout detail
+                until this decision. Absent only for an initial merge conflict.
         """
         ref = contribution.ref
         for attempt in range(1, _AUTO_RESOLUTION_MAX_ATTEMPTS + 1):
+            timed_out = (
+                gate_result is not None
+                and gate_result.failure is not None
+                and gate_result.failure.timed_out
+            )
+            if not timed_out:
+                scope = self._contribution_iter.get(contribution.contribution_id)
+                if scope is not None:
+                    scope.recovery_attempts += 1
+                # Only an actual Agent session emits recovery_started. The
+                # ordinal counts gate-only re-runs against this same bound.
+                self._emit_contribution_event(
+                    contribution,
+                    events_module.WRAPPER_INTEGRATION_RECOVERY_STARTED,
+                    attempt=attempt,
+                    max_attempts=_AUTO_RESOLUTION_MAX_ATTEMPTS,
+                )
+                await self._run_resolution_session(
+                    contribution, lane_work, stage, attempt, conflicted=conflicted,
+                    gate_failure=gate_result.failure if gate_result else None,
+                )
+            gate_result = await self._integration_gate(
+                ref, f"auto-resolution attempt {attempt}", stage.path
+            )
+            if gate_result is None:
+                break
+            if not gate_result.passed:
+                continue
+            # Leave gate Recovery on green, just as the initial gate does.
+            # Publication failure is not a red gate, even before base advances.
+            return self._publish_stage(contribution, lane_work, stage)
+        failure = gate_result.failure if gate_result is not None else None
+        if failure is not None and failure.timed_out:
             scope = self._contribution_iter.get(contribution.contribution_id)
             if scope is not None:
-                scope.recovery_attempts = attempt
-            # On disk before the session it names. K is immutable; the
-            # attempt is the only field that moves, and it never exceeds K.
-            self._emit_contribution_event(
-                contribution,
-                events_module.WRAPPER_INTEGRATION_RECOVERY_STARTED,
-                attempt=attempt,
-                max_attempts=_AUTO_RESOLUTION_MAX_ATTEMPTS,
+                scope.gate_timeout = failure
+            self._diag.warning(
+                "integration #%s: Recovery handoff — gate row %r %s; "
+                "exhausted %s attempts",
+                ref, failure.name, failure.summary, _AUTO_RESOLUTION_MAX_ATTEMPTS,
             )
-            await self._run_resolution_session(
-                contribution, lane_work, stage, attempt, conflicted=conflicted
-            )
-            if not await self._gate_green(
-                ref, f"auto-resolution attempt {attempt}", stage.path
-            ):
-                continue
-            pre_publications = self._base_publications
-            published = self._publish_stage(contribution, lane_work, stage)
-            if published or self._base_publications > pre_publications:
-                return published
-        self._fallback_lane_to_serial(lane_work)
+        self._fallback_lane_to_serial(
+            lane_work, failure=failure, gate_unavailable=gate_result is None
+        )
         return False
 
     async def _run_resolution_session(
@@ -8335,6 +8369,7 @@ class _ParallelLoop:
         attempt: int,
         *,
         conflicted: bool,
+        gate_failure: gate_module.LoopFailure | None = None,
     ) -> None:
         """Run one auto-resolution agent session in the private stage (#63).
 
@@ -8348,7 +8383,8 @@ class _ParallelLoop:
         bound advances.
         """
         prompt = self._resolution_prompt(
-            contribution, lane_work, attempt, conflicted=conflicted
+            contribution, lane_work, attempt, conflicted=conflicted,
+            gate_failure=gate_failure,
         )
         send_timeout = self._config.send_timeout_seconds
         scope = self._contribution_iter.get(contribution.contribution_id)
@@ -8410,6 +8446,7 @@ class _ParallelLoop:
         attempt: int,
         *,
         conflicted: bool,
+        gate_failure: gate_module.LoopFailure | None = None,
     ) -> str:
         """The dedicated auto-resolution brief (#63).
 
@@ -8417,23 +8454,33 @@ class _ParallelLoop:
         asks the agent to get the private Integration worktree green and commit
         — driving a clean Integration the runner can then publish.
 
-        The brief states which of the two failure states the tree is actually
-        in, because they need different work and a brief that misdescribes the
-        tree wastes one of only K=3 attempts: a **conflicted** stage has had its
-        merge aborted and still needs the Lane branch merged, while a **red**
-        stage already carries the merge and needs the feedback loops fixed.
+        The first conflict brief asks for the aborted merge to be resolved.
+        A subsequent red gate supplies the current failure, even if Integration
+        originally conflicted. The gate cannot prove that the Agent completed
+        that merge, so retain a verification reminder rather than claiming either
+        that it is still aborted or that it has been resolved.
         """
-        if conflicted:
+        revision = lane_work.publication_sha or lane_work.branch
+        if conflicted and gate_failure is None:
             situation = (
-                f"Revision {lane_work.publication_sha or lane_work.branch} could not be merged into this "
+                f"Revision {revision} could not be merged into this "
                 "integration worktree (the conflicting merge was aborted). "
                 "Merge it, "
             )
         else:
+            merge_context = (
+                f"The initial merge of revision {revision} conflicted. Verify its "
+                "merge resolution in this integration worktree; the current"
+                if conflicted else
+                f"Revision {revision} is already merged into this integration "
+                "worktree, but its"
+            )
+            detail = (
+                f"Gate row {gate_failure.name!r} {gate_failure.summary}. "
+                if gate_failure is not None else ""
+            )
             situation = (
-                f"Revision {lane_work.publication_sha or lane_work.branch} is already merged into this "
-                "integration worktree, but its feedback loops are red. Fix "
-                "them, "
+                f"{merge_context} feedback loops are red. {detail}Fix them, "
             )
         return (
             f"Auto-resolution attempt {attempt} of "
@@ -8445,7 +8492,10 @@ class _ParallelLoop:
             "If they do not settle a conflict, comment the blocker and end the turn."
         )
 
-    def _fallback_lane_to_serial(self, lane_work: _LaneWork) -> None:
+    def _fallback_lane_to_serial(
+        self, lane_work: _LaneWork, *, failure: gate_module.LoopFailure | None = None,
+        gate_unavailable: bool = False,
+    ) -> None:
         """Terminal auto-resolution failure -> fall back to a serial Iteration (#63).
 
         Posts exactly one automated breadcrumb comment on the issue and
@@ -8467,7 +8517,23 @@ class _ParallelLoop:
         """
         if not self._leased(lane_work.item, "auto-resolution fallback comment"):
             return
-        self._source.comment(lane_work.item.ref, _AUTO_RESOLUTION_FALLBACK_COMMENT)
+        comment = _AUTO_RESOLUTION_FALLBACK_COMMENT
+        if gate_unavailable:
+            comment = (
+                "The Integration gate could not run. No additional Recovery Agent "
+                "was started for this inconclusive result. The Lane branch is "
+                "preserved for Recovery handoff; the issue remains open for "
+                "a serial Iteration."
+            )
+        elif failure is not None and failure.timed_out:
+            comment = (
+                f"Integration gate row {failure.name!r} {failure.summary}; "
+                f"the {_AUTO_RESOLUTION_MAX_ATTEMPTS}-attempt bound is exhausted. "
+                "This is inconclusive, not a red result. The Lane branch is "
+                "preserved for Recovery handoff; the issue remains open for "
+                "a serial Iteration."
+            )
+        self._source.comment(lane_work.item.ref, comment)
 
     def _resolve_base_ref(self) -> str:
         """The base ref new Lane branches are cut from.
