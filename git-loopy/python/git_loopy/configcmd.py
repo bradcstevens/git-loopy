@@ -285,6 +285,16 @@ def _coerce_gate_timeout(raw: str) -> float:
     return value
 
 
+def _coerce_wrap_up_lead(raw: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ConfigCommandError("wrap_up_lead_seconds must be a number") from None
+    if not math.isfinite(value) or value <= 0:
+        raise ConfigCommandError("wrap_up_lead_seconds must be positive and finite")
+    return value
+
+
 def _coerce_enabled_skills(raw: str) -> list[str]:
     return sorted(set(_coerce_csv(raw)))
 
@@ -373,6 +383,11 @@ _KEYS: dict[str, _Key] = {
             "send_timeout_seconds",
             _coerce_timeout,
             lambda rc: rc.run.send_timeout_seconds,
+        ),
+        _Key(
+            "wrap_up_lead_seconds",
+            _coerce_wrap_up_lead,
+            lambda rc: rc.run.wrap_up_lead_seconds,
         ),
         _Key("deny_tools", _coerce_csv, lambda rc: sorted(rc.run.deny_tools)),
         _Key("deny_skills", _coerce_csv, lambda rc: sorted(rc.run.deny_skills)),

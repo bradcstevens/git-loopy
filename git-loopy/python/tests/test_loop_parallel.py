@@ -1252,6 +1252,8 @@ def test_lane_windows_correct_each_issue_without_crossing(
         prompt, _timeout = session.send_and_wait_calls[0]
         assert "model_context:" not in prompt
         assert "git-loopy-route:v1:" not in prompt
+        assert "Time budget: 7200 seconds" in prompt
+        assert "Send deadline (local time):" in prompt
 
 
 def test_a_failed_lane_window_is_retried_without_blocking_the_lane(
@@ -10343,9 +10345,11 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
 
     def _fake_factory(
         placement: str, *, send_timeout_seconds: float, gate_timeout_seconds: float,
+        wrap_up_lead_seconds: float | None,
     ) -> Any:
         assert placement == "github-actions"
         assert gate_timeout_seconds == cfg.gate_timeout_seconds
+        assert wrap_up_lead_seconds == cfg.wrap_up_lead_seconds
         # The Run's own send timeout has to cross the machine boundary on the
         # request: the job is a fresh process elsewhere and inherits none of
         # this Run's configuration, so a host built without it would leave the
