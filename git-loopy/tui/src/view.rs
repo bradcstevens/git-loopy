@@ -136,6 +136,9 @@ pub struct Header {
     /// Omitted for a historical trace; absence is unknown, not `off`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
+    /// Absent on historical traces; silence is not account health.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<crate::event::AccountState>,
     pub wind_down: WindDownDeclaration,
 }
 
@@ -725,6 +728,7 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         parallel: parallel_declaration(state, context),
         execution_host: execution_host_view(state),
         sandbox: state.sandbox.clone(),
+        account: state.account.clone(),
         wind_down: wind_down_declaration(state),
     }
 }

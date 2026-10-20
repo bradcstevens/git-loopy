@@ -644,6 +644,23 @@ fn draw_header(
     segments.extend(parallel_segments(header, glyphs));
     segments.push(execution_host_segment(header, glyphs));
     segments.extend(wind_down_segment(header));
+    if let Some(account) = &header.account {
+        segments.push((
+            0,
+            format!(
+                "account {}: {} / {} · {} retries · {:.0}s wait left",
+                if account.admission_open {
+                    "confirmed"
+                } else {
+                    &account.state
+                },
+                account.kind,
+                account.cause,
+                account.retries_remaining,
+                account.wait_remaining_seconds,
+            ),
+        ));
+    }
     segments.extend(diagnostic_segment(diagnostics).map(|note| (0, note)));
     let progress = fitted_line(segments, area, glyphs);
 

@@ -197,6 +197,7 @@ def _header(state: LiveRunState) -> dict[str, Any]:
         "execution_host": _execution_host(state.execution_host),
         # Optional for historical traces, but never inferred from the host.
         **({"sandbox": state.sandbox} if state.sandbox is not None else {}),
+        **({"account": state.account} if state.account is not None else {}),
         # Whether this Run has stopped taking new work, why, and how much is
         # still in flight. `availability` separates the two silences a single
         # nullable `cause` would collapse: a trace that never mentioned a

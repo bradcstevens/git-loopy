@@ -3,6 +3,12 @@
   "contract_version": "2.0",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
+    "account-control.json": {
+      "python": {"kind": "claimed", "reason": "tests/test_account_conformance.py drives exit mapping and the account Event producer; test_account_run.py and test_account_control.py prove Run admission, accounting, closure and clock-controlled budgets."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "Contract 2.38 is Python-only, above the dormant Path baseline; no new account-control obligation."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "Contract 2.38 is Python-only, above the dormant Path baseline; no new account-control obligation."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "This fixture tests Python production and exit policy, not Dashboard consumption. semantic_view.rs and dashboard_render.rs prove Run-level account Event ingestion and display."}
+    },
     "sandbox.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_sandbox_conformance.py drives policy forwarding, bypass permissions, Run preflight and tool attestation through the production seams; test_sandbox_run.py consumes disclosure cases through complete serial, Lane and Recovery Runs, asserting once-only Events and terminal output."},
       "shell": {"kind": "waived_owed", "reason": "ADR-0093 explicitly assigns the Sandbox obligation to every Orchestrator. The shell adapter and invocation port are owed separately from its frozen ADR-0091 baseline debt.", "issue": 866},

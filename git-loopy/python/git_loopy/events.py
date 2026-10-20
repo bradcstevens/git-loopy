@@ -73,6 +73,7 @@ __all__ = [
     # Wrapper event-type constants
     "WRAPPER_RUN_START",
     "WRAPPER_SANDBOX_RESOLVED",
+    "WRAPPER_ACCOUNT_STATE",
     "WRAPPER_RUN_END",
     "WRAPPER_STOP_REQUESTED",
     "WRAPPER_STOP_LIFTED",
@@ -273,6 +274,7 @@ _CONTEXT_WINDOW_SAFETY_PERCENT = 75
 # :func:`make_event`; they have no SDK equivalent.
 WRAPPER_RUN_START = "wrapper.run.start"
 WRAPPER_SANDBOX_RESOLVED = "wrapper.sandbox.resolved"
+WRAPPER_ACCOUNT_STATE = "wrapper.account.state"
 WRAPPER_RUN_END = "wrapper.run.end"
 WRAPPER_STOP_REQUESTED = "wrapper.stop.requested"
 WRAPPER_STOP_LIFTED = "wrapper.stop.lifted"
@@ -442,6 +444,7 @@ CONTRIBUTION_TERMINAL_REASONS: tuple[str, ...] = (
     "checkpoint_failed",
     "serial_fallback",
     "operator_stop",
+    "account_failure",
 )
 
 # The **Wind-down** vocabulary (#445 §J, ADR-0043), carried on

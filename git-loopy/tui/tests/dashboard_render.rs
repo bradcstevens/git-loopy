@@ -23,6 +23,26 @@ use common::assert_snapshot;
 const DASHBOARD_INSIGHTS: &str = include_str!("../../conformance/dashboard-insights.json");
 
 #[test]
+fn account_cooldown_is_visible_in_the_run_header() {
+    let mut state = DashboardState::new(RunInputs::new("work-model", "high"));
+    state.apply(&Event::from_jsonl_line(
+        r#"{"type":"wrapper.account.state","state":"cooldown","kind":"rate_limited","cause":"rate_refusal","retries_remaining":2,"wait_remaining_seconds":90.0,"admission_open":false}"#,
+    ).unwrap());
+    let context = ViewContext {
+        now: Timestamp::parse_rfc3339("2026-05-16T00:00:00Z").unwrap(),
+        now_monotonic: None,
+        zone: Zone::from_offset_minutes(0),
+        capabilities: TerminalCapabilities::default(),
+    };
+    let view = project_run_view(&state, &context, &IssueRef::number(42));
+    let rendered = render_lines(&view, 240, 35, TerminalCapabilities::default()).join("\n");
+    assert!(rendered.contains("account cooldown"), "{rendered}");
+    assert!(rendered.contains("rate_limited"), "{rendered}");
+    assert!(rendered.contains("2 retries"), "{rendered}");
+    assert!(rendered.contains("90s wait left"), "{rendered}");
+}
+
+#[test]
 fn skipped_is_inline_beside_its_ending_even_at_the_terminal_floor() {
     let view = fixture_view("ending-no-progress-content_filtered");
     for width in [40, 80, 160] {

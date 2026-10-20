@@ -290,6 +290,8 @@ pub enum EventPayload {
     RunEnd(RunEnd),
     /// `wrapper.stop.requested`
     StopRequested(StopRequested),
+    /// `wrapper.account.state`, a Run fact, never an issue Status.
+    AccountState(AccountState),
     /// `wrapper.stop.lifted`
     StopLifted(StopLifted),
     /// `wrapper.contribution.end`
@@ -1069,6 +1071,17 @@ pub struct StopRequested {
     pub draining: Option<i64>,
 }
 
+/// Python Run-wide account control, including the remaining lifetime budgets.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct AccountState {
+    pub state: String,
+    pub kind: String,
+    pub cause: String,
+    pub retries_remaining: u32,
+    pub wait_remaining_seconds: f64,
+    pub admission_open: bool,
+}
+
 /// A revocable Strike drain clearing after a green publication.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct StopLifted {
@@ -1372,6 +1385,7 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),
         "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
+        "wrapper.account.state" => EventPayload::AccountState(decode_or_default(value)),
         "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),
         // Only the rolling types with a producer are modelled (ADR-0044): the
         // Lane-contribution lifecycle, parking and admission (#682),

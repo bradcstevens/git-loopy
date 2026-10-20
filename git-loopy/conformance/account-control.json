@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.38",
+  "distributions": ["python"],
+  "exit_cases": [
+    {"id": "account-failure-is-nonzero", "reason": "account_failure", "exit_code": 1},
+    {"id": "deliberate-stop-keeps-primary-reason", "reason": "operator_stop", "exit_code": 1}
+  ],
+  "event_cases": [
+    {
+      "id": "terminal-quota",
+      "code": "insufficient_quota",
+      "probe": false,
+      "expected": {"state": "stopping", "kind": "quota_exhausted", "cause": "terminal_refusal", "retries_remaining": 2, "wait_remaining_seconds": 120.0, "admission_open": false}
+    },
+    {
+      "id": "terminal-authentication",
+      "code": "authentication_failed",
+      "probe": false,
+      "expected": {"state": "stopping", "kind": "authentication_failed", "cause": "terminal_refusal", "retries_remaining": 2, "wait_remaining_seconds": 120.0, "admission_open": false}
+    },
+    {
+      "id": "rate-cooldown",
+      "code": "rate_limit_exceeded",
+      "probe": false,
+      "expected": {"state": "cooldown", "kind": "rate_limited", "cause": "rate_refusal", "retries_remaining": 2, "wait_remaining_seconds": 90.0, "admission_open": false}
+    },
+    {
+      "id": "ordinary-probe",
+      "code": "rate_limit_exceeded",
+      "probe": true,
+      "expected": {"state": "probing", "kind": "rate_limited", "cause": "probe_admitted", "retries_remaining": 1, "wait_remaining_seconds": 90.0, "admission_open": false}
+    }
+  ]
+}

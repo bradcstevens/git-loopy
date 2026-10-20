@@ -77,9 +77,9 @@ class SessionErrorKind(Enum):
 
     Named for the *condition*, never for a reaction to it. ``RATE_LIMITED`` says a
     limiter refused the call, not that the Run should wait; ``QUOTA_EXHAUSTED``
-    says the account is spent, not that the Run should stop. Whether either
-    deserves a reaction is undecided (#403), and a vocabulary that answered it
-    would have decided it here by accident.
+    says the account is spent, not that the Run should stop. The separate
+    Run-wide account policy (#676) requires terminal endpoint provenance and
+    account identity before reacting; this classifier alone grants no control.
 
     ``UNKNOWN`` is a real member rather than a ``None``: the harness reported a
     failure git-loopy could not place, which is a different fact from no failure
@@ -272,16 +272,23 @@ class SessionError:
     def from_exception(cls, exc: BaseException, *, origin: str = "runner") -> SessionError:
         """Read one failure identity off an exception the Orchestrator caught.
 
-        The exception's type name and text are all there is, so this is the one
-        path where the identity is inferred from prose — but it is inferred once,
-        here, instead of being left as prose for every reader to squint at.
+        Retain structured code/status attributes when the harness supplies them.
+        Otherwise the descriptive identity may be inferred from type/text;
+        that inference alone is not authority for Run-wide account control.
         """
         error_type = type(exc).__name__
         message = str(exc)
+        error_code = _text(getattr(exc, "error_code", None)) or _text(getattr(exc, "code", None))
+        status = getattr(exc, "status_code", None)
         return cls(
-            kind=classify_error_kind(error_type=error_type, message=message),
+            kind=classify_error_kind(
+                error_type=error_type, error_code=error_code,
+                status_code=status if isinstance(status, int) else None, message=message,
+            ),
             origin=origin,
             error_type=error_type,
+            error_code=error_code,
+            status_code=status if isinstance(status, int) else None,
             message=message or None,
         )
 
@@ -408,6 +415,14 @@ class SessionOutcomeWatch:
         from would name a condition the session had already survived.
         """
         return self._errors[-1] if self._errors else None
+
+    @property
+    def terminal_error(self) -> SessionError | None:
+        """The session endpoint's refusal, distinct from per-call telemetry."""
+        return next(
+            (error for error in reversed(self._errors) if error.origin == events.SESSION_ERROR),
+            None,
+        )
 
 
 class SessionTermination(Enum):
