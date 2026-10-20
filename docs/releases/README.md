@@ -355,7 +355,10 @@ unavailable services, including an unreachable pinned Skill catalog during
 `init`, block. An unavailable pseudo-terminal makes cancelled setup
 inconclusive. Failed observations outrank blocked ones, which outrank
 inconclusive ones. Only all four observed boundaries and successful cleanup
-pass. Diagnostics distinguish an upstream outage from invalid catalog content.
+pass. Local version and inventory timeouts fail, and an inventory timeout
+does not skip the setup observations. A terminal that opens but never shows
+the wizard fails unless diagnostics establish a service outage. Diagnostics
+distinguish an upstream outage from invalid catalog content.
 
 Every verdict writes evidence of kind `git-loopy.release-installation/1`,
 carrying the candidate's proof, each observation, cleanup residue and a content

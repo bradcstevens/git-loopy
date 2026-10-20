@@ -109,7 +109,10 @@ def _service_unavailable(output: str) -> bool:
 
 
 def _inventory(installed: InstalledCandidate) -> Observation:
-    result = _run(installed, "commands", "--json", timeout=60)
+    try:
+        result = _run(installed, "commands", "--json", timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        return Observation("command-inventory", FAILED, f"local command timed out: {exc}")
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
@@ -151,7 +154,7 @@ def _cancelled(installed: InstalledCandidate, workspace: Path) -> Observation:
         if _service_unavailable(output):
             return Observation("init-cancelled", BLOCKED, output)
         return Observation(
-            "init-cancelled", FAILED if code is not None else INCONCLUSIVE,
+            "init-cancelled", FAILED,
             f"the wizard never opened (exit {code}): {output}",
         )
     if code in (None, 0) or "git-loopy init cancelled" not in output:
@@ -250,8 +253,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         status = FAILED
         observations.append(Observation(current, FAILED, str(exc)))
     except subprocess.TimeoutExpired as exc:
-        status = BLOCKED
-        observations.append(Observation(current, BLOCKED, f"command timed out: {exc}"))
+        status = FAILED if current == "clean-install" else BLOCKED
+        observations.append(Observation(current, status, f"command timed out: {exc}"))
     except (OSError, subprocess.SubprocessError) as exc:
         status = FAILED
         observations.append(Observation(current, FAILED, str(exc)))

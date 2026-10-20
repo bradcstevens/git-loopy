@@ -455,3 +455,61 @@ def test_reclaims_setup_children_not_just_their_parent(
     else:
         os.kill(pid, signal.SIGKILL)
         pytest.fail(f"setup child {pid} survived the Installation proof")
+
+
+@pytest.mark.parametrize(("args", "observation"), [
+    (["--version"], "clean-install"),
+    (["commands", "--json"], "command-inventory"),
+])
+def test_local_command_timeouts_are_candidate_failures(
+    publication_input: Path, tmp_path: Path, installer: Installer,
+    monkeypatch: pytest.MonkeyPatch, args: list[str], observation: str,
+) -> None:
+    installer.command = installer.command.replace(
+        "args = sys.argv[1:]",
+        f"args = sys.argv[1:]\nif args == {args!r}:\n"
+        "    import time\n    time.sleep(60)",
+    )
+    real_command = release_smoke.run_installation_command
+
+    def bounded(command: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if list(command[1:]) == args:
+            kwargs["timeout"] = 0.2
+        return real_command(command, **kwargs)
+
+    monkeypatch.setattr(release_smoke, "run_installation_command", bounded)
+    monkeypatch.setattr(release_installation, "run_installation_command", bounded)
+    code, evidence = prove(publication_input, tmp_path)
+    assert code == 1
+    assert evidence["verdict"] == "failed"
+    assert next(
+        item for item in evidence["observations"] if item["name"] == observation
+    )["status"] == "failed"
+    if observation == "command-inventory":
+        assert {
+            item["name"]: item["status"] for item in evidence["observations"]
+            if item["name"].startswith("init-")
+        } == {"init-cancelled": "observed", "init-saved": "observed"}
+
+
+def test_a_wizard_that_never_opens_in_an_available_terminal_fails(
+    publication_input: Path, tmp_path: Path, installer: Installer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installer.command = installer.command.replace(
+        'sys.stdout.write("\\x1b[?1049h")', "import time; time.sleep(60)",
+    )
+    real_terminal = release_installation.cancel_in_pty
+
+    def bounded(*args: Any, **kwargs: Any) -> tuple[int | None, str, bool]:
+        kwargs["timeout"] = 1
+        return real_terminal(*args, **kwargs)
+
+    monkeypatch.setattr(release_installation, "cancel_in_pty", bounded)
+    code, evidence = prove(publication_input, tmp_path)
+    assert code == 1
+    assert evidence["verdict"] == "failed"
+    assert {
+        item["name"]: item["status"] for item in evidence["observations"]
+        if item["name"].startswith("init-")
+    } == {"init-cancelled": "failed", "init-saved": "observed"}
