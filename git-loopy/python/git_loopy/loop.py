@@ -237,6 +237,7 @@ from git_loopy.rate_card import RateCard
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
     ReleaseLine,
+    ReleaseLineAlreadyReportedError,
     ReleaseNotesWrite,
     ReleaseVersionError,
     advance_release_line,
@@ -4652,6 +4653,7 @@ class _ParallelLoop:
         self._rate_card = rate_card
         self._git = git
         self._release_line: ReleaseLine | None = None
+        self._release_line_unreadable = False
         self._last_stable_release_version: str | None = None
         self._materializer = materialization_module.ContributionMaterializer(git)
         self._prompt_text = prompt_text
@@ -7983,6 +7985,8 @@ class _ParallelLoop:
             # read behind `_read_release_line`.
             last_stable, current_line = self._read_release_line()
             bump_class = resolve_bump_class(item.labels, last_stable)
+        except ReleaseLineAlreadyReportedError:
+            return None
         except (ReleaseVersionError, git_module.GitError) as exc:
             # Pickup already named a label fault; a refused label must not
             # silently advance the line either way.
@@ -8052,10 +8056,20 @@ class _ParallelLoop:
         if self._release_line is not None:
             assert self._last_stable_release_version is not None
             return self._last_stable_release_version, self._release_line
-        (
-            self._last_stable_release_version,
-            self._release_line,
-        ) = read_repository_release_line(self._repo_root, self._git)
+        if self._release_line_unreadable:
+            raise ReleaseLineAlreadyReportedError("Release line already reported unreadable")
+        try:
+            (
+                self._last_stable_release_version,
+                self._release_line,
+            ) = read_repository_release_line(self._repo_root, self._git)
+        except ReleaseVersionError as exc:
+            # Warn once per Run; later Pickups and Integrations stay silent.
+            self._release_line_unreadable = True
+            self._diag.warning(
+                "%s; the Bump class is skipped for this Run", exc
+            )
+            raise ReleaseLineAlreadyReportedError(str(exc)) from exc
         return self._last_stable_release_version, self._release_line
 
     def _restore_release_line(

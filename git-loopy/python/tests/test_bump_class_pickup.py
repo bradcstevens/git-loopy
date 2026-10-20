@@ -345,3 +345,38 @@ def test_a_human_applied_major_successor_label_is_honoured_unchanged() -> None:
     assert advance_release_line(
         "0.11.1", "0.12.0", 4, bump_class, current_stage="beta"
     ) == ReleaseLine(target="1.0.0", counter=5, stage="alpha")
+
+
+def test_an_unreadable_release_line_warns_once_per_run_across_pickups_and_integrations(
+    tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from git_loopy import loop as loop_module
+    from git_loopy.bump_class_pickup import PickupBumpClassifier
+
+    run_loop = object.__new__(loop_module._ParallelLoop)
+    run_loop._repo_root = tmp_path  # no VERSION file
+    run_loop._git = None
+    run_loop._release_line = None
+    run_loop._last_stable_release_version = None
+    run_loop._release_line_unreadable = False
+    diag = logging.getLogger("test.release-line-once")
+    run_loop._diag = diag
+    run_loop._repo_root = tmp_path
+
+    async def propose(_pair: ClassifierPair, _item: AfkReadyItem) -> str:
+        raise AssertionError("no model session without a Release line")
+
+    classifier = PickupBumpClassifier(
+        pair=ClassifierPair(model="cheap-model", effort=None),
+        propose=propose,
+        client=_RecordingLabelClient(),
+        release_line=run_loop._read_release_line,
+        diag=diag,
+    )
+    with caplog.at_level(logging.INFO, logger="test.release-line-once"):
+        for _ in range(3):
+            asyncio.run(classifier.labelled(_item()))
+            assert run_loop._advance_release_line(_item()) is None
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert "VERSION" in warnings[0].getMessage()
