@@ -74,7 +74,7 @@ departs from Anthropic's advice to read `stop_details` and retry on a fallback m
 Copilot's normalized content-filter signal establishes that a call was filtered, not the
 vendor's category or whether the vendor rather than the platform filtered it. The generic
 rung can lead back to the filtering model, and a fallback would introduce the second
-configured target the routing decision declined to create. There is **no content-filter
+configured target #292 declined to create. There is **no content-filter
 fallback model and no automatic model switch**.
 
 That routing boundary does not reinstate the table's historical immediate-skip rules:

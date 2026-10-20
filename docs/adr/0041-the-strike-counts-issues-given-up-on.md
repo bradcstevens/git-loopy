@@ -89,7 +89,7 @@ Anthropic's fallback-model advice applies here as in
 content-filter signal does not establish the vendor's category or distinguish vendor
 filtering from platform filtering. Retrying on the generic rung can return to the
 filtering model; creating a different destination would add a second configured target
-the routing decision rejected. There is no content-filter fallback model and no automatic
+#292 rejected. There is no content-filter fallback model and no automatic
 model switch.
 
 This records a routing boundary, not a new Strike disposition. It does not restore this
