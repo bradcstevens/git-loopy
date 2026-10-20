@@ -134,7 +134,7 @@ def test_recovery_publication_push_failure_is_terminal(
     gate = FakeGateRunner(outcomes=[False] * green_attempt + [True])
     monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
 
-    assert _run() == 0
+    assert _run() == 1  # Pending publication refuses fresh work until reconciled.
 
     assert git.head_sha() != before
     assert len(git.merge_calls) == 1

@@ -148,6 +148,7 @@ from git_loopy import rolling_scheduler
 from git_loopy import sources as sources_module
 from git_loopy import session_outcome as session_outcome_module
 from git_loopy import sweep as sweep_module
+from git_loopy.publication import PendingPublication, PublicationError, PublicationJournal
 from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
@@ -4728,6 +4729,9 @@ class _ParallelLoop:
         # observation from its own state.
         self._cost_meter = rolling_pressure.RunCostMeter(denomination=denomination)
         self._host_setup_pressure = rolling_pressure.HostSetupPressure()
+        # Publication identity and completion use the same injected tracker as
+        # the Run's issue source, not a new client hidden inside Integration.
+        self._publication_tracker = route_tracker
         self._dispatch_failures_exhausted = False
         self._pressure = _make_pressure_monitor(
             lane_cap=self._host_capacity,
@@ -7393,6 +7397,11 @@ class _ParallelLoop:
                     serial_required=None,
                 )
             self._finalize_contribution(contribution, published=published)
+            if PublicationJournal(self._git).path.exists():
+                raise PublicationError(
+                    "Publication reconciliation required: pending base publication; "
+                    "preserving work and stopping before fresh execution"
+                )
             # FIFO admission follows the freeing contribution's end, still
             # inside the lock, so the freed Lane cannot be refilled between
             # the two records. Direct admission was already said at the
@@ -7810,9 +7819,46 @@ class _ParallelLoop:
             )
             return False
         try:
+            publication_upstream = self._git.publication_upstream()
+        except git_module.GitError as exc:
+            self._diag.warning("integration #%s: publication push failed: %s", ref, exc)
+            self._emit_contribution_event(
+                contribution, events_module.WRAPPER_INTEGRATION_PUSH_FAILED, message=str(exc),
+            )
+            raise PublicationError(
+                f"Publication reconciliation required for #{ref}: upstream identity "
+                "is unreadable; not mutating base or starting fresh work"
+            ) from exc
+        try:
             if stage.issue_clone:
                 self._git.fetch_sha(str(stage.path), f"refs/heads/{stage.branch}", stage.branch)
+            if (
+                self._config.issue_source == "github"
+                and lane_work.item.kind == "issue" and isinstance(ref, int)
+            ):
+                tracker = self._publication_tracker
+                if tracker is None:
+                    raise PublicationError("publication tracker identity is unavailable")
+                branch = self._git.current_branch()
+                if branch is None:
+                    raise PublicationError("publication needs a named base branch")
+                PublicationJournal(self._git).begin(PendingPublication(
+                    version=1, run_id=self._run_id, issue=ref,
+                    close_requested=any(ref in extract_close_refs(c.message)
+                                        for c in stage_commits),
+                    repository=tracker.repo_view().nwo, branch=branch,
+                    before=pre_base, stage=stage.git.head_sha(),
+                    release_required=any(re.fullmatch(r"v\d+\.\d+\.\d+", label)
+                                         for label in lane_work.item.labels),
+                    leased=self._lease is not None,
+                    upstream=publication_upstream,
+                ))
             self._git.merge(stage.branch)
+        except (PublicationError, OSError) as exc:
+            raise PublicationError(
+                f"Publication reconciliation required for #{ref}: {exc}; "
+                "not mutating base or starting fresh work"
+            ) from exc
         except git_module.GitError as exc:
             self._diag.warning(
                 "integration #%s: publish of verified %s failed: %s; not "
@@ -7821,6 +7867,15 @@ class _ParallelLoop:
             )
             return False
         if not self._base_advanced(pre_base, ref):
+            # A returned, clean no-op is not an interrupted mutation. Keep
+            # uncertain/error cases pending; only this proved no-op retires it.
+            journal = PublicationJournal(self._git)
+            if (
+                journal.path.exists() and self._git.head_sha() == pre_base
+                and not self._git.merge_in_progress()
+                and not self._git.is_dirty() and not self._git.has_untracked()
+            ):
+                journal.complete()
             return False
         stage.published = True
         self._base_publications += 1
@@ -7904,12 +7959,34 @@ class _ParallelLoop:
     ) -> bool:
         """Advance the line, ensure durability, then close and reap the branch."""
         advanced = self._advance_release_line(lane_work.item)
+        journal = PublicationJournal(self._git)
+        record = journal.read()
+        if record is not None and record.release_required and advanced is None:
+            self._diag.error(
+                "integration #%s: final Release-line publication remains unresolved; "
+                "preserving pending publication for operator inspection",
+                lane_work.item.ref,
+            )
+            return False
+        journal.finalized()
         if not self._push_publication(contribution, lane_work.item):
             return False
         self._emit_contribution_event(
             contribution, events_module.WRAPPER_INTEGRATION_PUBLISHED
         )
         self._close_landed(contribution, lane_work.item, pre_base)
+        if journal.path.exists() and isinstance(lane_work.item.ref, int):
+            if (
+                record is not None and not record.close_requested
+                or self._publication_tracker is not None
+                and self._publication_tracker.issue_view(lane_work.item.ref).state == "CLOSED"
+            ):
+                journal.complete()
+            else:
+                # Durable publication still counts as advancement. Its pending
+                # closure stops this Run at the Integration boundary, preserving
+                # the Lane branch rather than publishing the work again.
+                return True
         if advanced is not None:
             next_line, bump_class = advanced
             self._serial._emit(
@@ -7938,6 +8015,16 @@ class _ParallelLoop:
         """
         try:
             upstream = self._git.upstream()
+            record = PublicationJournal(self._git).read()
+            if record is not None:
+                if self._git.publication_upstream() != record.upstream:
+                    raise PublicationError("upstream changed during publication")
+                if self._git.head_sha() != record.final:
+                    raise PublicationError("base changed from final publication")
+                if self._git.is_dirty() or self._git.has_untracked():
+                    raise PublicationError("final publication left base dirty; inspect index/worktree")
+                if record.release_required and record.release_tree is None:
+                    raise PublicationError("final Release-line publication remains unresolved")
             if upstream is None:
                 return True
             if not self._leased(item, "publication push"):
@@ -7948,7 +8035,7 @@ class _ParallelLoop:
                     contribution, events_module.WRAPPER_PUSH_RECORDED
                 )
                 return True
-        except git_module.GitError as exc:
+        except (git_module.GitError, PublicationError) as exc:
             message = str(exc)
         self._diag.warning(
             "integration #%s: publication push failed: %s; "
@@ -7978,12 +8065,11 @@ class _ParallelLoop:
         issue with no ``vX.Y.Z`` Release-target label advances nothing
         (ADR-0066).
 
-        Every failure here is a diagnostic and never a veto: the contribution is
-        already published on base, and a line that would not move cannot retract
-        a merge that already happened. The version copies are written as one
-        transaction (#491) and restored if the commit is refused, so a refusal
-        leaves the trunk on its prior complete Release line rather than a
-        partially advanced one.
+        Failures cannot retract the merge already on base. The version copies
+        are written as one transaction (#491) and restored if the commit is
+        refused. Publication reconciliation (#419) nevertheless keeps a required
+        but unresolved final Release result pending: the caller will not push,
+        close, or dispatch fresh work on the strength of the merge alone.
         """
         try:
             # The label names a Release relative to the last stable one, so the
@@ -8032,15 +8118,18 @@ class _ParallelLoop:
                         item.ref,
                         rollback_exc,
                     )
-            # Caught for the same reason every other fault here is: the merge is
-            # already published, so nothing this method learns may escape and
-            # strand a landed contribution.
+            # Preserve the landed merge. The caller retains its durable identity
+            # and refuses completion when the required final result is missing.
             self._diag.warning(
                 "integration #%s: Release line did not advance: %s", item.ref, exc
             )
             return None
 
         try:
+            PublicationJournal(self._git).release_intent(
+                release_line_commit_subject(next_line.version),
+                (*RELEASE_VERSION_PATHS, *notes_write.commit_paths),
+            )
             self._git.commit_paths(
                 release_line_commit_subject(next_line.version),
                 (*RELEASE_VERSION_PATHS, *notes_write.commit_paths),
@@ -8630,6 +8719,34 @@ async def _run_with_sleep_assertion(
         diag.error(
             "Run refused: cannot prevent idle system sleep: %s; "
             "set GIT_LOOPY_PREVENT_IDLE_SLEEP=off to opt out", exc,
+        )
+        control.close()
+        return exit_code_for("preflight_failed")
+
+    # Base is not Sweep residue. Never let reclamation or a new Agent hide an
+    # unfinished publication, including a pre-protocol, unrecorded merge.
+    try:
+        if git.merge_in_progress():
+            raise RuntimeError(
+                "unfinished base merge; inspect MERGE_HEAD, index and worktree "
+                "and resolve manually before restarting (nothing was reset)"
+            )
+        journal = PublicationJournal(git)
+        if journal.path.exists():
+            reconciliation_lease = _make_lease_lifecycle(
+                config, git, run_id=writers.run_id, diag=diag, residence=residence,
+            )
+            reconciled = journal.reconcile(
+                _make_github_client() if config.issue_source == "github" else None,
+                reconciliation_lease,
+            )
+            if reconciled is not None:
+                diag.info("Publication reconciliation completed for issue #%s", reconciled)
+    except (RuntimeError, git_module.GitError, gh_module.GhError, OSError) as exc:
+        diag.error(
+            "Publication reconciliation refused: %s; inspect %s and base before "
+            "restarting; no Sweep or new work was started",
+            exc, repo_root / ".git-loopy" / "publication.json",
         )
         control.close()
         return exit_code_for("preflight_failed")
