@@ -35,7 +35,7 @@ def _wire(root, monkeypatch, *, release=False):
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: gh)
     client = lp._ParallelFakeClient(fake_git=git, scripted_events=[])
     monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     return git, gh, client
 
 
@@ -132,7 +132,7 @@ def test_recovery_publication_push_failure_is_terminal(
     git.configured_upstream = ("origin", "refs/heads/main")
     git.push_error = git_module.GitError(["git", "push"], 1, "push rejected")
     gate = FakeGateRunner(outcomes=[False] * green_attempt + [True])
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: gate)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
 
     assert _run() == 0
 

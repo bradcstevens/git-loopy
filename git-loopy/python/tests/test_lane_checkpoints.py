@@ -245,7 +245,7 @@ def test_recovery_cannot_reintroduce_the_preserved_checkpoint(tmp_path, monkeypa
 
     git, gh, base = _wire(tmp_path, monkeypatch, Client)
     monkeypatch.setattr(loop_module, "_make_gate_runner",
-                        lambda: FakeGateRunner(outcomes=[False, True]))
+                        lambda **_kwargs: FakeGateRunner(outcomes=[False, True]))
     assert asyncio.run(loop_module.run(lp._pinned_config(42, max_iterations=1))) == 0
     assert git.head_sha() == base
     assert gh.issue_view(42).state == "OPEN"

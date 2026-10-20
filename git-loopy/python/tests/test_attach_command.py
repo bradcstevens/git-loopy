@@ -1298,12 +1298,12 @@ def _assert_attach_does_not_drive_the_host(
             return None
 
     monkeypatch.setattr(loop_module, "_make_client", lambda: _HoldingClient())
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     if placement == "github-actions":
         monkeypatch.setattr(
             loop_module,
             "_make_execution_host",
-            lambda host_placement, *, send_timeout_seconds: _ActionsHost(),
+            lambda host_placement, **_kwargs: _ActionsHost(),
         )
     cfg = RunConfig(
         model="claude-opus-4.8-max",

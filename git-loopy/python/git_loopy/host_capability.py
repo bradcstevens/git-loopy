@@ -201,6 +201,7 @@ async def observe_executing_host_capabilities(
             built = host_factory(
                 config.execution_host,
                 send_timeout_seconds=config.send_timeout_seconds,
+                gate_timeout_seconds=config.gate_timeout_seconds,
             )
         except Exception:
             return None

@@ -50,7 +50,7 @@ def test_saved_dynamic_authority_preserves_exact_effort_semantics(
         issues=[_make_issue(42, labels=labels)],
     )
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)

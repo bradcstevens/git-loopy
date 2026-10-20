@@ -84,6 +84,7 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
         "otel_enabled",
         "host_yield",
         "prevent_idle_sleep",
+        "gate_timeout_seconds",
         "send_timeout_seconds",
         "deny_tools",
         "deny_skills",
@@ -241,6 +242,34 @@ def test_set_global_scope_writes_under_config_home(tmp_path: Path) -> None:
     )
     assert rc == 0
     assert settings.global_config_path(env).is_file()
+
+
+def test_gate_bound_can_be_saved_in_both_scopes_and_environment_wins(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    for scope, value in (("global", "300"), ("project", "200.5")):
+        assert configcmd.run_set(
+            "gate_timeout_seconds", value, scope=scope, repo_root=tmp_path,
+            env=env, out=_Sink(), err=_Sink(),
+        ) == 0
+        out = _Sink()
+        assert configcmd.run_get(
+            "gate_timeout_seconds", repo_root=tmp_path, env=env,
+            out=out, err=_Sink(),
+        ) == 0
+        assert out.text == value
+    out = _Sink()
+    assert configcmd.run_get(
+        "gate_timeout_seconds", repo_root=tmp_path,
+        env={**env, "GIT_LOOPY_GATE_TIMEOUT_SECONDS": "100"},
+        out=out, err=_Sink(),
+    ) == 0
+    assert out.text == "100"
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "inf", "nan", "-inf", "1e400", "no"])
+def test_config_set_refuses_invalid_gate_bounds(bad: str) -> None:
+    with pytest.raises(configcmd.ConfigCommandError, match="positive and finite"):
+        configcmd.coerce_value("gate_timeout_seconds", bad)
 
 
 def test_set_rejects_unknown_key(tmp_path: Path) -> None:

@@ -7242,7 +7242,7 @@ def test_saved_dynamic_work_without_access_starts_no_classifier_or_fallback(
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=git, scripted_events=[])
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _harness(monkeypatch, ("gpt-5.6-terra", ["high"], True))
     _listing(monkeypatch)
     monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "setup-only-key")
@@ -7341,7 +7341,7 @@ def test_saved_routing_deadline_includes_retained_static_validation(
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=git, scripted_events=[])
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
@@ -7448,7 +7448,7 @@ def test_saved_legacy_config_refuses_work_until_a_routing_choice(
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=git, scripted_events=[])
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     path = settings.project_config_path(tmp_path)
     settings.write_config_atomic(path, {
         "model": "gpt-5.6-terra",
@@ -7507,7 +7507,7 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=git, scripted_events=[])
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
@@ -7707,7 +7707,7 @@ def test_first_setup_readiness_recovers_into_the_actual_routed_session(
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=git, scripted_events=[])
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     for name in (
@@ -7954,7 +7954,7 @@ def test_fresh_setup_records_dynamic_and_the_run_uses_that_session(
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=git, scripted_events=[])
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     monkeypatch.setattr(cli, "_make_label_client", lambda: _FakeLabelClient())
@@ -8153,7 +8153,7 @@ def test_no_config_local_run_refuses_before_a_legacy_session(
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=_git, scripted_events=[])
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     for name in (
@@ -8235,7 +8235,7 @@ def test_explicit_static_on_no_config_needs_no_leaderboard(
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=git, scripted_events=[])
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
@@ -8590,7 +8590,7 @@ def test_saved_setup_attributes_classification_and_selection_to_run_consumption(
             issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
         )
         monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
         client = _ParallelFakeClient(
             fake_git=fake_git,
             scripted_events=[_billed_routing_usage("gpt-5.6-terra", "0.10")],
@@ -9467,7 +9467,7 @@ def test_recorded_routing_reuse_preserves_publication_recovery_bounds(
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=git, scripted_events=[])
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     labels = [
         "ready-for-agent", "task-type:implementation", "operator-owned",
         *(["parallel-safe"] if mode == "lane" else []),

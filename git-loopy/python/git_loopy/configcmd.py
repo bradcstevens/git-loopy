@@ -271,6 +271,20 @@ def _coerce_csv(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _coerce_gate_timeout(raw: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ConfigCommandError(
+            f"gate_timeout_seconds must be positive and finite (got {raw!r})"
+        ) from None
+    if not math.isfinite(value) or value <= 0:
+        raise ConfigCommandError(
+            f"gate_timeout_seconds must be positive and finite (got {raw!r})"
+        )
+    return value
+
+
 def _coerce_enabled_skills(raw: str) -> list[str]:
     return sorted(set(_coerce_csv(raw)))
 
@@ -350,6 +364,11 @@ _KEYS: dict[str, _Key] = {
         _Key("otel_enabled", _coerce_bool, lambda rc: rc.run.otel_enabled),
         _Key("host_yield", _coerce_host_yield, lambda rc: rc.run.host_yield),
         _Key("prevent_idle_sleep", _coerce_bool, lambda rc: rc.run.prevent_idle_sleep),
+        _Key(
+            "gate_timeout_seconds",
+            _coerce_gate_timeout,
+            lambda rc: rc.run.gate_timeout_seconds,
+        ),
         _Key(
             "send_timeout_seconds",
             _coerce_timeout,

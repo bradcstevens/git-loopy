@@ -73,7 +73,7 @@ def test_saved_authority_revalidates_prepared_work_at_pickup(
         ],
     )
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(
         loop_module.execution_host_module, "local_execution_host_capacity", lambda: 2,
     )
@@ -432,7 +432,7 @@ def test_saved_authority_prepares_the_next_pickup_before_other_candidates(
         ref: set(tracker.issue_labels(ref)) for ref in [*running, next_issue, *pending]
     }
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(
         loop_module.execution_host_module, "local_execution_host_capacity", lambda: 2,
     )

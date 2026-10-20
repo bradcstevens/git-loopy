@@ -89,6 +89,45 @@ def test_resolve_all_empty_yields_builtin_defaults() -> None:
     assert resolved.run.skill_policy.global_.present is False
 
 
+@pytest.mark.parametrize(
+    ("env", "project", "global_", "expected"),
+    [
+        ({}, {}, {}, 3600.0),
+        ({}, {}, {"gate_timeout_seconds": 300}, 300.0),
+        ({}, {"gate_timeout_seconds": 200.5}, {"gate_timeout_seconds": 300}, 200.5),
+        ({"GIT_LOOPY_GATE_TIMEOUT_SECONDS": "100"}, {"gate_timeout_seconds": 200}, {}, 100.0),
+    ],
+)
+def test_gate_bound_follows_config_precedence(env, project, global_, expected) -> None:
+    assert _resolve(env=env, project=project, global_=global_).run.gate_timeout_seconds == expected
+
+
+@pytest.mark.parametrize("bad", ["no", "0", "-1", "inf", "-inf", "nan", "1e400"])
+def test_invalid_gate_environment_bound_warns_and_falls_through(bad: str) -> None:
+    warnings: list[str] = []
+    resolved = _resolve(
+        env={"GIT_LOOPY_GATE_TIMEOUT_SECONDS": bad},
+        project={"gate_timeout_seconds": 200}, warn=warnings.append,
+    )
+    assert resolved.run.gate_timeout_seconds == 200
+    assert len(warnings) == 1
+    assert "GIT_LOOPY_GATE_TIMEOUT_SECONDS" in warnings[0]
+
+
+@pytest.mark.parametrize("bad", [0, -1, float("inf"), float("nan")])
+def test_invalid_saved_gate_bound_warns_and_falls_through(bad: float) -> None:
+    warnings: list[str] = []
+    resolved = _resolve(
+        project={"gate_timeout_seconds": bad},
+        global_={"gate_timeout_seconds": 300}, warn=warnings.append,
+    )
+    assert resolved.run.gate_timeout_seconds == 300
+    assert len(warnings) == 1
+    assert "project" in warnings[0]
+    with pytest.raises(ValueError, match="gate_timeout_seconds"):
+        RunConfig(gate_timeout_seconds=bad)
+
+
 def test_enabled_skills_preserves_project_presence_and_explicit_empty() -> None:
     absent = _resolve(global_={"enabled_skills": ["global-skill"]})
     empty = _resolve(

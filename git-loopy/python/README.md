@@ -1477,6 +1477,20 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`      | `7200` (2 h)                   | Per-Iteration `send_and_wait` timeout. The SDK's default of `60` is far too short for autonomous Iterations that frequently run 30+ minutes.                                                                      |
 | `GIT_LOOPY_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker. Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. When requested on a non-TTY run, the run warns and falls back to the configured model. |
 
+The gate bound follows environment > project `gate_timeout_seconds` > global
+`gate_timeout_seconds` > 3600 seconds. Set it with
+`git-loopy config set --project gate_timeout_seconds 5400` (or `--global`).
+It remains one finite, positive hang-catching bound for every row. Invalid
+environment or numeric Config bounds warn and fall through; `config set`
+rejects them. Every attempted gate row logs its duration beside the bound, and
+strictly more than half the bound produces one warning naming the row.
+
+`git-loopy doctor` also reports `python3` version-manager shims with both the
+shim and backing interpreter paths and their measured startup times. Run
+preflight shares this non-blocking advisory. No shim means no Python-startup
+report; probe failures are explicit warnings. Neither `PATH` nor feedback-loop
+rows are changed. See [feedback-loop guidance](../../docs/customization.md#feedback-loops).
+
 CLI flags (`--version`, `--model ID`, `--reasoning-effort EFFORT`,
 `--context-tier TIER`,
 `--route-policy POLICY`,
@@ -1548,6 +1562,7 @@ demotion_threshold = 3
 include_prs = true
 otel_enabled = false
 send_timeout_seconds = 7200
+gate_timeout_seconds = 3600  # one finite hang-catching bound for every gate row
 enabled_skills = ["tdd", "code-review"]
 deny_tools = ["bash"]
 deny_skills = []   # deprecated final guard — prefer omitting from enabled_skills
@@ -1557,7 +1572,8 @@ The **persisted** knobs are `model`, `reasoning_effort`, `context_tier`, `route_
 `classifier_model`,
 `classifier_effort`, `issue_source`,
 `include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`,
-`host_yield`, `prevent_idle_sleep`, `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
+`host_yield`, `prevent_idle_sleep`, `send_timeout_seconds`, `gate_timeout_seconds`,
+`enabled_skills`, and the two denylists. The
 model/effort **capability gate** (below) still applies to a config-supplied
 model. The two denylists are
 **unioned** across all four sources (CLI ∪ env ∪ project ∪ global) — never
@@ -1678,6 +1694,7 @@ above (`model`, `reasoning_effort`, `context_tier`, `route_policy`,
 `classifier_model`, `classifier_effort`,
 `issue_source`, `max_nmt_strikes`, `demotion_threshold`,
 `include_prs`, `otel_enabled`, `host_yield`, `prevent_idle_sleep`, `send_timeout_seconds`,
+`gate_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
 

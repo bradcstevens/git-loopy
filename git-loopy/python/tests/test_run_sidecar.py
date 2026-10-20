@@ -27,6 +27,7 @@ def _config() -> RunConfig:
         reasoning_effort="high",
         issue_source="github",
         host_yield="none",
+        gate_timeout_seconds=125.5,
     )
 
 

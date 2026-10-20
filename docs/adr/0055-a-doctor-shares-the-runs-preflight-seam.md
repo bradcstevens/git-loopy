@@ -47,6 +47,16 @@ Run to learn something knowable in advance.
 worked around later: the moment an exception is made, the drift this ADR exists to prevent begins.
 A check worth having is a check the Run should be performing.
 
+## Amendment: shared Python-startup advisory (#907)
+
+The shared environment preflight also carries non-blocking warnings. When
+`python3` resolves through a version-manager `shims` directory, both doctor and
+the Run report the shim, its backing interpreter, and their measured startup
+times. Probe failures remain explicit warnings, not fabricated measurements.
+This is performance evidence, not a missing Run prerequisite: it does not make
+doctor nonzero or prevent a Run. With no shim it adds no report. Neither caller
+rewrites `PATH` or any feedback-loop row, including under `doctor --apply`.
+
 Moving environment checks into Run preflight changes when a Run fails — earlier, and for reasons it
 previously discovered late or not at all. This is Python-Runner-only for the reasons given in
 ADR-0054, and enters no Conformance fixture.

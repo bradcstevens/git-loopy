@@ -98,6 +98,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Collection, Literal, Mapping
 
 from git_loopy import settings
+from git_loopy.gate import resolve_gate_timeout_seconds
 from git_loopy.config import (
     DEFAULT_MAX_NMT_STRIKES,
     DEFAULT_SEND_TIMEOUT_SECONDS,
@@ -3131,7 +3132,7 @@ def resolve_config(
     ``model``, ``reasoning_effort``, ``max_nmt_strikes``, ``issue_source``,
     ``include_prs``, ``enabled_skills``, ``deny_tools``, ``deny_skills``,
     ``otel_enabled``, ``host_yield``, ``prevent_idle_sleep``,
-    ``send_timeout_seconds`` and the
+    ``send_timeout_seconds``, ``gate_timeout_seconds`` and the
     ``[routing]`` table. The
     per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``,
     temporary Skill overlays) are NEVER read from a config
@@ -3256,6 +3257,9 @@ def resolve_config(
         host_yield=_resolve_host_yield(env, project, global_),
         prevent_idle_sleep=_resolve_prevent_idle_sleep(env, project, global_),
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
+        gate_timeout_seconds=resolve_gate_timeout_seconds(
+            env, project=project, global_=global_, warn=warn,
+        ),
         routing=routing,
         context_tier=context_tier,
         context_tier_override=(

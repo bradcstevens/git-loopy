@@ -251,7 +251,7 @@ def _wire(
         serial_closes=serial_closes,
     )
     mp.setattr(loop_module, "_make_client", lambda: client)
-    mp.setattr(loop_module, "_make_gate_runner", lambda: gate)
+    mp.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
     return fake_git, fake_gh
 
 
@@ -550,7 +550,7 @@ def _parallel_over_a_non_rolling_source(root: Path, mp: pytest.MonkeyPatch) -> N
         "_make_client",
         lambda: lp._ParallelFakeClient(fake_git=fake_git, scripted_events=[]),
     )
-    mp.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    mp.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     assert asyncio.run(loop_module.run(_config(1, issue_source="prds"))) == 0
 
 

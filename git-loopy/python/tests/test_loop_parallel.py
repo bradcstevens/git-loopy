@@ -620,7 +620,7 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
 
     fake_gate = FakeGateRunner()
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: fake_gate
+        loop_module, "_make_gate_runner", lambda **_kwargs: fake_gate
     )
 
     cfg = RunConfig(
@@ -741,7 +741,7 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
 
     fake_gate = FakeGateRunner()
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: fake_gate)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: fake_gate)
 
     cfg = RunConfig(
         model="claude-opus-4.8",
@@ -811,7 +811,7 @@ def test_parallel_auto_resolution_session_reuses_lane_routed_model(
     monkeypatch.setattr(
         loop_module,
         "_make_gate_runner",
-        lambda: FakeGateRunner(outcomes=[False, True], default=True),
+        lambda **_kwargs: FakeGateRunner(outcomes=[False, True], default=True),
     )
 
     cfg = RunConfig(
@@ -882,7 +882,7 @@ def test_parallel_lane_with_an_unconfigured_canonical_task_type_uses_default(
         scripted_events=[_usage_event("claude-opus-4.8")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8",
@@ -965,7 +965,7 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     cfg = RunConfig(
@@ -1095,7 +1095,7 @@ def test_parallel_single_eligible_issue_starts_lane_immediately(
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     cfg = RunConfig(
@@ -1169,7 +1169,7 @@ def test_a_lane_session_window_updates_that_issues_model_context(
         serial_closes=True,
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     assert asyncio.run(loop_module.run(RunConfig(
         model="claude-opus-4.8-max",
@@ -1228,7 +1228,7 @@ def test_lane_windows_correct_each_issue_without_crossing(
 
     fake_client = _PerIssueWindows(fake_git=fake_git, scripted_events=[])
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     assert asyncio.run(loop_module.run(RunConfig(
         model="claude-opus-4.8-max",
@@ -1275,7 +1275,7 @@ def test_a_failed_lane_window_is_retried_without_blocking_the_lane(
     window = _capacity_window(256_000, used=9_000)
     fake_client = _ParallelFakeClient(fake_git=fake_git, scripted_events=[window])
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     config = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
@@ -1358,7 +1358,7 @@ def test_parallel_lane_refills_without_waiting_for_sibling(
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     setup_43_started = asyncio.Event()
@@ -1476,7 +1476,7 @@ def test_parallel_lane_cap_never_exceeded_under_bursty_refill(
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     real_add_worktree = fake_git.add_worktree
@@ -1596,7 +1596,7 @@ def test_parallel_contribution_survives_lane_reuse(
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     cfg = RunConfig(
@@ -1713,7 +1713,7 @@ def test_parallel_stale_candidate_never_consumes_a_lane(
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     cfg = RunConfig(
@@ -1800,7 +1800,7 @@ def test_parallel_lane_checkpoint_commits_in_its_own_worktree(
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     cfg = RunConfig(
@@ -1898,7 +1898,7 @@ def test_parallel_cancellation_salvages_a_dirty_lane_workspace_before_reclaim(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
@@ -1987,7 +1987,7 @@ def test_parallel_a_cancelled_contribution_is_not_demotion_evidence(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     evidence: list[tuple[Any, ...]] = []
 
     def spy_on_demotion(
@@ -2065,7 +2065,7 @@ def test_parallel_operator_stop_drains_then_cancels_only_the_lane_agent(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     built = _capture_parallel_loops(monkeypatch)
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -2137,7 +2137,7 @@ def test_second_stop_before_lane_send_starts_no_agent_session(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
@@ -2189,7 +2189,7 @@ def test_second_stop_before_host_dispatch_starts_no_host_contribution(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     class _NeverRunHost:
         placement = "test-host"
@@ -2301,7 +2301,7 @@ def test_parallel_the_first_stop_stops_refill_and_still_integrates_started_work(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     built = _capture_parallel_loops(monkeypatch)
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -2369,7 +2369,7 @@ def test_parallel_a_stop_never_interrupts_the_publish_transaction(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     built = _capture_parallel_loops(monkeypatch)
     stopped_during: list[str] = []
     cancellation_requests: list[int] = []
@@ -2479,7 +2479,7 @@ def test_parallel_a_second_stop_gesture_still_reclaims_the_lane_workspace(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
@@ -2522,7 +2522,7 @@ def test_parallel_exception_salvages_and_reclaims_a_dirty_lane_workspace(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     crashed_lane: FakeGitClient | None = None
 
     async def crash_local_lane(
@@ -2605,7 +2605,7 @@ def test_parallel_workspace_root_failure_refuses_the_run_at_preflight(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -2720,7 +2720,7 @@ def test_parallel_lane_checkpoint_failure_keeps_its_terminal_reason(
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     cfg = RunConfig(
@@ -2818,7 +2818,7 @@ def test_parallel_inline_reclaim_salvages_a_lane_its_checkpoint_left_dirty(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -2874,7 +2874,7 @@ def test_parallel_integration_lands_and_closes_both_lanes(
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     # All-green gate: every Lane's feedback loops pass, so every Lane lands.
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     cfg = RunConfig(
@@ -2969,7 +2969,7 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     exit_code = asyncio.run(
         loop_module.run(
@@ -3069,7 +3069,7 @@ def test_parallel_integration_never_promotes_a_major_to_stable(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     assert asyncio.run(
         loop_module.run(
@@ -3117,7 +3117,7 @@ def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     def reject_release_commit(message: str, paths: Sequence[Path | str]) -> str:
         fake_git.commit_paths_calls.append((message, tuple(str(path) for path in paths)))
@@ -3188,7 +3188,7 @@ def test_parallel_integration_survives_a_release_tag_read_that_fails(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     def refuse_tag_read() -> str | None:
         raise git_module.GitError(["git", "tag"], 128, "not a git repository")
@@ -3239,7 +3239,7 @@ def test_parallel_integration_continues_a_prerelease_release_line(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     assert asyncio.run(
         loop_module.run(
@@ -3287,7 +3287,7 @@ def test_parallel_integration_advances_the_release_line_holding_the_integration_
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     held: list[bool] = []
     advance = loop_module._ParallelLoop._advance_release_line
@@ -3353,7 +3353,7 @@ def test_parallel_no_lane_contribution_carries_a_release_version_change(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     release_write_roots: list[Path] = []
     write_release = loop_module.write_repository_release_version
@@ -3446,7 +3446,7 @@ def _release_line_after_run(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     assert asyncio.run(
         loop_module.run(
@@ -3535,7 +3535,7 @@ def test_git_loopy_version_reports_the_line_a_run_advanced(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     assert asyncio.run(
         loop_module.run(
@@ -3616,7 +3616,7 @@ def test_parallel_integration_gates_privately_before_publishing(
         ),
     )
     gate = _BaseWatchingGateRunner(fake_git)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: gate)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
 
     exit_code = asyncio.run(
         loop_module.run(
@@ -3701,7 +3701,7 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     exit_code = asyncio.run(
@@ -3784,7 +3784,7 @@ def test_parallel_integration_red_gate_keeps_branch_and_publishes_nothing(
     # All-red gate: every Lane's feedback loops fail on the initial landing AND
     # on every auto-resolution attempt, so no Lane ever lands.
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner(default=False)
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner(default=False)
     )
 
     cfg = RunConfig(
@@ -3880,7 +3880,7 @@ def test_parallel_integration_auto_resolves_red_lane_then_lands(
     monkeypatch.setattr(
         loop_module,
         "_make_gate_runner",
-        lambda: FakeGateRunner(outcomes=[False, False, True], default=True),
+        lambda **_kwargs: FakeGateRunner(outcomes=[False, False, True], default=True),
     )
 
     cfg = RunConfig(
@@ -3997,7 +3997,7 @@ def test_parallel_auto_resolution_does_not_consume_the_lane_cap(
         # #42's private stage gates red once, which is what puts it into bounded
         # auto-resolution; every other stage (including #42's recovery attempt)
         # is green.
-        lambda: FakeGateRunner(by_issue={42: [False]}),
+        lambda **_kwargs: FakeGateRunner(by_issue={42: [False]}),
     )
 
     setup_44_started = asyncio.Event()
@@ -4144,7 +4144,7 @@ def test_parallel_integration_never_overlaps_another_contribution(
     monkeypatch.setattr(
         loop_module,
         "_make_gate_runner",
-        lambda: FakeGateRunner(by_issue={42: [False]}),
+        lambda **_kwargs: FakeGateRunner(by_issue={42: [False]}),
     )
 
     cfg = RunConfig(
@@ -4219,7 +4219,7 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
     # All-green gate: the conflict is a *merge* failure, not a gate failure, so
     # 42's first auto-resolution attempt (and 43's landing) pass.
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner(default=True)
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner(default=True)
     )
 
     cfg = RunConfig(
@@ -4325,7 +4325,7 @@ def test_parallel_integration_falls_back_to_serial_after_k_attempts(
     monkeypatch.setattr(
         loop_module,
         "_make_gate_runner",
-        lambda: FakeGateRunner(outcomes=[False, False, False, False], default=True),
+        lambda **_kwargs: FakeGateRunner(outcomes=[False, False, False, False], default=True),
     )
 
     cfg = RunConfig(
@@ -4441,7 +4441,7 @@ def test_parallel_run_drains_lanes_then_serial_in_one_run(
     # All-green gate: every landed Lane's feedback loops pass, so both parallel-
     # safe Lanes land at Integration.
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     cfg = RunConfig(
@@ -4575,7 +4575,7 @@ def _wire_two_lane_rolling(
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner()
     )
 
     cfg = RunConfig(
@@ -4897,7 +4897,7 @@ def test_a_defeated_issue_never_winds_the_parallel_run_down(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     built: list[loop_module._ParallelLoop] = []
     host = _DefeatThenPublishExecutionHost(
@@ -5458,7 +5458,7 @@ def test_parallel_integration_reports_a_timed_out_loop_as_a_timeout(
     monkeypatch.setattr(
         loop_module,
         "_make_gate_runner",
-        lambda: FakeGateRunner(default=False, failure=timed_out),
+        lambda **_kwargs: FakeGateRunner(default=False, failure=timed_out),
     )
 
     exit_code = asyncio.run(loop_module.run(cfg))
@@ -5565,7 +5565,7 @@ def test_parallel_run_start_reports_parallel_mode_and_lane_cap(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -5610,7 +5610,7 @@ def test_parallel_over_a_non_rolling_source_reports_the_degrade(
         "_make_client",
         lambda: _ParallelFakeClient(fake_git=fake_git, scripted_events=[]),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -5667,7 +5667,7 @@ def test_parallel_over_a_rolling_source_reports_no_degrade(
             serial_closes=True,
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -5714,7 +5714,7 @@ def test_parallel_reports_serial_fallback_when_nothing_carries_parallel_safe(
             serial_closes=True,
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -5782,7 +5782,7 @@ def test_parallel_serial_fallback_separates_already_worked_from_unlabelled(
             serial_closes=True,
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -5841,7 +5841,7 @@ def test_parallel_reports_latched_serial_demand_when_it_latches(
             serial_closes=True,
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -5914,7 +5914,7 @@ def test_parallel_latched_serial_demand_is_visible_even_when_stranded(
             serial_closes=True,
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -5972,7 +5972,7 @@ def _wire_rolling_run(
             serial_closes=True,
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     return fake_gh
 
 
@@ -7832,7 +7832,7 @@ def test_parallel_never_ends_empty_on_a_partial_pool_read(
             serial_closes=True,
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -7935,7 +7935,7 @@ def test_parallel_recovers_when_a_granted_serial_turn_cannot_read_the_pool(
             serial_closes=True,
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     # Put the refusal inside the first serial Iteration's own collection —
     # after the peek that proved #44 exists, before the Pickup that would bind
@@ -8027,7 +8027,7 @@ def test_parallel_keeps_its_proven_empty_pool_when_the_fallback_read_gives_out(
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
     fake_client = _ParallelFakeClient(fake_git=fake_git, scripted_events=[])
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     # Arm on the announcement the driver makes immediately before the fallback
     # Iteration, so the refusal lands on that Iteration's collection and on no
@@ -8144,7 +8144,7 @@ def test_parallel_lanes_resume_refilling_after_an_interleaved_serial_iteration(
         serial_closes=True,
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -8433,7 +8433,7 @@ def test_parallel_serial_iteration_defeat_ends_the_run_all_skipped_never_stuck(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -8651,8 +8651,16 @@ def test_lane_commits_in_an_issue_clone_without_changing_source_refs(
         loop_module, "_make_gate_runner", loop_module.gate_module.AgentsMdGateRunner
     )
 
-    asyncio.run(loop_module.run(_pinned_config(42, max_iterations=1)))
+    asyncio.run(loop_module.run(dataclass_replace(
+        _pinned_config(42, max_iterations=1), gate_timeout_seconds=123.5,
+    )))
 
+    if not cancelled and not leave_dirty:
+        log = "\n".join(
+            path.read_text() for path in (tmp_path / ".git-loopy" / "logs").glob("*.log")
+        )
+        assert "Gate row 'Proof': passed; duration=" in log
+        assert "bound=123.5s" in log
     assert len(observed) == 1
     if cancelled:
         assert source.head_sha() == base
@@ -8840,7 +8848,7 @@ def test_parallel_serial_iteration_that_binds_nothing_ends_the_run_all_skipped(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -8957,7 +8965,7 @@ def _run_under_pressure(tmp_path, monkeypatch) -> int:
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -9058,7 +9066,7 @@ def test_parallel_narrows_lane_concurrency_under_sustained_rate_limits(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _wire_production_pressure(monkeypatch)
 
     cfg = RunConfig(
@@ -9166,7 +9174,7 @@ def test_a_rolling_run_replays_from_its_own_record_to_the_same_dashboard(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     live = LiveRunState()
     cfg = RunConfig(
@@ -9228,7 +9236,7 @@ def test_parallel_accounts_consumption_per_contribution_end_to_end(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -9324,7 +9332,7 @@ def test_parallel_summary_carries_no_row_for_an_in_flight_contribution(
         return inner_run(cwd, *args, **kwargs)
 
     fake_gate.run = gated_run  # type: ignore[method-assign]
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: fake_gate)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: fake_gate)
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -9407,7 +9415,7 @@ def test_a_lane_binding_publishes_the_same_routing_record_serial_does(
             fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     assert asyncio.run(
         loop_module.run(
@@ -9459,7 +9467,7 @@ def test_a_lane_that_stalled_escalates_at_its_next_serial_pickup(
             fake_git=fake_git, scripted_events=[_usage_event("claude-sonnet-5")]
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     asyncio.run(
         loop_module.run(
@@ -9515,7 +9523,7 @@ def test_a_lane_stall_and_a_serial_stall_skip_one_issue_at_its_strike_budget(
             fake_git=fake_git, scripted_events=[_usage_event("claude-sonnet-5")]
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     asyncio.run(
         loop_module.run(
@@ -9778,7 +9786,7 @@ def test_a_lane_classifies_its_unlabelled_issue_before_it_routes(
             scripted_events=[_usage_event("claude-opus-4.7")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     tracker = _RecordingTaskTypeLabelClient()
     monkeypatch.setattr(loop_module, "_make_task_type_label_client", lambda: tracker)
 
@@ -9864,7 +9872,7 @@ def test_a_lane_pickup_labels_against_the_baseline_integration_advances_from(
             scripted_events=[_usage_event("claude-opus-4.7")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     tracker = _RecordingTaskTypeLabelClient()
     monkeypatch.setattr(loop_module, "_make_task_type_label_client", lambda: tracker)
     monkeypatch.setattr(
@@ -9932,7 +9940,7 @@ def test_a_parallel_run_start_reads_back_the_routing_it_parsed(
             scripted_events=[_usage_event("gpt-5-mini")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     asyncio.run(
         loop_module.run(
@@ -10108,8 +10116,11 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
     class _RecordingHost(_RemoteBranchExecutionHost):
         pass
 
-    def _fake_factory(placement: str, *, send_timeout_seconds: float) -> Any:
+    def _fake_factory(
+        placement: str, *, send_timeout_seconds: float, gate_timeout_seconds: float,
+    ) -> Any:
         assert placement == "github-actions"
+        assert gate_timeout_seconds == cfg.gate_timeout_seconds
         # The Run's own send timeout has to cross the machine boundary on the
         # request: the job is a fresh process elsewhere and inherits none of
         # this Run's configuration, so a host built without it would leave the
@@ -10634,8 +10645,7 @@ def test_an_execution_host_that_cannot_be_built_refuses_the_run_at_preflight(
     )
     cfg = dataclass_replace(cfg, execution_host="github-actions")
 
-    def _refuse(placement: str, *, send_timeout_seconds: float) -> Any:
-        del send_timeout_seconds
+    def _refuse(placement: str, **_kwargs: object) -> Any:
         raise ValueError(
             "GIT_LOOPY_GITHUB_ACTIONS_CAPACITY must be a finite positive integer"
         )
@@ -10811,7 +10821,7 @@ def test_a_static_route_reaches_each_lanes_own_work_session(
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(
         monkeypatch,
         ("wide-model", ["low", "high"], True),
@@ -10867,7 +10877,7 @@ def test_a_refused_static_route_opens_no_lane_at_all(tmp_path, monkeypatch) -> N
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(monkeypatch, ("wide-model", ["low", "high"], False))
 
     cfg = RunConfig(
@@ -10905,7 +10915,7 @@ def test_a_dynamic_policy_override_reaches_lanes_without_routing_access(
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(monkeypatch, ("gpt-5-mini", ["max"], True))
     monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
 
@@ -11150,7 +11160,7 @@ def test_a_dynamic_route_reaches_each_lanes_own_work_session(
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
     )
@@ -11212,7 +11222,7 @@ def test_a_saved_routing_choice_reaches_lanes_only_after_fresh_readiness(
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
     )
@@ -11316,7 +11326,7 @@ def test_a_lane_whose_dynamic_route_is_unavailable_opens_no_session(
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
     )
@@ -11370,7 +11380,7 @@ def _dynamic_retry_lane_run(
     )
     fake_client._session_cls = OutcomeSession
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
     )
@@ -12173,7 +12183,7 @@ def test_each_lanes_final_dynamic_route_is_published_to_its_own_issue(
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
     )
@@ -12227,7 +12237,7 @@ def test_one_lanes_refused_projection_does_not_hold_up_the_other(
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
     )
@@ -12274,7 +12284,7 @@ def test_a_lane_whose_binding_cannot_be_recorded_opens_no_session(
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     original = persist_module.EventLogWriter.write
 
@@ -12328,7 +12338,7 @@ def _rolling_dynamic_run(
                 return await super().send_and_wait(prompt, **kwargs)
         fake_client._session_cls = ScriptedSession
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(
         monkeypatch,
         *overrides.pop(
@@ -12899,7 +12909,7 @@ def test_a_rolling_run_prepares_the_candidates_no_lane_has_taken(
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
     )
@@ -12953,7 +12963,7 @@ def test_preparation_reserves_nothing_and_opens_no_session(
         fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
     )
@@ -13007,7 +13017,7 @@ def test_a_real_run_takes_and_gives_back_the_lease_on_the_issue_it_works(
             serial_closes=True,
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -13070,7 +13080,7 @@ def test_a_lane_takes_and_gives_back_the_lease_on_the_issue_it_works(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -13156,7 +13166,7 @@ def test_a_lane_whose_issue_another_run_holds_opens_no_session(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -13242,7 +13252,7 @@ def test_a_lane_whose_lease_was_stolen_publishes_nothing_and_closes_nothing(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -13300,7 +13310,7 @@ def test_each_lane_holds_its_own_lease_and_one_contention_frees_no_other(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -13376,7 +13386,7 @@ def test_a_lane_whose_lease_remote_cannot_be_read_passes_over_and_ends(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     cfg = RunConfig(
         model="claude-opus-4.8-max",
@@ -13514,7 +13524,7 @@ def test_a_parked_contribution_keeps_its_lease_until_it_is_integrated(
     monkeypatch.setattr(
         loop_module,
         "_make_gate_runner",
-        lambda: FakeGateRunner(by_issue={42: [False]}),
+        lambda **_kwargs: FakeGateRunner(by_issue={42: [False]}),
     )
 
     cfg = RunConfig(

@@ -428,6 +428,7 @@ def _make_execution_host(
     placement: str,
     *,
     send_timeout_seconds: float,
+    gate_timeout_seconds: float | None = None,
 ) -> execution_host_module.ExecutionHost | None:
     """Construct the **Execution host** the operator named, or ``None`` for local.
 
@@ -458,6 +459,7 @@ def _make_execution_host(
             capacity=actions_host_module.github_actions_capacity(),
             workflow_ref=actions_host_module.workflow_ref(client),
             send_timeout_seconds=send_timeout_seconds,
+            gate_timeout_seconds=gate_timeout_seconds,
         )
     raise ValueError(f"no adapter exists for execution host {placement!r}")
 
@@ -489,7 +491,11 @@ def _make_task_type_label_client() -> gh_module.SubprocessTaskTypeLabelClient:
     return gh_module.SubprocessTaskTypeLabelClient()
 
 
-def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
+def _make_gate_runner(
+    *,
+    timeout_seconds: float | None = None,
+    diagnostics: logging.Logger | None = None,
+) -> gate_module.AgentsMdGateRunner:
     """Construct the per-invocation runner-side Integration gate (#60, ADR-0009).
 
     Factored to its own module-level function — mirroring :func:`_make_git_client`
@@ -506,14 +512,15 @@ def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
     own session), so :func:`run` does not call this factory. It ships now purely as
     the injectable seam the parallel slices consume.
 
-    The per-loop wall-clock bound (#374) is resolved here from
-    ``GIT_LOOPY_GATE_TIMEOUT_SECONDS``, env-only and inside the factory exactly as
-    :func:`_make_worktree_setup` resolves ``GIT_LOOPY_WORKTREE_SETUP`` — both are
-    Parallel-mode-only seam knobs, and keeping the factory zero-argument is what
-    lets every Integration test keep monkeypatching it with a bare ``lambda:``.
+    A Run supplies its resolved Config bound and Run log. Standalone callers
+    retain the environment/default resolution.
     """
     return gate_module.AgentsMdGateRunner(
-        timeout_seconds=gate_module.resolve_gate_timeout_seconds(os.environ)
+        timeout_seconds=(
+            gate_module.resolve_gate_timeout_seconds(os.environ)
+            if timeout_seconds is None else timeout_seconds
+        ),
+        diagnostics=diagnostics,
     )
 
 
@@ -8521,6 +8528,7 @@ async def _run_with_sleep_assertion(
             observed_host = _make_execution_host(
                 config.execution_host,
                 send_timeout_seconds=config.send_timeout_seconds,
+                gate_timeout_seconds=config.gate_timeout_seconds,
             )
         except (ValueError, actions_host_module.ActionsError) as exc:
             print(
@@ -8658,6 +8666,7 @@ async def _run_with_sleep_assertion(
             else _make_execution_host(
                 config.execution_host,
                 send_timeout_seconds=config.send_timeout_seconds,
+                gate_timeout_seconds=config.gate_timeout_seconds,
             )
         )
     except (ValueError, actions_host_module.ActionsError) as exc:
@@ -8715,6 +8724,8 @@ async def _run_with_sleep_assertion(
             _make_label_client() if config.issue_source == "github" else None
         ),
     )
+    for warning in environment_preflight.warnings:
+        diag.warning("%s", warning.message)
     if not environment_preflight.passed:
         for failure in environment_preflight.failures:
             diag.error("%s", failure.message)
@@ -9035,7 +9046,9 @@ async def _run_with_sleep_assertion(
             skill_preflight=skill_preflight,
             source=source,
             diag=diag,
-            gate_runner=_make_gate_runner(),
+            gate_runner=_make_gate_runner(
+                timeout_seconds=config.gate_timeout_seconds, diagnostics=diag,
+            ),
             worktree_setup=_make_worktree_setup(),
             include_prs=include_prs,
             rate_card=rate_card,

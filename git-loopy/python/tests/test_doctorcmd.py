@@ -6,6 +6,7 @@ import asyncio
 import functools
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import replace
 from decimal import Decimal
@@ -234,6 +235,46 @@ def _run_ca_doctor(
         tmp_path, config=config, catalog=catalog, env=env, apply=apply,
         environment_resolver=_host(repo, missing_tool="", authenticated=True),
     )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="executable shell shim")
+@pytest.mark.parametrize("manager", ["pyenv", "asdf", "mise"])
+def test_doctor_reports_python_shim_and_interpreter_startup_without_repair(
+    tmp_path: Path, manager: str,
+) -> None:
+    import re
+    import shlex
+    import sys
+
+    shim = tmp_path / manager / "shims" / "python3"
+    shim.parent.mkdir(parents=True)
+    shim.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    shim.chmod(0o755)
+    environment = {**os.environ, **_pinned_scope(tmp_path), "PATH": str(shim.parent)}
+    original_path = os.environ.get("PATH")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    agents = "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n| Tests | `true` |\n"
+    (repo / "AGENTS.md").write_text(agents)
+    resolver = functools.partial(
+        resolve_run_environment_preflight,
+        executable_finder=lambda name: str(shim) if name == "python3" else f"/tools/{name}",
+    )
+    code, lines = _run(
+        tmp_path, config=replace(_config(), issue_source="prds"),
+        catalog=_catalog(), env=environment, environment_resolver=resolver,
+    )
+    assert code == 0
+    rows = [line for line in lines if "Python startup" in line]
+    assert len(rows) == 1
+    assert " | warning | " in rows[0]
+    assert f"shim {shim}" in rows[0]
+    assert f"interpreter {sys.executable}" in rows[0]
+    assert len(re.findall(r"\d+\.\d+ ms", rows[0])) == 2
+    assert "PATH unchanged" in rows[0]
+    assert environment["PATH"] == str(shim.parent)
+    assert os.environ.get("PATH") == original_path
+    assert (repo / "AGENTS.md").read_text() == agents
 
 
 def test_doctor_reports_untrusted_copilot_proxy_ca(
@@ -1010,6 +1051,7 @@ def test_doctor_apply_repairs_only_missing_and_required_names(
     )
 
     assert code == 0
+    assert not any("Python startup" in line for line in output)
     assert output == [
         *_matching_rows(tmp_path),
         "ghost | enabled Skill has no catalog winner | project policy | "

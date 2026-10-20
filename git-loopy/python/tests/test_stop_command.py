@@ -799,7 +799,7 @@ def test_public_stop_of_a_local_lane_salvages_and_records_no_strike(
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
@@ -875,7 +875,7 @@ def test_public_stop_of_a_github_actions_run_acks_without_discarding_the_contrib
             scripted_events=[_usage_event("claude-opus-4.8-max")],
         ),
     )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
 
     class _ActionsHost:
         def __init__(self) -> None:
@@ -911,7 +911,7 @@ def test_public_stop_of_a_github_actions_run_acks_without_discarding_the_contrib
 
     host = _ActionsHost()
 
-    def _host(placement: str, *, send_timeout_seconds: float) -> _ActionsHost:
+    def _host(placement: str, **_kwargs: object) -> _ActionsHost:
         assert placement == "github-actions"
         return host
 

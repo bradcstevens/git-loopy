@@ -77,7 +77,7 @@ def test_recorded_dynamic_authority_governs_permitted_retries(
 
     client = _NoProgressFakeClient(fake_git=git, scripted_events=[])
     client._session_cls = OutcomeSession
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)

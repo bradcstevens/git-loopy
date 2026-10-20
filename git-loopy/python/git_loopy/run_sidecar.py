@@ -93,6 +93,7 @@ def _config_to_payload(config: RunConfig) -> dict[str, Any]:
         "host_yield": config.host_yield,
         "prevent_idle_sleep": config.prevent_idle_sleep,
         "send_timeout_seconds": config.send_timeout_seconds,
+        "gate_timeout_seconds": config.gate_timeout_seconds,
         "routing": {
             key: [model, effort]
             for key, (model, effort) in sorted(config.routing.items())
@@ -159,6 +160,7 @@ def _config_from_payload(payload: dict[str, Any]) -> RunConfig:
         host_yield=parse_host_yield(payload.get("host_yield", default_host_yield())),
         prevent_idle_sleep=bool(payload.get("prevent_idle_sleep", True)),
         send_timeout_seconds=float(payload.get("send_timeout_seconds", 7200.0)),
+        gate_timeout_seconds=float(payload.get("gate_timeout_seconds", 3600.0)),
         routing=routing,
         context_tier=str(payload.get("context_tier", "default")),
         context_tier_override=bool(payload.get("context_tier_override", False)),

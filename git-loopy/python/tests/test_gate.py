@@ -460,5 +460,43 @@ def test_make_gate_runner_is_monkeypatchable(monkeypatch: pytest.MonkeyPatch) ->
     from git_loopy import loop
 
     sentinel = AgentsMdGateRunner()
-    monkeypatch.setattr("git_loopy.loop._make_gate_runner", lambda: sentinel)
+    monkeypatch.setattr("git_loopy.loop._make_gate_runner", lambda **_kwargs: sentinel)
     assert loop._make_gate_runner() is sentinel
+
+
+@requires_posix
+@pytest.mark.parametrize(
+    ("command", "duration", "outcome", "warning"),
+    [
+        ("true", 0.025, "passed", False),
+        ("true", 0.026, "passed", True),
+        ("false", 0.026, "failed", True),
+        ("sleep 30", 0.05, "timed out", True),
+    ],
+)
+def test_every_gate_row_records_duration_and_bound_in_the_run_log(
+    tmp_path: Path, command: str, duration: float, outcome: str, warning: bool,
+) -> None:
+    from git_loopy.persist import create_writers
+
+    writers = create_writers(tmp_path, mirror_diagnostics_to_stderr=False)
+    _write_agents(tmp_path, [("Measured row", command), ("Next row", "true")])
+    ticks = iter([0.0, duration, 1.0, 1.001])
+    result = AgentsMdGateRunner(
+        timeout_seconds=0.05, diagnostics=writers.diagnostics,
+        clock=lambda: next(ticks),
+    ).run(tmp_path)
+
+    text = writers.diagnostics_path.read_text(encoding="utf-8")
+    assert f"Gate row 'Measured row': {outcome}; duration={duration:.3f}s; bound=0.05s" in text
+    warnings = [line for line in text.splitlines() if "WARNING" in line]
+    assert len(warnings) == int(warning)
+    if warning:
+        assert "'Measured row'" in warnings[0]
+        assert "half" in warnings[0]
+    if outcome == "passed":
+        assert result.passed
+        assert "Gate row 'Next row': passed; duration=0.001s; bound=0.05s" in text
+    else:
+        assert not result.passed
+        assert "Next row" not in text

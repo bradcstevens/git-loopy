@@ -35,7 +35,7 @@ Public surface:
 * :class:`AgentsMdGateRunner` — the production adapter: read ``<worktree>/AGENTS.md``,
   parse its ``## Feedback loops`` table, and run the runnable commands *in that
   worktree*, **fail-fast** on the first non-zero exit and **bounded** per loop.
-* :func:`resolve_gate_timeout_seconds` — the per-loop bound's env resolution.
+* :func:`resolve_gate_timeout_seconds` — the per-loop bound's Config resolution.
 * :func:`parse_feedback_loops` — the pure table parser, separately tested.
 
 Design notes:
@@ -53,8 +53,8 @@ Design notes:
   Lane merge, and a loop waiting on a socket, a prompt or a lock would otherwise block
   the gate forever — no workflow here sets a job timeout either, so the only ceiling in
   effect would be the CI platform's own default. The bound is
-  :data:`DEFAULT_GATE_TIMEOUT_SECONDS`, overridable through
-  :data:`GATE_TIMEOUT_ENV_VAR`; there is deliberately **no value meaning "unbounded"**.
+  :data:`DEFAULT_GATE_TIMEOUT_SECONDS`, overridable through project/global Config
+  and then :data:`GATE_TIMEOUT_ENV_VAR`; there is **no value meaning "unbounded"**.
   Exceeding it is a red gate naming that loop, reported as a *timeout* rather than
   collapsed into a non-zero exit. The kill goes to the loop's whole **process group**:
   the command is a shell whose children hold the same pipes, so killing only the shell
@@ -68,16 +68,20 @@ Design notes:
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Iterable, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Callable, Final, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
 from .process_cleanup import kill_and_release
+from .config import DEFAULT_GATE_TIMEOUT_SECONDS
+from .settings import table_float
 
 __all__ = [
     "GateError",
@@ -96,18 +100,7 @@ __all__ = [
 _AGENTS_FILENAME: Final[str] = "AGENTS.md"
 _OUTPUT_TAIL_LIMIT: Final[int] = 2000
 
-#: Default per-loop wall-clock bound, in seconds (#374). Sized as a **hang
-#: catcher**, not a performance budget: it must comfortably clear the slowest
-#: honest loop a repo declares (this repo's Rust loop compiles from cold) while
-#: still ending a loop that is waiting on a socket, a prompt or a lock. One
-#: number serves every loop for that job — a fast loop that hangs is simply
-#: caught at the slow loop's bound — which is why the knob is one value and not
-#: a per-loop table.
-DEFAULT_GATE_TIMEOUT_SECONDS: Final[float] = 3600.0
-
-#: The env var that overrides :data:`DEFAULT_GATE_TIMEOUT_SECONDS`. Env-only,
-#: like ``GIT_LOOPY_WORKTREE_SETUP``: both are **Parallel mode**-only seam knobs
-#: resolved inside their zero-argument ``git_loopy.loop._make_*`` factory.
+#: The environment override takes precedence over project and global Config.
 GATE_TIMEOUT_ENV_VAR: Final[str] = "GIT_LOOPY_GATE_TIMEOUT_SECONDS"
 
 #: How long to wait for a killed loop's pipes to drain before giving up on its
@@ -349,27 +342,38 @@ def _tail(text: str, limit: int) -> str:
     return "..." + stripped[-limit:]
 
 
-def resolve_gate_timeout_seconds(env: Mapping[str, str]) -> float:
-    """Resolve the per-loop wall-clock bound from the environment.
+def resolve_gate_timeout_seconds(
+    env: Mapping[str, str],
+    *,
+    project: Mapping[str, object] | None = None,
+    global_: Mapping[str, object] | None = None,
+    warn: Callable[[str], None] | None = None,
+) -> float:
+    """Resolve env > project > global > default; reject unbounded values.
 
-    ``GIT_LOOPY_GATE_TIMEOUT_SECONDS`` > :data:`DEFAULT_GATE_TIMEOUT_SECONDS`.
-    A malformed, non-positive or non-finite value falls through to the default
-    rather than aborting, matching ``_resolve_send_timeout_seconds``'s leniency —
-    a stray value must not stop a Run from gating, and it can never *widen* the
-    bound to "unbounded", because no value means that. ``inf`` is refused for
-    that reason and not as a formality: ``float`` parses it, it satisfies
-    ``> 0``, and it is precisely a request for no bound at all.
+    Invalid numeric bounds retain the existing fall-through behavior, with a
+    warning rather than silent fallback. Wrong TOML types are Config errors.
     """
+    report = warn if warn is not None else logging.getLogger(__name__).warning
     raw = env.get(GATE_TIMEOUT_ENV_VAR)
-    if raw is None or not raw.strip():
-        return DEFAULT_GATE_TIMEOUT_SECONDS
-    try:
-        value = float(raw)
-    except ValueError:
-        return DEFAULT_GATE_TIMEOUT_SECONDS
-    if not math.isfinite(value) or value <= 0:
-        return DEFAULT_GATE_TIMEOUT_SECONDS
-    return value
+    if raw is not None and raw.strip():
+        try:
+            value = float(raw)
+        except ValueError:
+            value = None
+        if value is not None and math.isfinite(value) and value > 0:
+            return value
+        report(f"{GATE_TIMEOUT_ENV_VAR} must be positive and finite; ignoring {raw!r}")
+    for scope, table in (("project", project), ("global", global_)):
+        value = table_float(table or {}, "gate_timeout_seconds", scope=scope)
+        if value is None:
+            continue
+        if math.isfinite(value) and value > 0:
+            return value
+        report(
+            f"{scope} gate_timeout_seconds must be positive and finite; ignoring {value!r}"
+        )
+    return DEFAULT_GATE_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -438,6 +442,8 @@ class AgentsMdGateRunner:
         agents_filename: str = _AGENTS_FILENAME,
         output_tail_limit: int = _OUTPUT_TAIL_LIMIT,
         timeout_seconds: float = DEFAULT_GATE_TIMEOUT_SECONDS,
+        diagnostics: logging.Logger | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError(
@@ -447,6 +453,8 @@ class AgentsMdGateRunner:
         self._agents_filename = agents_filename
         self._output_tail_limit = output_tail_limit
         self._timeout_seconds = float(timeout_seconds)
+        self._diag = diagnostics if diagnostics is not None else logging.getLogger(__name__)
+        self._clock = clock
 
     @property
     def timeout_seconds(self) -> float:
@@ -486,11 +494,30 @@ class AgentsMdGateRunner:
         ran: list[str] = []
         for loop in loops:
             ran.append(loop.name)
-            completed = _run_bounded(
-                loop.command,
-                cwd=worktree,
-                timeout_seconds=self._timeout_seconds,
-            )
+            started = self._clock()
+            outcome = "interrupted"
+            try:
+                completed = _run_bounded(
+                    loop.command,
+                    cwd=worktree,
+                    timeout_seconds=self._timeout_seconds,
+                )
+                outcome = (
+                    "timed out" if completed.timed_out
+                    else "passed" if completed.returncode == 0 else "failed"
+                )
+            finally:
+                duration = self._clock() - started
+                self._diag.info(
+                    "Gate row %r: %s; duration=%.3fs; bound=%gs; worktree=%s",
+                    loop.name, outcome, duration, self._timeout_seconds, worktree,
+                )
+                if duration > self._timeout_seconds / 2:
+                    self._diag.warning(
+                        "Gate row %r exceeded half its bound: duration=%.3fs; "
+                        "bound=%gs; worktree=%s",
+                        loop.name, duration, self._timeout_seconds, worktree,
+                    )
             if completed.timed_out:
                 return GateResult.red(
                     ran,
@@ -518,6 +545,7 @@ class AgentsMdGateRunner:
 
 def main() -> int:
     """Run this checkout's declared feedback loops for a remote preflight."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
         result = AgentsMdGateRunner(
             timeout_seconds=resolve_gate_timeout_seconds(os.environ)

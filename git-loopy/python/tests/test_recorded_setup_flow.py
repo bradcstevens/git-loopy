@@ -46,7 +46,7 @@ def test_bare_setup_preserves_the_recorded_route_into_actual_work(
     if mode == "lane":
         client = _ParallelFakeClient(fake_git=git, scripted_events=[])
         monkeypatch.setattr(loop_module, "_make_client", lambda: client)
-        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_make_label_client", lambda: None)
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
