@@ -47,6 +47,46 @@ values.
 
 ---
 
+## Interrupted Parallel publication
+
+Before publishing a verified GitHub issue contribution onto base, the Python
+Runner persists `.git-loopy/publication.json` in that base worktree. The record
+binds the issue and its closure intent, originating Run, base branch, verified stage SHA and configured
+upstream (or explicit local-only status). A Release-line advance also records
+its intended tree and parent before committing, so an interrupted acknowledgement
+does not confuse the stage with the final publication.
+
+Partial contributions without a closing request retain the existing advancement
+semantics: their publication does not authorize an issue closure. Closing keywords
+in historical commits never substitute for a pending publication record.
+
+On restart, **Publication reconciliation** runs before Sweep or new work. It
+proves the stage and final publication by Git ancestry, including on the recorded
+upstream when configured. A newer upstream tip containing the final publication
+is sufficient. It finishes an outstanding closure without another Agent, merge
+or Release increment, and never closes an already-closed issue again. Recovered
+writes acquire a fresh Lease where the Lease protocol applies and fence each
+push and closure; a dead Run's Lease grants no authority.
+
+If upstream lacks the final publication, reconciliation can make one non-force
+push of its exact SHA, only while that SHA is the clean local base tip. It never
+includes later unrecorded commits. The attempt is persisted before pushing;
+another restart checks upstream proof rather than blindly retrying.
+
+An unfinished base merge, dirty base, changed identity, unavailable authority,
+unreadable remote, failed push or incomplete evidence refuses startup and names
+the pending record in diagnostics. Work and the index remain untouched. Inspect
+`git status`, `git log --graph --oneline --all`, the record and the configured
+upstream; resolve the identified ambiguity before restarting. In particular,
+death before the required Release-line result can be identified is a refusal,
+not permission to repeat the Release advance. Do not delete the record merely to
+bypass a refusal: it is the publication's durable identity, not a disposable log.
+
+This is distinct from private-stage **Recovery** and residue **Sweep**. It adds
+no recovery claim for serial publication or historical, unrecorded work. Clean
+pre-upgrade checkouts continue normally; an unrecorded unfinished merge is
+preserved and refused, never automatically aborted or attributed to an issue.
+
 ## Assessment service tracer (#759)
 
 The optional `assessment` extra supplies `git-loopy-assessment`, a separate

@@ -231,9 +231,9 @@ class FakeGitClient:
         # 40-char hex with a distinctive ``face`` prefix so auto-generated SHAs
         # never collide with the explicit SHAs tests pass to
         # simulate_agent_commit (e.g. "abcdef..." / "a" * 40 / "cap0...").
-        # Worktree children get a distinct ``sha_prefix`` (``wt1``, ``wt2``, ...)
+        # Worktree children get a distinct hex prefix (``ab01``, ``ab02``, ...)
         # so per-Lane auto-SHAs never collide across worktrees either.
-        return f"{self._sha_prefix}{self._sha_counter:036x}"
+        return f"{self._sha_prefix}{self._sha_counter:0{40 - len(self._sha_prefix)}x}"
 
     def _index(self, sha: str) -> int:
         for i, commit in enumerate(self._log):
@@ -262,6 +262,23 @@ class FakeGitClient:
 
     def is_dirty(self) -> bool:
         return self.dirty
+
+    def merge_in_progress(self) -> bool:
+        return False
+
+    def commit_identity(self, sha: str) -> tuple[str, tuple[str, ...]]:
+        return sha, ()
+
+    def stage_paths_tree(self, paths: Sequence[Path | str]) -> str:
+        return self.head_sha()
+
+    def publication_upstream(self) -> tuple[str, str, str, str] | None:
+        upstream = self.upstream()
+        if upstream is None:
+            return None
+        remote, ref = upstream
+        url = self.remote_url(remote) or remote
+        return remote, ref, url, url
 
     def has_untracked(self) -> bool:
         return self.untracked
@@ -300,7 +317,7 @@ class FakeGitClient:
     def upstream(self) -> tuple[str, str] | None:
         return self.configured_upstream
 
-    def push(self, *, upstream: tuple[str, str] | None = None) -> None:
+    def push(self, *, upstream: tuple[str, str] | None = None, sha: str = "HEAD") -> None:
         self.push_calls += 1
         if self.push_error is not None:
             raise self.push_error
@@ -386,7 +403,7 @@ class FakeGitClient:
             wt_path,
             commits=list(self._log),
             branch=branch,
-            sha_prefix=f"wt{self._worktree_seq}",
+            sha_prefix=f"ab{self._worktree_seq:02x}",
             merge_conflicts=sorted(self._merge_conflict_issues),
             release_versions=self._release_versions,
             tracked_paths=self._tracked_paths,

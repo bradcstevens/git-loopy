@@ -1828,7 +1828,7 @@ def test_parallel_lane_checkpoint_commits_in_its_own_worktree(
     assert checkpoint["lane_issue"] == 42
     # Authored in the Lane's OWN worktree: only a child worktree client mints
     # ``wt``-prefixed SHAs, and the main worktree wrote no commit at all.
-    assert checkpoint["sha"].startswith("wt")
+    assert checkpoint["sha"].startswith("ab")
     assert fake_git.commit_messages == []
 
 
@@ -3137,7 +3137,7 @@ def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
                 render_reasoning=False,
             )
         )
-    ) == 0
+    ) == 1
 
     assert validate_repository_release_version(tmp_path) == "1.2.3"
     # Both halves of the refused `commit_paths` are undone -- the working tree by
@@ -3152,22 +3152,16 @@ def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
         )
     ]
     assert not (tmp_path / "docs/releases/v1.2.4-alpha.1.md").exists()
-    # The publication already happened and cannot be retracted; a Release line
-    # that would not move is a diagnostic, never a veto on a landed issue.
-    assert fake_gh.issue_view(42).state == "CLOSED"
-    assert len(_lane_branch_deletes(fake_git)) == 1
+    # #419: the merge alone cannot certify the unresolved final publication.
+    assert fake_gh.issue_view(42).state == "OPEN"
+    assert _lane_branch_deletes(fake_git) == []
+    assert (tmp_path / ".git-loopy/publication.json").exists()
 
 
-def test_parallel_integration_survives_a_release_tag_read_that_fails(
+def test_parallel_integration_preserves_publication_when_release_tag_read_fails(
     tmp_path, monkeypatch
 ) -> None:
-    """A git failure reading the last stable Release never strands a landing.
-
-    The stable base behind a prerelease line comes from a ``git tag`` read, which
-    raises :class:`~git_loopy.git.GitError` rather than a Release error. Left
-    uncaught it would escape a *published* merge before the contribution is
-    finalized, crashing the Run with the issue open and the Lane branch alive.
-    """
+    """#419: an unreadable required Release result cannot certify completion."""
     fake_git = _wire_repo(tmp_path)
     _wire_release_distribution(tmp_path, version="1.3.0-alpha.7")
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -3207,12 +3201,13 @@ def test_parallel_integration_survives_a_release_tag_read_that_fails(
                 render_reasoning=False,
             )
         )
-    ) == 0
+    ) == 1
 
     assert validate_repository_release_version(tmp_path) == "1.3.0-alpha.7"
     assert fake_git.commit_paths_calls == []
-    assert fake_gh.issue_view(42).state == "CLOSED"
-    assert len(_lane_branch_deletes(fake_git)) == 1
+    assert fake_gh.issue_view(42).state == "OPEN"
+    assert _lane_branch_deletes(fake_git) == []
+    assert (tmp_path / ".git-loopy/publication.json").exists()
 
 
 def test_parallel_integration_continues_a_prerelease_release_line(
@@ -3293,9 +3288,9 @@ def test_parallel_integration_advances_the_release_line_holding_the_integration_
     held: list[bool] = []
     advance = loop_module._ParallelLoop._advance_release_line
 
-    def watch_the_lock(self: Any, item: Any) -> None:
+    def watch_the_lock(self: Any, item: Any):
         held.append(self._integration_lock.locked())
-        advance(self, item)
+        return advance(self, item)
 
     monkeypatch.setattr(
         loop_module._ParallelLoop, "_advance_release_line", watch_the_lock
@@ -3651,26 +3646,10 @@ def test_parallel_integration_gates_privately_before_publishing(
     assert [b for b in fake_git.merge_calls if "/integrate/" not in b] == []
 
 
-def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions(
+def test_parallel_rollup_preserves_published_unclosed_contribution_and_stops(
     tmp_path, monkeypatch
 ) -> None:
-    """Integration tells "published, close failed" apart from "no progress".
-
-    Two Lanes finalize with different dispositions: #42's merge genuinely
-    advances base but its ``gh issue close`` call errors (published, stays
-    open); #43's merge is a no-op (its branch is already fully merged), so
-    Integration never even attempts a close (no base advancement, no
-    progress). Under Rolling dispatch there is no single-slot
-    ``wrapper.iteration.end`` rollup for Lane contributions (see the module
-    docstring's documented gap), so this asserts the equivalent *observable*
-    distinction directly: exactly one close is attempted (for #42, and it
-    fails so #42 stays open), #43 is never attempted and also stays open, and
-    the two contributions finalize with different ``published`` verdicts (#42's
-    merge advanced base; #43's no-op did not) — both consuming their
-    ``max_iterations`` unit at pickup, with no extra serial-fallback round
-    sneaking past the cap. Since contract 1.27 neither charges a **Strike**:
-    unpublished is not the same claim as *given up on*.
-    """
+    """Durable advancement counts, but pending closure stops fresh execution."""
     fake_git = _wire_repo(tmp_path)
     merge = fake_git.merge
 
@@ -3718,7 +3697,7 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
         )
     )
 
-    assert exit_code == 0
+    assert exit_code == 1
     # #42 published (base advanced) but its close call failed -> stays open,
     # never retried. #43's merge was a no-op -> never even attempted.
     assert [n for (n, _msg) in fake_gh.issue_close_calls] == [42]
@@ -3732,14 +3711,13 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
         for e in events
         if e["type"] == "wrapper.contribution.end"
     }
-    assert published == {42: True, 43: False}
+    assert published[42] is True
+    assert not published.get(43, False)
+    assert (tmp_path / ".git-loopy/publication.json").exists()
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
-    assert run_end["outcome"] == "iteration_cap"
+    assert run_end["outcome"] == "crashed"
     assert "refusals" not in run_end  # #643: only a Rolling all_blocked/all_skipped
-    # Exactly the two Lane sessions' units are spent -- no extra
-    # serial-fallback round sneaks past the `max_iterations=2` cap even
-    # though #43's disposition would otherwise latch one.
-    assert run_end["iterations_run"] == 2
+    assert len(fake_client.created) == 2  # No extra serial-fallback session.
 
 
 def test_parallel_integration_red_gate_keeps_branch_and_publishes_nothing(
