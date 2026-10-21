@@ -61,6 +61,8 @@ from git_loopy.events import (
     WRAPPER_AFK_READY_COLLECTED,
     WRAPPER_ASK_USER_ATTEMPTED,
     WRAPPER_AUTO_CLOSE,
+    WRAPPER_ISSUE_CLOSE_FAILED,
+    WRAPPER_ISSUE_CLOSED,
     WRAPPER_CHECKPOINT_RECORDED,
     WRAPPER_COMMIT_RECORDED,
     WRAPPER_CONCURRENCY_CHANGED,
@@ -828,6 +830,30 @@ class Renderer:
         self.console.print(text)
         self.summary.record_auto_close()
 
+    def _on_issue_closed(self, event: dict[str, Any]) -> None:
+        issue = event.get("issue")
+        sha = event.get("sha", "")
+        short = sha[:10] if isinstance(sha, str) else ""
+        text = Text()
+        text.append("✓ ", style=STYLES["success"])
+        text.append("closed ", style=STYLES["meta"])
+        if issue is not None:
+            text.append(f"#{issue}", style=STYLES["success"])
+        if short:
+            text.append(f"  ({short})", style=STYLES["meta"])
+        self.console.print(text)
+        self.summary.record_auto_close()
+
+    def _on_issue_close_failed(self, event: dict[str, Any]) -> None:
+        issue = event.get("issue")
+        text = Text()
+        text.append("✗ ", style=STYLES["error"])
+        text.append("close failed ", style=STYLES["meta"])
+        if issue is not None:
+            text.append(f"#{issue}", style=STYLES["error"])
+        text.append(f"  ({event.get('stage', '?')})", style=STYLES["meta"])
+        self.console.print(text)
+
     def _on_pr_advanced(self, event: dict[str, Any]) -> None:
         pr = event.get("pr")
         sha = event.get("sha", "")
@@ -1445,6 +1471,8 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_CONCURRENCY_CHANGED: Renderer._on_concurrency_changed,
     WRAPPER_PUSH_RECORDED: Renderer._on_push_recorded,
     WRAPPER_AUTO_CLOSE: Renderer._on_auto_close,
+    WRAPPER_ISSUE_CLOSED: Renderer._on_issue_closed,
+    WRAPPER_ISSUE_CLOSE_FAILED: Renderer._on_issue_close_failed,
     WRAPPER_PR_ADVANCED: Renderer._on_pr_advanced,
     WRAPPER_STRIKE: Renderer._on_strike,
     WRAPPER_STOP_REQUESTED: Renderer._on_stop_requested,

@@ -64,7 +64,7 @@ _BRANCH_OBSERVED = "wrapper.integration.branch_observed"
 _RECOVERY_STARTED = "wrapper.integration.recovery_started"
 _PUBLISHED = "wrapper.integration.published"
 _PUSH_FAILED = "wrapper.integration.push_failed"
-_AUTO_CLOSE = "wrapper.auto_close"
+_AUTO_CLOSE = "wrapper.issue.closed"
 _RELEASE_ADVANCED = "wrapper.release.advanced"
 
 #: The types the per-contribution order constrains. Every other stamped record
@@ -95,7 +95,7 @@ def _lifecycle_sequences() -> list[tuple[Token, ...]]:
           ( work_finished
               ( end[unchanged_branch]
               | [parked] admitted started branch_observed recovery_started{0..3}
-                  ( published auto_close [release.advanced] end[published]
+                  ( published issue.closed [release.advanced] end[published]
                   | [push_failed] end[serial_fallback] ) )
           | end[checkpoint_failed | unchanged_branch | operator_stop] )
 

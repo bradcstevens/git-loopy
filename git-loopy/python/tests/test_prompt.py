@@ -151,8 +151,8 @@ def test_packaged_prompt_is_present_and_nonempty() -> None:
     [
         "# YOUR ISSUE",  # the one-issue contract header (#394)
         "<working issue=N>",  # the working marker
-        "FINAL SEQUENCE",  # the issue-closure contract
-        "Closes #",  # the close-keyword backstop
+        "FINAL SEQUENCE",  # the Agent never closes or pushes
+        "Closes #",  # the finishing-commit close keyword
     ],
 )
 def test_packaged_prompt_carries_runner_contract(marker: str) -> None:
@@ -468,3 +468,11 @@ def test_leaving_no_process_behind_is_not_scoped_to_deliberate_load() -> None:
     assert "`pgrep`" in section
     assert "end the ones you started by PID" in section
     assert "interrupted" in section
+
+
+def test_packaged_prompt_leaves_publication_and_closure_to_the_run() -> None:
+    prompt = _packaged_prompt_text()
+
+    assert "gh issue close <N>" not in prompt
+    assert "The Run alone publishes and closes" in prompt
+    assert "never run `gh issue close` and you never push" in prompt

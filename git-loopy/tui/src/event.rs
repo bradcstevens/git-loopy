@@ -1364,10 +1364,12 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
             Ok(advance) => EventPayload::PrAdvanced(advance),
             Err(_) => EventPayload::Other,
         },
-        "wrapper.auto_close" => match serde_json::from_value(value.clone()) {
-            Ok(closure) => EventPayload::AutoClosed(closure),
-            Err(_) => EventPayload::Other,
-        },
+        "wrapper.auto_close" | "wrapper.issue.closed" => {
+            match serde_json::from_value(value.clone()) {
+                Ok(closure) => EventPayload::AutoClosed(closure),
+                Err(_) => EventPayload::Other,
+            }
+        }
         "wrapper.strike" => EventPayload::Strike(decode_or_default(value)),
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),

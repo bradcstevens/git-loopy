@@ -1362,7 +1362,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.10"
-    assert _EVENT_SCHEMA["contract_version"] == "2.37"
+    assert _EVENT_SCHEMA["contract_version"] == "2.38"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]

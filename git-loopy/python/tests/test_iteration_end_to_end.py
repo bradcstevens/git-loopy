@@ -481,7 +481,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "wrapper.afk_ready.collected",
         "wrapper.issue.activated",
         "wrapper.commit.recorded",
-        "wrapper.auto_close",
+        "wrapper.issue.closed",
         "wrapper.iteration.end",
         "wrapper.run.end",
     ):
@@ -1242,6 +1242,63 @@ def test_loop_pushes_after_agent_commit(tmp_path, monkeypatch) -> None:
     assert "wrapper.push.recorded" in types_seen
 
 
+def _run_finishing_commit(tmp_path, monkeypatch, **wire):
+    fake_client, fake_git = _wire_single_issue_github(tmp_path, monkeypatch, **wire)
+    fake_git.configured_upstream = ("origin", "main")
+    fake_gh = loop_module._make_github_client()
+    fake_client.on_send = lambda: fake_client.git_for_session(fake_git).simulate_agent_commit(
+        sha="c" * 40, subject="feat: done", body="Closes #42"
+    )
+    cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
+    assert asyncio.run(loop_module.run(cfg)) == 0
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    return fake_git, fake_gh, events
+
+
+def test_orchestrator_closes_only_after_the_push_lands(tmp_path, monkeypatch) -> None:
+    fake_git, fake_gh, events = _run_finishing_commit(tmp_path, monkeypatch)
+    types = [e["type"] for e in events]
+    assert types.index("wrapper.push.recorded") < types.index("wrapper.issue.closed")
+    closed = next(e for e in events if e["type"] == "wrapper.issue.closed")
+    assert closed["issue"] == 42 and closed["sha"] == fake_git.head_sha()
+    [(number, comment)] = fake_gh.issue_close_calls
+    assert number == 42 and fake_git.head_sha() in comment
+    assert "wrapper.auto_close" not in types
+
+
+def test_a_push_that_cannot_land_publishes_and_closes_nothing(tmp_path, monkeypatch) -> None:
+    push_error = git_module.GitError(["git", "push"], 1, "non-fast-forward")
+    fake_git, fake_gh, events = _run_finishing_commit(
+        tmp_path, monkeypatch, push_error=push_error
+    )
+    failed = [e for e in events if e["type"] == "wrapper.issue.close_failed"]
+    assert [(e["issue"], e["stage"]) for e in failed] == [(42, "publication")]
+    assert fake_gh.issue_close_calls == []
+    assert fake_git.reset_calls
+    assert "wrapper.issue.closed" not in [e["type"] for e in events]
+
+
+def test_an_issue_closed_by_someone_else_is_not_published(tmp_path, monkeypatch) -> None:
+    fake_client, fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+    published: list[str] = []
+
+    def close_then_commit() -> None:
+        fake_gh.issue_close(42, "closed by a human")
+        fake_client.git_for_session(fake_git).simulate_agent_commit(
+            sha="d" * 40, subject="feat: done", body="Closes #42"
+        )
+
+    fake_client.on_send = close_then_commit
+    monkeypatch.setattr(fake_git, "push", lambda **_: published.append("push"))
+    cfg = RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
+    asyncio.run(loop_module.run(cfg))
+    types = _logged_types(tmp_path)
+    assert published == []
+    assert "wrapper.issue.closed" not in types
+    assert len(fake_gh.issue_close_calls) == 1
+
+
 def test_loop_pushes_after_checkpoint(tmp_path, monkeypatch) -> None:
     """A Checkpoint (no agent commit) still triggers the auto-push.
 
@@ -1476,8 +1533,8 @@ def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
         assert expected in types_seen, (
             f"expected {expected} in JSONL; saw: {types_seen}"
         )
-    assert "wrapper.auto_close" not in types_seen, (
-        "PRDs mode must not emit wrapper.auto_close — handle_completions returns []"
+    assert "wrapper.issue.closed" not in types_seen, (
+        "PRDs mode must not emit wrapper.issue.closed — handle_completions returns []"
     )
 
     # Run-summary JSON.
@@ -1688,8 +1745,8 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
 def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch) -> None:
     """A failing ``gh issue close`` is logged and the iteration continues.
 
-    Verifies the per-issue try/except inside ``_try_auto_close``: one
-    failing close must not prevent commits from being recorded or the
+    Verifies the Orchestrator's closure retries once and then reports a
+    ``tracker`` failure: one failing close must not prevent commits from being recorded or the
     strike machine from running.
     """
     (tmp_path / "git-loopy").mkdir()
@@ -1731,7 +1788,10 @@ def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch)
     ]
     types_seen = [event["type"] for event in events_seen]
     assert "wrapper.commit.recorded" in types_seen
-    assert "wrapper.auto_close" not in types_seen
+    assert "wrapper.issue.closed" not in types_seen
+    failed = next(e for e in events_seen if e["type"] == "wrapper.issue.close_failed")
+    assert (failed["issue"], failed["stage"]) == (42, "tracker")
+    assert len(fake_gh.issue_close_calls) == 2
     activation = next(
         event
         for event in events_seen
@@ -2243,7 +2303,7 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
 
     * exit 0,
     * the PR block reaches the prompt,
-    * ``wrapper.pr.advanced`` is logged and ``wrapper.auto_close`` is not,
+    * ``wrapper.pr.advanced`` is logged and ``wrapper.issue.closed`` is not,
     * the iteration row counts the PR advance separately from auto-closures,
       with 0 commits and 0 strikes,
     * the base branch is never switched (HEAD already on base).
@@ -2350,7 +2410,7 @@ def test_loop_pr_advance_emits_pr_advanced_event(tmp_path, monkeypatch) -> None:
         if evt["type"] == "wrapper.issue.activated":
             activations.append(evt)
     assert "wrapper.pr.advanced" in types_seen, f"saw: {types_seen}"
-    assert "wrapper.auto_close" not in types_seen, f"saw: {types_seen}"
+    assert "wrapper.issue.closed" not in types_seen, f"saw: {types_seen}"
     assert "wrapper.commit.recorded" not in types_seen, (
         "no base-branch commit landed this iteration"
     )

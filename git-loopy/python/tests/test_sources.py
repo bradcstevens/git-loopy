@@ -1230,22 +1230,26 @@ class TestGitHubHandleCompletions:
         )
         assert completions == []
 
-    def test_closes_issue_when_commit_references_pool_member(self) -> None:
+    def test_a_closing_keyword_closes_nothing(self) -> None:
         gh = FakeGitHubClient(issues=[_make_issue(42)])
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
         completions = impl.handle_completions(
             pool=[AfkReadyItem(ref=42, title="t", rendered_block="x")],
-            new_commits=[
-                _FakeCommit("sha_abc", "feat: impl", body="Closes #42")
-            ],
+            new_commits=[_FakeCommit("sha_abc", "feat: impl", body="Closes #42")],
         )
+        assert completions == []
+        assert gh.issue_close_calls == []
 
-        assert len(completions) == 1
-        assert completions[0].ref == 42
-        assert completions[0].sha == "sha_abc"
-        assert completions[0].shas == ("sha_abc",)
-        assert len(gh.issue_close_calls) == 1
-        assert gh.issue_close_calls[0][0] == 42
+    def test_close_issue_reports_a_tracker_refusal(self) -> None:
+        gh = FakeGitHubClient(
+            issues=[_make_issue(42), _make_issue(43)],
+            issue_close_errors={42: gh_module.GhError(["gh"], 1, "boom")},
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+        assert impl.close_issue(42, "c") is False
+        assert impl.issue_state(42) == "OPEN"
+        assert impl.close_issue(43, "c") is True
+        assert impl.issue_state(43) == "CLOSED"
 
     def test_skips_close_when_ref_not_in_pool(self) -> None:
         gh = FakeGitHubClient(issues=[_make_issue(42)])
@@ -1266,47 +1270,6 @@ class TestGitHubHandleCompletions:
         )
         assert completions == []
         assert gh.issue_close_calls == []
-
-    def test_close_failure_is_non_fatal_to_other_completions(self) -> None:
-        # The close of #42 fails; #43 must still be closed and completed.
-        gh = FakeGitHubClient(
-            issues=[_make_issue(42), _make_issue(43)],
-            issue_close_errors={42: gh_module.GhError(["gh"], 1, "boom")},
-        )
-        impl = GitHubIssueSource(_silent_logger(), gh=gh)
-        completions = impl.handle_completions(
-            pool=[
-                AfkReadyItem(ref=42, title="t", rendered_block="x"),
-                AfkReadyItem(ref=43, title="t", rendered_block="x"),
-            ],
-            new_commits=[
-                _FakeCommit("sha1", "Closes #42"),
-                _FakeCommit("sha2", "Fixes #43"),
-            ],
-        )
-        # #42 close raised → no completion; #43 still proceeds.
-        assert [c.ref for c in completions] == [43]
-        assert [num for num, _ in gh.issue_close_calls] == [42, 43]
-
-    def test_attributes_multiple_shas_when_multiple_commits_reference_issue(
-        self,
-    ) -> None:
-        gh = FakeGitHubClient(issues=[_make_issue(42)])
-        impl = GitHubIssueSource(_silent_logger(), gh=gh)
-        completions = impl.handle_completions(
-            pool=[AfkReadyItem(ref=42, title="t", rendered_block="x")],
-            new_commits=[
-                _FakeCommit("sha_a", "first half", body="Refs #42"),
-                _FakeCommit("sha_b", "complete", body="Closes #42"),
-                _FakeCommit("sha_c", "follow-up", body="Fixes #42"),
-            ],
-        )
-        # Only sha_b and sha_c contain CLOSING keywords (Refs isn't one);
-        # extract_close_refs returns 42 (deduped). Both closing commits
-        # should be attributed.
-        assert len(completions) == 1
-        assert completions[0].ref == 42
-        assert set(completions[0].shas) == {"sha_b", "sha_c"}
 
 
 # --------------------------------------------------------------------------- #
@@ -2101,21 +2064,6 @@ class TestGitHubMixedPoolBackstop:
         )
         assert gh.issue_close_calls == []
         assert completions == []
-
-    def test_issue_closure_still_works_with_pr_in_pool(self) -> None:
-        gh = FakeGitHubClient(
-            issues=[_make_issue(42)], prs=[_make_pr(7, head_sha="oldsha")]
-        )
-        impl = GitHubIssueSource(_silent_logger(), gh=gh, include_prs=True)
-        completions = impl.handle_completions(
-            pool=[
-                _pool_pr(number=7, head_sha="oldsha"),
-                AfkReadyItem(ref=42, title="t", rendered_block="x"),  # issue
-            ],
-            new_commits=[_FakeCommit("sha", "Closes #42")],
-        )
-        assert [num for num, _ in gh.issue_close_calls] == [42]
-        assert [c.ref for c in completions] == [42]
 
 
 # --------------------------------------------------------------------------- #

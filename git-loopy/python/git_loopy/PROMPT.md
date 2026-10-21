@@ -22,7 +22,7 @@ If you're about to commit to a non-trivial plan (cross-cutting refactor, ambiguo
 
 The runner bound that issue as this iteration's **active issue** before your session started, so the marker is attribution and not selection: it confirms the binding, lights the active issue up on the interactive path, and the per-run **queue** uses it to attribute this iteration's work. A marker naming any other issue rebinds nothing — the runner records the disagreement and keeps the issue it bound.
 
-The marker changes nothing else: you still close the issue with a `Closes #N` close-keyword exactly as described under **COMMIT** / **THE ISSUE** below. Emit it once per iteration, for the issue you were handed.
+The marker changes nothing else: you still name the issue with a `Closes #N` close-keyword in your finishing commit, exactly as described under **COMMIT** / **THE ISSUE** below. Emit it once per iteration, for the issue you were handed.
 
 Favour reviewable output over token compression while running unattended. Go up a layer to map an unfamiliar area before drilling in, stress-test plans against the domain docs, and favour deep modules: substantial behaviour behind a small interface at a clean seam.
 
@@ -71,7 +71,7 @@ Run only the loops your change touched. If a loop's tooling doesn't exist yet (t
 
 Make a git commit. The commit message must:
 
-1. Reference the issue with a **GitHub closing keyword** (`Closes #N`, `Fixes #N`, or `Resolves #N`) for GitHub mode, or include the issue path for `prds` mode. The wrapper relies on this exact form (case-insensitive `close[sd]?|fix(es|ed)?|resolve[sd]?` directly followed by `#N`) as a backstop — if you forget to call `gh issue close`, it will close the issue for you, but only if the commit message uses one of those keywords.
+1. Reference the issue with a **GitHub closing keyword** (`Closes #N`, `Fixes #N`, or `Resolves #N`) for GitHub mode, or include the issue path for `prds` mode. The finishing commit says `Closes #N`; a partial commit says `Refs #N`. The Run reads that form (case-insensitive `close[sd]?|fix(es|ed)?|resolve[sd]?` directly followed by `#N`) to tell finished work from partial work.
 2. Include key decisions made
 3. Include files changed
 4. Note any blockers or follow-ups for the next iteration
@@ -80,33 +80,20 @@ Make a git commit. The commit message must:
 
 ## GitHub mode (default)
 
-When the task is complete, run this **FINAL SEQUENCE** in order. Do NOT end the turn until every step has succeeded:
+The Run alone publishes and closes. You never run `gh issue close` and you never push; a review may hand findings to a fresh Agent.
 
-1. **Re-fetch state.** `gh issue view <N> --json state,labels -q '{state,labels}'`. If state is already `CLOSED` or the issue has been moved off `ready-for-agent`, do nothing — someone else worked it — and end the turn.
-2. **Close the issue** with a single wrap-up comment that links the commit SHA(s):
+When you stop, run this **FINAL SEQUENCE** in order:
 
-   ```bash
-   gh issue close <N> --comment "$(cat <<'EOF'
-   Implemented in <commit-sha>.
-
-   <one-paragraph summary of the change in domain-language terms>
-
-   Follow-ups (if any):
-   - …
-   EOF
-   )"
-   ```
-
-3. **Verify the closure landed.** `gh issue view <N> --json state -q .state` must print `CLOSED`. If it doesn't, retry the close once. If it still fails, post a `gh issue comment <N> --body "..."` describing the failure and end the turn — the wrapper will pick up the closure on the next iteration as long as the commit message contains `Closes #<N>`.
-4. **Do NOT** modify labels. The closure is the signal.
-5. **Commit and Push** local changes to GitHub each time you complete and close an issue.
+1. **Re-read the issue.** `gh issue view <N> --json state,labels -q '{state,labels}'`. If the state is `CLOSED` or the issue has been moved off `ready-for-agent`, do nothing — someone else worked it — and end the turn.
+2. **Make sure your work is committed.** Commit anything left in the tree, with `Closes #N` when the work is finished and `Refs #N` when it is partial, then end the turn.
+3. **Do NOT** close the issue, push, or modify labels. The Run publishes your commits and closes the issue once publication lands.
 
 When the task is **not** complete and you want to record substantive progress (a real partial step, a discovered blocker, or a design pivot):
 
 - Post **at most one** comment per iteration with `gh issue comment <N> --body-file <path>`.
 - Comment only when there's genuinely new information for the next iteration to read. Never comment merely to say "no progress" or to narrate exploration.
-- Prefer rolling all wrap-up content into the eventual close comment over leaving a trail of progress chatter.
-- Do **not** write `Closes #N` in any partial-progress commit message — the wrapper will auto-close. Use `Refs #N` or `Progress on #N` instead.
+- Prefer rolling all wrap-up content into your finishing commit message over leaving a trail of progress chatter.
+- Do **not** write `Closes #N` in any partial-progress commit message — the Run would close the issue. Use `Refs #N` or `Progress on #N` instead.
 
 Never modify the parent PRD issue (typically `#1`, identifiable from each slice's `## Parent` section when present). Never relabel any issue.
 
