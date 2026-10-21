@@ -39,9 +39,9 @@ from git_loopy.release_rehearsal import (
     VerifiedPublicationInput,
     rehearse_promotion,
     stable_commit_promotion,
+    untagged_stable_commits as _untagged_stable_commits,
 )
 from git_loopy.release_smoke import SmokeEvidenceError, confirm_smoke_evidence
-from git_loopy.release_version import is_prerelease
 
 
 class ReleasePromotionError(ValueError):
@@ -179,9 +179,9 @@ def publish_untagged_stable(
 ) -> tuple[PublicationOutcome, ...]:
     """Publish every untagged stable commit, oldest first, or stop at the first refusal.
 
-    Both Promotion triggers enter this walk. A stable commit buried under a
-    later prerelease advance is still published; the head is not consulted.
-    A refusal publishes none of the commits after it.
+    Both Promotion triggers enter this walk. A Reopen withdraws earlier
+    unpublished stable commits of its target; a different target's prerelease
+    does not. A refusal publishes none of the remaining commits after it.
     """
     outcomes: list[PublicationOutcome] = []
     for index, commit in enumerate(untagged_stable_commits(repository_root)):
@@ -211,54 +211,11 @@ class SmokeFor(Protocol):
 
 
 def untagged_stable_commits(repository_root: Path) -> tuple[str, ...]:
-    """Stable Release commits on the trunk that no ``v*`` tag reaches, oldest first.
-
-    The same walk ``release-promotion.yml`` already publishes by. A committed
-    Promotion can be buried under the next issue's prerelease advance, so the
-    head's ``VERSION`` is not the candidate.
-    """
-    root = Path(repository_root).resolve()
-    walk = _git(
-        root,
-        "log",
-        "--format=%H",
-        "--reverse",
-        "HEAD",
-        "--not",
-        "--tags=v*",
-        "--",
-        "VERSION",
-    )
-    commits: list[str] = []
-    for commit in walk.splitlines():
-        version = _git(root, "show", f"{commit}:VERSION").strip()
-        if version and not is_prerelease(version):
-            commits.append(commit)
-    return tuple(commits)
-
-
-def _git(root: Path, *arguments: str) -> str:
-    import subprocess
-
+    """Share Rehearsal's Reopen-aware walk, retaining Promotion's error boundary."""
     try:
-        result = subprocess.run(
-            ["git", *arguments],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=120,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ReleasePromotionError(
-            f"git {' '.join(arguments)} could not be run: {exc}"
-        ) from exc
-    if result.returncode != 0:
-        raise ReleasePromotionError(
-            f"git {' '.join(arguments)} failed: "
-            f"{result.stderr.strip() or 'no diagnostic'}"
-        )
-    return result.stdout.strip()
+        return _untagged_stable_commits(repository_root)
+    except ReleaseRehearsalError as exc:
+        raise ReleasePromotionError(str(exc)) from exc
 
 
 def _default_gate_runner() -> GateRunner:

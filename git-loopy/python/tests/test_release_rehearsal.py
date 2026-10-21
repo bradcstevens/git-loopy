@@ -17,12 +17,16 @@ from git_loopy.release_rehearsal import (
     SOURCE_ONLY,
     ReleaseRehearsalError,
     confirm_publication_input,
+    main,
+    prepare_promotion_candidate,
     stable_commit_promotion,
     milestone_promotion,
     rehearse_promotion,
 )
 from tests.release_fixtures import (
     AGENTS_MD,
+    REOPEN_WALK_CASES,
+    commit_release_version,
     git,
     trunk_repository,
     write_release_metadata,
@@ -30,6 +34,99 @@ from tests.release_fixtures import (
 
 
 GATE_RUNNER = AgentsMdGateRunner(timeout_seconds=120.0)
+
+
+@pytest.mark.parametrize("versions,remaining,withdrawn", REOPEN_WALK_CASES)
+def test_implicit_rehearsal_selects_the_first_remaining_promotion_candidate(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    versions: tuple[str, ...],
+    remaining: tuple[int, ...],
+    withdrawn: tuple[int, ...],
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    commits = [git(trunk, "rev-parse", "HEAD")]
+    commits.extend(commit_release_version(trunk, version) for version in versions)
+
+    if remaining:
+        candidate = prepare_promotion_candidate(
+            trunk, stable_commit_promotion(), workspace=tmp_path / "candidate"
+        )
+        assert candidate.commit == commits[remaining[0]]
+    else:
+        with pytest.raises(ReleaseRehearsalError, match="no untagged stable Release"):
+            prepare_promotion_candidate(
+                trunk, stable_commit_promotion(), workspace=tmp_path / "candidate"
+            )
+    diagnostics = capsys.readouterr().err
+    for index in withdrawn:
+        assert diagnostics.count(f"stable commit {commits[index]} ") == 1
+    for index in remaining:
+        assert commits[index] not in diagnostics
+
+
+def test_a_reopen_selects_its_repromotion_for_implicit_rehearsal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    withdrawn = git(trunk, "rev-parse", "HEAD")
+    for version in ("0.11.3-rc.1", "0.11.3"):
+        write_release_metadata(trunk, version)
+        git(trunk, "add", ".")
+        git(trunk, "commit", "-qm", f"Declare {version}")
+    repromotion = git(trunk, "rev-parse", "HEAD")
+
+    candidate = prepare_promotion_candidate(
+        trunk, stable_commit_promotion(), workspace=tmp_path / "candidate"
+    )
+
+    assert candidate.commit == repromotion
+    assert candidate.version == "0.11.3"
+    assert withdrawn in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("outcome", ["passed", "unpromoted", "refused"])
+def test_the_rehearsal_command_reports_reopens_without_polluting_its_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], outcome: str
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    withdrawn = git(trunk, "rev-parse", "HEAD")
+    commit_release_version(trunk, "0.11.3-rc.1")
+    if outcome == "refused":
+        (trunk / "git-loopy/conformance/event-schema.json").write_text(
+            '{"contract_version": "99.0"}\n', encoding="utf-8"
+        )
+    repromotion = (
+        commit_release_version(trunk, "0.11.3")
+        if outcome != "unpromoted" else None
+    )
+    github_output = tmp_path / "github-output"
+
+    status = main([
+        "--repository-root", str(trunk),
+        "--workspace", str(tmp_path / "candidate"),
+        "--archive-output", str(tmp_path / "source.tar"),
+        "--distribution-mode", SOURCE_ONLY,
+        "--stable-commit",
+        "--github-output", str(github_output),
+    ])
+
+    output = capsys.readouterr()
+    assert withdrawn in output.err
+    if outcome == "passed":
+        assert status == 0
+        assert json.loads(output.out)["commit"] == repromotion
+        assert f"commit={repromotion}\n" in github_output.read_text(encoding="utf-8")
+    else:
+        assert status == 1
+        assert output.out == ""
+        assert not github_output.exists()
+        diagnostic = (
+            "no untagged stable Release" if outcome == "unpromoted"
+            else "no other Conformance fixture"
+        )
+        assert diagnostic in output.err
+    assert git(trunk, "tag", "--list") == ""
 
 
 def test_a_closed_milestone_rehearses_the_stable_snapshot_it_names(

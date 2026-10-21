@@ -896,9 +896,18 @@ _Avoid_: severity, impact, semver level, `semver:` label.
 **Promotion**:
 Cutting a stable **Release version** from a **Release line**. Triggered by the
 `vX.Y.Z` **milestone** closing, which is what makes "when it makes sense" a tracker
-event rather than a judgement. It promotes from any prerelease stage, and it is the only
-trigger: a `major` **Bump class** is a prerelease like any other.
+event rather than a judgement. It promotes from any prerelease stage. The milestone is
+the only unattended trigger; an operator's by-exception promotion
+([ADR-0079](docs/adr/0079-a-human-opens-a-major-line-and-the-1-0-0-cut-waits-for-the-python-path.md))
+is the other route, and the same
+**Rehearsal** proves both. A `major` **Bump class** is a prerelease like any other.
 _Avoid_: release cut, graduation, publish.
+
+**Reopen**:
+Moving an unpublished stable **Release target** back onto its prerelease line, which withdraws
+its stable commit from the **Promotion** walk. Only an operator does it, by exception
+([ADR-0097](docs/adr/0097-reopening-an-unpublished-release-target-withdraws-its-stable-commit.md)).
+_Avoid_: release candidate (the `-rc.N` stage), rollback, downgrade, revert.
 
 **Release assessment**:
 A read-only, advisory reading of one repository's **Release line** that tells a Loop engineer

@@ -117,6 +117,29 @@ def write_release_metadata(root: Path, version: str) -> None:
     )
 
 
+def commit_release_version(root: Path, version: str) -> str:
+    """Declare a Release version, retaining any already-committed notes."""
+    write_release_metadata(root, version)
+    notes = root / f"docs/releases/v{version}.md"
+    if not notes.exists():
+        notes.write_text(f"# git-loopy {version}\n\nAdvance.\n", encoding="utf-8")
+    git(root, "add", ".")
+    git(root, "commit", "-qm", f"Declare {version}")
+    return git(root, "rev-parse", "HEAD")
+
+
+# Histories after an initial unpublished 0.11.3, and literal indices of the
+# candidates/withdrawals. Both public entry points must agree on these cases.
+REOPEN_WALK_CASES = [
+    (("0.11.3-rc.1", "0.11.3"), (2,), (0,)),
+    (("0.12.0-alpha.1", "0.11.3", "0.11.3-rc.1"), (), (0, 2)),
+    (("0.12.0", "0.13.0-alpha.1"), (0, 1), ()),
+    (("0.12.0", "0.11.3"), (0, 1, 2), ()),
+    (("0.11.3-rc.1", "0.11.3", "0.11.3-rc.2", "0.11.3"), (4,), (0, 2)),
+    (("0.11.3-rc.1", "0.11.3", "0.12.0", "0.13.0-alpha.1"), (2, 3), (0,)),
+]
+
+
 def trunk_repository(
     root: Path,
     version: str,

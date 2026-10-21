@@ -218,12 +218,31 @@ A `vX.Y.Z` **GitHub milestone** is solely the **Promotion** trigger. Closing it
 starts the unattended Promotion: the matching line becomes stable from whatever
 stage it has reached, `release-promotion.yml` commits it as `chore(release):
 promote Release line to <VERSION>`, and `git_loopy.release_promotion` publishes
-that committed snapshot. It is the only way a stable value reaches `main`: a
-`major` is a prerelease like any other bump. On every push the same entry
+that committed snapshot. It is the only unattended way a stable value reaches
+`main`: a `major` is a prerelease like any other bump. An operator's
+by-exception promotion ([ADR-0079](../adr/0079-a-human-opens-a-major-line-and-the-1-0-0-cut-waits-for-the-python-path.md))
+is the other route, and the same Rehearsal proves both. On every push the same entry
 publishes every stable Release the trunk carries that no tag reaches yet,
+except those withdrawn by a Reopen,
 rather than whatever `VERSION` says at the head, so a stable commit whose
 publication failed is found again, even when the next issue's prerelease
-advance has already followed it.
+advance to a different target has already followed it.
+
+A **Reopen** ([ADR-0097](../adr/0097-reopening-an-unpublished-release-target-withdraws-its-stable-commit.md))
+moves an unpublished stable target back onto its prerelease line, for example
+`0.11.3` to `0.11.3-rc.1`. That withdraws every earlier untagged stable commit
+of the target from the walk, and the walk names each one, even when none remains
+to publish. Promotion and `release_rehearsal --stable-commit` without
+`--candidate-commit` share this walk. The target's next promotion is then its
+candidate. The candidates that remain still run oldest first and stop at the
+first refusal. Only an operator's by-exception commit makes a
+Reopen: no Run advance, stage advance or milestone does, and a later stable
+value of the same version with no Reopen between withdraws nothing. A Reopen
+and its re-promotion must land on first-parent history. A squash erases the
+bump, and a merge commit hides both from the walk when it leaves `VERSION`
+unchanged, a Run's `--no-ff` Integration included. Every Rehearsal rule, the
+tagged trust policy and its declaration rules, and publication readback are
+unchanged. Public tags never move, so a Reopen cannot repair a published target.
 
 Promotion only accepts a milestone that exists. List them rather than inventing
 one:
