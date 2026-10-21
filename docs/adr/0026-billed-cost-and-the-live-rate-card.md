@@ -209,16 +209,16 @@ records rather than for what could be derived from it.
   of legibility ADR-0018 accepted. What replaces it is what GitHub billed rather than a
   disclaimed estimate of a different quantity, and the renderer's list-price caveat goes
   with the estimate it qualified.
-- **The empirical question ADR-0018 left open is now half-answered and still open.** The
-  card's unit is settled by its own schema. What a **Run** replay must still confirm is
-  whether the per-call billing fields populate on the event stream the runner subscribes
-  to, what the unlabelled Experimental `assistant.usage.cost` float actually holds, and
-  whether the reported input-token count already includes cache reads — the session
-  rollup and the shutdown summary disagree on that last convention, and the answer moves
-  the reported figures by more than an order of magnitude. The first Run to populate
-  these fields should be dumped and the finding recorded on
-  [#329](https://github.com/bradcstevens/git-loopy/issues/329), which already asks for
-  exactly that.
+- **#329's Run replay settled the cache question.** The per-call billing fields
+  populated on the stream the Runner already consumes, and all four calls satisfied
+  `input = cache_read + cache_write + uncached input`; for example,
+  `13512 = 8267 + 5235 + 10`. Reported input tokens are already cache-inclusive.
+  Cache-read and cache-write splits are components of that input, never additional
+  input to add again. The replay finding is recorded on
+  [#329](https://github.com/bradcstevens/git-loopy/issues/329#issuecomment-5159799178)
+  and pinned by `test_reported_input_tokens_already_include_the_cache_split`.
+  The Experimental `assistant.usage.cost` float remains unlabelled by its schema;
+  observing it does not authorize a currency inference or change the billed-Credits rule.
 - **`CONTEXT.md` is deliberately untouched.** **Rate card** and **AI Credits** are
   [#336](https://github.com/bradcstevens/git-loopy/issues/336)'s entries, sequenced
   after the code implements them; the glossary records shipped reality.

@@ -85,6 +85,34 @@ and **Strike** limits stay in force; routing does not manufacture extra attempts
 Dynamic retries have no fixed **Escalation rung**, so a first attempt may use `max`
 without reserving it for a later, possibly obsolete model.
 
+### Terminal Integration evidence (accepted design, not yet shipped)
+
+[#293](https://github.com/bradcstevens/git-loopy/issues/293) decided that a
+**Lane contribution** whose permitted **Recovery** is exhausted and ends in a
+**Recovery handoff** to the serial path must amend its originating **Attempt evidence** row to
+`DID_NOT_INTEGRATE` (`did_not_integrate`). It is the same attempt, not another
+one: preserve its resolved model, effort, context tier and position in the
+issue's per-Run history. Amend before the next Pickup constructs selector input,
+without changing the current Pickup's frozen resolution or reselecting mid-attempt.
+Repeated terminal notifications must be idempotent and contribution-specific.
+
+This is **not capability evidence**. A post-merge failure can reflect a concurrent
+Lane's semantic conflict rather than an incapable model. The corrected row must
+no longer read as `ADVANCED` or retain its success meaning, but it neither
+blacklists a configuration nor creates an escalation trigger for a Static route.
+An intermediate Integration failure that Recovery turns green is not terminal;
+Review rejection and publication push failure alone do not establish this outcome.
+Recognized account interruption remains subject to
+[#676](https://github.com/bradcstevens/git-loopy/issues/676), not adverse routing
+evidence.
+
+This is accepted design under [#932](https://github.com/bradcstevens/git-loopy/issues/932),
+with runtime delivery owned by [#938](https://github.com/bradcstevens/git-loopy/issues/938);
+it is not a claim about the current outcome vocabulary. The Glossary and Conformance
+fixtures change when that behavior ships, following
+[ADR-0019](0019-roster-derived-from-the-pinned-harness.md)'s glossary-of-shipped-reality
+precedent.
+
 ## Static choices and supported settings
 
 A Static route is an atomic model/effort/context choice for a Task type and bypasses
@@ -199,10 +227,26 @@ does not become a fallback for a failed dynamic decision. Historical rationale,
 Calibration's experimental meaning, and the optional recommended static values are
 preserved rather than rewritten as though this had always been the design.
 
-The map remains open for [#293](https://github.com/bradcstevens/git-loopy/issues/293)
-(blast-radius guards) and [#295](https://github.com/bradcstevens/git-loopy/issues/295)
-(intra-session Subagent routing). Excluding them from this delivery does not answer
-their separate questions.
+The map's remaining questions were resolved by
+[#293](https://github.com/bradcstevens/git-loopy/issues/293) and
+[#295](https://github.com/bradcstevens/git-loopy/issues/295); the map is closed.
+Their locked boundaries are:
+
+- **No blast-radius guards.** Predictive issue-text information already reaches
+  the Dynamic selector, whose objective includes likely retries. A guard cannot
+  honestly route a session using the diff only learned after it finishes, nor
+  override an operator's atomic Static route. Diff shape and **Bump class** remain
+  available-but-unexercised levers, not file-count thresholds, new routing inputs
+  or guard mechanisms. The terminal Integration amendment above records the
+  failed contribution without pretending that change size measures difficulty.
+- **Observe intra-session Subagents; never control them.** git-loopy observes
+  harness-reported Subagent lifecycle activity, as
+  [ADR-0022](0022-per-agent-insight-facts.md) records, but never
+  routes, enables, disables or overrides those Subagents. Their model, effort,
+  context tier and enablement remain the operator's Copilot settings, resolved
+  by the harness. Lifecycle observations are not configuration readback:
+  git-loopy does not parse or reconstruct the harness's layered settings.
+  This boundary introduces no Subagent router or new capability.
 
 ## Activation status (#567)
 
