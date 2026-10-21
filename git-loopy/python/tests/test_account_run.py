@@ -181,12 +181,18 @@ def test_simultaneous_lane_rate_refusals_coalesce_and_only_one_probe_runs(
     assert not [e for e in events if e["type"] == "wrapper.strike"]
 
 
-@pytest.mark.parametrize("parallel", [False, True])
+@pytest.mark.parametrize("parallel,salvage_failure", [(False, False), (True, False), (True, True)])
 def test_a_close_before_refusal_is_diagnosed_not_reopened_or_verified(
-    tmp_path, monkeypatch, parallel,
+    tmp_path, monkeypatch, parallel, salvage_failure,
 ):
-    async def script(_session, tracker):
+    from git_loopy.git import GitError
+
+    async def script(session, tracker):
         tracker.issue_close(42, comment="Agent closed early")
+        if salvage_failure:
+            target = session._fake_git.worktree_client(Path(session._working_directory))
+            target.dirty = True
+            target.commit_error = GitError(["commit"], 1, "fixture salvage failed")
 
     rc, events, client, tracker, git = _run(
         tmp_path, monkeypatch, parallel=parallel, session_hook=script, commit=True,

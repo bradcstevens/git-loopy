@@ -159,6 +159,8 @@ class AccountControl:
         )
 
     def admit(self, *, ordinary: bool) -> bool:
+        if self._interrupted.is_set():
+            raise AccountAdmissionClosed(self.cause or "operator_stop")
         if self.state is None:
             return False
         if self.state != "probing" or self._probe_active or not ordinary:
@@ -171,14 +173,16 @@ class AccountControl:
 
     @property
     def ordinary_available(self) -> bool:
-        return self.state is None or (self.state == "probing" and not self._probe_active)
+        return not self._interrupted.is_set() and (
+            self.state is None or (self.state == "probing" and not self._probe_active)
+        )
 
     async def ready(self, *, may_start: bool) -> bool:
         """Wait without spending a work unit; the next eligible worker probes."""
-        if self.state is None:
-            return True
         if self.state == "stopping" or self._interrupted.is_set():
             return False
+        if self.state is None:
+            return True
         if not may_start:
             self.stop("retry_prevented_by_cap")
             return False
@@ -196,6 +200,8 @@ class AccountControl:
                     sleeper.cancel()
                     interrupted.cancel()
                     await asyncio.gather(sleeper, interrupted, return_exceptions=True)
+                if self._interrupted.is_set() or self.state == "stopping":
+                    return False
                 if self._deadline <= deadline:
                     break
             self.state = "probing"

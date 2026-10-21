@@ -6905,6 +6905,12 @@ class _ParallelLoop:
         # of the work that preceded it is the one thing an operator cannot
         # debug afterwards, because the machine that held the logs is gone.
         self._ingest_contribution_events(contribution, outcome.events)
+        account_failed = self._serial._account_affected(
+            outcome.ending.error if outcome.ending is not None else None
+        )
+        if account_failed:
+            self._serial._account_issues.add(lane_work.item.ref)
+            self._serial._diagnose_account_closure(lane_work.item.ref)
         if outcome.classification == "never_started":
             self._host_setup_pressure.record_dispatch_failure()
             if self._host_setup_pressure.exhausted:
@@ -6930,9 +6936,7 @@ class _ParallelLoop:
             reoffer=reoffer and outcome.classification != "breach",
             reason=(
                 "account_failure"
-                if self._serial._account_affected(
-                    outcome.ending.error if outcome.ending is not None else None
-                )
+                if account_failed
                 else _terminal_reason_for(outcome)
             ),
         )

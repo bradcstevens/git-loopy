@@ -158,3 +158,32 @@ async def test_provider_minimum_arriving_during_wait_cannot_be_retried_early():
     assert clock.waits == [30, 40]
     assert clock.now == 70
     assert control.wait_remaining == 50
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["quota", "operator"])
+async def test_stop_arriving_at_the_cooldown_completion_boundary_cannot_admit_a_probe(stop):
+    clock = Clock()
+
+    def interrupt():
+        if stop == "quota":
+            control.refuse(refusal("insufficient_quota"))
+        else:
+            control.interrupt()
+
+    async def sleep(seconds):
+        await clock.sleep(seconds)
+        # Let the wait complete, then deliver the external stop while its
+        # cancelled waiter is being drained, before admission may reopen.
+        loop = asyncio.get_running_loop()
+        loop.call_soon(lambda: loop.call_soon(lambda: loop.call_soon(interrupt)))
+
+    control = AccountControl(emit=lambda *a, **kw: None, clock=clock, sleep=sleep)
+    control.refuse(refusal())
+    assert not await control.ready(may_start=True)
+    with pytest.raises(AccountAdmissionClosed):
+        control.admit(ordinary=True)
+    assert control.retries_remaining == 2
+    if stop == "quota":
+        assert control.state == "stopping"
+        assert control.error.kind.value == "quota_exhausted"
