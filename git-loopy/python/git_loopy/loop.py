@@ -34,27 +34,30 @@ Per-iteration sequence:
 5. Capture ``pre_sha`` *immediately* before invoking the SDK — so a slow
    ``gh issue_view`` call before this point cannot affect the
    ``commits_between(pre_sha, head)`` accounting after.
-6. Open :class:`~git_loopy.session.IterationSession`,
+6. Create and prepare a fresh **Issue clone** on the Iteration's Reserved
+   branch, with or without a Sandbox. Open
+   :class:`~git_loopy.session.IterationSession` in that clone and
    ``await session.send_and_wait(prompt, timeout=long)``.
-7. ``head_sha = git.head_sha()``; ``commits = git.commits_between(pre, head)``.
-8. Emit one ``wrapper.commit.recorded`` per new commit so the renderer
-   increments the iteration's commit count.
+7. Read the clone's agent commits from ``pre_sha`` through its current head,
+   before making any runner Checkpoint.
+8. **Runner Checkpoint** (ADR-0004) and publication via
+   :meth:`_Loop._finish_serial_clone`: Checkpoint dirty or untracked work in
+   the clone, import it, then merge onto base when publication is allowed.
+   Never Checkpoint the operator's checkout. The Checkpoint emits
+   ``wrapper.checkpoint.recorded`` but is excluded from both the agent-commit
+   tally and the progress predicate. Failed publication preserves the branch
+   and contributes no commits to the Iteration's accounting.
 9. **Completion backstop** via
    :meth:`IssueSource.handle_completions`. Each returned
    :class:`~git_loopy.sources.Completion` produces one
    ``wrapper.auto_close`` event. The GitHub backend closes issues via
    ``gh issue close``; the PRDs backend returns an empty list (the
    agent owns ``git mv ... prds/<feat>/done/``).
-10. **Runner Checkpoint** (ADR-0004) via :meth:`_maybe_checkpoint`: a dirty
-    or untracked worktree is staged and captured in a single
-    close-keyword-free ``wrapper.checkpoint.recorded`` commit attributed to
-    the Active issue. Deliberately ordered *after* the agent-commit
-    accounting (step 8) and *before* strike accounting (step 12), so the
-    Checkpoint is excluded from both the Summary commit tally and the §6
-    progress predicate. Non-fatal: a failure warns and the loop carries on.
+10. Emit one ``wrapper.commit.recorded`` per published agent commit so the
+    renderer increments the Iteration's commit count.
 11. **Auto-push** (ADR-0004) via :meth:`_maybe_push`: whenever the iteration
-    produced new commits — agent commits (step 8) and/or the Checkpoint from
-    step 10 — the current branch is pushed to its upstream
+    published new commits — agent commits (step 7) and/or the Checkpoint from
+    step 8 — the current branch is pushed to its upstream
     (``wrapper.push.recorded`` on success) so the work reaches the remote.
     Non-fatal: a missing remote/upstream, an auth failure, or a
     non-fast-forward warns and the loop carries on, so a local-only repo
