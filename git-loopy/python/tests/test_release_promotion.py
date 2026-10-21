@@ -31,6 +31,7 @@ from tests.fakes import FakeReleaseService
 from tests.release_fixtures import (
     AGENTS_MD,
     REOPEN_WALK_CASES,
+    ReopenWalkCase,
     commit_release_version,
     git,
     trunk_repository,
@@ -44,24 +45,19 @@ VERSION = "0.11.0"
 TAG = f"v{VERSION}"
 
 
-@pytest.mark.parametrize("versions,remaining,withdrawn", REOPEN_WALK_CASES)
+@pytest.mark.parametrize("case", REOPEN_WALK_CASES)
 def test_the_promotion_walk_keeps_only_unwithdrawn_candidates_in_order(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    versions: tuple[str, ...],
-    remaining: tuple[int, ...],
-    withdrawn: tuple[int, ...],
+    case: ReopenWalkCase,
 ) -> None:
     trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
-    commits = [git(trunk, "rev-parse", "HEAD")]
-    commits.extend(commit_release_version(trunk, version) for version in versions)
+    commits = case.commit_history(trunk)
 
-    assert untagged_stable_commits(trunk) == tuple(commits[i] for i in remaining)
-    diagnostics = capsys.readouterr().err
-    for index in withdrawn:
-        assert diagnostics.count(f"stable commit {commits[index]} ") == 1
-    for index in remaining:
-        assert commits[index] not in diagnostics
+    assert untagged_stable_commits(trunk) == tuple(
+        commits[name] for name in case.remaining
+    )
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize("landing", ["--ff-only", "--no-ff", "--squash"])
@@ -80,11 +76,20 @@ def test_a_reopen_and_repromotion_must_land_on_first_parent_history(
 
     expected = repromotion if landing == "--ff-only" else original
     assert untagged_stable_commits(trunk) == (expected,)
-    diagnostics = capsys.readouterr().err
-    if landing == "--ff-only":
-        assert original in diagnostics
-    else:
-        assert diagnostics == ""
+    assert capsys.readouterr().err == ""
+
+
+def test_a_merged_stable_commit_buried_under_a_different_target_remains_a_candidate(
+    tmp_path: Path,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3-alpha.1")
+    git(trunk, "checkout", "-qb", "release")
+    stable = commit_release_version(trunk, "0.11.3")
+    commit_release_version(trunk, "0.12.0-alpha.1")
+    git(trunk, "checkout", "-q", "main")
+    git(trunk, "merge", "--no-ff", "release", "-m", "Integrate release")
+
+    assert untagged_stable_commits(trunk) == (stable,)
 
 
 def test_a_reopen_does_not_withdraw_a_stable_commit_a_public_tag_reaches(
@@ -195,7 +200,6 @@ def test_after_reopen_publication_keeps_order_and_stops_at_the_first_refusal(
         tmp_path / "trunk", "0.11.3",
         agents_md=AGENTS_MD.replace("test -s VERSION", "false"),
     )
-    withdrawn = git(trunk, "rev-parse", "HEAD")
     # Repair on the prerelease line, then promote the corrected snapshot.
     (trunk / "AGENTS.md").write_text(AGENTS_MD, encoding="utf-8")
     commit_release_version(trunk, "0.11.3-rc.1")
@@ -228,7 +232,7 @@ def test_after_reopen_publication_keeps_order_and_stops_at_the_first_refusal(
         assert len(smoke.proofs) == 1
         assert service.create_calls == []
         assert not any(ref.startswith("refs/tags/") for ref in _remote_refs(remote))
-    assert withdrawn in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize(
@@ -297,7 +301,6 @@ def test_a_reopen_withdraws_the_old_stable_commit_not_its_repromotion(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
-    withdrawn = git(trunk, "rev-parse", "HEAD")
     for version in ("0.11.3-rc.1", "0.11.3"):
         write_release_metadata(trunk, version)
         git(trunk, "add", ".")
@@ -305,10 +308,7 @@ def test_a_reopen_withdraws_the_old_stable_commit_not_its_repromotion(
     candidate = git(trunk, "rev-parse", "HEAD")
 
     assert untagged_stable_commits(trunk) == (candidate,)
-    diagnostic = capsys.readouterr().err
-    assert "Reopen" in diagnostic
-    assert withdrawn in diagnostic
-    assert candidate not in diagnostic
+    assert capsys.readouterr().err == ""
 
 
 def test_a_reopen_nobody_re_promotes_publishes_nothing_and_names_the_withdrawn(
@@ -323,9 +323,7 @@ def test_a_reopen_nobody_re_promotes_publishes_nothing_and_names_the_withdrawn(
     git(trunk, "commit", "-qm", "Reopen 0.11.3")
 
     assert untagged_stable_commits(trunk) == ()
-    diagnostics = capsys.readouterr().err
-    assert withdrawn in diagnostics
-    assert also_withdrawn in diagnostics
+    assert capsys.readouterr().err == ""
     assert main(
         [
             "--repository-root", str(trunk),
@@ -338,9 +336,38 @@ def test_a_reopen_nobody_re_promotes_publishes_nothing_and_names_the_withdrawn(
     ) == 0
     output = capsys.readouterr()
     assert output.out == "no untagged stable Release on the trunk; nothing to publish\n"
-    assert withdrawn in output.err
-    assert also_withdrawn in output.err
+    assert output.err.count(f"stable commit {withdrawn} ") == 1
+    assert output.err.count(f"stable commit {also_withdrawn} ") == 1
     assert not (tmp_path / "w").exists()
+    assert git(trunk, "tag", "--list") == ""
+
+
+@pytest.mark.parametrize("trigger", ["--publish-untagged-stable", "--stable-commit"])
+def test_a_promotion_command_names_withdrawals_once_before_a_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], trigger: str,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    withdrawn = git(trunk, "rev-parse", "HEAD")
+    commit_release_version(trunk, "0.11.3-rc.1")
+    (trunk / "git-loopy/conformance/event-schema.json").write_text(
+        '{"contract_version": "99.0"}\n', encoding="utf-8"
+    )
+    commit_release_version(trunk, "0.11.3")
+
+    status = main([
+        "--repository-root", str(trunk),
+        "--workspace", str(tmp_path / "work"),
+        "--archive-output", str(tmp_path / "source.tar"),
+        "--evidence-output", str(tmp_path / "evidence.json"),
+        "--distribution-mode", SOURCE_ONLY,
+        trigger,
+    ])
+
+    output = capsys.readouterr()
+    assert status == 1
+    assert output.out == ""
+    assert output.err.count(f"stable commit {withdrawn} ") == 1
+    assert "no other Conformance fixture" in output.err
     assert git(trunk, "tag", "--list") == ""
 
 

@@ -323,20 +323,27 @@ def _promote_milestone(workspace: Path, trigger: PromotionTrigger) -> str:
     return outputs["version"]
 
 
-def untagged_stable_commits(repository_root: Path) -> tuple[str, ...]:
+@dataclass(frozen=True)
+class StableCommitWalk:
+    """Remaining candidates and the withdrawals a command should explain."""
+
+    commits: tuple[str, ...]
+    withdrawals: tuple[str, ...]
+
+
+def walk_untagged_stable(repository_root: Path) -> StableCommitWalk:
     """Unwithdrawn stable commits no ``v*`` tag reaches, oldest first.
 
-    Only first-parent VERSION changes count: a Reopen and its re-promotion
-    must land on the trunk, not disappear inside a squash or merge. A later
+    Keep Git's existing VERSION-path history simplification: a Reopen and its
+    re-promotion disappear inside a merge that leaves VERSION unchanged. A later
     prerelease withdraws every earlier unpublished stable commit of its own
     Release target (ADR-0097), never a different target or a later promotion.
-    Diagnostics go to stderr so Rehearsal's publication-input JSON stays intact.
+    Return withdrawals as data; only command entry points write diagnostics.
     """
     root = Path(repository_root).resolve()
     walk = _run_git(
         root,
         "log",
-        "--first-parent",
         "--format=%H",
         "--reverse",
         "HEAD",
@@ -345,30 +352,34 @@ def untagged_stable_commits(repository_root: Path) -> tuple[str, ...]:
         "--",
         "VERSION",
     )
-    candidates: list[tuple[str, str]] = []
+    candidates: dict[str, release_version.ReleaseLine] = {}
+    withdrawals: list[str] = []
     for commit in walk.splitlines():
         version = _run_git(root, "show", f"{commit}:VERSION").strip()
+        if not version:
+            continue
+        try:
+            line = release_version.parse_release_line(version)
+        except ReleaseVersionError as exc:
+            raise ReleaseRehearsalError(
+                f"cannot read Release line at {commit}: {exc}"
+            ) from exc
         if is_prerelease(version):
-            target = version.split("-", 1)[0]
-            remaining: list[tuple[str, str]] = []
-            for stable_commit, stable_version in candidates:
-                if stable_version.split("+", 1)[0] == target:
-                    print(
+            for stable_commit, stable_line in tuple(candidates.items()):
+                if stable_line.target == line.target:
+                    withdrawals.append(
                         f"Reopen {commit} ({version}) withdraws unpublished "
-                        f"stable commit {stable_commit} ({stable_version})",
-                        file=sys.stderr,
+                        f"stable commit {stable_commit} ({stable_line.target})"
                     )
-                else:
-                    remaining.append((stable_commit, stable_version))
-            candidates = remaining
-        elif version:
-            candidates.append((commit, version))
-    return tuple(commit for commit, _version in candidates)
+                    del candidates[stable_commit]
+        else:
+            candidates[commit] = line
+    return StableCommitWalk(tuple(candidates), tuple(withdrawals))
 
 
 def _untagged_stable_commit(workspace: Path) -> str:
     """Select the same oldest remaining candidate the Promotion would publish."""
-    commits = untagged_stable_commits(workspace)
+    commits = walk_untagged_stable(workspace).commits
     if commits:
         return commits[0]
     raise ReleaseRehearsalError(
@@ -803,9 +814,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Rehearse one candidate and print the publication input it proved."""
     args = _build_parser().parse_args(argv)
     try:
+        trigger = _trigger_from(args)
+        if trigger.kind == STABLE_COMMIT_TRIGGER and trigger.candidate_commit is None:
+            for withdrawal in walk_untagged_stable(args.repository_root).withdrawals:
+                print(withdrawal, file=sys.stderr)
         publication_input = rehearse_promotion(
             args.repository_root,
-            _trigger_from(args),
+            trigger,
             workspace=args.workspace,
             archive_output=args.archive_output,
             gate_runner=_default_gate_runner(),

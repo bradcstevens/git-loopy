@@ -39,7 +39,7 @@ from git_loopy.release_rehearsal import (
     VerifiedPublicationInput,
     rehearse_promotion,
     stable_commit_promotion,
-    untagged_stable_commits as _untagged_stable_commits,
+    walk_untagged_stable,
 )
 from git_loopy.release_smoke import SmokeEvidenceError, confirm_smoke_evidence
 
@@ -213,7 +213,7 @@ class SmokeFor(Protocol):
 def untagged_stable_commits(repository_root: Path) -> tuple[str, ...]:
     """Share Rehearsal's Reopen-aware walk, retaining Promotion's error boundary."""
     try:
-        return _untagged_stable_commits(repository_root)
+        return walk_untagged_stable(repository_root).commits
     except ReleaseRehearsalError as exc:
         raise ReleasePromotionError(str(exc)) from exc
 
@@ -250,6 +250,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Promote from the command line. The workflow's only publication entry."""
     args = _build_parser().parse_args(argv)
     try:
+        if args.publish_untagged_stable or (
+            args.stable_commit and args.candidate_commit is None
+        ):
+            for withdrawal in walk_untagged_stable(args.repository_root).withdrawals:
+                print(withdrawal, file=sys.stderr)
         if args.publish_untagged_stable:
             _publish_untagged(args)
         else:
@@ -259,7 +264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "--publish-untagged-stable"
                 )
             _promote_one(args, stable_commit_promotion(commit=args.candidate_commit))
-    except ReleasePromotionError as exc:
+    except (ReleasePromotionError, ReleaseRehearsalError) as exc:
         print(f"release promotion failed: {exc}", file=sys.stderr)
         return 1
     return 0
