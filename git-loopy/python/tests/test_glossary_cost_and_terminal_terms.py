@@ -224,7 +224,7 @@ def test_no_part_of_the_glossary_still_derives_cost_from_a_usage_tally_rule() ->
 #: Each term this ticket adds, and the shipped code that implements it. The
 #: glossary records shipped reality, so a term written ahead of its code is the
 #: failure mode this pins — the same failure ADR-0026 avoided by leaving
-#: ``CONTEXT.md`` untouched until the Runs it describes existed.
+#: the glossary untouched until the Runs it describes existed.
 SHIPPED_TERMS: tuple[tuple[str, str, str], ...] = (
     ("Rate card", "git-loopy/python/git_loopy/rate_card.py", "class RateCard"),
     (

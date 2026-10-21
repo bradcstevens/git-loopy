@@ -173,15 +173,13 @@ def test_packaged_prompt_makes_genuine_issue_blockers_native_dependencies() -> N
     assert "comment, then output `<promise>NO MORE TASKS</promise>`" in prompt
 
 
-def test_domain_guidance_prefers_glossary_with_legacy_fallback() -> None:
+def test_domain_guidance_reads_only_the_glossary_entry_points() -> None:
     prompt = _packaged_prompt_text()
     section = prompt.split("# DOMAIN AWARENESS", 1)[1].split("\n# ", 1)[0]
 
     assert "`GLOSSARY.md`" in section
     assert "`GLOSSARY-MAP.md`" in section
     assert "repository root" in section
-    assert "fall back to `CONTEXT.md` / `CONTEXT-MAP.md`" in section
-    assert section.index("`GLOSSARY.md`") < section.index("`CONTEXT.md`")
 
 
 # ---------------------------------------------------------------------------

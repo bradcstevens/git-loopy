@@ -341,9 +341,11 @@ only from the installed profiles, and the Minimal Skill policy is `code-review`,
 key. A missing or stale profile install must be repaired before a Run.
 
 The catalog uses `GLOSSARY.md`, or `GLOSSARY-MAP.md` for multiple contexts.
-The Run prompt prefers these root entry points in both domain reading and
-plan stress-testing, falling back to `CONTEXT.md` / `CONTEXT-MAP.md` only when
-neither new entry point exists.
+The Run prompt reads only these root entry points, in both domain reading and
+plan stress-testing; it no longer falls back to `CONTEXT.md` / `CONTEXT-MAP.md`.
+A repository still on those legacy names should accept the `git mv` migration
+that `/setup-git-loopy-skills` offers. Declining it keeps the legacy paths in
+that repository's `docs/agents/domain.md`, which the Run prompt reads first.
 
 The current catalog includes 45 Skills. `/next` handles both workflow routing
 and skill selection, replacing `/skill-router`; its skill-selection and
