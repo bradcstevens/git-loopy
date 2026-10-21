@@ -468,6 +468,8 @@ def test_the_job_session_spends_the_transported_timeout_not_the_sdk_default(
 
     assert observed.termination is SessionTermination.COMPLETED
     assert recorded["send_kwargs"] == {"timeout": 21600.0}
+    assert "Time budget: 21600 seconds" in recorded["prompt"]
+    assert "Send deadline (local time):" in recorded["prompt"]
     assert recorded["memory"] == {"enabled": False}
 
 
@@ -595,7 +597,8 @@ def test_remote_lane_opens_only_its_named_installed_profile(
             "name": "bugfix", "prompt": "bugfix role delta.",
             "infer": False, "skills": ["tdd"],
         }]
-        assert recorded["prompt"] == "Work issue 460."
+        assert recorded["prompt"].startswith("Work issue 460.")
+        assert "Time budget: 21600 seconds" in recorded["prompt"]
         events = [json.loads(line) for line in (tmp_path / worker.EVENTS_FILENAME).read_text().splitlines()]
         assert events[-1]["reason"] == "skill_outside_profile"
 

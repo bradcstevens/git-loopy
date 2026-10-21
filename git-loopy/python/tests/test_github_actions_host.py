@@ -1046,6 +1046,7 @@ def test_the_dispatch_carries_no_credential_across_the_machine_boundary() -> Non
         "reasoning_effort",
         "run_id",
         "send_timeout_seconds",
+        "wrap_up_lead_seconds",
         "profile_key",
         "catalog_skills",
     }
@@ -1370,6 +1371,7 @@ def test_the_request_carries_the_runs_send_timeout_rather_than_an_sdk_default(
         capacity=4,
         workflow_ref="main",
         send_timeout_seconds=1234.5,
+        wrap_up_lead_seconds=25,
         sleep=_instant,
         poll_interval_seconds=0,
     )
@@ -1378,6 +1380,15 @@ def test_the_request_carries_the_runs_send_timeout_rather_than_an_sdk_default(
 
     _workflow, _ref, inputs = client.dispatched[0]
     assert json.loads(inputs["request"])["send_timeout_seconds"] == 1234.5
+    assert json.loads(inputs["request"])["wrap_up_lead_seconds"] == 25
+
+
+def test_wrap_up_lead_is_refused_against_the_capped_remote_budget():
+    with pytest.raises(ValueError, match="wrap_up_lead_seconds"):
+        GitHubActionsExecutionHost(
+            client=_SilentActionsClient(), capacity=4, workflow_ref="main",
+            send_timeout_seconds=30000, wrap_up_lead_seconds=22000,
+        )
 
 
 def test_a_host_without_a_send_timeout_is_refused_at_construction() -> None:

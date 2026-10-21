@@ -231,9 +231,9 @@ class FakeGitClient:
         # 40-char hex with a distinctive ``face`` prefix so auto-generated SHAs
         # never collide with the explicit SHAs tests pass to
         # simulate_agent_commit (e.g. "abcdef..." / "a" * 40 / "cap0...").
-        # Worktree children get a distinct ``sha_prefix`` (``wt1``, ``wt2``, ...)
+        # Worktree children get a distinct hex prefix (``ab01``, ``ab02``, ...)
         # so per-Lane auto-SHAs never collide across worktrees either.
-        return f"{self._sha_prefix}{self._sha_counter:036x}"
+        return f"{self._sha_prefix}{self._sha_counter:0{40 - len(self._sha_prefix)}x}"
 
     def _index(self, sha: str) -> int:
         for i, commit in enumerate(self._log):
@@ -262,6 +262,23 @@ class FakeGitClient:
 
     def is_dirty(self) -> bool:
         return self.dirty
+
+    def merge_in_progress(self) -> bool:
+        return False
+
+    def commit_identity(self, sha: str) -> tuple[str, tuple[str, ...]]:
+        return sha, ()
+
+    def stage_paths_tree(self, paths: Sequence[Path | str]) -> str:
+        return self.head_sha()
+
+    def publication_upstream(self) -> tuple[str, str, str, str] | None:
+        upstream = self.upstream()
+        if upstream is None:
+            return None
+        remote, ref = upstream
+        url = self.remote_url(remote) or remote
+        return remote, ref, url, url
 
     def has_untracked(self) -> bool:
         return self.untracked
@@ -300,7 +317,7 @@ class FakeGitClient:
     def upstream(self) -> tuple[str, str] | None:
         return self.configured_upstream
 
-    def push(self, *, upstream: tuple[str, str] | None = None) -> None:
+    def push(self, *, upstream: tuple[str, str] | None = None, sha: str = "HEAD") -> None:
         self.push_calls += 1
         if self.push_error is not None:
             raise self.push_error
@@ -386,7 +403,7 @@ class FakeGitClient:
             wt_path,
             commits=list(self._log),
             branch=branch,
-            sha_prefix=f"wt{self._worktree_seq}",
+            sha_prefix=f"ab{self._worktree_seq:02x}",
             merge_conflicts=sorted(self._merge_conflict_issues),
             release_versions=self._release_versions,
             tracked_paths=self._tracked_paths,
@@ -1071,23 +1088,24 @@ class FakeGateRunner:
     Every worktree passed to :meth:`run` is recorded in :attr:`calls` for assertions.
     Red results carry ``failure`` (a shared :class:`~git_loopy.gate.LoopFailure`) so a
     test can assert failure detail flows through, exactly as the production runner's
-    does.
+    does. A queue entry may instead be a complete :class:`GateResult`, allowing
+    timeout and red results to alternate without changing the fake's failure state.
     """
 
     def __init__(
         self,
         *,
-        outcomes: Sequence[bool] | None = None,
-        by_worktree: Mapping[Path, Sequence[bool]] | None = None,
-        by_issue: Mapping[int | str, Sequence[bool]] | None = None,
+        outcomes: Sequence[bool | GateResult] | None = None,
+        by_worktree: Mapping[Path, Sequence[bool | GateResult]] | None = None,
+        by_issue: Mapping[int | str, Sequence[bool | GateResult]] | None = None,
         default: bool = True,
         failure: LoopFailure | None = None,
     ) -> None:
-        self._outcomes: list[bool] = list(outcomes) if outcomes else []
-        self._by_worktree: dict[Path, list[bool]] = {
+        self._outcomes: list[bool | GateResult] = list(outcomes) if outcomes else []
+        self._by_worktree: dict[Path, list[bool | GateResult]] = {
             Path(key): list(value) for key, value in (by_worktree or {}).items()
         }
-        self._by_issue: dict[str, list[bool]] = {
+        self._by_issue: dict[str, list[bool | GateResult]] = {
             f"issue-{key}": list(value) for key, value in (by_issue or {}).items()
         }
         self._default = default
@@ -1109,6 +1127,8 @@ class FakeGateRunner:
             passed = self._outcomes.pop(0)
         else:
             passed = self._default
+        if isinstance(passed, GateResult):
+            return passed
         if passed:
             return GateResult.green(("scripted",))
         return GateResult.red(("scripted",), self._failure)

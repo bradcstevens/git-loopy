@@ -149,6 +149,7 @@ from git_loopy import rolling_scheduler
 from git_loopy import sources as sources_module
 from git_loopy import session_outcome as session_outcome_module
 from git_loopy import sweep as sweep_module
+from git_loopy.publication import PendingPublication, PublicationError, PublicationJournal
 from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
@@ -430,6 +431,7 @@ def _make_execution_host(
     placement: str,
     *,
     send_timeout_seconds: float,
+    wrap_up_lead_seconds: float | None = None,
     gate_timeout_seconds: float | None = None,
 ) -> execution_host_module.ExecutionHost | None:
     """Construct the **Execution host** the operator named, or ``None`` for local.
@@ -461,6 +463,7 @@ def _make_execution_host(
             capacity=actions_host_module.github_actions_capacity(),
             workflow_ref=actions_host_module.workflow_ref(client),
             send_timeout_seconds=send_timeout_seconds,
+            wrap_up_lead_seconds=wrap_up_lead_seconds,
             gate_timeout_seconds=gate_timeout_seconds,
         )
     raise ValueError(f"no adapter exists for execution host {placement!r}")
@@ -4485,6 +4488,7 @@ class _ContributionAccounting:
     recovery_attempts: int = 0
     strikes_at_open: int = 0
     ending: session_outcome_module.SessionOutcome | None = None
+    gate_timeout: gate_module.LoopFailure | None = None
 
 
 @dataclass
@@ -4732,6 +4736,9 @@ class _ParallelLoop:
         # observation from its own state.
         self._cost_meter = rolling_pressure.RunCostMeter(denomination=denomination)
         self._host_setup_pressure = rolling_pressure.HostSetupPressure()
+        # Publication identity and completion use the same injected tracker as
+        # the Run's issue source, not a new client hidden inside Integration.
+        self._publication_tracker = route_tracker
         self._dispatch_failures_exhausted = False
         self._pressure = _make_pressure_monitor(
             lane_cap=self._host_capacity,
@@ -7159,8 +7166,13 @@ class _ParallelLoop:
                 try:
                     if self._stop_cancel_requested:
                         raise asyncio.CancelledError
+                    from .lane_session import run_lane_session
+
                     await self._await_agent(
-                        sdk_session.send_and_wait(prompt, timeout=send_timeout),
+                        run_lane_session(
+                            sdk_session, prompt, timeout=send_timeout,
+                            lead_time=self._config.wrap_up_lead_seconds,
+                        ),
                         name=(
                             "git-loopy-lane-"
                             f"{contribution.contribution_id}-agent"
@@ -7420,6 +7432,11 @@ class _ParallelLoop:
                     serial_required=None,
                 )
             self._finalize_contribution(contribution, published=published)
+            if PublicationJournal(self._git).path.exists():
+                raise PublicationError(
+                    "Publication reconciliation required: pending base publication; "
+                    "preserving work and stopping before fresh execution"
+                )
             # FIFO admission follows the freeing contribution's end, still
             # inside the lock, so the freed Lane cannot be refilled between
             # the two records. Direct admission was already said at the
@@ -7622,6 +7639,13 @@ class _ParallelLoop:
         self._emit_contribution_event(
             contribution,
             events_module.WRAPPER_CONTRIBUTION_END,
+            **(
+                {"gate_timeout": {
+                    "name": scope.gate_timeout.name,
+                    "timeout_seconds": scope.gate_timeout.timeout_seconds,
+                }}
+                if scope.gate_timeout is not None else {}
+            ),
             **rollup_module.contribution_end_payload(
                 rollup,
                 published=published,
@@ -7662,10 +7686,10 @@ class _ParallelLoop:
         there is nothing to revert on a red gate, and base cannot be observed
         red even transiently.
 
-        A conflicting merge, a red gate, or a gate that cannot run all hand the
-        same stage to bounded auto-resolution (:meth:`_auto_resolve_lane`, #63),
-        which reuses this worktree so the resolution agent sees the exact tree
-        that failed. The stage is reaped on every path.
+        A conflicting merge or red gate hands the same stage to bounded Recovery
+        (:meth:`_auto_resolve_lane`, #63). A timeout re-runs the gate without an
+        Agent, within that same bound (#904). A gate that cannot run at all hands
+        off without claiming the change is red. The stage is reaped on every path.
         """
         ref = contribution.ref
         stage = self._open_integration_stage(ref)
@@ -7700,13 +7724,17 @@ class _ParallelLoop:
                     contribution, lane_work, stage, conflicted=True
                 )
 
-            if await self._gate_green(ref, "post-merge", stage.path):
+            result = await self._integration_gate(ref, "post-merge", stage.path)
+            if result is not None and result.passed:
                 return self._publish_stage(contribution, lane_work, stage)
 
-            # A red / un-runnable gate on the private result: base still has
-            # not moved, so recovery simply continues in the same stage.
+            if result is None:
+                self._fallback_lane_to_serial(lane_work, gate_unavailable=True)
+                return False
+            # Preserve the result until the Recovery decision: a timeout buys
+            # a gate re-run, not an Agent tasked with repairing a red change.
             return await self._auto_resolve_lane(
-                contribution, lane_work, stage, conflicted=False
+                contribution, lane_work, stage, conflicted=False, gate_result=result
             )
         finally:
             self._reap_integration_stage(stage, ref)
@@ -7839,9 +7867,46 @@ class _ParallelLoop:
             )
             return False
         try:
+            publication_upstream = self._git.publication_upstream()
+        except git_module.GitError as exc:
+            self._diag.warning("integration #%s: publication push failed: %s", ref, exc)
+            self._emit_contribution_event(
+                contribution, events_module.WRAPPER_INTEGRATION_PUSH_FAILED, message=str(exc),
+            )
+            raise PublicationError(
+                f"Publication reconciliation required for #{ref}: upstream identity "
+                "is unreadable; not mutating base or starting fresh work"
+            ) from exc
+        try:
             if stage.issue_clone:
                 self._git.fetch_sha(str(stage.path), f"refs/heads/{stage.branch}", stage.branch)
+            if (
+                self._config.issue_source == "github"
+                and lane_work.item.kind == "issue" and isinstance(ref, int)
+            ):
+                tracker = self._publication_tracker
+                if tracker is None:
+                    raise PublicationError("publication tracker identity is unavailable")
+                branch = self._git.current_branch()
+                if branch is None:
+                    raise PublicationError("publication needs a named base branch")
+                PublicationJournal(self._git).begin(PendingPublication(
+                    version=1, run_id=self._run_id, issue=ref,
+                    close_requested=any(ref in extract_close_refs(c.message)
+                                        for c in stage_commits),
+                    repository=tracker.repo_view().nwo, branch=branch,
+                    before=pre_base, stage=stage.git.head_sha(),
+                    release_required=any(re.fullmatch(r"v\d+\.\d+\.\d+", label)
+                                         for label in lane_work.item.labels),
+                    leased=self._lease is not None,
+                    upstream=publication_upstream,
+                ))
             self._git.merge(stage.branch)
+        except (PublicationError, OSError) as exc:
+            raise PublicationError(
+                f"Publication reconciliation required for #{ref}: {exc}; "
+                "not mutating base or starting fresh work"
+            ) from exc
         except git_module.GitError as exc:
             self._diag.warning(
                 "integration #%s: publish of verified %s failed: %s; not "
@@ -7850,6 +7915,15 @@ class _ParallelLoop:
             )
             return False
         if not self._base_advanced(pre_base, ref):
+            # A returned, clean no-op is not an interrupted mutation. Keep
+            # uncertain/error cases pending; only this proved no-op retires it.
+            journal = PublicationJournal(self._git)
+            if (
+                journal.path.exists() and self._git.head_sha() == pre_base
+                and not self._git.merge_in_progress()
+                and not self._git.is_dirty() and not self._git.has_untracked()
+            ):
+                journal.complete()
             return False
         stage.published = True
         self._base_publications += 1
@@ -7875,15 +7949,13 @@ class _ParallelLoop:
             )
         return advanced
 
-    async def _gate_green(
+    async def _integration_gate(
         self, ref: int | str, phase: str, worktree: Path | None = None
-    ) -> bool:
-        """Run the injected gate on ``worktree`` (default repo root); ``True`` == green.
+    ) -> gate_module.GateResult | None:
+        """Run the gate without collapsing a timeout into a red result.
 
-        A **red** gate or a :exc:`~git_loopy.gate.GateError` (cannot gate at all)
-        both return ``False`` — the contribution stays unpublished in its private
-        **Integration stage** and drives auto-resolution there; the ``phase``
-        label enriches the diagnostic.
+        ``None`` means the gate could not run at all. Neither that nor a timed-out
+        row justifies a Recovery Agent; the caller decides whether to re-run.
 
         The gate is awaited off the event loop (#901), so Lane send timeouts,
         Events and the Dashboard keep running for the row's whole bound, while
@@ -7894,10 +7966,10 @@ class _ParallelLoop:
             result = await gate_module.run_gate_off_loop(self._gate_runner, target)
         except gate_module.GateError as exc:
             self._diag.warning(
-                "integration #%s: %s gate could not run: %s; treating as red",
+                "integration #%s: %s gate could not run: %s",
                 ref, phase, exc,
             )
-            return False
+            return None
         if not result.passed:
             failure = result.failure
             self._diag.warning(
@@ -7906,8 +7978,7 @@ class _ParallelLoop:
                 failure.name if failure else "unknown",
                 failure.summary if failure else "no detail",
             )
-            return False
-        return True
+        return result
 
     def _abort_stage_merge_safely(
         self, stage: _IntegrationStage, ref: int | str
@@ -7933,12 +8004,34 @@ class _ParallelLoop:
     ) -> bool:
         """Advance the line, ensure durability, then close and reap the branch."""
         advanced = self._advance_release_line(lane_work.item)
+        journal = PublicationJournal(self._git)
+        record = journal.read()
+        if record is not None and record.release_required and advanced is None:
+            self._diag.error(
+                "integration #%s: final Release-line publication remains unresolved; "
+                "preserving pending publication for operator inspection",
+                lane_work.item.ref,
+            )
+            return False
+        journal.finalized()
         if not self._push_publication(contribution, lane_work.item):
             return False
         self._emit_contribution_event(
             contribution, events_module.WRAPPER_INTEGRATION_PUBLISHED
         )
         self._close_landed(contribution, lane_work.item, pre_base)
+        if journal.path.exists() and isinstance(lane_work.item.ref, int):
+            if (
+                record is not None and not record.close_requested
+                or self._publication_tracker is not None
+                and self._publication_tracker.issue_view(lane_work.item.ref).state == "CLOSED"
+            ):
+                journal.complete()
+            else:
+                # Durable publication still counts as advancement. Its pending
+                # closure stops this Run at the Integration boundary, preserving
+                # the Lane branch rather than publishing the work again.
+                return True
         if advanced is not None:
             next_line, bump_class = advanced
             self._serial._emit(
@@ -7967,6 +8060,16 @@ class _ParallelLoop:
         """
         try:
             upstream = self._git.upstream()
+            record = PublicationJournal(self._git).read()
+            if record is not None:
+                if self._git.publication_upstream() != record.upstream:
+                    raise PublicationError("upstream changed during publication")
+                if self._git.head_sha() != record.final:
+                    raise PublicationError("base changed from final publication")
+                if self._git.is_dirty() or self._git.has_untracked():
+                    raise PublicationError("final publication left base dirty; inspect index/worktree")
+                if record.release_required and record.release_tree is None:
+                    raise PublicationError("final Release-line publication remains unresolved")
             if upstream is None:
                 return True
             if not self._leased(item, "publication push"):
@@ -7977,7 +8080,7 @@ class _ParallelLoop:
                     contribution, events_module.WRAPPER_PUSH_RECORDED
                 )
                 return True
-        except git_module.GitError as exc:
+        except (git_module.GitError, PublicationError) as exc:
             message = str(exc)
         self._diag.warning(
             "integration #%s: publication push failed: %s; "
@@ -8007,12 +8110,11 @@ class _ParallelLoop:
         issue with no ``vX.Y.Z`` Release-target label advances nothing
         (ADR-0066).
 
-        Every failure here is a diagnostic and never a veto: the contribution is
-        already published on base, and a line that would not move cannot retract
-        a merge that already happened. The version copies are written as one
-        transaction (#491) and restored if the commit is refused, so a refusal
-        leaves the trunk on its prior complete Release line rather than a
-        partially advanced one.
+        Failures cannot retract the merge already on base. The version copies
+        are written as one transaction (#491) and restored if the commit is
+        refused. Publication reconciliation (#419) nevertheless keeps a required
+        but unresolved final Release result pending: the caller will not push,
+        close, or dispatch fresh work on the strength of the merge alone.
         """
         try:
             # The label names a Release relative to the last stable one, so the
@@ -8061,15 +8163,18 @@ class _ParallelLoop:
                         item.ref,
                         rollback_exc,
                     )
-            # Caught for the same reason every other fault here is: the merge is
-            # already published, so nothing this method learns may escape and
-            # strand a landed contribution.
+            # Preserve the landed merge. The caller retains its durable identity
+            # and refuses completion when the required final result is missing.
             self._diag.warning(
                 "integration #%s: Release line did not advance: %s", item.ref, exc
             )
             return None
 
         try:
+            PublicationJournal(self._git).release_intent(
+                release_line_commit_subject(next_line.version),
+                (*RELEASE_VERSION_PATHS, *notes_write.commit_paths),
+            )
             self._git.commit_paths(
                 release_line_commit_subject(next_line.version),
                 (*RELEASE_VERSION_PATHS, *notes_write.commit_paths),
@@ -8207,19 +8312,21 @@ class _ParallelLoop:
         stage: _IntegrationStage,
         *,
         conflicted: bool,
+        gate_result: gate_module.GateResult | None = None,
     ) -> bool:
         """Bounded auto-resolution inside the private stage (#63, ADR-0009/0020).
 
-        Up to K=:data:`_AUTO_RESOLUTION_MAX_ATTEMPTS` times, runs a fresh
-        resolution agent session pinned to the same
-        :class:`_IntegrationStage` the failed merge/gate happened in
-        (:meth:`_run_resolution_session`) and re-gates it. The first **green**
+        Up to K=:data:`_AUTO_RESOLUTION_MAX_ATTEMPTS` times after the initial gate,
+        re-gates the same :class:`_IntegrationStage`. A conflict or red result
+        first gets a fresh Agent (:meth:`_run_resolution_session`); a timeout
+        gets only the gate re-run. Both spend one slot of the same bound.
+        The first **green**
         attempt publishes that verified stage onto base
         (:meth:`_publish_stage`), closes the issue, deletes the (now-landed)
-        Lane branch, and returns ``True``. If base advances but upstream
-        durability fails, return ``False`` immediately: the work is already
-        on base and must not buy another Recovery session or Release advance.
-        If all K attempts stay red the
+        Lane branch, and returns ``True``. A publication refusal returns
+        ``False`` immediately, whether or not base advanced: publication has its
+        own failure handling and a green gate must not buy a Recovery Agent.
+        If all K attempts stay red or time out the
         contribution falls back to a serial Iteration
         (:meth:`_fallback_lane_to_serial`) and returns ``False``, keeping its
         Lane branch as a breadcrumb.
@@ -8232,32 +8339,55 @@ class _ParallelLoop:
             conflicted: Whether the Lane branch failed to merge at all (as
                 opposed to merging cleanly and gating red) — the two states
                 leave very different trees, so the brief must say which.
+            gate_result: The preceding gate result, retaining the timeout detail
+                until this decision. Absent only for an initial merge conflict.
         """
         ref = contribution.ref
         for attempt in range(1, _AUTO_RESOLUTION_MAX_ATTEMPTS + 1):
+            timed_out = (
+                gate_result is not None
+                and gate_result.failure is not None
+                and gate_result.failure.timed_out
+            )
+            if not timed_out:
+                scope = self._contribution_iter.get(contribution.contribution_id)
+                if scope is not None:
+                    scope.recovery_attempts += 1
+                # Only an actual Agent session emits recovery_started. The
+                # ordinal counts gate-only re-runs against this same bound.
+                self._emit_contribution_event(
+                    contribution,
+                    events_module.WRAPPER_INTEGRATION_RECOVERY_STARTED,
+                    attempt=attempt,
+                    max_attempts=_AUTO_RESOLUTION_MAX_ATTEMPTS,
+                )
+                await self._run_resolution_session(
+                    contribution, lane_work, stage, attempt, conflicted=conflicted,
+                    gate_failure=gate_result.failure if gate_result else None,
+                )
+            gate_result = await self._integration_gate(
+                ref, f"auto-resolution attempt {attempt}", stage.path
+            )
+            if gate_result is None:
+                break
+            if not gate_result.passed:
+                continue
+            # Leave gate Recovery on green, just as the initial gate does.
+            # Publication failure is not a red gate, even before base advances.
+            return self._publish_stage(contribution, lane_work, stage)
+        failure = gate_result.failure if gate_result is not None else None
+        if failure is not None and failure.timed_out:
             scope = self._contribution_iter.get(contribution.contribution_id)
             if scope is not None:
-                scope.recovery_attempts = attempt
-            # On disk before the session it names. K is immutable; the
-            # attempt is the only field that moves, and it never exceeds K.
-            self._emit_contribution_event(
-                contribution,
-                events_module.WRAPPER_INTEGRATION_RECOVERY_STARTED,
-                attempt=attempt,
-                max_attempts=_AUTO_RESOLUTION_MAX_ATTEMPTS,
+                scope.gate_timeout = failure
+            self._diag.warning(
+                "integration #%s: Recovery handoff — gate row %r %s; "
+                "exhausted %s attempts",
+                ref, failure.name, failure.summary, _AUTO_RESOLUTION_MAX_ATTEMPTS,
             )
-            await self._run_resolution_session(
-                contribution, lane_work, stage, attempt, conflicted=conflicted
-            )
-            if not await self._gate_green(
-                ref, f"auto-resolution attempt {attempt}", stage.path
-            ):
-                continue
-            pre_publications = self._base_publications
-            published = self._publish_stage(contribution, lane_work, stage)
-            if published or self._base_publications > pre_publications:
-                return published
-        self._fallback_lane_to_serial(lane_work)
+        self._fallback_lane_to_serial(
+            lane_work, failure=failure, gate_unavailable=gate_result is None
+        )
         return False
 
     async def _run_resolution_session(
@@ -8268,6 +8398,7 @@ class _ParallelLoop:
         attempt: int,
         *,
         conflicted: bool,
+        gate_failure: gate_module.LoopFailure | None = None,
     ) -> None:
         """Run one auto-resolution agent session in the private stage (#63).
 
@@ -8281,7 +8412,8 @@ class _ParallelLoop:
         bound advances.
         """
         prompt = self._resolution_prompt(
-            contribution, lane_work, attempt, conflicted=conflicted
+            contribution, lane_work, attempt, conflicted=conflicted,
+            gate_failure=gate_failure,
         )
         send_timeout = self._config.send_timeout_seconds
         scope = self._contribution_iter.get(contribution.contribution_id)
@@ -8343,6 +8475,7 @@ class _ParallelLoop:
         attempt: int,
         *,
         conflicted: bool,
+        gate_failure: gate_module.LoopFailure | None = None,
     ) -> str:
         """The dedicated auto-resolution brief (#63).
 
@@ -8350,23 +8483,33 @@ class _ParallelLoop:
         asks the agent to get the private Integration worktree green and commit
         — driving a clean Integration the runner can then publish.
 
-        The brief states which of the two failure states the tree is actually
-        in, because they need different work and a brief that misdescribes the
-        tree wastes one of only K=3 attempts: a **conflicted** stage has had its
-        merge aborted and still needs the Lane branch merged, while a **red**
-        stage already carries the merge and needs the feedback loops fixed.
+        The first conflict brief asks for the aborted merge to be resolved.
+        A subsequent red gate supplies the current failure, even if Integration
+        originally conflicted. The gate cannot prove that the Agent completed
+        that merge, so retain a verification reminder rather than claiming either
+        that it is still aborted or that it has been resolved.
         """
-        if conflicted:
+        revision = lane_work.publication_sha or lane_work.branch
+        if conflicted and gate_failure is None:
             situation = (
-                f"Revision {lane_work.publication_sha or lane_work.branch} could not be merged into this "
+                f"Revision {revision} could not be merged into this "
                 "integration worktree (the conflicting merge was aborted). "
                 "Merge it, "
             )
         else:
+            merge_context = (
+                f"The initial merge of revision {revision} conflicted. Verify its "
+                "merge resolution in this integration worktree; the current"
+                if conflicted else
+                f"Revision {revision} is already merged into this integration "
+                "worktree, but its"
+            )
+            detail = (
+                f"Gate row {gate_failure.name!r} {gate_failure.summary}. "
+                if gate_failure is not None else ""
+            )
             situation = (
-                f"Revision {lane_work.publication_sha or lane_work.branch} is already merged into this "
-                "integration worktree, but its feedback loops are red. Fix "
-                "them, "
+                f"{merge_context} feedback loops are red. {detail}Fix them, "
             )
         return (
             f"Auto-resolution attempt {attempt} of "
@@ -8378,7 +8521,10 @@ class _ParallelLoop:
             "If they do not settle a conflict, comment the blocker and end the turn."
         )
 
-    def _fallback_lane_to_serial(self, lane_work: _LaneWork) -> None:
+    def _fallback_lane_to_serial(
+        self, lane_work: _LaneWork, *, failure: gate_module.LoopFailure | None = None,
+        gate_unavailable: bool = False,
+    ) -> None:
         """Terminal auto-resolution failure -> fall back to a serial Iteration (#63).
 
         Posts exactly one automated breadcrumb comment on the issue and
@@ -8400,7 +8546,23 @@ class _ParallelLoop:
         """
         if not self._leased(lane_work.item, "auto-resolution fallback comment"):
             return
-        self._source.comment(lane_work.item.ref, _AUTO_RESOLUTION_FALLBACK_COMMENT)
+        comment = _AUTO_RESOLUTION_FALLBACK_COMMENT
+        if gate_unavailable:
+            comment = (
+                "The Integration gate could not run. No additional Recovery Agent "
+                "was started for this inconclusive result. The Lane branch is "
+                "preserved for Recovery handoff; the issue remains open for "
+                "a serial Iteration."
+            )
+        elif failure is not None and failure.timed_out:
+            comment = (
+                f"Integration gate row {failure.name!r} {failure.summary}; "
+                f"the {_AUTO_RESOLUTION_MAX_ATTEMPTS}-attempt bound is exhausted. "
+                "This is inconclusive, not a red result. The Lane branch is "
+                "preserved for Recovery handoff; the issue remains open for "
+                "a serial Iteration."
+            )
+        self._source.comment(lane_work.item.ref, comment)
 
     def _resolve_base_ref(self) -> str:
         """The base ref new Lane branches are cut from.
@@ -8577,6 +8739,7 @@ async def _run_with_sleep_assertion(
             observed_host = _make_execution_host(
                 config.execution_host,
                 send_timeout_seconds=config.send_timeout_seconds,
+                wrap_up_lead_seconds=config.wrap_up_lead_seconds,
                 gate_timeout_seconds=config.gate_timeout_seconds,
             )
         except (ValueError, actions_host_module.ActionsError) as exc:
@@ -8663,6 +8826,34 @@ async def _run_with_sleep_assertion(
         control.close()
         return exit_code_for("preflight_failed")
 
+    # Base is not Sweep residue. Never let reclamation or a new Agent hide an
+    # unfinished publication, including a pre-protocol, unrecorded merge.
+    try:
+        if git.merge_in_progress():
+            raise RuntimeError(
+                "unfinished base merge; inspect MERGE_HEAD, index and worktree "
+                "and resolve manually before restarting (nothing was reset)"
+            )
+        journal = PublicationJournal(git)
+        if journal.path.exists():
+            reconciliation_lease = _make_lease_lifecycle(
+                config, git, run_id=writers.run_id, diag=diag, residence=residence,
+            )
+            reconciled = journal.reconcile(
+                _make_github_client() if config.issue_source == "github" else None,
+                reconciliation_lease,
+            )
+            if reconciled is not None:
+                diag.info("Publication reconciliation completed for issue #%s", reconciled)
+    except (RuntimeError, git_module.GitError, gh_module.GhError, OSError) as exc:
+        diag.error(
+            "Publication reconciliation refused: %s; inspect %s and base before "
+            "restarting; no Sweep or new work was started",
+            exc, repo_root / ".git-loopy" / "publication.json",
+        )
+        control.close()
+        return exit_code_for("preflight_failed")
+
     # A free control lock proves its Run cannot still own a Lane workspace.
     # This is intentionally Event-free: reclaiming someone else's residue is
     # neither an Iteration nor a contribution of this Run, so it happens here —
@@ -8717,6 +8908,7 @@ async def _run_with_sleep_assertion(
             else _make_execution_host(
                 config.execution_host,
                 send_timeout_seconds=config.send_timeout_seconds,
+                wrap_up_lead_seconds=config.wrap_up_lead_seconds,
                 gate_timeout_seconds=config.gate_timeout_seconds,
             )
         )

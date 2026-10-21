@@ -1532,8 +1532,27 @@ declares or emits it; `event_schema_version` stays 1.2 (ADR-0046 precedent).
   contribution gets bounded runner-driven recovery in the same stage: each attempt emits
   `wrapper.integration.recovery_started` once, before that attempt's Agent session, with its
   `attempt` (from 1) and the immutable `max_attempts` (K = 3) (contract 2.20). Attempts MUST NOT
-  exceed three, and an exhausted contribution emits three such records, then
-  `wrapper.contribution.end` with `reason` `serial_fallback`. Recovery Consumption and commits are
+  exceed three. From contract 2.36, a gate timeout is inconclusive rather than red:
+  the next attempt MUST re-run the gate without starting an Agent or emitting
+  `recovery_started`. That gate-only re-run consumes one of the same three slots
+  after the initial merge/gate. A later red result starts Recovery within the remaining
+  bound, with a brief describing that red result, never the earlier timeout as red.
+  Only a merge conflict or a gate that ran and failed starts a Recovery Agent; a
+  gate that cannot run at all hands off without an additional Agent.
+  `attempt` is the shared ordinal, so Recovery records can have gaps;
+  `summary.recovery_attempts` still counts actual Agent sessions, not gate-only re-runs.
+  Exhaustion emits `wrapper.contribution.end` with `reason` `serial_fallback`.
+  If its final gate timed out, that end MUST also carry `gate_timeout` with `name`
+  (the row label) and `timeout_seconds` (the exceeded bound). This is distinct from
+  the Lane's Agent-session `ending` and MUST NOT charge a Strike. The Run log reports
+  that handoff, row and timeout in one line, and the preserved Lane branch's breadcrumb
+  names the timeout rather than blaming the change.
+  [`integration-gate.json`](../git-loopy/conformance/integration-gate.json) pins the
+  four result sequences through Python's Integration seam. Shell and PowerShell
+  schedule no Lanes and remain at their dormant Contract support baseline (ADR-0091);
+  the TUI helper makes no Recovery decision. Existing Event fixture pins remain
+  unchanged: `gate_timeout` is an additive field and historical streams retain their
+  meaning. Recovery Consumption and commits are
   counted once, in the originating contribution. Persistent failure ends the contribution unpublished rather than
   publishing something the loops did not pass.
 - **The refill turn a serial Iteration earns is reported when it is spent (contract 2.21).**

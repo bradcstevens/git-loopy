@@ -442,6 +442,41 @@ def test_send_timeout_env_beats_config() -> None:
     assert resolved.run.send_timeout_seconds == 100.0
 
 
+@pytest.mark.parametrize(
+    ("env", "project", "global_", "expected"),
+    [
+        ({}, {}, {}, None),
+        ({}, {}, {"wrap_up_lead_seconds": 300}, 300),
+        ({}, {"wrap_up_lead_seconds": 200}, {"wrap_up_lead_seconds": 300}, 200),
+        (
+            {"GIT_LOOPY_WRAP_UP_LEAD_SECONDS": "100"},
+            {"wrap_up_lead_seconds": 200}, {"wrap_up_lead_seconds": 300}, 100,
+        ),
+    ],
+)
+def test_wrap_up_lead_follows_config_precedence(env, project, global_, expected):
+    assert _resolve(
+        env=env, project=project, global_=global_
+    ).run.wrap_up_lead_seconds == expected
+
+
+@pytest.mark.parametrize("lead", [100, 101, 0, -1, float("inf"), float("nan"), True])
+def test_wrap_up_lead_refuses_invalid_or_unbounded_warning(lead):
+    with pytest.raises(ValueError, match="wrap_up_lead_seconds"):
+        RunConfig(send_timeout_seconds=100, wrap_up_lead_seconds=lead)
+
+
+@pytest.mark.parametrize("tier", ["env", "project", "global_"])
+def test_resolved_wrap_up_lead_must_be_below_effective_timeout(tier):
+    inputs = {tier: (
+        {"GIT_LOOPY_WRAP_UP_LEAD_SECONDS": "100"}
+        if tier == "env" else {"wrap_up_lead_seconds": 100}
+    )}
+    inputs.setdefault("env", {})["GIT_LOOPY_SEND_TIMEOUT_SECONDS"] = "100"
+    with pytest.raises(ValueError, match="wrap_up_lead_seconds"):
+        _resolve(**inputs)
+
+
 def test_send_timeout_project_beats_global() -> None:
     resolved = _resolve(
         project={"send_timeout_seconds": 200.0},

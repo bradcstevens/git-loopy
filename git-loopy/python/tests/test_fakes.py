@@ -248,8 +248,8 @@ def test_fake_worktrees_have_independent_logs_from_each_other(tmp_path: Path) ->
     # Neither Lane sees the other's commit; auto-generated SHAs never collide.
     assert "b1" not in [c.sha for c in a.recent_commits(10)]
     assert "a1" not in [c.sha for c in b.recent_commits(10)]
-    assert a.commit("chore: cap").startswith("wt1")  # distinct per-worktree sha prefix
-    assert b.commit("chore: cap").startswith("wt2")
+    assert a.commit("chore: cap").startswith("ab01")  # distinct per-worktree hex prefix
+    assert b.commit("chore: cap").startswith("ab02")
 
 
 def test_fake_remove_worktree_is_recorded_and_drops_the_worktree(

@@ -497,6 +497,22 @@ class GitClient(Protocol):
         """Return ``True`` if the tree has uncommitted staged/unstaged changes."""
         ...
 
+    def merge_in_progress(self) -> bool:
+        """Whether this worktree has an unfinished merge."""
+        ...
+
+    def commit_identity(self, sha: str) -> tuple[str, tuple[str, ...]]:
+        """The commit's tree and ordered parents, without touching the worktree."""
+        ...
+
+    def stage_paths_tree(self, paths: Sequence[Path | str]) -> str:
+        """Stage publication metadata and identify its intended complete tree."""
+        ...
+
+    def publication_upstream(self) -> tuple[str, str, str, str] | None:
+        """Configured upstream and its fetch/push destinations, or local-only."""
+        ...
+
     def has_untracked(self) -> bool:
         """Return ``True`` if the tree has any untracked, non-ignored file."""
         ...
@@ -537,7 +553,7 @@ class GitClient(Protocol):
         """Return the current branch's configured remote and upstream ref, if any."""
         ...
 
-    def push(self, *, upstream: tuple[str, str] | None = None) -> None:
+    def push(self, *, upstream: tuple[str, str] | None = None, sha: str = "HEAD") -> None:
         """Push the current branch to its configured upstream."""
         ...
 
@@ -755,6 +771,34 @@ class SubprocessGitClient:
     def root(self) -> Path:
         """The repository root every git call runs in."""
         return self._root
+
+    def merge_in_progress(self) -> bool:
+        path = Path(_run(["rev-parse", "--git-path", "MERGE_HEAD"], cwd=self._root).strip())
+        if not path.is_absolute():
+            path = self._root / path
+        return path.exists()
+
+    def commit_identity(self, sha: str) -> tuple[str, tuple[str, ...]]:
+        parts = _run(["show", "-s", "--format=%T %P", sha], cwd=self._root).split()
+        return parts[0], tuple(parts[1:])
+
+    def stage_paths_tree(self, paths: Sequence[Path | str]) -> str:
+        _run(["add", "--", *(str(path) for path in paths)], cwd=self._root)
+        return _run(["write-tree"], cwd=self._root).strip()
+
+    def publication_upstream(self) -> tuple[str, str, str, str] | None:
+        upstream = self.upstream()
+        if upstream is None:
+            return None
+        remote, ref = upstream
+        if remote == ".":
+            return remote, ref, str(self.root.resolve()), str(self.root.resolve())
+        fetch = _run(["remote", "get-url", "--all", remote], cwd=self._root).splitlines()
+        push = _run(["remote", "get-url", "--push", "--all", remote], cwd=self._root).splitlines()
+        if len(fetch) != 1 or len(push) != 1:
+            raise GitError(["git", "remote", "get-url", remote], 1,
+                           "publication needs one unambiguous fetch/push destination")
+        return remote, ref, fetch[0], push[0]
 
     def common_git_dir(self) -> Path:
         """Return the resolved directory git shares across this clone's worktrees.
@@ -1034,7 +1078,7 @@ class SubprocessGitClient:
         remote, separator, ref = value.partition("\0")
         return (remote, ref) if separator and remote and ref else None
 
-    def push(self, *, upstream: tuple[str, str] | None = None) -> None:
+    def push(self, *, upstream: tuple[str, str] | None = None, sha: str = "HEAD") -> None:
         """Push the current branch to its configured upstream via ``git push``.
 
         The remote half of ADR-0004's durability net. After an iteration produces
@@ -1074,7 +1118,7 @@ class SubprocessGitClient:
         args = ["push"]
         if upstream is not None:
             remote, ref = upstream
-            args.extend(["--", remote, f"HEAD:{ref}"])
+            args.extend(["--", remote, f"{sha}:{ref}"])
         _run(args, cwd=self._root)
 
     def current_branch(self) -> str | None:

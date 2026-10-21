@@ -47,6 +47,46 @@ values.
 
 ---
 
+## Interrupted Parallel publication
+
+Before publishing a verified GitHub issue contribution onto base, the Python
+Runner persists `.git-loopy/publication.json` in that base worktree. The record
+binds the issue and its closure intent, originating Run, base branch, verified stage SHA and configured
+upstream (or explicit local-only status). A Release-line advance also records
+its intended tree and parent before committing, so an interrupted acknowledgement
+does not confuse the stage with the final publication.
+
+Partial contributions without a closing request retain the existing advancement
+semantics: their publication does not authorize an issue closure. Closing keywords
+in historical commits never substitute for a pending publication record.
+
+On restart, **Publication reconciliation** runs before Sweep or new work. It
+proves the stage and final publication by Git ancestry, including on the recorded
+upstream when configured. A newer upstream tip containing the final publication
+is sufficient. It finishes an outstanding closure without another Agent, merge
+or Release increment, and never closes an already-closed issue again. Recovered
+writes acquire a fresh Lease where the Lease protocol applies and fence each
+push and closure; a dead Run's Lease grants no authority.
+
+If upstream lacks the final publication, reconciliation can make one non-force
+push of its exact SHA, only while that SHA is the clean local base tip. It never
+includes later unrecorded commits. The attempt is persisted before pushing;
+another restart checks upstream proof rather than blindly retrying.
+
+An unfinished base merge, dirty base, changed identity, unavailable authority,
+unreadable remote, failed push or incomplete evidence refuses startup and names
+the pending record in diagnostics. Work and the index remain untouched. Inspect
+`git status`, `git log --graph --oneline --all`, the record and the configured
+upstream; resolve the identified ambiguity before restarting. In particular,
+death before the required Release-line result can be identified is a refusal,
+not permission to repeat the Release advance. Do not delete the record merely to
+bypass a refusal: it is the publication's durable identity, not a disposable log.
+
+This is distinct from private-stage **Recovery** and residue **Sweep**. It adds
+no recovery claim for serial publication or historical, unrecorded work. Clean
+pre-upgrade checkouts continue normally; an unrecorded unfinished merge is
+preserved and refused, never automatically aborted or attributed to an issue.
+
 ## Assessment service tracer (#759)
 
 The optional `assessment` extra supplies `git-loopy-assessment`, a separate
@@ -1499,7 +1539,19 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 | `GIT_LOOPY_OTEL_ENABLED`              | unset (disabled)               | Truthy (`1`, `true`, `yes`, `on`) enables OpenTelemetry tracing. Requires the `[otel]` extra. When disabled, `opentelemetry` is never imported — base install pays zero cost.                                    |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`     | unset                          | Presence (non-empty) also enables OTel tracing — matches the conventional OTel-ecosystem activation pattern.                                                                                                     |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`      | `7200` (2 h)                   | Per-Iteration `send_and_wait` timeout. The SDK's default of `60` is far too short for autonomous Iterations that frequently run 30+ minutes.                                                                      |
+| `GIT_LOOPY_WRAP_UP_LEAD_SECONDS` | smaller of `900` and one tenth of the send timeout | Lead time for one immediate Lane wrap-up message. Environment overrides project `wrap_up_lead_seconds`, then global Config. Must be positive, finite, and strictly below the effective send timeout. |
 | `GIT_LOOPY_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker. Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. When requested on a non-TTY run, the run warns and falls back to the configured model. |
+
+Each local or GitHub Actions Lane brief states its budget and local deadline with
+UTC offset. A still-running Lane receives one reminder to commit coherent work,
+leave the rest for the Checkpoint, and comment on its issue with what is done and
+what remains. The original timeout never moves. Early completion cancels the
+reminder; nothing is sent at or after expiry, and failed delivery is logged
+without retry. Serial Iterations and Reviewer/Recovery sessions are unchanged.
+Set an explicit lead with `git-loopy config set --project wrap_up_lead_seconds 300`
+(or `--global`). Remove the key to restore the automatic default; `config get`
+prints an empty value when automatic. The Run refuses an effective lead at or
+above its timeout; GitHub Actions also checks against its capped session budget.
 
 The gate bound follows environment > project `gate_timeout_seconds` > global
 `gate_timeout_seconds` > 3600 seconds. Set it with
@@ -1586,6 +1638,7 @@ demotion_threshold = 3
 include_prs = true
 otel_enabled = false
 send_timeout_seconds = 7200
+# wrap_up_lead_seconds = 300  # omit for min(900, effective send timeout / 10)
 gate_timeout_seconds = 3600  # one finite hang-catching bound for every gate row
 enabled_skills = ["tdd", "code-review"]
 deny_tools = ["bash"]
@@ -1596,7 +1649,8 @@ The **persisted** knobs are `model`, `reasoning_effort`, `context_tier`, `route_
 `classifier_model`,
 `classifier_effort`, `issue_source`,
 `include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`,
-`host_yield`, `prevent_idle_sleep`, `send_timeout_seconds`, `gate_timeout_seconds`,
+`host_yield`, `prevent_idle_sleep`, `send_timeout_seconds`, `wrap_up_lead_seconds`,
+`gate_timeout_seconds`,
 `enabled_skills`, and the two denylists. The
 model/effort **capability gate** (below) still applies to a config-supplied
 model. The two denylists are
@@ -1718,7 +1772,7 @@ above (`model`, `reasoning_effort`, `context_tier`, `route_policy`,
 `classifier_model`, `classifier_effort`,
 `issue_source`, `max_nmt_strikes`, `demotion_threshold`,
 `include_prs`, `otel_enabled`, `host_yield`, `prevent_idle_sleep`, `send_timeout_seconds`,
-`gate_timeout_seconds`,
+`gate_timeout_seconds`, `wrap_up_lead_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
 

@@ -1252,6 +1252,8 @@ def test_lane_windows_correct_each_issue_without_crossing(
         prompt, _timeout = session.send_and_wait_calls[0]
         assert "model_context:" not in prompt
         assert "git-loopy-route:v1:" not in prompt
+        assert "Time budget: 7200 seconds" in prompt
+        assert "Send deadline (local time):" in prompt
 
 
 def test_a_failed_lane_window_is_retried_without_blocking_the_lane(
@@ -1828,7 +1830,7 @@ def test_parallel_lane_checkpoint_commits_in_its_own_worktree(
     assert checkpoint["lane_issue"] == 42
     # Authored in the Lane's OWN worktree: only a child worktree client mints
     # ``wt``-prefixed SHAs, and the main worktree wrote no commit at all.
-    assert checkpoint["sha"].startswith("wt")
+    assert checkpoint["sha"].startswith("ab")
     assert fake_git.commit_messages == []
 
 
@@ -3137,7 +3139,7 @@ def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
                 render_reasoning=False,
             )
         )
-    ) == 0
+    ) == 1
 
     assert validate_repository_release_version(tmp_path) == "1.2.3"
     # Both halves of the refused `commit_paths` are undone -- the working tree by
@@ -3152,22 +3154,16 @@ def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
         )
     ]
     assert not (tmp_path / "docs/releases/v1.2.4-alpha.1.md").exists()
-    # The publication already happened and cannot be retracted; a Release line
-    # that would not move is a diagnostic, never a veto on a landed issue.
-    assert fake_gh.issue_view(42).state == "CLOSED"
-    assert len(_lane_branch_deletes(fake_git)) == 1
+    # #419: the merge alone cannot certify the unresolved final publication.
+    assert fake_gh.issue_view(42).state == "OPEN"
+    assert _lane_branch_deletes(fake_git) == []
+    assert (tmp_path / ".git-loopy/publication.json").exists()
 
 
-def test_parallel_integration_survives_a_release_tag_read_that_fails(
+def test_parallel_integration_preserves_publication_when_release_tag_read_fails(
     tmp_path, monkeypatch
 ) -> None:
-    """A git failure reading the last stable Release never strands a landing.
-
-    The stable base behind a prerelease line comes from a ``git tag`` read, which
-    raises :class:`~git_loopy.git.GitError` rather than a Release error. Left
-    uncaught it would escape a *published* merge before the contribution is
-    finalized, crashing the Run with the issue open and the Lane branch alive.
-    """
+    """#419: an unreadable required Release result cannot certify completion."""
     fake_git = _wire_repo(tmp_path)
     _wire_release_distribution(tmp_path, version="1.3.0-alpha.7")
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -3207,12 +3203,13 @@ def test_parallel_integration_survives_a_release_tag_read_that_fails(
                 render_reasoning=False,
             )
         )
-    ) == 0
+    ) == 1
 
     assert validate_repository_release_version(tmp_path) == "1.3.0-alpha.7"
     assert fake_git.commit_paths_calls == []
-    assert fake_gh.issue_view(42).state == "CLOSED"
-    assert len(_lane_branch_deletes(fake_git)) == 1
+    assert fake_gh.issue_view(42).state == "OPEN"
+    assert _lane_branch_deletes(fake_git) == []
+    assert (tmp_path / ".git-loopy/publication.json").exists()
 
 
 def test_parallel_integration_continues_a_prerelease_release_line(
@@ -3293,9 +3290,9 @@ def test_parallel_integration_advances_the_release_line_holding_the_integration_
     held: list[bool] = []
     advance = loop_module._ParallelLoop._advance_release_line
 
-    def watch_the_lock(self: Any, item: Any) -> None:
+    def watch_the_lock(self: Any, item: Any):
         held.append(self._integration_lock.locked())
-        advance(self, item)
+        return advance(self, item)
 
     monkeypatch.setattr(
         loop_module._ParallelLoop, "_advance_release_line", watch_the_lock
@@ -3651,26 +3648,10 @@ def test_parallel_integration_gates_privately_before_publishing(
     assert [b for b in fake_git.merge_calls if "/integrate/" not in b] == []
 
 
-def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions(
+def test_parallel_rollup_preserves_published_unclosed_contribution_and_stops(
     tmp_path, monkeypatch
 ) -> None:
-    """Integration tells "published, close failed" apart from "no progress".
-
-    Two Lanes finalize with different dispositions: #42's merge genuinely
-    advances base but its ``gh issue close`` call errors (published, stays
-    open); #43's merge is a no-op (its branch is already fully merged), so
-    Integration never even attempts a close (no base advancement, no
-    progress). Under Rolling dispatch there is no single-slot
-    ``wrapper.iteration.end`` rollup for Lane contributions (see the module
-    docstring's documented gap), so this asserts the equivalent *observable*
-    distinction directly: exactly one close is attempted (for #42, and it
-    fails so #42 stays open), #43 is never attempted and also stays open, and
-    the two contributions finalize with different ``published`` verdicts (#42's
-    merge advanced base; #43's no-op did not) — both consuming their
-    ``max_iterations`` unit at pickup, with no extra serial-fallback round
-    sneaking past the cap. Since contract 1.27 neither charges a **Strike**:
-    unpublished is not the same claim as *given up on*.
-    """
+    """Durable advancement counts, but pending closure stops fresh execution."""
     fake_git = _wire_repo(tmp_path)
     merge = fake_git.merge
 
@@ -3718,7 +3699,7 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
         )
     )
 
-    assert exit_code == 0
+    assert exit_code == 1
     # #42 published (base advanced) but its close call failed -> stays open,
     # never retried. #43's merge was a no-op -> never even attempted.
     assert [n for (n, _msg) in fake_gh.issue_close_calls] == [42]
@@ -3732,14 +3713,13 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
         for e in events
         if e["type"] == "wrapper.contribution.end"
     }
-    assert published == {42: True, 43: False}
+    assert published[42] is True
+    assert not published.get(43, False)
+    assert (tmp_path / ".git-loopy/publication.json").exists()
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
-    assert run_end["outcome"] == "iteration_cap"
+    assert run_end["outcome"] == "crashed"
     assert "refusals" not in run_end  # #643: only a Rolling all_blocked/all_skipped
-    # Exactly the two Lane sessions' units are spent -- no extra
-    # serial-fallback round sneaks past the `max_iterations=2` cap even
-    # though #43's disposition would otherwise latch one.
-    assert run_end["iterations_run"] == 2
+    assert len(fake_client.created) == 2  # No extra serial-fallback session.
 
 
 def test_parallel_integration_red_gate_keeps_branch_and_publishes_nothing(
@@ -4410,8 +4390,9 @@ def test_parallel_contribution_waits_behind_a_running_gate_row(
     assert fake_gh.issue_view(43).state == "CLOSED"
 
 
+@pytest.mark.parametrize("timeout_then_red", [False, True])
 def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, timeout_then_red
 ) -> None:
     """A conflicting Lane merge is aborted *privately*, then auto-resolved (#63).
 
@@ -4419,10 +4400,11 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
     cleanly. Under ADR-0020 the conflicting merge is attempted in 42's private
     Integration stage, never on base — so the ``git merge --abort`` that unwinds
     it fires **in that stage**, base is never left mid-merge, and there is
-    nothing to ``git revert``. Recovery then runs the auto-resolution agent in
-    the same stage, which passes on its first attempt here (all-green gate) and
-    publishes 42. Asserts where the abort happened, that base recorded none of
-    it, that both issues closed, and that the Run made progress (no strike).
+    nothing to ``git revert``. Recovery runs in that same stage, either gating
+    green immediately or reaching a timeout then a red gate-only re-run before
+    the last Agent repairs the current red row. Asserts where the abort happened,
+    that base recorded none of it, that both issues closed, and that the Run made
+    progress (no strike).
     """
     fake_git = _wire_repo(tmp_path, merge_conflicts=[42])
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -4441,10 +4423,21 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
         scripted_events=[_usage_event("claude-opus-4.8-max")],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    # All-green gate: the conflict is a *merge* failure, not a gate failure, so
-    # 42's first auto-resolution attempt (and 43's landing) pass.
+    # Either the first Recovery gates green, or its gate times out, a gate-only
+    # re-run is red, and the last remaining Recovery attempt fixes that red row.
+    results: list[bool | loop_module.gate_module.GateResult] = [True]
+    if timeout_then_red:
+        results = [
+            _gate_timeout(),
+            loop_module.gate_module.GateResult.red(
+                ("Shell syntax",),
+                LoopFailure("Shell syntax", "bash -n check.sh", 2, "syntax error"),
+            ),
+            True,
+        ]
     monkeypatch.setattr(
-        loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner(default=True)
+        loop_module, "_make_gate_runner",
+        lambda **_kwargs: FakeGateRunner(by_issue={42: results}),
     )
 
     cfg = RunConfig(
@@ -4467,8 +4460,7 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
     assert fake_git.repo_merge_aborts == [int_path]
     assert fake_git.merge_aborts == 0
 
-    # 42 was recovered by exactly one auto-resolution attempt in its dedicated
-    # integration worktree; 43 landed via the happy path.
+    # Recovery stays in the same stage; the timeout never buys an Agent.
     resolution_dirs = [
         c["working_directory"]
         for c in fake_client.create_calls
@@ -4480,7 +4472,7 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
                 fake_git.common_git_dir(), _run_id(tmp_path), 42
             )
         )
-    ]
+    ] * (2 if timeout_then_red else 1)
     recovery = next(
         session for session in fake_client.created
         if session._working_directory in resolution_dirs
@@ -4501,6 +4493,20 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
     assert fake_gh.issue_view(43).state == "CLOSED"
     assert fake_gh.issue_comment_calls == []
     events = _logged_events(tmp_path)
+    assert [
+        e["attempt"] for e in events
+        if e["type"] == "wrapper.integration.recovery_started" and e["issue"] == 42
+    ] == ([1, 3] if timeout_then_red else [1])
+    if timeout_then_red:
+        briefs = [
+            session.send_and_wait_calls[0][0]
+            for session in fake_client.created
+            if session._working_directory in resolution_dirs
+        ]
+        assert "feedback loops are red" in briefs[-1]
+        assert "Shell syntax" in briefs[-1] and "exited 2" in briefs[-1]
+        assert "could not be merged" not in briefs[-1]
+        assert "Python suite" not in briefs[-1] and "timed out" not in briefs[-1]
     assert [e for e in events if e["type"] == "wrapper.strike"] == []
 
 
@@ -5659,13 +5665,216 @@ def test_parallel_lane_runs_worktree_setup_before_own_session(
         assert own_session_index >= sessions_at_setup
 
 
+def test_parallel_gate_timeout_then_pass_needs_no_recovery_agent(
+    tmp_path, monkeypatch
+) -> None:
+    """An inconclusive gate is re-run in place, not described as red to an Agent."""
+    _git, gh, client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    gate = FakeGateRunner(by_issue={42: [_gate_timeout(), True]})
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    endings = [
+        e for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.contribution.end" and e["issue"] == 42
+    ]
+    assert len(endings) == 1
+    assert endings[0]["published"] is True
+    assert endings[0]["summary"]["recovery_attempts"] == 0
+    assert len([p for p in gate.calls if p.name == "issue-42"]) == 2
+    assert not [
+        c for c in client.create_calls
+        if "/integrate/" in c["working_directory"]
+    ]
+    assert gh.issue_view(42).state == "CLOSED"
+
+
+@pytest.mark.parametrize("first_result", ["timeout", "red"])
+def test_parallel_green_rerun_publication_refusal_does_not_start_recovery(
+    tmp_path, monkeypatch, first_result
+) -> None:
+    """A publication refusal is not evidence that a passing gate needs repair."""
+    git, gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+
+    def unreadable_history(_pre, _head):
+        raise git_module.GitError(["git", "log"], 1, "unreadable publication history")
+
+    class PublicationHistoryFailureGate(FakeGateRunner):
+        def run(self, worktree):
+            result = super().run(worktree)
+            if worktree.name == "issue-42" and result.passed:
+                stage_git = git.worktree_client(worktree)
+                assert stage_git is not None
+                monkeypatch.setattr(stage_git, "commits_between", unreadable_history)
+            return result
+
+    gate = PublicationHistoryFailureGate(
+        by_issue={42: [_gate_timeout() if first_result == "timeout" else False, True]}
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    events = [
+        e for e in _logged_events(tmp_path) if e.get("issue") == 42
+    ]
+    ending = next(e for e in events if e["type"] == "wrapper.contribution.end")
+    assert ending["published"] is False
+    assert ending["reason"] == "serial_fallback"
+    assert "gate_timeout" not in ending
+    expected_agents = 0 if first_result == "timeout" else 1
+    assert ending["summary"]["recovery_attempts"] == expected_agents
+    assert len([
+        e for e in events if e["type"] == "wrapper.integration.recovery_started"
+    ]) == expected_agents
+    assert len([path for path in gate.calls if path.name == "issue-42"]) == 2
+    assert gh.issue_view(42).state == "OPEN"
+    assert "integration #42: publication history read failed" in _diag_log(tmp_path)
+
+
+def _gate_timeout():
+    return loop_module.gate_module.GateResult.red(
+        ("Python suite",),
+        LoopFailure(
+            name="Python suite",
+            command="uv run pytest",
+            returncode=None,
+            output_tail="",
+            timed_out=True,
+            timeout_seconds=1800.0,
+        ),
+    )
+
+
+def test_parallel_gate_timeouts_exhaust_shared_bound_and_name_row(
+    tmp_path, monkeypatch
+) -> None:
+    """Exhaustion is a Recovery handoff, explicitly caused by a gate timeout."""
+    _git, gh, client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    gate = FakeGateRunner(by_issue={42: [_gate_timeout()] * 4})
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    events = _logged_events(tmp_path)
+    ending = next(
+        e for e in events
+        if e["type"] == "wrapper.contribution.end" and e["issue"] == 42
+    )
+    assert ending["published"] is False
+    assert ending["reason"] == "serial_fallback"
+    assert ending["gate_timeout"] == {
+        "name": "Python suite", "timeout_seconds": 1800.0,
+    }
+    assert ending["summary"]["recovery_attempts"] == 0
+    assert len([p for p in gate.calls if p.name == "issue-42"]) == 4
+    assert not [
+        c for c in client.create_calls
+        if "/integrate/" in c["working_directory"]
+    ]
+    assert not [e for e in events if e["type"] == "wrapper.integration.recovery_started"]
+    assert any(
+        e["type"] == "wrapper.serial.requested" and e["issue"] == 42
+        for e in events
+    )
+    assert gh.issue_view(42).state == "OPEN"
+    comments = [body for ref, body in gh.issue_comment_calls if ref == 42]
+    assert len(comments) == 1
+    assert "Python suite" in comments[0] and "timed out" in comments[0]
+    reports = [
+        line for line in _diag_log(tmp_path).splitlines()
+        if "integration #42:" in line and "Recovery handoff" in line
+    ]
+    assert len(reports) == 1
+    assert "Python suite" in reports[0] and "timed out after 1800s" in reports[0]
+
+
+@pytest.mark.parametrize("timeouts", [0, 1, 2])
+def test_parallel_red_gate_gets_recovery_from_current_result(
+    tmp_path, monkeypatch, timeouts
+) -> None:
+    """A red result, with or without earlier timeouts, buys one truthful brief."""
+    _git, gh, client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    red = loop_module.gate_module.GateResult.red(
+        ("Shell syntax",),
+        LoopFailure("Shell syntax", "bash -n check.sh", 2, "syntax error"),
+    )
+    gate = FakeGateRunner(by_issue={42: [_gate_timeout()] * timeouts + [red, True]})
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    events = _logged_events(tmp_path)
+    recovery = [e for e in events if e["type"] == "wrapper.integration.recovery_started"]
+    assert [(e["issue"], e["attempt"], e["max_attempts"]) for e in recovery] == [
+        (42, timeouts + 1, 3)
+    ]
+    briefs = [
+        session.send_and_wait_calls[0][0]
+        for call, session in zip(client.create_calls, client.created)
+        if "/integrate/" in call["working_directory"]
+    ]
+    assert len(briefs) == 1
+    assert "feedback loops are red" in briefs[0]
+    assert "Shell syntax" in briefs[0] and "exited 2" in briefs[0]
+    assert "Python suite" not in briefs[0]
+    assert "timed out" not in briefs[0]
+    ending = next(
+        e for e in events
+        if e["type"] == "wrapper.contribution.end" and e["issue"] == 42
+    )
+    assert ending["published"] is True
+    assert ending["summary"]["recovery_attempts"] == 1
+    assert "gate_timeout" not in ending
+    assert gh.issue_view(42).state == "CLOSED"
+
+
+def test_parallel_timeout_after_recovery_does_not_buy_another_agent(
+    tmp_path, monkeypatch
+) -> None:
+    _git, _gh, client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    gate = FakeGateRunner(by_issue={42: [False, _gate_timeout(), True]})
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: gate)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    ending = next(
+        e for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.contribution.end" and e["issue"] == 42
+    )
+    assert ending["published"] is True
+    assert ending["summary"]["recovery_attempts"] == 1
+    assert "gate_timeout" not in ending
+    assert len([
+        c for c in client.create_calls if "/integrate/" in c["working_directory"]
+    ]) == 1
+
+
+def test_parallel_gate_that_cannot_run_hands_off_without_a_red_brief(
+    tmp_path, monkeypatch
+) -> None:
+    _git, gh, client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+
+    class UnavailableGate(FakeGateRunner):
+        def run(self, worktree):
+            raise loop_module.gate_module.GateError("no runnable feedback loops")
+
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: UnavailableGate())
+    assert asyncio.run(loop_module.run(cfg)) == 0
+    assert not [
+        c for c in client.create_calls if "/integrate/" in c["working_directory"]
+    ]
+    assert all("could not run" in body for _, body in gh.issue_comment_calls)
+    assert len(gh.issue_comment_calls) == 2
+
+
 def test_parallel_integration_reports_a_timed_out_loop_as_a_timeout(
     tmp_path, monkeypatch
 ) -> None:
-    """A loop that exceeds its bound is red *as a timeout* (#374).
+    """A loop that exceeds its bound is reported as a timeout (#374, #904).
 
     A timeout is not a test failure and must not read as one in the record an
-    operator reads to explain a red Integration: the diagnostic names the loop
+    operator reads to explain an inconclusive Integration: the diagnostic names the loop
     **and** says it timed out, so a hung toolchain is not mistaken for a
     contribution that broke the suite.
     """
@@ -10343,9 +10552,11 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
 
     def _fake_factory(
         placement: str, *, send_timeout_seconds: float, gate_timeout_seconds: float,
+        wrap_up_lead_seconds: float | None,
     ) -> Any:
         assert placement == "github-actions"
         assert gate_timeout_seconds == cfg.gate_timeout_seconds
+        assert wrap_up_lead_seconds == cfg.wrap_up_lead_seconds
         # The Run's own send timeout has to cross the machine boundary on the
         # request: the job is a fresh process elsewhere and inherits none of
         # this Run's configuration, so a host built without it would leave the

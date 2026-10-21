@@ -393,8 +393,11 @@ async def _run_agent_session(
                 # orders of magnitude below the six-hour allowance this job was
                 # dispatched to spend, so leaving it implicit would terminate
                 # nearly every real contribution after one minute.
-                await session.send_and_wait(
-                    request["prompt"], timeout=request["send_timeout_seconds"]
+                from .lane_session import run_lane_session
+
+                await run_lane_session(
+                    session, request["prompt"], timeout=request["send_timeout_seconds"],
+                    lead_time=request.get("wrap_up_lead_seconds"),
                 )
             except (TimeoutError, asyncio.TimeoutError):
                 termination = SessionTermination.TIMED_OUT
