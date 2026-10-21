@@ -1,7 +1,73 @@
 {
   "schema_version": 1,
-  "contract_version": "2.34",
+  "contract_version": "2.37",
   "event_schema_version": "1.10",
+  "membership_cadence_cases": [
+    {
+      "id": "quiet-serial-mid-iteration",
+      "distributions": ["python"],
+      "mode": "serial",
+      "times": [59, 60],
+      "expected_membership": [[42, 43]]
+    },
+    {
+      "id": "full-lanes-coalesce-and-see-serial-required",
+      "distributions": ["python"],
+      "mode": "lanes",
+      "times": [30, 89, 240, 300, 360],
+      "expected_membership": [[42, 43], [42, 43, 44, 45], [42, 43, 44, 45], []]
+    },
+    {
+      "id": "incomplete-visibility-consumes-interval",
+      "distributions": ["python"],
+      "mode": "failure",
+      "failure": "incomplete",
+      "times": [60, 119, 120],
+      "diagnostic": "membership refresh incomplete",
+      "expected_membership": [[42, 43]]
+    },
+    {
+      "id": "failed-visibility-consumes-interval",
+      "distributions": ["python"],
+      "mode": "failure",
+      "failure": "failed",
+      "times": [60, 119, 120],
+      "diagnostic": "membership refresh incomplete",
+      "expected_membership": [[42, 43]]
+    },
+    {
+      "id": "unexpected-visibility-error-is-contained",
+      "distributions": ["python"],
+      "mode": "failure",
+      "failure": "exception",
+      "times": [60, 119, 120],
+      "diagnostic": "membership refresh failed",
+      "expected_membership": [[42, 43]]
+    },
+    {
+      "id": "empty-and-unchanged-membership-retire-nothing",
+      "distributions": ["python"],
+      "mode": "consumer",
+      "steps": [
+        {
+          "event": {"type": "wrapper.pool.refreshed", "iter": null, "issues": [43, 42]},
+          "expected_statuses": {"43": "queued", "42": "queued"}
+        },
+        {
+          "event": {"type": "wrapper.pool.refreshed", "iter": null, "issues": [43, 42]},
+          "expected_statuses": {"43": "queued", "42": "queued"}
+        },
+        {
+          "event": {"type": "wrapper.pool.refreshed", "iter": null, "issues": []},
+          "expected_statuses": {"43": "queued", "42": "queued"}
+        },
+        {
+          "event": {"type": "wrapper.afk_ready.collected", "iter": 1, "issues": [42]},
+          "expected_statuses": {"43": "gone", "42": "queued"}
+        }
+      ]
+    }
+  ],
   "insight_capabilities": {
     "names": [
       "agent_output",
@@ -300,7 +366,7 @@
     },
     "wrapper.pool.refreshed": {
       "required_when_present": ["issues"],
-      "emitted": "Only for a complete successful shallow snapshot. An incomplete pagination, an unresolved candidate, or a failed refresh emits nothing and cannot establish emptiness.",
+      "emitted": "Only for a complete successful shallow snapshot. Incomplete pagination or a failed refresh emits nothing and cannot establish emptiness. Python's due visibility read reports all AFK-shaped candidates, including serial-required work, even when empty or unchanged; it does not resolve Readiness or grant Pickup authority. Equivalent existing reads and Events may service that cadence.",
       "order": "Source order, as read. The membership list is not re-sorted."
     },
     "wrapper.pool.excluded": {

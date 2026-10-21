@@ -317,6 +317,17 @@ and the exit code it names, must be absent from every port's vocabulary and from
 the live exit-code matrix, not merely missing from the shared `event_types`
 map. `wrapper.dashboard.fault` and exit code 3 are retired that way (#459).
 
+Contract 2.37 adds `event-schema.json`'s `membership_cadence_cases`: quiet serial
+and full-Lane production Runs, equivalent-read coalescing, unchanged/empty
+sightings, paced failure diagnostics, and add-only Dashboard ingestion followed
+by authoritative retirement. `tests/test_membership_cadence.py` drives these
+cases with fake SDK/tracker boundaries and an injected clock. Every new case
+selects `distributions: ["python"]`; dormant shell and PowerShell baselines
+stay unchanged. Reusing `wrapper.pool.refreshed` changes neither Event fixture
+revision 1.10 nor compatibility schema 1.
+Dashboard fixture revision 1.26 tracks contract provenance 2.37 without
+projection changes; the Rust helper's declared contract follows that pin.
+
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. Fixture content is data only: do not add
 host-language expressions, executable hooks, or implementation-specific
