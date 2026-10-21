@@ -6,6 +6,7 @@ agentic-engineering work. **Loop engineering** is the practice of shaping that
 work into explicit, reviewable units, setting guardrails and feedback loops, and
 supervising autonomous execution. This glossary fixes the vocabulary shared by
 the planning skills, issue tracker, Runner family, and live interface.
+In this repository's Markdown, bold marks a glossary entry.
 
 ## Two-phase model
 
