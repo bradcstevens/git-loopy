@@ -8,6 +8,10 @@ in two places only: its refusal of local blast-radius containment, and its
 placement of Lane workspaces inside the clone's git directory. Its two
 **Isolation grades**, Execution host model, client model and meter rule stand.
 
+**Amended by [ADR-0098](0098-a-dormant-path-owes-the-sandbox-rules-only-once-it-resumes.md):**
+decision 7 no longer reaches the dormant shell and PowerShell paths. Prompt mode cannot meet the
+Sandbox rules, so under ADR-0091 those paths owe no Sandbox row until one resumes.
+
 ## Context
 
 ADR-0010's spike (CLI 1.0.67) found no way to sandbox the headless SDK session
