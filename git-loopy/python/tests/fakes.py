@@ -305,6 +305,8 @@ class FakeGitClient:
         )
         self._log.append(commit)
         self._store_commit_message(commit)
+        self.dirty = False
+        self.untracked = False
         return commit.sha
 
     def commit_paths(self, message: str, paths: Sequence[Path | str]) -> str:

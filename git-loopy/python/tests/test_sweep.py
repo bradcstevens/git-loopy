@@ -230,7 +230,13 @@ def _real_repo(tmp_path: Path) -> SubprocessGitClient:
     return SubprocessGitClient(repo)
 
 
-def test_sweep_salvages_issue_clone_to_source_and_origin(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "branch", [
+        lane_branch_name("RUNDEAD/attempt-2", 7),
+        "git-loopy/RUNDEAD/serial/iteration-1",
+    ],
+)
+def test_sweep_salvages_issue_clone_to_source_and_origin(tmp_path: Path, branch: str) -> None:
     """A fresh process can recover registered clones, not just old worktrees."""
     source = _real_repo(tmp_path)
     base = source.head_sha()
@@ -240,7 +246,6 @@ def test_sweep_salvages_issue_clone_to_source_and_origin(tmp_path: Path) -> None
         ["git", "-C", str(source.root), "remote", "add", "origin", str(origin)],
         check=True,
     )
-    branch = lane_branch_name("RUNDEAD/attempt-2", 7)
     # Deliberately unrelated to the default layout: registration discovers,
     # and the Reserved branch namespace owns, this clone.
     lane = source.add_issue_clone(tmp_path / "elsewhere", branch=branch, base=base)
@@ -268,6 +273,31 @@ def test_sweep_salvages_issue_clone_to_source_and_origin(tmp_path: Path) -> None
     assert subprocess.check_output(
         ["git", "-C", str(source.root), "show", f"{branch}:unfinished.txt"], text=True
     ) == "rescue me\n"
+
+
+def test_sweep_collects_serial_work_only_after_it_is_merged(tmp_path: Path) -> None:
+    source = _real_repo(tmp_path)
+    branch = "git-loopy/RUNDEAD/serial/iteration-1"
+    clone = source.add_issue_clone(tmp_path / "clone", branch=branch, base="main")
+    (clone.root / "contribution.txt").write_text("unpublished work\n")
+    clone.add_all()
+    clone.commit("Advance issue work")
+    tracker = FakeGitHubClient(
+        repo=Repo(owner="octo", name="kit", default_branch="main"),
+        issues=[_issue(1, state="CLOSED")],
+    )
+    options = dict(
+        git=source, github=tracker, control_dir=source.root / ".git-loopy" / "logs",
+        base_branch="main", liveness=lambda _: False,
+    )
+    report = sweep(**options, dry_run=False)
+    assert report.worktrees == (clone.root,)
+    assert report.branches == ()
+    assert branch in source.list_branches()
+    source.merge(branch)
+    assert sweep(**options, dry_run=True).branches == (branch,)
+    assert sweep(**options, dry_run=False).branches == (branch,)
+    assert branch not in source.list_branches()
 
 
 @pytest.mark.parametrize("alive", [False, True, None])
@@ -442,8 +472,11 @@ def test_sweep_recovers_a_crash_during_issue_clone_setup(tmp_path, monkeypatch) 
 
 @pytest.mark.skipif(not advisory_locking_available(), reason="requires advisory locks")
 @pytest.mark.parametrize("preparing", [False, True])
+@pytest.mark.parametrize("branch", [
+    lane_branch_name("RUNLIVE", 7), "git-loopy/RUNLIVE/serial/iteration-1",
+])
 def test_live_issue_clone_protects_run_control_from_uninstall(
-    tmp_path, monkeypatch, preparing,
+    tmp_path, monkeypatch, preparing, branch,
 ) -> None:
     """Uninstall must not remove the lock that keeps Sweep away from a live clone."""
     from git_loopy.uninstallcmd import find_live_lanes
@@ -462,9 +495,9 @@ def test_live_issue_clone_protects_run_control_from_uninstall(
         patch.setattr(subprocess, "run", interrupt_preparation)
         if preparing:
             with pytest.raises(SystemExit):
-                source.add_issue_clone(path, branch=lane_branch_name("RUNLIVE", 7), base="main")
+                source.add_issue_clone(path, branch=branch, base="main")
         else:
-            source.add_issue_clone(path, branch=lane_branch_name("RUNLIVE", 7), base="main")
+            source.add_issue_clone(path, branch=branch, base="main")
     control_dir = source.root / ".git-loopy" / "logs"
     control_dir.mkdir(parents=True)
     control = RunControlArtifact.acquire(control_dir / "live-RUNLIVE.jsonl")

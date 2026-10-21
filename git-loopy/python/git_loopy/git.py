@@ -346,12 +346,12 @@ def _stderr_tail(stderr: str | None) -> str:
 # --------------------------------------------------------------------------- #
 
 
-# The one reading of a reserved Lane branch name, retry namespace included
+# The one reading of reserved Lane and serial branch names, retry namespace included
 # (``git-loopy/<run>/attempt-<A>/...``); sweep and uninstall both parse with it.
 RESERVED_BRANCH_RE = re.compile(
     r"^git-loopy/(?P<run_id>[^/]+)(?:/attempt-[1-9]\d*)?"
-    r"(?:/(?P<stage>integrate|materialized))?"
-    r"/issue-(?P<issue>\d+)$"
+    r"(?:(?:/(?P<stage>integrate|materialized))?/issue-(?P<issue>\d+)"
+    r"|/serial/iteration-[1-9]\d*)$"
 )
 
 

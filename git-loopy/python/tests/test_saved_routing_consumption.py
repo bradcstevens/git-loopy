@@ -358,7 +358,7 @@ def test_reported_in_flight_billing_closes_admission_before_session_completion(
         if mode == "lane":
             assert Path(call["working_directory"]).name == f"issue-{ref}"
         else:
-            assert call["working_directory"] is None
+            assert Path(call["working_directory"]).parent.name == "serial"
     pickups = [e for e in events if e["type"] == "wrapper.pickup.bound"]
     assert [e["issue"] for e in pickups] == scenario["work_issues"]
     resolutions = [e for e in events if e["type"] == "wrapper.routing.resolved"]
