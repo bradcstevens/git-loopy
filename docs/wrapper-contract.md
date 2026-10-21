@@ -2385,8 +2385,9 @@ in the new Python-only `rolling-priority.json`, proved through complete Runs in
 it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1), then 2.29 with the Python-only non-execution Task-type exclusion.
-Event revision 1.10 and Dashboard revision 1.25 record current provenance;
-the Dashboard adds the optional Header Sandbox state. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
+Event revision 1.11 and Dashboard revision 1.27 record current provenance;
+the Dashboard adds the Run-level account state. Revision 1.25 added the
+optional Header Sandbox state. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;
 the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility
 schema remains 1 and historical streams' interpretation is unchanged.
@@ -3248,6 +3249,10 @@ invalid timing stops with `invalid_retry_delay`. A delay beyond the remaining
 budget stops with `wait_budget_exhausted`, never retries early. The pinned SDK's
 typed terminal error currently has no retry-delay field; it therefore supplies
 missing timing, not a guessed delay parsed from prose.
+When an endpoint exception or remote artifact reports `retry_after_seconds`,
+the Session error preserves it across the host boundary, including unusable
+timing for diagnosis. Replaying or finalizing that same refusal is not another
+cooldown observation.
 
 Concurrent refusals coalesce: missing timing does not reset the clock or consume
 another retry. An explicit later provider minimum can extend that same deadline
@@ -3264,7 +3269,8 @@ hard deadlines remain in force.
 An affected session records its actual ending, work, elapsed time and credits but
 charges no issue Strike, Attempt transition, escalation or adverse route-quality
 evidence. Earlier legitimate history is never refunded. An already-granted
-session consumes its Iteration/Lane-work unit; cooldown consumes none. Unaffected
+session consumes its Iteration/Lane-work unit, even when its remote delivery fails
+afterwards; cooldown consumes none. Unaffected
 issue failures keep their ordinary accounting. The completion backstop excludes
 affected issues, including attempts that left commits. An already-closed affected
 issue is diagnosed, preserved and not treated as verified completion; it is never
@@ -3274,6 +3280,9 @@ Restored account health does not release this publication protection. A later
 ordinary attempt must supply a fresh close-bearing Agent commit and pass the
 ordinary Lease-fenced, source-verified completion boundary; Checkpoints,
 non-closing progress and failed closure verification leave the protection intact.
+The protection is held for the Run that observed the refusal and is not persisted
+across Runs; that boundary is recorded for the Orchestrator-only publication and
+closure work (#918).
 
 The terminal reason is **`account_failure` / exit 1**, carrying `account_error`
 (the original Session error identity) and `account_cause` on `wrapper.run.end`.

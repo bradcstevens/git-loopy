@@ -286,6 +286,45 @@ def test_provider_timing_on_terminal_exception_reaches_run_policy(tmp_path, monk
     assert clock.waits == []
 
 
+@pytest.mark.parametrize("parallel", [False, True])
+def test_one_provider_minimum_is_not_charged_again_at_lane_finalization(tmp_path, monkeypatch, parallel):
+    class RateRefusal(Exception):
+        code = "rate_limit_exceeded"
+        retry_after_seconds = 120
+
+    sends, clock = 0, Clock()
+    monkeypatch.setattr(loop, "AccountControl", partial(
+        AccountControl, clock=clock, sleep=clock.sleep,
+    ))
+
+    async def script(_session, _tracker):
+        nonlocal sends
+        sends += 1
+        if sends == 1:
+            raise RateRefusal("Rate refused")
+
+    class Client(_ParallelFakeClient):
+        async def create_session(self, **kwargs):
+            session = await super().create_session(**kwargs)
+
+            async def disconnect():
+                if len(self.created) == 1:
+                    clock.now += 10
+
+            session.disconnect = disconnect
+            return session
+
+    rc, events, client, tracker, git = _run(
+        tmp_path, monkeypatch, parallel=parallel, session_hook=script, maximum=2,
+        client_type=Client,
+    )
+    assert rc == 1 and sends == 2
+    assert clock.waits == [110]
+    end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert end["account_error"]["kind"] == "quota_exhausted"
+    assert end["account_cause"] == "terminal_refusal"
+
+
 @pytest.mark.parametrize("message,code,error_type,stops", [
     ("Monthly premium request quota exhausted", None, "APIError", True),
     ("Authentication failed: invalid credentials", None, "APIError", True),
@@ -679,3 +718,68 @@ def test_account_health_does_not_authorize_old_close_bearing_commits(tmp_path, m
     assert git.push_calls == int(verified)
     assert tracker.issue_view(42).state == ("CLOSED" if verified else "OPEN")
     assert bool([e for e in events if e["type"] == "wrapper.auto_close"]) is verified
+
+
+@pytest.mark.parametrize("code,materializes,later_rate", [
+    ("insufficient_quota", True, False), ("rate_limit_exceeded", False, False),
+    ("insufficient_quota", True, True),
+])
+def test_remote_account_evidence_survives_other_errors_and_failed_materialization(
+    tmp_path, monkeypatch, code, materializes, later_rate,
+):
+    from dataclasses import replace
+
+    from git_loopy.git import GitError
+    from git_loopy.session_outcome import SessionError
+    from tests.test_loop_parallel import _RemoteBranchExecutionHost, _wire_two_lane_rolling
+
+    git, tracker, client, config = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    clock = Clock()
+    monkeypatch.setattr(loop, "AccountControl", partial(
+        AccountControl, clock=clock, sleep=clock.sleep,
+    ))
+
+    class Host(_RemoteBranchExecutionHost):
+        calls = 0
+
+        async def run_contribution(self, request):
+            self.calls += 1
+            outcome = await super().run_contribution(request)
+            if not materializes:
+                def unavailable(remote, ref):
+                    raise GitError(["ls-remote"], 1, "transport unavailable")
+                self.git.probe_remote_ref = unavailable
+            terminal = {
+                "ts": "2026-10-20T00:00:00Z", "type": "session.error",
+                "error_type": "APIError", "error_code": code, "message": "Endpoint refused",
+            }
+            later = {
+                "ts": "2026-10-20T00:00:01Z", "type": "model.call_failure",
+                "error_type": "NetworkError", "message": "network error",
+            }
+            if later_rate:
+                later = {
+                    **terminal, "ts": "2026-10-20T00:00:01Z",
+                    "error_code": "rate_limit_exceeded",
+                }
+            return replace(
+                outcome, events=(terminal, later),
+                ending=replace(outcome.ending, error=SessionError.from_event(later)),
+            )
+
+    host = Host(git)
+    real_loop = loop._ParallelLoop
+    monkeypatch.setattr(loop, "_ParallelLoop", lambda **kw: real_loop(
+        **{**kw, "execution_host": host},
+    ))
+    rc = asyncio.run(loop.run(replace(config, max_iterations=1)))
+    events = _logged_events(tmp_path)
+    end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert rc == 1 and host.calls == 1
+    assert end["iterations_run"] == 1
+    assert end["account_cause"] == ("terminal_refusal" if materializes else "retry_prevented_by_cap")
+    assert clock.waits == []
+    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close")]
+    assert all(e["reason"] == "account_failure" for e in events if e["type"] == "wrapper.contribution.end")
+    assert tracker.issue_view(42).state == "OPEN"
+

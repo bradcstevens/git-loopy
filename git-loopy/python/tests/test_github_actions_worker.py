@@ -50,6 +50,81 @@ def make_request(**overrides: object) -> dict[str, object]:
     return request
 
 
+@pytest.mark.parametrize("mode", ["raised", "event_then_other", "provider_timing"])
+def test_remote_worker_preserves_terminal_account_provenance(tmp_path, monkeypatch, mode):
+    from copilot.generated.session_events import (
+        ModelCallFailureData, ModelCallFailureSource, SessionErrorData, SessionEventType,
+    )
+    from git_loopy.account_control import account_refusal
+    from tests.test_iteration_end_to_end import _sdk_event
+
+    class Refusal(Exception):
+        code = "rate_limit_exceeded" if mode == "provider_timing" else "insufficient_quota"
+        retry_after_seconds = 121 if mode == "provider_timing" else None
+
+    class Session:
+        def __init__(self, callback):
+            self.callback = callback
+
+        async def disconnect(self):
+            pass
+
+        async def send_and_wait(self, prompt, **kwargs):
+            if mode == "event_then_other":
+                self.callback(_sdk_event(SessionEventType.SESSION_ERROR, SessionErrorData(
+                    error_type="APIError", error_code="insufficient_quota", message="Spent",
+                )))
+            self.callback(_sdk_event(SessionEventType.MODEL_CALL_FAILURE, ModelCallFailureData(
+                source=ModelCallFailureSource.TOP_LEVEL,
+                error_type="NetworkError", error_message="network error",
+            )))
+            if mode != "event_then_other":
+                raise Refusal("Account refused")
+
+    class Client:
+        async def start(self):
+            pass
+
+        async def stop(self):
+            pass
+
+        async def create_session(self, **kwargs):
+            return Session(kwargs["on_event"])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(copilot_client_module, "make_copilot_client", lambda **kw: Client())
+    observed = asyncio.run(worker._run_agent_session(
+        make_request(), worker._ArtifactEventLog(tmp_path / worker.EVENTS_FILENAME),
+    ))
+    assert account_refusal(observed.error)
+    assert observed.error.kind is (
+        SessionErrorKind.RATE_LIMITED if mode == "provider_timing" else SessionErrorKind.QUOTA_EXHAUSTED
+    )
+    assert observed.error.origin == ("session.error" if mode == "event_then_other" else "send")
+    if mode == "provider_timing":
+        from git_loopy.account_control import AccountControl
+        from git_loopy.session_outcome import resolve_session_outcome
+        from tests.test_github_actions_host import _archive
+
+        ending = resolve_session_outcome(
+            termination=observed.termination, progressed=False, error=observed.error,
+        ).as_payload()
+        assert ending["error"]["retry_after_seconds"] == 121
+        artifact = host_module.ActionsArtifact(name="completion", archive=_archive(
+            completion={
+                "remote": "https://github.com/x/y.git",
+                "ref": "refs/heads/git-loopy/proof/issue-460", "sha": "a" * 40,
+                "ending": ending,
+            },
+            events=[],
+        ))
+        remote = host_module.read_completion_artifact(artifact)
+        control = AccountControl(emit=lambda *a, **kw: None)
+        control.refuse(remote.ending.error)
+        assert control.state == "stopping"
+        assert control.cause == "wait_budget_exhausted"
+
+
 class _FakeGit:
     """A git worktree the worker can Checkpoint, with no subprocess behind it."""
 

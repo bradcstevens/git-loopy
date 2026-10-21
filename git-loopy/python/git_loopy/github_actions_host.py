@@ -65,6 +65,7 @@ from git_loopy.session_outcome import (
     SessionOutcome,
     SessionOutcomeRecord,
     SessionTermination,
+    normalize_retry_delay,
 )
 
 __all__ = [
@@ -1133,6 +1134,7 @@ def _parse_error(raw: Any) -> SessionError | None:
         message=_optional_text(raw.get("message")),
         model=_optional_text(raw.get("model")),
         service_request_id=_optional_text(raw.get("service_request_id")),
+        retry_after_seconds=normalize_retry_delay(raw.get("retry_after_seconds")),
     )
 
 

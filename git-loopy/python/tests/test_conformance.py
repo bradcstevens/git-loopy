@@ -2619,7 +2619,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # 1.11 added the spent refill turn, including a zero reservation. 1.10
     # added Recovery. 1.9 added Integration start. 1.8 added the Header's
     # Integration backlog. 1.7 added optional Queue ``phase_age_seconds``.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.26"
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.27"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]

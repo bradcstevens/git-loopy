@@ -149,7 +149,8 @@ from git_loopy import rolling_scheduler
 from git_loopy import sources as sources_module
 from git_loopy import session_outcome as session_outcome_module
 from git_loopy.account_control import (
-    AccountClient, AccountControl, account_interruption, session_error_for_control,
+    AccountClient, AccountControl, account_interruption, account_refusal,
+    session_error_for_control,
 )
 from git_loopy import sweep as sweep_module
 from git_loopy.publication import PendingPublication, PublicationError, PublicationJournal
@@ -4533,6 +4534,8 @@ class _LaneWork:
     source_imported: bool = False
     publication_sha: str | None = None
     account_interrupted: bool = False
+    account_error: session_outcome_module.SessionError | None = None
+    account_ending: session_outcome_module.SessionOutcomeRecord | None = None
     has_checkpoints: bool = False
     # Publications already on base when this Lane was cut. Drift is the
     # later count minus this snapshot; a cut this Run did not observe has
@@ -6636,10 +6639,11 @@ class _ParallelLoop:
             raise
         if self._execution_host is not None:
             interaction = False
+            account_watch = session_outcome_module.SessionOutcomeWatch()
             for event in outcome.events:
+                account_watch.observe(event)
                 error = session_outcome_module.SessionError.from_event(event)
                 if error is not None:
-                    self._serial._account.refuse(error)
                     interaction = False
                 elif (
                     event.get("type") == events_module.ASSISTANT_MESSAGE
@@ -6650,13 +6654,29 @@ class _ParallelLoop:
                     and not event.get("content_filtered")
                 ):
                     interaction = True
-            if outcome.ending is not None and outcome.ending.error is not None:
-                self._serial._account.refuse(outcome.ending.error)
+            # The remote artifact is one refusal observation, normalized like a
+            # local ending: a later descriptive error cannot mask it, and
+            # replaying the same Events later is not another cooldown.
+            endpoint_error = session_error_for_control(
+                account_watch, outcome.ending.error if outcome.ending is not None else None,
+            )
+            if account_refusal(endpoint_error):
+                assert endpoint_error is not None
+                lane_work.account_error = endpoint_error
+                self._serial._account.refuse(endpoint_error)
+                if outcome.ending is not None:
+                    outcome = dataclass_replace(
+                        outcome, ending=dataclass_replace(outcome.ending, error=endpoint_error),
+                    )
             self._serial._account.finished(
                 external_probe,
                 successful=interaction and outcome.ending is not None
                 and outcome.ending.termination is session_outcome_module.SessionTermination.COMPLETED,
             )
+        if outcome.ending is not None and account_refusal(outcome.ending.error):
+            # Delivery can fail later without disproving that this session ran.
+            lane_work.account_error = outcome.ending.error
+            lane_work.account_ending = outcome.ending
         self._account_supervised_contribution(
             contribution, host, since=supervision_started
         )
@@ -6725,8 +6745,6 @@ class _ParallelLoop:
         lane_work.branch = outcome.branch
         lane_outcome = outcome.ending
         assert lane_outcome is not None
-        if lane_outcome.error is not None:
-            self._serial._account.refuse(lane_outcome.error)
         try:
             lane_outcome = self._prepare_lane_publication(lane_work, lane_outcome)
         except git_module.GitError as exc:
@@ -6905,8 +6923,9 @@ class _ParallelLoop:
         # of the work that preceded it is the one thing an operator cannot
         # debug afterwards, because the machine that held the logs is gone.
         self._ingest_contribution_events(contribution, outcome.events)
+        ending = lane_work.account_ending or outcome.ending
         account_failed = self._serial._account_affected(
-            outcome.ending.error if outcome.ending is not None else None
+            lane_work.account_error or (ending.error if ending is not None else None)
         )
         if account_failed:
             self._serial._account_issues.add(lane_work.item.ref)
@@ -6919,9 +6938,10 @@ class _ParallelLoop:
                     "execution host repeatedly refused Lane dispatch; "
                     "ending the Run as an environment failure"
                 )
-        if outcome.classification == "breach":
+        if outcome.classification == "breach" or (account_failed and ending is not None):
+            # An account-refused session ran and spent its work unit, even if
+            # its delivery later failed.
             self._host_setup_pressure.record_successful_dispatch()
-            ending = outcome.ending
             assert ending is not None
             scope = self._contribution_iter.get(contribution.contribution_id)
             if scope is not None:
@@ -6933,7 +6953,7 @@ class _ParallelLoop:
 
         disposition = self._scheduler.finish_terminal_failure(
             contribution,
-            reoffer=reoffer and outcome.classification != "breach",
+            reoffer=reoffer and outcome.classification != "breach" and not account_failed,
             reason=(
                 "account_failure"
                 if account_failed
@@ -7049,9 +7069,6 @@ class _ParallelLoop:
         it was reused.
         """
         for remote_event in remote_events:
-            error = session_outcome_module.SessionError.from_event(remote_event)
-            if error is not None:
-                self._serial._account.refuse(error)
             envelope = dict(remote_event)
             envelope.update(
                 contribution_id=contribution.contribution_id,

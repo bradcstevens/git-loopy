@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from git_loopy import events as events_module
+from git_loopy.account_control import session_error_for_control
 from git_loopy.config import EXECUTION_TASK_TYPE_KEYS
 from git_loopy.skill_policy import (
     EffectiveSkillPolicy, SkillCatalog, SkillPolicyScope, is_canonical_skill_name,
@@ -403,15 +404,15 @@ async def _run_agent_session(
                 termination = SessionTermination.TIMED_OUT
             except Exception as exc:
                 termination = SessionTermination.CRASHED
-                raised = SessionError.from_exception(exc)
+                raised = SessionError.from_exception(exc, origin="send")
     except Exception as exc:
         termination = SessionTermination.CRASHED
-        raised = SessionError.from_exception(exc)
+        raised = SessionError.from_exception(exc, origin="session_lifecycle")
     finally:
         await client.stop()
     return SessionObservation(
         termination=termination,
-        error=strongest_error(watch.error, raised),
+        error=session_error_for_control(watch, raised),
         content_filtered=watch.content_filtered,
         no_more_tasks=watch.no_more_tasks,
     )

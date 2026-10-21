@@ -59,10 +59,20 @@ def account_interruption(error: SessionError | None) -> bool:
 def session_error_for_control(
     watch: SessionOutcomeWatch, raised: SessionError | None,
 ) -> SessionError | None:
-    """A terminal account refusal cannot be masked by descriptive call telemetry."""
-    for error in (raised, *reversed(watch.errors)):
-        if account_refusal(error):
+    """A terminal account refusal cannot be masked by descriptive call telemetry.
+
+    Among the session's account refusals, quota or authentication dominates a
+    rate refusal, whichever came last.
+    """
+    refusals = [
+        error for error in (raised, *reversed(watch.errors))
+        if error is not None and account_refusal(error)
+    ]
+    for error in refusals:
+        if error.kind is not SessionErrorKind.RATE_LIMITED:
             return error
+    if refusals:
+        return refusals[0]
     return strongest_error(watch.terminal_error, watch.error, raised)
 
 
@@ -103,6 +113,8 @@ class AccountControl:
         if error.kind is not SessionErrorKind.RATE_LIMITED:
             self.stop("terminal_refusal")
             return
+        if retry_after is None:
+            retry_after = error.retry_after_seconds
         provider_delay = None
         if retry_after is not None:
             try:
@@ -111,7 +123,7 @@ class AccountControl:
                 provider_delay = float(retry_after)
                 if not math.isfinite(provider_delay) or provider_delay < 0:
                     raise ValueError
-            except ValueError:
+            except (ValueError, OverflowError):
                 self.stop("invalid_retry_delay")
                 return
         if self.state == "cooldown":
