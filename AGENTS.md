@@ -33,6 +33,31 @@ it contains.
 | Shell Orchestrator suites | `for t in git-loopy/shell/tests/test-*.sh; do bash "$t" \|\| exit 1; done` | Any change under `git-loopy/shell/` or to a Conformance fixture |
 | PowerShell Orchestrator suites | `for t in git-loopy/powershell/tests/test-*.ps1; do pwsh -NoLogo -NoProfile -File "$t" \|\| exit 1; done` | Any change under `git-loopy/powershell/` or to a Conformance fixture |
 
+For a docstring-or-prose change, run targeted Python tests instead of the full
+Python suite only when publishing through a pull request (CI runs the full suite
+on every pull request with no path filters) or contributing a Lane in Parallel
+mode (Integration runs the whole table); a serial Run pushes straight to the
+default branch and still runs the full suite. To qualify, compare each changed
+Python file against the merge-base yourself: both versions must parse to the same
+`ast.dump` after removing module, class and function docstrings, and every other
+changed file must be Markdown. Run each changed module's own
+`tests/test_<module>*.py`, every test file that names a changed file (find them
+with `git grep -l -F <basename> -- git-loopy/python/tests` for each changed file),
+and the tracked-tree guards `tests/test_no_*.py` and `tests/test_glossary_*.py`;
+Markdown-only changes run this same set too. Record the targeted tests run and
+the full-suite backstop (CI or Integration). The known flakes are
+`test_release_installation.py::test_reclaims_setup_children_not_just_their_parent[cancelled-init]`
+(a pseudo-terminal "Operation not permitted" error under host load),
+`test_release_smoke.py::test_a_run_still_in_flight_at_the_deadline_is_never_passed`
+(its fixture deadline expires under host load), and
+`test_attach_command.py::test_a_dashboard_fault_restores_the_terminal`
+(a deadline or teardown timeout under host load; #734 fixes it, so remove this
+entry when #734 lands). When a listed test fails in a full run, rerun it alone:
+if it passes, report the flake and treat that failure as green without rerunning
+the full suite; an unlisted failure or one that also fails alone is a real
+failure. Record each encountered known flake and its result when rerun alone;
+change this list only through normal review.
+
 Notes on what is deliberately *not* in the table, because every row in it is a
 blocking gate:
 
