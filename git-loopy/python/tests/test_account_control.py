@@ -27,6 +27,59 @@ class Clock:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ordinary", [False, True])
+@pytest.mark.parametrize("code", [
+    "rate_limit_exceeded", "insufficient_quota", "authentication_failed",
+])
+async def test_operator_stop_without_account_episode_admits_drain_sessions(ordinary, code):
+    clock, events = Clock(), []
+    control = AccountControl(
+        emit=lambda type, **kw: events.append(kw), clock=clock, sleep=clock.sleep,
+    )
+    control.interrupt()
+
+    assert control.admit(ordinary=ordinary) is False
+    assert control.ordinary_available
+    assert not await control.ready(may_start=True), "Stop must not start new work"
+    assert control.end_payload() == {}
+    assert events == []
+    assert clock.waits == []
+
+    # A refusal from that draining work must close admission, never probe.
+    control.refuse(refusal(code))
+    with pytest.raises(AccountAdmissionClosed):
+        control.admit(ordinary=ordinary)
+    assert not control.ordinary_available
+    assert not await control.ready(may_start=True)
+    assert control.end_payload()["account_error"]["error_code"] == code
+    assert not any(event["admission_open"] for event in events)
+    assert clock.waits == []
+
+
+@pytest.mark.asyncio
+async def test_successful_probe_finishing_after_operator_stop_cannot_reopen_admission():
+    clock, events = Clock(), []
+    control = AccountControl(
+        emit=lambda type, **kw: events.append(kw), clock=clock, sleep=clock.sleep,
+    )
+    control.refuse(refusal())
+    assert await control.ready(may_start=True)
+    probe = control.admit(ordinary=True)
+    control.interrupt()
+    control.finished(probe, successful=True)
+
+    assert not any(event["admission_open"] for event in events)
+    assert control.state is not None
+    assert not control.ordinary_available
+    assert not await control.ready(may_start=True)
+    for ordinary in (True, False):
+        with pytest.raises(AccountAdmissionClosed):
+            control.admit(ordinary=ordinary)
+    assert control.end_payload()["account_error"]["kind"] == "rate_limited"
+    assert clock.waits == [30]
+
+
+@pytest.mark.asyncio
 async def test_rate_retries_are_run_wide_and_success_does_not_reset_budget():
     clock, events = Clock(), []
     control = AccountControl(
@@ -129,6 +182,10 @@ async def test_operator_stop_interrupts_cooldown_without_waiting_for_clock():
     control.interrupt()
     assert not await asyncio.wait_for(waiting, timeout=0.1)
     assert control.retries_remaining == 2
+    for ordinary in (True, False):
+        with pytest.raises(AccountAdmissionClosed):
+            control.admit(ordinary=ordinary)
+    assert not control.ordinary_available
 
 
 @pytest.mark.asyncio

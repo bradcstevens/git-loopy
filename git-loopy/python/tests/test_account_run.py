@@ -20,7 +20,7 @@ from tests.fakes import FakeGitHubClient
 from tests.test_iteration_end_to_end import _make_issue, _sdk_event, _stub_run_skill_catalog  # noqa: F401
 from tests.test_loop_parallel import (
     FakeGateRunner, _NoProgressFakeSession, _ParallelFakeClient,
-    _logged_events, _wire_repo,
+    _capture_parallel_loops, _logged_events, _wire_repo,
 )
 
 
@@ -391,6 +391,68 @@ def test_operator_stop_during_run_cooldown_keeps_primary_reason(tmp_path, monkey
     assert rc == 1 and len(client.created) == 1
     assert end["outcome"] == "operator_stop"
     assert end["account_error"]["kind"] == "rate_limited"
+
+
+@pytest.mark.parametrize("repair_after", [1, 3])
+def test_first_stop_drains_lane_through_bounded_recovery(tmp_path, monkeypatch, repair_after):
+    built = _capture_parallel_loops(monkeypatch)
+    gate = FakeGateRunner(default=False)
+    sends = 0
+
+    async def script(session, _tracker):
+        nonlocal sends
+        sends += 1
+        session._scripted_events = []
+        if sends == 1:
+            built[0].request_stop_drain()
+        elif sends == repair_after + 1:
+            # A gate-only retry cannot repair the stage: a Recovery session
+            # must actually run before the gate can turn green.
+            gate._outcomes.append(True)
+
+    rc, events, client, tracker, git = _run(
+        tmp_path, monkeypatch, parallel=True, commit=True, session_hook=script, gate=gate,
+    )
+    assert len(client.created) == repair_after + 1
+    assert sends == repair_after + 1
+    assert len([e for e in events if e["type"] == "wrapper.integration.recovery_started"]) == repair_after
+    (contribution,) = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert contribution["published"] is True
+    assert contribution["reason"] != "account_failure"
+    assert tracker.issue_view(42).state == "CLOSED"
+    end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert rc == 1 and end["outcome"] == "operator_stop"
+    assert "account_cause" not in end and "account_error" not in end
+    assert not [e for e in events if e["type"] == "wrapper.account.state"]
+
+
+def test_first_stop_after_lane_dispatch_still_creates_and_publishes_session(tmp_path, monkeypatch):
+    built = _capture_parallel_loops(monkeypatch)
+    real_policy = loop._Loop._agent_sandbox_policy
+
+    def stop_before_session(self, issue_clone):
+        assert self is built[0]._serial
+        built[0].request_stop_drain()
+        return real_policy(self, issue_clone)
+
+    monkeypatch.setattr(loop._Loop, "_agent_sandbox_policy", stop_before_session)
+
+    async def script(session, _tracker):
+        session._scripted_events = []
+
+    rc, events, client, tracker, git = _run(
+        tmp_path, monkeypatch, parallel=True, commit=True, session_hook=script,
+    )
+    assert len(client.created) == 1
+    assert len(client.created[0].send_and_wait_calls) == 1
+    (contribution,) = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert contribution["published"] is True
+    assert contribution["reason"] != "account_failure"
+    assert tracker.issue_view(42).state == "CLOSED"
+    end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert rc == 1 and end["outcome"] == "operator_stop"
+    assert "account_cause" not in end and "account_error" not in end
+    assert not [e for e in events if e["type"] == "wrapper.account.state"]
 
 
 def test_rate_probe_cannot_treat_no_eligible_work_as_clean_completion(tmp_path, monkeypatch):
@@ -782,4 +844,3 @@ def test_remote_account_evidence_survives_other_errors_and_failed_materializatio
     assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close")]
     assert all(e["reason"] == "account_failure" for e in events if e["type"] == "wrapper.contribution.end")
     assert tracker.issue_view(42).state == "OPEN"
-

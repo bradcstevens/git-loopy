@@ -171,10 +171,12 @@ class AccountControl:
         )
 
     def admit(self, *, ordinary: bool) -> bool:
-        if self._interrupted.is_set():
-            raise AccountAdmissionClosed(self.cause or "operator_stop")
+        # A plain operator Stop drains already-dispatched work, including
+        # Recovery. The wake-up latch closes admission only in an account episode.
         if self.state is None:
             return False
+        if self._interrupted.is_set():
+            raise AccountAdmissionClosed(self.cause or "operator_stop")
         if self.state != "probing" or self._probe_active or not ordinary:
             raise AccountAdmissionClosed(self.cause)
         self._probe_active = True
@@ -185,8 +187,9 @@ class AccountControl:
 
     @property
     def ordinary_available(self) -> bool:
-        return not self._interrupted.is_set() and (
-            self.state is None or (self.state == "probing" and not self._probe_active)
+        return self.state is None or (
+            not self._interrupted.is_set()
+            and self.state == "probing" and not self._probe_active
         )
 
     async def ready(self, *, may_start: bool) -> bool:
@@ -221,7 +224,7 @@ class AccountControl:
         return True
 
     def finished(self, probe: bool, *, successful: bool) -> None:
-        if not probe or self.state != "probing":
+        if not probe or self.state != "probing" or self._interrupted.is_set():
             return
         self._probe_active = False
         if not successful:
