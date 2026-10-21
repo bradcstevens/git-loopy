@@ -75,8 +75,17 @@ your git config read-only (`GIT_CONFIG_GLOBAL` when set, otherwise `~/.gitconfig
 Existing operator grants are preserved. Serial work and Recovery then use
 independent Issue clones too, so neither needs write access to the shared git
 directory. The Runner imports their commits before publication and preserves
-unpublished work for salvage. With sandboxing disabled, the existing serial
-checkout and Integration-worktree behavior is unchanged.
+unpublished work for salvage. Serial Iterations always use an Issue clone,
+even with sandboxing disabled. Each starts from base on
+`git-loopy/<run>/serial/iteration-<n>`, runs clone setup, and Checkpoints only
+its own unfinished work before import and publication onto base. The Run never
+Checkpoints or pushes uncommitted edits in the operator's checkout. If those
+edits prevent publication, the imported branch remains available for recovery.
+Sandbox policy and the unsandboxed Integration-worktree behavior are unchanged.
+Sweep recognizes these serial branches too: a dead Run's unfinished clone is
+salvaged before reclamation, while live or unprovably dead Runs are left alone.
+A serial branch is collected only after it is merged; its Iteration number
+does not identify a tracker issue.
 
 Clone setup commands and **Integration feedback loops remain Runner processes
 outside the Sandbox**. Sandboxing does not change the Execution host's Isolation
@@ -126,7 +135,8 @@ is `parallel-safe`.
 
 Everything eligible but unlabelled is **Serial-required**: unlabelled issues,
 pull requests, and local-markdown items. A Parallel Run still drains them, one
-serial **Iteration** at a time, with exclusive use of the base worktree.
+serial **Iteration** at a time, in its own Issue clone while Lane work and
+Integration are quiescent.
 
 If nothing carries the label, the Run tells you so rather than looking broken:
 

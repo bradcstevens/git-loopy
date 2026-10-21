@@ -23,6 +23,130 @@ from tests.test_run_sandbox import Runtime
 from tests.test_sandbox_conformance import sandbox_cases
 
 
+@pytest.mark.parametrize("clone_dirty", [False, True])
+@pytest.mark.parametrize("operator_state", ["unstaged", "staged", "overlap"])
+def test_unsandboxed_serial_iteration_publishes_only_its_issue_clone(
+    tmp_path, monkeypatch, clone_dirty, operator_state,
+):
+    _wire_rolling_run(
+        tmp_path, monkeypatch, [_make_issue(42, labels=["ready-for-agent"])],
+    )
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(tmp_path), *args], stderr=subprocess.PIPE,
+        )
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "Tester")
+    git("config", "user.email", "tester@example.com")
+    git("config", "commit.gpgsign", "false")
+    (tmp_path / ".gitignore").write_text(".git-loopy/\n")
+    (tmp_path / "operator.txt").write_bytes(b"committed\n")
+    git("add", ".")
+    git("commit", "-qm", "initial")
+    origin = tmp_path.parent / f"{tmp_path.name}-origin.git"
+    git("init", "--bare", "-q", str(origin))
+    git("remote", "add", "origin", str(origin))
+    git("push", "-qu", "origin", "main")
+    source = SubprocessGitClient(tmp_path)
+    base = source.head_sha()
+    (tmp_path / "operator.txt").write_bytes(b"operator's unfinished edit\x00\n")
+    (tmp_path / "untracked.txt").write_bytes(b"operator's untracked work\n")
+    if operator_state == "staged":
+        git("add", "operator.txt")
+    before = {
+        name: (tmp_path / name).read_bytes()
+        for name in ("operator.txt", "untracked.txt")
+    }
+    dirty_before = git("diff", "--binary")
+    staged_before = git("diff", "--cached", "--binary")
+    prepared = []
+    observed = []
+
+    class Setup:
+        def run(self, path):
+            prepared.append(path)
+            return SetupResult(None)
+
+    class Agent:
+        def __init__(self, path):
+            self.path = Path(path) if path else tmp_path
+
+        async def send_and_wait(self, prompt, **kwargs):
+            observed.append(self.path)
+            assert self.path != tmp_path
+            assert self.path in prepared
+            clone = SubprocessGitClient(self.path)
+            assert clone.common_git_dir() == self.path / ".git"
+            assert clone.current_branch().endswith("/serial/iteration-1")
+            assert clone.head_sha() == base
+            assert (self.path / "operator.txt").read_bytes() == b"committed\n"
+            assert not (self.path / "untracked.txt").exists()
+            (self.path / "contribution.txt").write_text("issue work\n")
+            if operator_state == "overlap":
+                (self.path / "operator.txt").write_text("issue changes same file\n")
+            if not clone_dirty:
+                clone.add_all()
+                clone.commit("Implement issue work")
+            assert source.head_sha() == base
+
+        async def disconnect(self):
+            pass
+
+    class Client(Runtime):
+        async def start(self):
+            pass
+
+        async def stop(self):
+            pass
+
+        async def create_session(self, **kwargs):
+            if kwargs.get("available_tools") == []:
+                return await super().create_session(**kwargs)
+            return Agent(kwargs.get("working_directory"))
+
+    async def discover(_client, **kwargs):
+        return build_skill_catalog(
+            (), repo_root=kwargs["repo_root"],
+            installed_skills_dir=kwargs["installed_skills_dir"],
+        )
+
+    monkeypatch.setattr(loop, "_make_client", lambda: Client(enabled=False))
+    monkeypatch.setattr(loop, "_discover_skill_catalog", discover)
+    monkeypatch.setattr(loop, "_make_git_client", lambda: source)
+    monkeypatch.setattr(loop, "_make_worktree_setup", Setup)
+    assert asyncio.run(loop.run(_pinned_config(42, max_iterations=1))) == 0
+    assert len(observed) == 1
+    assert all((tmp_path / name).read_bytes() == value for name, value in before.items())
+    assert git("diff", "--binary") == dirty_before
+    assert git("diff", "--cached", "--binary") == staged_before
+    assert git("show", "origin/main:operator.txt") == b"committed\n"
+    assert "untracked.txt" not in git("ls-tree", "--name-only", "origin/main").decode()
+    assert source.probe_remote_ref("origin", "refs/heads/main") == source.head_sha()
+    assert source.list_issue_clones() == []
+    assert not observed[0].exists()
+    events = _logged_events(tmp_path)
+    checkpoints = [event for event in events if event["type"] == "wrapper.checkpoint.recorded"]
+    assert len(checkpoints) == int(clone_dirty)
+    if operator_state != "unstaged":
+        assert source.head_sha() == base
+        assert not (tmp_path / "contribution.txt").exists()
+        branch = git("branch", "--format=%(refname:short)", "--list", "git-loopy/*").decode().strip()
+        assert git("show", f"{branch}:contribution.txt") == b"issue work\n"
+        assert not any(event["type"] == "wrapper.push.recorded" for event in events)
+        assert not any(event["type"] == "wrapper.commit.recorded" for event in events)
+    else:
+        assert git("show", "origin/main:contribution.txt") == b"issue work\n"
+        assert len([
+            event for event in events if event["type"] == "wrapper.commit.recorded"
+        ]) == int(not clone_dirty)
+        if clone_dirty:
+            assert "GitLoopy-Checkpoint: 42" in source.commit_message(checkpoints[0]["sha"])
+            ending = next(event for event in events if event["type"] == "wrapper.iteration.end")
+            assert ending["issues"][0]["status"] == "no-progress"
+
+
 def test_required_unsupported_sandbox_never_starts_an_agent(tmp_path, monkeypatch, capsys):
     _wire_rolling_run(
         tmp_path, monkeypatch, [_make_issue(42, labels=["ready-for-agent"])],
@@ -66,12 +190,25 @@ def test_required_policy_is_not_silently_dropped_by_a_remote_lane_host(tmp_path,
     assert "GIT_LOOPY_EXECUTION_HOST=local" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("case", sandbox_cases("disclosure_cases"), ids=lambda case: case["id"])
+@pytest.mark.parametrize(
+    "case",
+    sandbox_cases("disclosure_cases") + [
+        {
+            **case, "id": "serial-cancel-off",
+            "enabled": False, "managed": False,
+            "expected": next(
+                off["expected"] for off in sandbox_cases("disclosure_cases") if off["id"] == "off"
+            ),
+        }
+        for case in sandbox_cases("disclosure_cases") if case["id"] == "serial-cancel"
+    ],
+    ids=lambda case: case["id"],
+)
 def test_sandboxed_agents_commit_in_issue_clones(tmp_path, monkeypatch, capsys, case):
-    kind = case["id"]
+    kind = case["id"].removesuffix("-off")
     expected_disclosure = case["expected"]
     parallel = kind in {"lane", "recovery"}
-    enabled = kind != "off"
+    enabled = case["id"] not in {"off", "serial-cancel-off"}
     labels = ["ready-for-agent"] + (["parallel-safe"] if parallel else [])
     _wire_rolling_run(
         tmp_path, monkeypatch, [_make_issue(42, labels=labels)],
@@ -131,21 +268,19 @@ def test_sandboxed_agents_commit_in_issue_clones(tmp_path, monkeypatch, capsys, 
             return {"required": False, "blocked": False}
 
         async def send_and_wait(self, prompt, **kwargs):
-            assert (self.path != tmp_path) is enabled
+            assert self.path != tmp_path
             assert (self.path / ".git").is_dir()
             clone = SubprocessGitClient(self.path)
-            assert (clone.common_git_dir() != source.common_git_dir()) is enabled
+            assert clone.common_git_dir() != source.common_git_dir()
             assert bool(policies) is enabled, "policy must precede first prompt"
-            if enabled:
-                assert self.path in prepared
+            assert self.path in prepared
             filename = "recovery.txt" if "Auto-resolution attempt" in prompt else "contribution.txt"
             (self.path / filename).write_text("issue 42\n", encoding="utf-8")
             if kind not in {"serial-dirty", "serial-cancel"}:
                 clone.add_all()
                 clone.commit("Implement isolated contribution\n\nCloses #42")
-            if enabled:
-                assert source.head_sha() == base
-                assert not (tmp_path / "contribution.txt").exists()
+            assert source.head_sha() == base
+            assert not (tmp_path / "contribution.txt").exists()
             observed.append(self.path)
             if kind == "serial-cancel":
                 loops[0].request_stop_cancel()
@@ -208,7 +343,9 @@ def test_sandboxed_agents_commit_in_issue_clones(tmp_path, monkeypatch, capsys, 
     assert (tmp_path / "contribution.txt").read_text() == "issue 42\n"
     if not enabled:
         assert policies == []
-        assert prepared == []
+        assert prepared == observed
+        assert all(not path.exists() for path in observed)
+        assert source.list_issue_clones() == []
         return
     assert all(not path.exists() for path in observed)
     assert source.list_issue_clones() == []

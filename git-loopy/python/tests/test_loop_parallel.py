@@ -202,14 +202,18 @@ _EXECUTION_HOST_REPORT = _ROUTING_RESOLUTION["execution_host_report"]
 # ---------------------------------------------------------------------------
 
 
+def _is_serial_directory(directory: str | None) -> bool:
+    return directory is not None and Path(directory).parent.name == "serial"
+
+
 class _ParallelFakeSession:
     """A per-Lane SDK session stub pinned to one worktree.
 
     ``send_and_wait`` models the Lane's agent committing *into its own
     worktree* — it looks the live child :class:`FakeGitClient` up on the parent
     fake by ``working_directory`` and advances that Lane's log — so per-Lane
-    commit accounting sees exactly that Lane's commit and no other. A ``None``
-    working directory (the serial-fallback path) commits on the main worktree.
+    commit accounting sees exactly that Lane's commit and no other. Serial
+    Iterations likewise commit in their own Issue clone.
     """
 
     def __init__(
@@ -233,17 +237,16 @@ class _ParallelFakeSession:
         self, prompt: str, *, timeout: float = 60.0, **_extra: Any
     ) -> SessionEvent | None:
         self.send_and_wait_calls.append((prompt, timeout))
-        if self._working_directory is not None:
-            target = self._fake_git.worktree_client(
-                Path(self._working_directory)
-            )
+        assert self._working_directory is not None
+        target = self._fake_git.worktree_client(Path(self._working_directory))
+        assert target is not None
+        if not _is_serial_directory(self._working_directory):
             # The Lane's agent commit references its issue so the reused serial
             # closure path fires at Integration. The worktree dir is named
             # ``issue-<N>`` (see ``_issue_clone_path``), so parse N from it.
             ref = Path(self._working_directory).name.removeprefix("issue-")
             body = f"Closes #{ref}"
         else:
-            target = self._fake_git
             # The serial-fallback agent "picks one" issue and closes it. Parse
             # the pool from the rendered ``=== Issue #N:`` block HEADERS only
             # (never the Previous-commits block, which can carry a stale
@@ -258,11 +261,10 @@ class _ParallelFakeSession:
                 ]
                 if refs:
                     body = f"Closes #{min(refs)}"
-        if target is not None:
-            target.simulate_agent_commit(
-                subject="feat(lane): implement issue",
-                body=body,
-            )
+        target.simulate_agent_commit(
+            subject="feat(lane): implement issue",
+            body=body,
+        )
         last: SessionEvent | None = None
         for evt in self._scripted_events:
             if self._on_event is not None:
@@ -442,7 +444,7 @@ def _run_summary(tmp_path: Path) -> dict[str, Any]:
 
 
 def _lane_worktree_adds(fake_git: FakeGitClient) -> list[tuple[Path, str, str]]:
-    """The **Lane** worktree adds only, dropping private Integration stages.
+    """The **Lane** adds only, dropping Integration stages and serial clones.
 
     Under ADR-0020 every admitted **Lane contribution** also opens a private
     ``_IntegrationStage`` worktree (``.../integrate/issue-<N>``) to merge and
@@ -450,12 +452,18 @@ def _lane_worktree_adds(fake_git: FakeGitClient) -> list[tuple[Path, str, str]]:
     Lanes. Filtering on the branch keeps these assertions about dispatch rather
     than about Integration's internals.
     """
-    return [add for add in fake_git.worktree_adds if "/integrate/" not in add[1]]
+    return [
+        add for add in fake_git.worktree_adds
+        if "/integrate/" not in add[1] and "/serial/" not in add[1]
+    ]
 
 
 def _lane_worktree_removes(fake_git: FakeGitClient) -> list[Path]:
     """The **Lane** worktree teardowns only (see :func:`_lane_worktree_adds`)."""
-    return [p for p in fake_git.worktree_removes if "integrate" not in p.parts]
+    return [
+        p for p in fake_git.worktree_removes
+        if "integrate" not in p.parts and p.parent.name != "serial"
+    ]
 
 
 def test_run_refuses_the_retired_lane_adaptation_environment_variable(
@@ -1119,17 +1127,16 @@ def test_parallel_single_eligible_issue_starts_lane_immediately(
     (lane_path, lane_branch, _base) = adds[0]
     assert lane_branch.endswith("/issue-42")
 
-    # Exactly one Lane session (pinned) and one serial session (unpinned) —
+    # Exactly one Lane session and one serial session, each clone-pinned —
     # the plain issue (43) was never a Lane, but still worked and drained.
     working_dirs = [c["working_directory"] for c in fake_client.create_calls]
-    assert working_dirs.count(None) == 1, "exactly one serial (unpinned) session"
-    assert sum(wd is not None for wd in working_dirs) == 1, (
-        "exactly one Lane (worktree-pinned) session"
-    )
+    assert all(wd is not None for wd in working_dirs)
+    assert sum(_is_serial_directory(wd) for wd in working_dirs) == 1
+    assert len(working_dirs) == 2
 
     # The serial session's prompt carries only the plain issue — the Lane
     # issue is worked (and closed) through Integration, not the serial path.
-    serial_idx = working_dirs.index(None)
+    serial_idx = next(i for i, wd in enumerate(working_dirs) if _is_serial_directory(wd))
     serial_prompt, _timeout = fake_client.created[serial_idx].send_and_wait_calls[0]
     assert "Issue #43" in serial_prompt
 
@@ -4696,18 +4703,16 @@ def test_parallel_run_drains_lanes_then_serial_in_one_run(
     laned = sorted(int(b.split("/issue-")[1]) for (_p, b, _base) in adds)
     assert laned == [42, 43], "only the parallel-safe issues become Lanes"
 
-    # --- A later turn was serial: exactly one unpinned session; the two Lane
-    #     sessions were worktree-pinned. Three sessions total across the run.
+    # --- A later turn was serial. All three sessions were clone-pinned.
     working_dirs = [c["working_directory"] for c in fake_client.create_calls]
-    assert working_dirs.count(None) == 1, "exactly one serial (unpinned) session"
-    assert sum(wd is not None for wd in working_dirs) == 2, (
-        "both Lane sessions were worktree-pinned"
-    )
+    assert all(wd is not None for wd in working_dirs)
+    assert sum(_is_serial_directory(wd) for wd in working_dirs) == 1
+    assert len(working_dirs) == 3
 
     # --- The serial turn worked the plain issue AFTER the Lanes closed 42/43:
     #     its prompt carries #44 and no longer carries the closed parallel-safe
     #     issues, so opting into Parallel mode strands nothing.
-    serial_idx = working_dirs.index(None)
+    serial_idx = next(i for i, wd in enumerate(working_dirs) if _is_serial_directory(wd))
     serial_session = fake_client.created[serial_idx]
     serial_prompt, _timeout = serial_session.send_and_wait_calls[0]
     assert "=== Issue #44:" in serial_prompt
@@ -6972,7 +6977,10 @@ def test_later_priority_demand_withholds_retry_until_serial_and_refill(
     assert [
         e["strikes"] for e in events if e["type"] == "wrapper.strike" and e["issue"] == 42
     ] == [1, 2]
-    assert [live for wd, live in client.live_worktrees if wd is None] == [()]
+    (serial_wd, live), = [
+        (wd, live) for wd, live in client.live_worktrees if _is_serial_directory(wd)
+    ]
+    assert live == (serial_wd,)
     refill = next(e for e in events if e["type"] == "wrapper.rolling.refill_turn")
     assert refill["reservations"] == 1
 
@@ -7441,7 +7449,10 @@ def test_priority_discovered_beside_started_setup_drains_it_before_serial(
         )
         assert events.index(end) < events.index(grant)
         assert end["reason"] == "published"
-    assert [live for wd, live in client.live_worktrees if wd is None] == [()]
+    (serial_wd, live), = [
+        (wd, live) for wd, live in client.live_worktrees if _is_serial_directory(wd)
+    ]
+    assert live == (serial_wd,)
 
 
 def test_the_run_built_source_accepts_a_serial_required_pin(
@@ -8548,9 +8559,9 @@ def test_parallel_lanes_resume_refilling_after_an_interleaved_serial_iteration(
 
     * #44's Lane exists at all, which is #219 §5.9's granted refill turn — the
       thing that makes the serial latch a handoff rather than a stop.
-    * The serial Iteration ran with **no** worktree live: no Lane, no private
-      **Integration stage**. §5.5 grants ownership only at full Parallel
-      quiescence, because that Iteration owns the base worktree.
+    * The serial Iteration ran with only its own Issue clone live: no Lane,
+      no private **Integration stage**. §5.5 still grants the serial turn only
+      at full Parallel quiescence.
     * The serial Iteration re-collected and rendered its *own* authoritative
       Pool — including #44, which Rolling dispatch had not yet dispatched — and
       chose its own Active issue from it, exactly as a serial Run does (§5.6).
@@ -8597,8 +8608,9 @@ def test_parallel_lanes_resume_refilling_after_an_interleaved_serial_iteration(
     # --- Lane(#42) + Lane(#43), serial, Lane(#44): the Run refilled a Lane
     #     AFTER the interleaved serial Iteration, so neither class starved.
     def _issue_of(working_directory: str | None) -> int | None:
-        if working_directory is None:
+        if _is_serial_directory(working_directory):
             return None
+        assert working_directory is not None
         return int(Path(working_directory).name.removeprefix("issue-"))
 
     order = [_issue_of(wd) for (wd, _live) in fake_client.live_worktrees]
@@ -8606,12 +8618,9 @@ def test_parallel_lanes_resume_refilling_after_an_interleaved_serial_iteration(
         f"expected Lanes -> serial -> a refilled Lane, got {order}"
     )
 
-    # --- The serial Iteration owned base alone: nothing was live beside it.
-    #     Non-vacuous — the same snapshot sees each Lane's own worktree live
-    #     during that Lane's own session, so an empty one is a genuine teardown
-    #     rather than an instrument that never observes anything.
-    (_serial_wd, live_during_serial) = fake_client.live_worktrees[2]
-    assert live_during_serial == (), (
+    # No Lane or Integration stage remains beside the serial Issue clone.
+    (serial_wd, live_during_serial) = fake_client.live_worktrees[2]
+    assert live_during_serial == (serial_wd,), (
         f"serial Iteration overlapped live worktrees: {live_during_serial}"
     )
     for issue, live in (
@@ -13216,7 +13225,7 @@ def test_serial_required_work_is_prepared_while_existing_lanes_drain(
     observed_during_work = []
 
     async def work(session, tracker):
-        if session._working_directory is None:
+        if _is_serial_directory(session._working_directory):
             return
         lane = Path(session._working_directory).name
         if lane == f"issue-{discovering_lane}":
@@ -13244,7 +13253,7 @@ def test_serial_required_work_is_prepared_while_existing_lanes_drain(
         tmp_path, monkeypatch, on_work=work, max_iterations=3,
     )
     assert exit_code == 0
-    assert [call["working_directory"] is None for call in client.create_calls] == [
+    assert [_is_serial_directory(call["working_directory"]) for call in client.create_calls] == [
         False, False, True
     ]
     assert client.create_calls[-1]["model"] == "claude-opus-5"
@@ -13285,7 +13294,7 @@ def test_priority_serial_discovery_interrupts_speculative_lane_preparation(
         return _elects_lane_model("claude-opus-5")(request)
 
     async def work(session, tracker):
-        if session._working_directory is None:
+        if _is_serial_directory(session._working_directory):
             serial_started.set()
         elif Path(session._working_directory).name == "issue-42":
             await asyncio.wait_for(tail_started.wait(), timeout=2)
@@ -13303,7 +13312,7 @@ def test_priority_serial_discovery_interrupts_speculative_lane_preparation(
     )
     assert exit_code == 0
     assert tail_cancelled.is_set() and serial_started.is_set()
-    assert [call["working_directory"] is None for call in client.create_calls] == [
+    assert [_is_serial_directory(call["working_directory"]) for call in client.create_calls] == [
         False, False, True,
     ]
     assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
@@ -14019,7 +14028,8 @@ def test_a_parked_contribution_keeps_its_lease_until_it_is_integrated(
         )
         assert events.index(serial_end) < events.index(next_lane)
         assert (45, "priority") in _bindings(events)
-        assert [
-            live for wd, live in fake_client.live_worktrees if wd is None
-        ] == [()]
+        (serial_wd, live), = [
+            (wd, live) for wd, live in fake_client.live_worktrees if _is_serial_directory(wd)
+        ]
+        assert live == (serial_wd,)
         assert sorted(n for n, _comment in fake_gh.issue_close_calls) == [42, 43, 44, 45, 46]

@@ -170,7 +170,7 @@ def test_recorded_dynamic_authority_governs_permitted_retries(
     if mode == "lane":
         assert Path(work_calls[0]["working_directory"]).name == "issue-42"
     assert all(
-        call["working_directory"] is None
+        Path(call["working_directory"]).parent.name == "serial"
         for call in (work_calls[1:] if mode == "lane" else work_calls)
     )
     for prompt, history, capability in zip(

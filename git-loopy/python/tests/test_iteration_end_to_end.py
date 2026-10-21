@@ -221,6 +221,12 @@ class FakeCopilotClient:
     async def stop(self) -> None:
         self.stop_call_count += 1
 
+    def git_for_session(self, source: FakeGitClient) -> FakeGitClient:
+        """The current Agent's clone, addressed by the SDK session's cwd."""
+        clone = source.worktree_client(Path(self.create_calls[-1]["working_directory"]))
+        assert clone is not None
+        return clone
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -389,7 +395,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
 
     fake_client = FakeCopilotClient(scripted_events=scripted)
     # The agent authors its commit (referencing ``Closes #42``) mid-session.
-    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+    fake_client.on_send = lambda: fake_client.git_for_session(fake_git).simulate_agent_commit(
         sha="abcdef1234567890abcdef1234567890abcdef12",
         subject="feat(thing): implement",
         body="Closes #42",
@@ -770,7 +776,7 @@ def test_a_real_serial_session_carries_its_ending_on_its_issue_outcome(
 
     def work() -> None:
         if case["progress"] is not None:
-            git.simulate_agent_commit(
+            client.git_for_session(git).simulate_agent_commit(
                 subject="Closes #42" if case["progress"] == "closure" else "Advance #42"
             )
         if case["termination"] == "timeout":
@@ -994,9 +1000,6 @@ def _wire_single_issue_github(
     issue = _make_issue(issue_number, labels=labels)
     fake_git = FakeGitClient(
         tmp_path,
-        dirty=dirty,
-        untracked=untracked,
-        commit_error=commit_error,
         push_error=push_error,
     )
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1008,6 +1011,14 @@ def _wire_single_issue_github(
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
 
     fake_client = FakeCopilotClient(scripted_events=[])
+
+    def leave_clone_work():
+        clone = fake_client.git_for_session(fake_git)
+        clone.dirty = dirty
+        clone.untracked = untracked
+        clone.commit_error = commit_error
+
+    fake_client.on_send = leave_clone_work
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     return fake_client, fake_git
 
@@ -1036,13 +1047,15 @@ def test_loop_dirty_worktree_checkpoints_and_continues(
     assert len(fake_client.created) == 1, "the SDK session still ran"
 
     # Exactly one Checkpoint: stage everything, then one commit.
-    assert fake_git.add_all_calls, (
+    clone = fake_git.worktree_clients[0]
+    assert fake_git.commit_messages == []
+    assert clone.add_all_calls, (
         "the worktree must be staged before the Checkpoint"
     )
-    assert len(fake_git.commit_messages) == 1, (
-        f"expected exactly one Checkpoint commit; got {fake_git.commit_messages}"
+    assert len(clone.commit_messages) == 1, (
+        f"expected exactly one Checkpoint commit; got {clone.commit_messages}"
     )
-    msg = fake_git.commit_messages[0]
+    msg = clone.commit_messages[0]
     assert is_checkpoint_message(msg), "Checkpoint must carry the trailer"
     assert "42" in msg, "Checkpoint is attributed to the Active issue #42"
 
@@ -1090,6 +1103,49 @@ def test_loop_clean_worktree_makes_no_checkpoint(tmp_path, monkeypatch) -> None:
     assert "wrapper.checkpoint.recorded" not in types_seen
 
 
+def test_each_serial_iteration_gets_a_fresh_clone_of_published_base(tmp_path, monkeypatch):
+    client, source = _wire_single_issue_github(tmp_path, monkeypatch)
+    observed = []
+
+    def work():
+        clone = client.git_for_session(source)
+        observed.append((clone.root, clone.branch, clone.head_sha(), source.head_sha()))
+        clone.simulate_agent_commit(subject="Advance issue 42")
+
+    client.on_send = work
+    assert asyncio.run(loop_module.run(RunConfig(
+        issue_source="github", max_iterations=2,
+    ))) == 0
+    assert len(observed) == 2
+    first, second = observed
+    assert first[0] != second[0]
+    assert first[1].endswith("/serial/iteration-1")
+    assert second[1].endswith("/serial/iteration-2")
+    assert first[2] == first[3]
+    assert second[2] == second[3] != first[2]
+    assert source.active_worktrees == []
+    assert source.push_calls == 2
+
+
+def test_serial_clone_creation_failure_never_runs_or_checkpoints_on_base(tmp_path, monkeypatch):
+    client, source = _wire_single_issue_github(tmp_path, monkeypatch)
+    source.dirty = True
+    source.untracked = True
+
+    def refuse_clone(*args, **kwargs):
+        raise git_module.GitError(["git", "clone"], 1, "clone unavailable")
+
+    monkeypatch.setattr(source, "add_issue_clone", refuse_clone)
+    assert asyncio.run(loop_module.run(RunConfig(
+        issue_source="github", max_iterations=1,
+    ))) == 0
+    assert client.created == []
+    assert source.commit_messages == []
+    assert source.add_all_calls == source.push_calls == 0
+    assert source.dirty and source.untracked
+    assert "wrapper.strike" in _logged_types(tmp_path)
+
+
 def test_checkpoint_is_excluded_from_strikes_abort_after_n_still_fires(
     tmp_path, monkeypatch
 ) -> None:
@@ -1113,9 +1169,10 @@ def test_checkpoint_is_excluded_from_strikes_abort_after_n_still_fires(
     # Abort-after-N still fires despite every iteration being Checkpointed.
     assert exit_code == 1
     # Two iterations to reach the 2-strike threshold, one Checkpoint each.
-    assert len(fake_git.commit_messages) == 2, (
+    messages = [message for clone in fake_git.worktree_clients for message in clone.commit_messages]
+    assert len(messages) == 2, (
         f"expected one Checkpoint per stuck iteration; "
-        f"got {fake_git.commit_messages}"
+        f"got {messages}"
     )
     assert len(fake_client.created) == 2
 
@@ -1169,7 +1226,7 @@ def test_loop_pushes_after_agent_commit(tmp_path, monkeypatch) -> None:
         tmp_path, monkeypatch, dirty=False, untracked=False
     )
     # One agent commit, no close keyword -> pure progress, no auto-closure.
-    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+    fake_client.on_send = lambda: fake_client.git_for_session(fake_git).simulate_agent_commit(
         sha="a" * 40, subject="feat: real work", body="Refs #42"
     )
 
@@ -1343,7 +1400,7 @@ def test_loop_prds_end_to_end_one_iteration(tmp_path, monkeypatch) -> None:
     fake_client = FakeCopilotClient(scripted_events=scripted)
     # The agent authors one commit mid-session (PRDs mode never auto-closes:
     # PrdsIssueSource.handle_completions returns [] — the agent owns the git mv).
-    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+    fake_client.on_send = lambda: fake_client.git_for_session(fake_git).simulate_agent_commit(
         sha="a" * 40,
         subject="feat(featA/001): implement",
         body="Refs prds/featA/001-ready.md",
@@ -1656,7 +1713,7 @@ def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch)
     fake_client = FakeCopilotClient(scripted_events=[])
     # The agent authors a commit referencing ``Closes #42`` mid-session; the
     # subsequent auto-close attempt fails (issue_close_errors) but must not abort.
-    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+    fake_client.on_send = lambda: fake_client.git_for_session(fake_git).simulate_agent_commit(
         sha="deadbeef", subject="x", body="Closes #42"
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
@@ -1728,7 +1785,7 @@ def test_loop_multiple_iterations_until_cap(tmp_path, monkeypatch) -> None:
     fake_client = FakeCopilotClient(scripted_events=[])
     # Each iteration the agent lands one fresh commit (progress -> no strikes),
     # so head advances every session and the only stop condition is the cap.
-    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+    fake_client.on_send = lambda: fake_client.git_for_session(fake_git).simulate_agent_commit(
         subject="progress"
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
@@ -1816,7 +1873,9 @@ def _wire_serial_stop_run(
 
     started, release = asyncio.Event(), asyncio.Event()
     fake_client = _HeldSerialClient(started, release)
-    fake_client.on_send = lambda: fake_git.simulate_agent_commit(subject="progress")
+    fake_client.on_send = lambda: fake_client.git_for_session(fake_git).simulate_agent_commit(
+        subject="progress"
+    )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     return fake_git, started, release, _capture_serial_loops(monkeypatch)
 
@@ -2074,7 +2133,7 @@ def test_loop_emits_otel_span_tree_when_enabled(tmp_path, monkeypatch) -> None:
     fake_client = FakeCopilotClient(scripted_events=[])
     # The agent authors its ``Closes #42`` commit mid-session so the closure
     # (and its git_loopy.enforce_closures span) fires as before.
-    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+    fake_client.on_send = lambda: fake_client.git_for_session(fake_git).simulate_agent_commit(
         sha="abcdef1234567890abcdef1234567890abcdef12",
         subject="feat: stuff",
         body="Closes #42",
@@ -3554,7 +3613,9 @@ def test_the_rung_is_sticky_for_the_rest_of_the_run(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
     sends = itertools.count(1)
     fake_client.on_send = lambda: (
-        fake_git.simulate_agent_commit(subject="chore: the rung got somewhere")
+        fake_client.git_for_session(fake_git).simulate_agent_commit(
+            subject="chore: the rung got somewhere"
+        )
         if next(sends) == 2
         else None
     )
@@ -4240,7 +4301,7 @@ def test_an_advancing_iteration_spends_no_attempt(tmp_path, monkeypatch) -> None
     )
     fake_git = FakeGitClient(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-    fake_client.on_send = lambda: fake_git.simulate_agent_commit(
+    fake_client.on_send = lambda: fake_client.git_for_session(fake_git).simulate_agent_commit(
         subject="chore: a step forward"
     )
 
@@ -8706,7 +8767,9 @@ def test_advancing_dynamic_work_preserves_history_without_refunding_attempts(
 
     def on_send() -> None:
         if next(advances):
-            fake_git.simulate_agent_commit(subject="feat: advance without closing")
+            fake_client.git_for_session(fake_git).simulate_agent_commit(
+                subject="feat: advance without closing"
+            )
 
     fake_client.on_send = on_send
     _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))

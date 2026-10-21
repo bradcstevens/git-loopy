@@ -1783,8 +1783,9 @@ _Avoid_: sandbox, scratch directory, shared worktree.
 **Issue clone**:
 The self-contained clone in which one issue's **Agents** work, with its own refs
 and config and read-only access to the source clone's objects. It is a **Lane
-workspace**, or the private working surface of a sandboxed serial **Iteration**
-or **Recovery**, and supplies the issue-local writable boundary for a **Sandbox**.
+workspace**, or the private working surface of any serial **Iteration** or a
+sandboxed **Recovery**, and supplies the issue-local writable boundary when a
+**Sandbox** is enabled.
 _Avoid_: linked worktree, shared git directory.
 
 **Salvage**:

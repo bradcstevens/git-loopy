@@ -171,16 +171,18 @@ def test_injected_push_error_is_raised_after_recording(tmp_path: Path) -> None:
     assert git.push_calls == 1
 
 
-def test_dirty_and_untracked_are_test_controlled_and_persist(
+def test_committing_staged_work_clears_dirty_and_untracked_state(
     tmp_path: Path,
 ) -> None:
     git = FakeGitClient(tmp_path, dirty=True, untracked=True)
     assert git.is_dirty() is True
     assert git.has_untracked() is True
-    # commit does NOT clear them (a real agent re-dirties each iteration), so a
-    # multi-iteration test that leaves dirty=True Checkpoints every iteration.
     git.add_all()
     git.commit("checkpoint")
+    assert git.is_dirty() is False
+    assert git.has_untracked() is False
+    git.dirty = True
+    git.untracked = True
     assert git.is_dirty() is True
     assert git.has_untracked() is True
 

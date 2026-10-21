@@ -34,27 +34,30 @@ Per-iteration sequence:
 5. Capture ``pre_sha`` *immediately* before invoking the SDK — so a slow
    ``gh issue_view`` call before this point cannot affect the
    ``commits_between(pre_sha, head)`` accounting after.
-6. Open :class:`~git_loopy.session.IterationSession`,
+6. Create and prepare a fresh **Issue clone** on the Iteration's Reserved
+   branch, with or without a Sandbox. Open
+   :class:`~git_loopy.session.IterationSession` in that clone and
    ``await session.send_and_wait(prompt, timeout=long)``.
-7. ``head_sha = git.head_sha()``; ``commits = git.commits_between(pre, head)``.
-8. Emit one ``wrapper.commit.recorded`` per new commit so the renderer
-   increments the iteration's commit count.
+7. Read the clone's agent commits from ``pre_sha`` through its current head,
+   before making any runner Checkpoint.
+8. **Runner Checkpoint** (ADR-0004) and publication via
+   :meth:`_Loop._finish_serial_clone`: Checkpoint dirty or untracked work in
+   the clone, import it, then merge onto base when publication is allowed.
+   Never Checkpoint the operator's checkout. The Checkpoint emits
+   ``wrapper.checkpoint.recorded`` but is excluded from both the agent-commit
+   tally and the progress predicate. Failed publication preserves the branch
+   and contributes no commits to the Iteration's accounting.
 9. **Completion backstop** via
    :meth:`IssueSource.handle_completions`. Each returned
    :class:`~git_loopy.sources.Completion` produces one
    ``wrapper.auto_close`` event. The GitHub backend closes issues via
    ``gh issue close``; the PRDs backend returns an empty list (the
    agent owns ``git mv ... prds/<feat>/done/``).
-10. **Runner Checkpoint** (ADR-0004) via :meth:`_maybe_checkpoint`: a dirty
-    or untracked worktree is staged and captured in a single
-    close-keyword-free ``wrapper.checkpoint.recorded`` commit attributed to
-    the Active issue. Deliberately ordered *after* the agent-commit
-    accounting (step 8) and *before* strike accounting (step 12), so the
-    Checkpoint is excluded from both the Summary commit tally and the §6
-    progress predicate. Non-fatal: a failure warns and the loop carries on.
+10. Emit one ``wrapper.commit.recorded`` per published agent commit so the
+    renderer increments the Iteration's commit count.
 11. **Auto-push** (ADR-0004) via :meth:`_maybe_push`: whenever the iteration
-    produced new commits — agent commits (step 8) and/or the Checkpoint from
-    step 10 — the current branch is pushed to its upstream
+    published new commits — agent commits (step 7) and/or the Checkpoint from
+    step 8 — the current branch is pushed to its upstream
     (``wrapper.push.recorded`` on success) so the work reaches the remote.
     Non-fatal: a missing remote/upstream, an auth failure, or a
     non-fast-forward warns and the loop carries on, so a local-only repo
@@ -544,10 +547,9 @@ def _make_worktree_setup() -> worktree_module.WorktreeSetup:
     unset or blank the adapter falls back to
     :func:`~git_loopy.worktree.detect_setup_command`'s best-effort auto-detect.
 
-    **Unused by the serial path.** Per-Lane setup only exists in Parallel mode
-    (each **Lane** gets a fresh Issue clone that needs its environment prepared); the
-    serial loop works in place on the repo worktree, so :func:`run` only wires this
-    into the ``_ParallelLoop``.
+    Every Issue clone needs its environment prepared, including serial
+    Iterations with the Sandbox off. ``_ParallelLoop`` shares this setup with
+    its embedded serial driver.
     """
     raw = os.environ.get("GIT_LOOPY_WORKTREE_SETUP")
     command = raw.strip() if raw else None
@@ -2264,22 +2266,21 @@ class _Loop:
             # reads it, joined to the Run's own observer rather than replacing it.
             session_watch = session_outcome_module.SessionOutcomeWatch()
             issue_git: git_module.GitClient | None = None
-            sandbox_commits: list[git_module.Commit] = []
+            new_commits: list[git_module.Commit] = []
             checkpoint_sha: str | None = None
             sandbox_failed = False
             clone_branch = f"git-loopy/{self._writers.run_id}/serial/iteration-{iter_num}"
             with telemetry.span("git_loopy.session"):
                 try:
-                    if self._sandbox_settings is not None:
-                        path = (
-                            git_module.issue_clone_root(self._git.common_git_dir())
-                            / self._writers.run_id / "serial" / f"iteration-{iter_num}"
-                        )
-                        issue_git = self._git.add_issue_clone(
-                            path, branch=clone_branch, base=pre_sha,
-                        )
-                        if self._issue_clone_setup is not None:
-                            self._issue_clone_setup(path, active.ref)
+                    path = (
+                        git_module.issue_clone_root(self._git.common_git_dir())
+                        / self._writers.run_id / "serial" / f"iteration-{iter_num}"
+                    )
+                    issue_git = self._git.add_issue_clone(
+                        path, branch=clone_branch, base=pre_sha,
+                    )
+                    if self._issue_clone_setup is not None:
+                        self._issue_clone_setup(path, active.ref)
                     async with IterationSession(
                         self._client,
                         config=self._config,
@@ -2290,10 +2291,8 @@ class _Loop:
                         model=model,
                         reasoning_effort=reasoning_effort,
                         context_tier=context_tier,
-                        working_directory=str(issue_git.root) if issue_git else None,
-                        sandbox_policy=self._agent_sandbox_policy(
-                            issue_git.root if issue_git else self._git.root
-                        ),
+                        working_directory=str(issue_git.root),
+                        sandbox_policy=self._agent_sandbox_policy(issue_git.root),
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
                         profile_key=execution_profile_key(resolution.task_type_keys),
@@ -2359,31 +2358,13 @@ class _Loop:
                     )
                 finally:
                     if issue_git is not None:
-                        sandbox_commits, checkpoint_sha = self._finish_serial_clone(
+                        new_commits, checkpoint_sha = self._finish_serial_clone(
                             issue_git, clone_branch, pre_sha, active, iter_num,
                             publish=not operator_cancelled and not sandbox_failed,
                         )
 
-            # 6) Post-iteration accounting.
-            try:
-                head = self._git.head_sha()
-            except git_module.GitError as exc:
-                self._diag.warning(
-                    "post-iteration git head_sha failed: %s; "
-                    "skipping commit accounting", exc,
-                )
-                head = pre_sha
-            try:
-                new_commits = self._git.commits_between(pre_sha, head)
-            except git_module.GitError as exc:
-                self._diag.warning(
-                    "post-iteration commits_between failed: %s; "
-                    "skipping commit accounting", exc,
-                )
-                new_commits = []
-            if self._sandbox_settings is not None:
-                new_commits = sandbox_commits
-
+            # 6) Account only for published clone commits, never unrelated
+            #    changes on base or the clone's runner-authored Checkpoint.
             # 7) Completion backstop — source-specific. The GitHub backend
             #    closes the issue via gh; the PRDs backend always returns
             #    [] (the agent owns the `git mv ... done/` step).
@@ -2441,24 +2422,12 @@ class _Loop:
             pr_advances = len(completions) - auto_closures
             completion_count = len(completions)
 
-            # 8) Runner Checkpoint (ADR-0004). Capture any dirty / untracked
-            #    work-in-progress in a single close-keyword-free Checkpoint
-            #    commit so the next iteration starts from a clean tree and no
-            #    work is ever lost. Deliberately AFTER the agent-commit
-            #    accounting above (step 6) and BEFORE the ending is resolved
-            #    below, so the Checkpoint is structurally excluded from both: it
-            #    never counts as a commit in the Summary (it emits
-            #    ``wrapper.checkpoint.recorded``, not ``wrapper.commit.recorded``)
-            #    and it never counts as progress. Non-fatal — a failure warns and
-            #    the loop carries on (a local-only repo still completes).
-            if self._sandbox_settings is None:
-                checkpoint_sha = self._maybe_checkpoint(
-                    iter_num, issue_binding.active_ref
-                )
+            # 8) The clone was Checkpointed before import, after its agent
+            #    commits were counted. Never Checkpoint the operator's checkout.
 
             # 9) Auto-push (ADR-0004, second half). Whenever this iteration
             #    produced new commits — agent commits (step 6) and/or the
-            #    Checkpoint just made (step 8) — push the current branch to its
+            #    Checkpoint imported from the clone — push the current branch to its
             #    upstream so the work reaches the remote instead of piling up
             #    locally. Non-fatal: a missing remote/upstream, an auth failure,
             #    or a non-fast-forward warns and the loop carries on. Like the

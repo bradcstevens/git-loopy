@@ -178,7 +178,7 @@ def test_saved_dynamic_authority_preserves_exact_effort_semantics(
             assert Path(session["working_directory"]).name == "issue-42"
             assert any(event["type"] == "wrapper.contribution.start" for event in events)
         else:
-            assert session["working_directory"] is None
+            assert Path(session["working_directory"]).parent.name == "serial"
             assert not any(event["type"] == "wrapper.contribution.start" for event in events)
         (pickup,) = [event for event in events if event["type"] == "wrapper.pickup.bound"]
         (record,) = [event for event in events if event["type"] == "wrapper.routing.resolved"]
