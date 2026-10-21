@@ -35,9 +35,9 @@ it contains.
 
 For a docstring-or-prose change, run targeted Python tests instead of the full
 Python suite only when publishing through a pull request (CI runs the full suite
-on every pull request with no path filters) or contributing a Lane in Parallel
-mode (Integration runs the whole table); a serial Run pushes straight to the
-default branch and still runs the full suite. To qualify, compare each changed
+on every pull request with no path filters) or delivering a Lane contribution in
+Parallel mode (Integration runs the whole table); a serial Run pushes straight to
+the default branch and still runs the full suite. To qualify, compare each changed
 Python file against the merge-base yourself: both versions must parse to the same
 `ast.dump` after removing module, class and function docstrings, and every other
 changed file must be Markdown. Run each changed module's own
