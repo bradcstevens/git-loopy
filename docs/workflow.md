@@ -177,7 +177,8 @@ One serial Iteration makes one bounded attempt at one Active issue:
 7. **Push and account.** The Orchestrator pushes new commits, updates the
    Dashboard and Summary, and charges the issue a Strike whenever its session
    reaches an ending: no progress, a timeout or crash, no more tasks, or a
-   content filter.
+   content filter. A session a terminal account refusal ended charges none:
+   the Run stops or pauses instead.
 
 ```mermaid
 flowchart TD

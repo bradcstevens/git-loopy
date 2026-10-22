@@ -1524,6 +1524,7 @@ class _Loop:
         # The second dial one **Session outcome** turns: the ledger above
         # decides whether the *pair* changes, and this one decides whether the
         # issue is worked at all. Every ending charges its issue one Strike,
+        # except one a terminal account refusal caused (§19.1),
         # and an issue out of Strikes is skipped; the Run itself never stops on
         # them. Run-scoped and in memory for the same reason and with the same
         # consequence — a bad night must never permanently demote an issue, and
@@ -4326,7 +4327,9 @@ class _Loop:
         matter.
 
         **This is also where the issue's Strike is charged** (ADR-0070).
-        Every ending charges the issue it belongs to exactly one, so "one
+        Every ending charges the issue it belongs to exactly one, except an
+        ending a terminal account refusal caused, which returns before the
+        charge (§19.1), so "one
         Strike per Session outcome" falls out of the ledger rather than out of
         anyone counting carefully, and it is the same seam in **Parallel mode**,
         where a Lane's ending and the accounting scope that finalizes it are

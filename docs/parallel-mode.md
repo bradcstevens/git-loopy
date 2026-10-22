@@ -150,7 +150,8 @@ other two reasons it can give are that every `parallel-safe` issue it found was
 already worked this Run, and that a candidate could not be read.
 
 An issue holds at most one Lane contribution at a time, including through parking,
-Integration and recovery. Every Session outcome charges it one Strike; advancing
+Integration and recovery. Every Session outcome charges it one Strike, except one a
+terminal account refusal caused (the Run stops or pauses instead); advancing
 work charges none unless its session timed out or crashed. After that contribution
 finalizes, a charged issue with fewer than `max_nmt_strikes` Strikes is eligible
 for another Lane in the same Run. Each setup uses a new branch and workspace,

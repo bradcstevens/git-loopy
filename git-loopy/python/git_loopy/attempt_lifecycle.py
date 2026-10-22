@@ -6,7 +6,8 @@ held the one fact that would have stopped it: *this Run has already tried this
 issue and it did not work*. This module is that fact.
 
 Since ADR-0070 the fact is a count. Every **Session outcome** charges the issue
-it belongs to one **Strike**, and an issue that has taken ``max_strikes`` of
+it belongs to one **Strike**, except one a terminal account refusal caused
+(Wrapper contract §19.1), and an issue that has taken ``max_strikes`` of
 them is **skipped** for the rest of the Run. The monotonic per-issue, per-Run
 lifecycle — **fresh → retrying → skipped** — is a projection of that count, so
 there is no per-ending table to drift: no Strikes is fresh, at least one short
@@ -128,7 +129,9 @@ class AttemptLedger:
         it is the ordinary shape of a Run grinding, not evidence the Run has
         recovered, and only a fresh Run withdraws the claim.
 
-        Every ending charges the same single Strike (ADR-0070). Which ending it
+        Every ending charges the same single Strike (ADR-0070); one a terminal
+        account refusal caused never reaches this ledger (Wrapper contract
+        §19.1). Which ending it
         was decides what the **Escalation rung** and the **Attempt evidence**
         ledgers do, not how many tries the issue has left.
 

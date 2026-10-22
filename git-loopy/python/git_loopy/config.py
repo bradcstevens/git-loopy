@@ -696,7 +696,8 @@ class RunConfig:
             unlimited.
         max_nmt_strikes: How many **Strikes** each issue gets in a Run before
             it is skipped (ADR-0070). Every Session outcome charges its issue
-            one; the Run never stops on Strikes. Must be ≥ 1.
+            one, except one a terminal account refusal caused; the Run never
+            stops on Strikes. Must be ≥ 1.
         demotion_threshold: How many no-progress **Lane contributions** one
             **Routed pair** may accumulate in a Run before **Demotion** replaces
             its **Measured routing** entry with the next pair up the price
