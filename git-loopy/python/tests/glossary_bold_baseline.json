@@ -1,6 +1,6 @@
 [
-  ["AGENTS.md", "a paired skill change"],
-  ["AGENTS.md", "the cross-repo skills proof"],
+  ["docs/agents/feedback-loops.md", "a paired skill change"],
+  ["docs/agents/feedback-loops.md", "the cross-repo skills proof"],
   ["GLOSSARY.md", "automation stop"],
   ["GLOSSARY.md", "iteration driver"],
   ["GLOSSARY.md", "routing credit"],
