@@ -4,8 +4,8 @@
 
 **Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):** the budget is no longer two
 attempts with three endings defeating an issue on first sight. Every **Session outcome** charges
-its issue one **Strike**, except one a terminal account refusal caused (ADR-0070's #676
-amendment), and an issue is skipped at `max_nmt_strikes` (N). The lifecycle is the
+its issue one **Strike**, except, in the Python Runner, one a terminal account refusal caused
+(ADR-0070's #676 amendment), and an issue is skipped at `max_nmt_strikes` (N). The lifecycle is the
 projection of that count — `fresh` at none, `retrying` below N, `skipped` at N — and stays per
 issue, per Run, monotonic, and a **Pickup** filter.
 

@@ -336,8 +336,8 @@ _Avoid_: poll, refresh, shallow pool, live pool.
 One **Session outcome** charged to the issue whose session it was. Every ending — silent
 no-progress, timeout, crash, no more tasks, content-filtered — charges exactly one, and a session
 that advanced its issue charges nothing unless the Orchestrator lost it to a timeout or crash,
-which progress does not launder (**Session outcome**). A session a terminal account refusal
-ended is the exception and charges none: in the Python Runner the account failed, not the
+which progress does not launder (**Session outcome**). In the Python Runner, a session a
+terminal account refusal ended is the exception and charges none: the account failed, not the
 issue, so the Run stops or pauses instead (Wrapper contract §19.1). Strikes are counted per issue, per
 **Run**: what one issue spends no other issue loses. `--max-nmt-strikes` is N, the number each
 issue gets, so it reads as *how many times this Run may try an issue that keeps ending badly*;
