@@ -1013,7 +1013,8 @@ pub struct PrAdvanced {
 /// One Strike.
 ///
 /// The Python Runner charges a Strike to the issue a Session worked, once per
-/// Session ending, and names that `issue`; `strikes` is then that issue's count
+/// Session ending except one a terminal account refusal caused (contract
+/// §19.1), and names that `issue`; `strikes` is then that issue's count
 /// and `max_strikes` its budget (ADR-0070). The shell and PowerShell
 /// Orchestrators name no issue: theirs is one Run-wide count of consecutive
 /// no-progress Iterations.

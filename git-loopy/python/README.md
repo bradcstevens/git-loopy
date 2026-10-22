@@ -1514,7 +1514,7 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 | Clean — Pool empty    | `0`  | Start of an Iteration finds the ready-for-agent Pool empty.                                                                                                                                                                                        |
 | Clean — iteration cap | `0`  | Positional `<max-iterations>` reached without natural termination.                                                                                                                                                                                |
 | Aborted — all skipped | `1`  | The Pool is non-empty but no issue can be bound: each was refused at Pickup or has been charged `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) Strikes this Run.                                                                                                    |
-| Stopped — account     | `1`  | A terminal, account-identifying refusal stopped the Run: quota or authentication, or a rate refusal whose retry budget, cooldown or probe is spent (`account_failure`, Wrapper contract §19.1). |
+| Stopped — account     | `1`  | A terminal, account-identifying refusal stopped the Run: quota or authentication, or a rate refusal the Run could not recover from within its retry and cooldown budget (`account_failure`, Wrapper contract §19.1). |
 | Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, `CopilotClient` construction failed, writers bundle failed, or unknown `GIT_LOOPY_ISSUE_SOURCE`. Surfaces cleanly via stderr. |
 
 ---
