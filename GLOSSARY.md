@@ -2031,6 +2031,22 @@ the ordering constraint is the **Integration backlog**.
 _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap**, or
 **Rolling dispatch** instead.
 
+### Publication reconciliation
+
+**Publication reconciliation**:
+The restart-time reconciliation of an interrupted **Integration** publication against
+durable evidence of its identity and landed result. Distinct from **Recovery**, which
+repairs a contribution in its private **Integration stage**; delivered by #419 (PR #933).
+_Avoid_: Recovery, Sweep (as synonyms).
+
+### Completion check (accepted design)
+
+**Completion check**:
+A read-only verdict on whether one identified **Run** completed an explicitly named
+set of issues with the required evidence. Distinct from the comparative research
+**Completion proof**; delivery is tracked by #674.
+_Avoid_: finalizer, Completion proof (as synonyms).
+
 ### Board (accepted design)
 
 These terms complete the vocabulary of

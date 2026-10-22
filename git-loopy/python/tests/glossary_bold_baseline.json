@@ -57,7 +57,6 @@
   ["git-loopy/conformance/README.md", "integration gate outcomes"],
   ["git-loopy/powershell/README.md", "which helper runs"],
   ["git-loopy/python/README.md", "integration time"],
-  ["git-loopy/python/README.md", "publication reconciliation"],
   ["git-loopy/python/README.md", "records scaffold provenance"],
   ["git-loopy/shell/README.md", "which helper runs"]
 ]

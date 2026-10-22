@@ -160,6 +160,48 @@ baseline's `completion-baseline/`. It reuses the Proving set and Trial modules, 
 becomes a product command only if it gets a second use. The Language paths & release PRD
 owns the harness, the record's shape, its revision rule and the rehearsal's refusal.
 
+## Completion check (accepted design; #674)
+
+A supported CI **Completion check** evaluates canonical completion evidence for
+one explicit Run and a nonempty, explicitly named set of expected issues. Every
+target must be proved complete; the target set is never inferred from whichever
+work happened to run. Unrelated work does not itself fail the named targets.
+
+The check is read-only: it runs no tests or Review, pushes nothing, closes
+nothing and supplies no opt-in bypass for mandatory Review. It returns a
+machine-readable verdict without changing `git-loopy run` exit semantics.
+Checkpoints, zero Strikes, aggregate progress and a successful Run exit do not
+prove completion. Missing, malformed, contradictory or unsupported evidence
+cannot yield verified success. Ordinary legacy records, including v0.11.2,
+remain unverified rather than having Review or closure provenance reconstructed
+from time windows. Delivery depends on the canonical Review and Orchestrator
+closure evidence owned by #913; this is not implemented by this decision.
+
+The Python/GitHub-source interface is
+`git-loopy check-completion --run <run-id> --issue <number> [--issue <number> ...]`,
+run in the relevant clone. It emits one versioned JSON result naming the Run,
+repository, requested issues, overall verdict and per-issue results/reason codes.
+Exit `0` means all targets passed; `1` means valid evidence proves at least one
+target did not complete; `2` means invalid, unavailable or unsupported evidence or
+invocation. In mixed results, unverifiable evidence takes precedence. Ordinary
+syntax errors may use usage diagnostics on stderr rather than a result object.
+
+Success requires a terminal Run record with consistent canonical
+Review/publication/Orchestrator-closure evidence and read-only confirmation of
+current publication and closure. The recorded final head must be contained in the
+recorded upstream; a newer descendant is valid, but a missing or rewritten ref,
+inaccessible evidence or reopened issue cannot pass. Local-only publication uses
+local evidence rather than inventing an upstream. Earlier timeout, crash or
+Checkpoint history does not veto a later valid, normal, reviewed completion of
+the target in that Run. A Checkpoint or later external closure alone never
+supplies that proof. A capped Run may pass if all explicitly requested targets
+genuinely completed; the cap itself proves nothing.
+
+The consuming workflow still owns independent regression and browser-test jobs.
+The Completion check neither runs them nor accepts arbitrary external
+attestations, and it does not claim those jobs passed. This deliberately avoids
+turning an outcome reader into a second finalizer or an attestation framework.
+
 ## Scope
 
 The GitHub Issues source on the Python path (ADR-0073), as for ADR-0082. The dormant
