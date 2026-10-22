@@ -58,71 +58,7 @@ the full suite; an unlisted failure or one that also fails alone is a real
 failure. Record each encountered known flake and its result when rerun alone;
 change this list only through normal review.
 
-Notes on what is deliberately *not* in the table, because every row in it is a
-blocking gate:
-
-- **`ruff`** carries pre-existing errors, so declaring it would make Integration
-  permanently red. Run `uv run --project git-loopy/python --all-extras ruff check
-  git-loopy/python` on the files you touched and keep them clean; it becomes a gate
-  row once the backlog is cleared.
-- **The Conformance adapter subset** the CI runs as its own fast job
-  (`test_conformance.py`, `test_release_identity_conformance.py`) is already
-  inside the Python suite row; a second
-  row would only pay for it twice.
-- **The native Windows timezone proof** in `runner-family-gate.yml` repeats Rust
-  format/lint checks and runs the native timezone API and executable regressions
-  on Windows. Those tests are already part of the Rust suite above on a Windows
-  host; another row would either repeat them there or require Windows APIs on an
-  operator's non-Windows host. CI supplies that additional platform evidence.
-- **`python -m git_loopy.skill_source`** (acquire and validate the pinned external
-  Skill catalog, ADR-0023) reaches the network, so it can never be a gate: an
-  unreachable upstream would make Integration red for a reason no change here
-  caused. Its offline half — the immutable pin, the real fetch/checkout path over
-  a `file://` remote, and every validation failure — is covered by
-  `tests/test_skill_source.py` inside the Python suite row.
-- **`git-loopy doctor --apply`** refreshes that same catalog before it repairs a
-  Skill policy (#518), so it inherits the same exclusion for the same reason. Its
-  offline half — the pin comparison, the `absent`/`drifted`/`matching` verdicts,
-  the "refresh, do not prune" rule they impose on a missing-Skill row, and the
-  refresh itself over a `file://` remote — is covered by
-  `tests/test_skill_install.py` and `tests/test_doctorcmd.py` inside the Python
-  suite row.
-- **`python -m git_loopy.sdk_feed`** reports when the corporate Python feed
-  carries a `github-copilot-sdk` release newer than the pin in the Runner
-  manifest (#639). It reaches the network, so it can never be a gate: an
-  unreachable feed would make Integration red for a reason no change here
-  caused. Its offline half — the pin read from the manifest, and the
-  comparison that reports a newer release, distinguishes a prerelease from a
-  stable upgrade, and refuses to treat a feed error as no upgrade — is covered
-  by `tests/test_sdk_feed.py` inside the Python suite row. Run it when working
-  in this repository and surface any finding; a finding does not change the
-  pin, and a feed error is never "no upgrade available".
-- **A paired Skill change** (ADR-0064) is authored in a sibling clone of
-  `bradcstevens/git-loopy-skills`, published, proved, then pinned. It is a
-  working surface, not a loop: proving it reaches that clone, and an
-  unreachable upstream would make Integration red for a reason no change here
-  caused. The Iteration runs that proof itself. The gate still runs from this
-  repository alone.
-- **The cross-repo Skills proof** in `cross-repo-skills-proof.yml` (#632) acquires
-  that same pinned catalog and then runs the three Python-suite checks that read
-  it — that the profiles' Required and Permitted Skills resolve at the pin,
-  that Skill reference routing resolves, and that the Skill-authored label vocabulary
-  matches what this repository provisions — each of which otherwise skips rather
-  than fails when the catalog is not acquired. It inherits the same network
-  exclusion as `python -m git_loopy.skill_source` above for the same reason: an
-  unreachable `bradcstevens/git-loopy-skills` would make Integration red for a
-  reason no change here caused. CI supplies this as a required job precisely
-  because Integration cannot, the same way it supplies the native Windows
-  timezone proof above; the three checks stay offline-safe skips everywhere
-  else, and the job's own shape is covered by
-  `tests/test_cross_repo_skills_proof_workflow.py` inside the Python suite row.
-- **`python -m git_loopy.release_rehearsal`** (prove a promoted stable snapshot
-  before any public tag exists, ADR-0059) *runs this table* over its candidate,
-  so declaring it as a row would make Integration gate itself recursively. It is
-  release proof rather than a Lane gate: `release-promotion.yml` runs it per
-  candidate and creates no tag without it, and the boundary itself — both
-  triggers, every drift and refusal, the publication-input binding — is covered
-  offline by `tests/test_release_rehearsal.py` inside the Python suite row.
+For maintainer rationale on whether a command should become a gate row, see [Feedback-loop exclusions](docs/agents/feedback-loops.md).
 
 Commands resolve their tools through `PATH` and are relative to the repository root,
 because Integration runs them in a throwaway private worktree on whatever host the
@@ -156,54 +92,7 @@ every Run; the graph remains a proposal until the Loop engineer approves it.
 For Routing overrides, harness requirements, and launch refusals, read the
 [Planner reference](git-loopy/python/README.md#planning-git-loopy-plan).
 
-### Skills repository
-
-[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
-is a working surface this project changes, not merely consumes. A Skill prompt is
-authored there and mirrored nowhere: there is no prompt tree in this checkout
-to edit, and the installed catalog is repaired back to the pin rather than
-kept as an edit surface (ADR-0025, ADR-0064).
-
-A working clone is expected as a sibling of this checkout, at
-`../git-loopy-skills` relative to the repository root. Acquire one with:
-
-```bash
-git clone https://github.com/bradcstevens/git-loopy-skills.git ../git-loopy-skills
-```
-
-That clone is the only place to author. Do not edit
-`<config-home>/git-loopy/skills/`, `<config-home>/git-loopy/skill-catalog/`, or
-`.git-loopy/skill-source/` — the first two are the install a Run refreshes, and
-the third is a force-checkout of the pin. Pointing any of them at work in
-progress discards it.
-
-The order a paired change lands is a requirement, not a convention, and the
-pin is last. Publish the Skill change upstream, prove the resulting revision
-against git-loopy, and only then move the pin. A pin that moves before the
-proof is the failure this sequence exists to prevent: the pin is what every
-installation refreshes from.
-
-1. **Publish.** Commit the Skill edit in the sibling clone and push it, so the
-   change is a full 40-character SHA on
-   `bradcstevens/git-loopy-skills`. An uncommitted tree is not a published
-   revision.
-2. **Prove.** Run
-   `uv run --project git-loopy/python python -m git_loopy.skill_candidate ../git-loopy-skills`
-   against a checkout of that published revision, clean of later edits. A pass
-   says the cross-repo proofs hold. It does not move the pin. A dirty tree is
-   a preview, not this proof.
-3. **Pin last.** Only after that proof passes, edit
-   `git-loopy/python/git_loopy/skill_source.json` to that SHA.
-
-The git-loopy half of a paired change names the upstream revision the pin
-moves to and the Skill edit it carries, so the two halves are reviewable
-together. A pin bump that leaves a reader inferring which Skill edit it
-carries is not that change.
-
-This working surface is not a feedback-loop row. The Integration gate reaches
-no network, and the declared feedback loops still run from this repository
-alone. An unreachable upstream must not make Integration red. Proving a
-candidate is the Iteration's own step (ADR-0064).
+When changing a Skill or Agent profile, follow [Skills repository guidance](docs/agents/skills-repository.md).
 
 ### Chain hook
 
