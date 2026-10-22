@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.38 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.40 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -932,7 +932,8 @@ here against `git_loopy.events`. Wrapper-emitted types (phase 1 core): `wrapper.
 `wrapper.run.end`, `wrapper.iteration.start`, `wrapper.iteration.end`,
 `wrapper.afk_ready.collected`, `wrapper.commit.recorded`, `wrapper.checkpoint.recorded`,
 `wrapper.push.recorded`, `wrapper.auto_close`, `wrapper.strike`, `wrapper.pr.advanced`,
-`wrapper.ask_user.attempted`. Contract-1.5 addition within compatibility schema 1:
+`wrapper.ask_user.attempted`. Contract-2.38 additions: `wrapper.issue.closed` and
+`wrapper.issue.close_failed` (§21). Contract-1.5 addition within compatibility schema 1:
 `wrapper.pool.excluded` — one per `ready-for-agent` candidate the discriminator rejected (§3.1),
 carrying `issue`, `title`, and one `reason` from the closed exclusion vocabulary, emitted in source
 order *before* the `wrapper.afk_ready.collected` it explains. That collection Event additionally
@@ -1175,14 +1176,14 @@ contribution.start
   ( work_finished
       ( end[unchanged_branch]
       | [parked] admitted started branch_observed recovery_started{0..3}
-          ( published auto_close [release.advanced] end[published]
+          ( published issue.closed [release.advanced] end[published]
           | [push_failed] end[serial_fallback] ) )
   | end[checkpoint_failed | unchanged_branch | operator_stop] )
 ```
 
 The order covers lifecycle types only, so stamped assistant, tool, usage, commit and Checkpoint
 records interleave freely. Run-exit reclamation may end any open contribution at any point with
-`operator_stop` or `unchanged_branch`. `wrapper.auto_close` is stamped with the landing
+`operator_stop` or `unchanged_branch`. `wrapper.issue.closed` is stamped with the landing
 contribution's triple; `wrapper.release.advanced` is Run-scoped on the wire and belongs to the open
 contribution whose issue it names. The Python Runner declares `true` and is held to it by
 `git-loopy/python/tests/test_contribution_events_gate.py`; the shell and PowerShell Orchestrators
@@ -1380,6 +1381,48 @@ counters or collections MUST NOT be reported as `0` or `[]`.
 Envelope and nested timestamps MUST be RFC3339 UTC with a trailing `Z`. Durations MUST be
 non-negative seconds measured from a monotonic clock; renderers MUST NOT derive them by
 subtracting wall-clock timestamps.
+
+### Mid-work Membership visibility (contract 2.37, #429)
+
+The Python Orchestrator MUST service one Run-wide **Membership read** cadence
+during active serial Iterations and Parallel work, including when every Lane is
+occupied, the Agent is quiet, or no Dashboard is attached. The interval is
+`RefreshBackoff.maximum`, not a second setting. A runner-owned cooperative tick
+takes the read at its first opportunity at or after that interval; slow servicing
+may delay it and MUST NOT produce a catch-up burst.
+
+The read MUST reuse the shallow source's AFK discriminator and selection order,
+including candidates without `parallel-safe`, without per-issue enrichment.
+It MUST NOT reconcile the dispatch cache, feed Pickup, change FIFO order, demand
+or backoff, latch serial demand, consume Lane capacity, or establish authoritative
+emptiness. An ordinary scheduler read keeps its existing cache reconciliation
+and demand/backoff policy; reusing it for visibility confers no Pickup or
+emptiness authority.
+
+A complete successful due read MUST emit **`wrapper.pool.refreshed`** with its
+existing `issues` payload and Run-scoped envelope (`iter: null`), even when empty
+or unchanged. A suitable existing shallow read and equivalent full-membership
+Event SHOULD service the cadence instead of duplicating work. An eligible-only
+subset is not equivalent to all AFK-shaped candidates. Reads MUST NOT overlap,
+multiply per Lane, or introduce concurrent Event writers.
+
+A failed or incomplete attempt MUST emit no Membership Event, report the existing
+refresh diagnostic, and leave active work running. The attempt consumes the
+visibility interval; output-callback bursts MUST NOT cause immediate retries.
+Ordinary scheduler reads retain their independent demand/backoff policy.
+
+Both Dashboards keep their existing add-only ingestion: a Membership Event may
+add ordinary `queued` rows, but never retire, revive or downgrade existing rows.
+Only a later authoritative `wrapper.afk_ready.collected` may retire a still-queued
+Membership-only row. Empty reads and Event silence are not emptiness claims.
+The local-markdown source implements no shallow Rolling source and emits none.
+
+This is a widened Python emission obligation, not a new Event, payload field,
+Queue status or capability. Event fixture revision **1.10** and compatibility
+schema **1** are unchanged. `event-schema.json`'s `membership_cadence_cases`
+select Python with per-case `distributions`; dormant shell and PowerShell
+baselines remain frozen under ADR-0091. ADR-0042 is the design record; the approved
+#429 brief supersedes its original new-Event/all-Orchestrator obligation.
 
 ### Rolling-dispatch contribution lifecycle
 
@@ -2378,7 +2421,9 @@ and 2.30 with execution profile selection and Skill exposure (ADR-0078),
 and 2.31 with Reviewer read-only access (ADR-0078/0086),
 and 2.32 with the Host yield disclosure (§4, §12, #817),
 and 2.34 with the Sandbox disclosure (§12, #864),
-and 2.38 with Python Run-wide account control (§19.1, #676).
+and 2.37 with the Python mid-work Membership cadence (§12, #429),
+and 2.38 with Orchestrator-only closure (§21, #918),
+and 2.40 with Python Run-wide account control (§19.1, #676).
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
@@ -2386,7 +2431,8 @@ it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1), then 2.29 with the Python-only non-execution Task-type exclusion.
 Event revision 1.11 and Dashboard revision 1.27 record current provenance;
-the Dashboard adds the Run-level account state. Revision 1.25 added the
+the Dashboard adds the Run-level account state. Revision 1.26 tracked the
+Membership cadence, which adds no Dashboard projection. Revision 1.25 added the
 optional Header Sandbox state. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;
 the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility
@@ -3324,6 +3370,32 @@ been asked about cannot land at all, and a port that has been asked and has not 
 answer is recorded as *owing* the fixture, with a tracking issue, instead of passing green for never
 having heard of it. The suite still cannot compel a port to implement anything. What it refuses is
 the silent case.
+
+## 21. The Orchestrator alone closes (contract 2.38, #918)
+
+Only the Orchestrator publishes work and closes issues, serial and Parallel. An Agent commits
+its work and ends its turn; it never runs `gh issue close` and never pushes. Its finishing commit
+still names the issue with a closing keyword (`Closes #N`; a partial commit says `Refs #N`), because
+that is how the Orchestrator tells finished work from partial work and how the dormant shell and
+PowerShell backstops keep working.
+
+An Orchestrator that closes MUST:
+
+1. **Re-read before publishing.** Publish nothing for an issue the tracker already reports `CLOSED`;
+   the fence (Lease) applies as before.
+2. **Publish first.** Merge the head onto the current base and push it. A merge that conflicts or a
+   push that cannot land publishes and closes nothing, restores base, keeps the branch, and emits
+   `wrapper.issue.close_failed` with `stage` `publication` and a `reason`.
+3. **Close only after publication lands**, as completed, with a comment linking the published
+   commit. Verify the closure by re-reading the issue and retry a failed close once. Success emits
+   `wrapper.issue.closed` (`issue`, `sha`, `shas`); a persistent failure emits
+   `wrapper.issue.close_failed` with `stage` `tracker`, leaving the published issue open and reported.
+4. **Count only its own closure** as a completion. A closure by anyone else is never one.
+5. **Not emit `wrapper.auto_close`.** Replay and projections still read it from older traces and
+   from the dormant paths.
+
+In Parallel mode both Events are contribution-stamped. The dormant shell and PowerShell
+Orchestrators are `waived_out_of_scope` for this fixture; the TUI helper only projects both Events.
 
 ---
 

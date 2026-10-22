@@ -5,8 +5,8 @@
   "fixtures": {
     "account-control.json": {
       "python": {"kind": "claimed", "reason": "tests/test_account_conformance.py drives exit mapping and the account Event producer; test_account_run.py and test_account_control.py prove Run admission, accounting, closure and clock-controlled budgets."},
-      "shell": {"kind": "waived_out_of_scope", "reason": "Contract 2.38 is Python-only, above the dormant Path baseline; no new account-control obligation."},
-      "powershell": {"kind": "waived_out_of_scope", "reason": "Contract 2.38 is Python-only, above the dormant Path baseline; no new account-control obligation."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "Contract 2.40 is Python-only, above the dormant Path baseline; no new account-control obligation."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "Contract 2.40 is Python-only, above the dormant Path baseline; no new account-control obligation."},
       "rust": {"kind": "waived_out_of_scope", "reason": "This fixture tests Python production and exit policy, not Dashboard consumption. semantic_view.rs and dashboard_render.rs prove Run-level account Event ingestion and display."}
     },
     "integration-gate.json": {

@@ -346,12 +346,12 @@ def _stderr_tail(stderr: str | None) -> str:
 # --------------------------------------------------------------------------- #
 
 
-# The one reading of a reserved Lane branch name, retry namespace included
+# The one reading of reserved Lane and serial branch names, retry namespace included
 # (``git-loopy/<run>/attempt-<A>/...``); sweep and uninstall both parse with it.
 RESERVED_BRANCH_RE = re.compile(
     r"^git-loopy/(?P<run_id>[^/]+)(?:/attempt-[1-9]\d*)?"
-    r"(?:/(?P<stage>integrate|materialized))?"
-    r"/issue-(?P<issue>\d+)$"
+    r"(?:(?:/(?P<stage>integrate|materialized))?/issue-(?P<issue>\d+)"
+    r"|/serial/iteration-[1-9]\d*)$"
 )
 
 
@@ -739,6 +739,16 @@ class GitClient(Protocol):
 
         Raises:
             GitError: If ``git`` is not on PATH or there is no merge to abort.
+        """
+        ...
+
+    def reset_hard(self, sha: str) -> None:
+        """Move the checked-out branch and its worktree back to ``sha``.
+
+        Undoes a local publication whose push could not land (#918).
+
+        Raises:
+            GitError: If ``sha`` does not resolve or ``git`` refuses.
         """
         ...
 
@@ -1809,6 +1819,10 @@ class SubprocessGitClient:
         mid-merge, restoring the base branch to its exact pre-merge state.
         """
         _run(["merge", "--abort"], cwd=self._root)
+
+    def reset_hard(self, sha: str) -> None:
+        """Reset the checked-out branch to ``sha`` with ``git reset --hard``."""
+        _run(["reset", "--hard", sha], cwd=self._root)
 
     def list_worktrees(self) -> list[Worktree]:
         """Return every registered worktree via ``git worktree list``.

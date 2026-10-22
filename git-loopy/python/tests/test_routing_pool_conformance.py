@@ -274,7 +274,7 @@ def test_saved_authority_revalidates_prepared_work_at_pickup(
         if mode == "lane":
             assert Path(call["working_directory"]).name == f"issue-{ref}"
         else:
-            assert call["working_directory"] is None
+            assert Path(call["working_directory"]).parent.name == "serial"
     events = _read_events(tmp_path)
     pickups = [event for event in events if event["type"] == "wrapper.pickup.bound"]
     assert [event["issue"] for event in pickups] == [*running_issues, expected["next_issue"]]
@@ -637,7 +637,7 @@ def test_saved_authority_prepares_the_next_pickup_before_other_candidates(
         if mode == "lane":
             assert Path(call["working_directory"]).name == f"issue-{ref}"
         else:
-            assert call["working_directory"] is None
+            assert Path(call["working_directory"]).parent.name == "serial"
         line = " ".join(output.getvalue()[before:].split())
         assert f"pickup #{ref} {model} @ high" in line
         view = project_run_view(dashboard, summary, issue=ref)

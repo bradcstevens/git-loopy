@@ -10,7 +10,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 
 | Fixture | Contract decision |
 | --- | --- |
-| `account-control.json` | Python-only Run-wide account control (§19.1, contract 2.38, #676): nonzero exit mapping and production `wrapper.account.state` transitions. Clock-controlled policy and fake-SDK Run tests prove budgets, provenance, admission, accounting and closure; Dashboard tests consume the Run-level state. Dormant shell/PowerShell Path baselines gain no account-control obligation |
+| `account-control.json` | Python-only Run-wide account control (§19.1, contract 2.40, #676): nonzero exit mapping and production `wrapper.account.state` transitions. Clock-controlled policy and fake-SDK Run tests prove budgets, provenance, admission, accounting and closure; Dashboard tests consume the Run-level state. Dormant shell/PowerShell Path baselines gain no account-control obligation |
 | `integration-gate.json` | **Integration gate outcomes** (contract 2.36, #904): timeout→pass, persistent timeouts, timeout→red, and red→pass. Python drives complete Runs with a fake gate and observes the contribution ending, Recovery briefs and one-line Run log handoff. Gate-only re-runs share the three-attempt bound without starting Agents; dormant shell/PowerShell and the TUI helper make no such decision and are explicitly waived in `fixture-claims.json`. |
 | `sandbox.json` | **Sandbox** (§19, contract 2.35, ADR-0093): unchanged operator policy plus only explicit git grants, unconditional bypass/permissive refusal, required-but-unenforceable preflight refusal, tool attestation, and once-only Run disclosure beside the Isolation grade. Python drives its production policy/session/preflight seams and complete Runs; shell owes #866 and PowerShell owes #868. Remote residence and Python-only lifecycle cases carry `distributions` overrides; the TUI helper's Event consumption stays in `event-schema.json` |
 | `agent-profiles.json` | **Agent profiles and session isolation** (§18, contracts 2.28/2.30/2.31, ADR-0076/0078/0086): memory disabled and cross-session history refused; Python execution-profile selection, single non-inferable registration, Required preload and exact profile exposure, including distinct `skill_outside_profile` refusal. Reviewer access excludes edit tools and records `profile_read_only` refusals for writes, ref-moving git and tracker commands from Agents and Subagents, while reads and exact snapshotted feedback loops remain available; execution profiles retain full access. Python drives the production session seam; the TUI helper opens no session, and the dormant shell/PowerShell paths owe nothing above Contract support 2.26 (ADR-0091) |
@@ -317,6 +317,17 @@ Orchestrator. `retired_event_types` is the negative pin: a literal listed there,
 and the exit code it names, must be absent from every port's vocabulary and from
 the live exit-code matrix, not merely missing from the shared `event_types`
 map. `wrapper.dashboard.fault` and exit code 3 are retired that way (#459).
+
+Contract 2.37 adds `event-schema.json`'s `membership_cadence_cases`: quiet serial
+and full-Lane production Runs, equivalent-read coalescing, unchanged/empty
+sightings, paced failure diagnostics, and add-only Dashboard ingestion followed
+by authoritative retirement. `tests/test_membership_cadence.py` drives these
+cases with fake SDK/tracker boundaries and an injected clock. Every new case
+selects `distributions: ["python"]`; dormant shell and PowerShell baselines
+stay unchanged. Reusing `wrapper.pool.refreshed` changes neither Event fixture
+revision 1.10 nor compatibility schema 1.
+Dashboard fixture revision 1.26 tracks contract provenance 2.37 without
+projection changes; the Rust helper's declared contract follows that pin.
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
 `contract_version` they pin. Fixture content is data only: do not add

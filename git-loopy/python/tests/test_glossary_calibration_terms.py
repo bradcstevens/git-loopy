@@ -664,7 +664,7 @@ def test_the_provisional_entry_names_the_writer_that_has_now_shipped() -> None:
 #: Each term this ticket adds, and the shipped code that implements it. The
 #: glossary records shipped reality, so a term written ahead of its code is the
 #: failure mode this pins — the same failure ADR-0026 avoided by leaving
-#: ``CONTEXT.md`` untouched until the Runs it describes existed.
+#: the glossary untouched until the Runs it describes existed.
 SHIPPED_TERMS: tuple[tuple[str, str, str], ...] = (
     (
         "Calibration",

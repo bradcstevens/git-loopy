@@ -105,7 +105,7 @@ class _Residue:
 
     branch: str
     run_id: str
-    issue: int
+    issue: int | None
     stage: bool
 
 
@@ -124,7 +124,7 @@ def _parse_residue(branch: str) -> _Residue | None:
     return _Residue(
         branch=branch,
         run_id=match["run_id"],
-        issue=int(match["issue"]),
+        issue=int(match["issue"]) if match["issue"] is not None else None,
         stage=match["stage"] == "integrate",
     )
 
@@ -488,7 +488,9 @@ def _is_resolved(
             return True
     except git_module.GitError:
         return False
-    if github is None:
+    # A serial branch names an Iteration, not an issue. Only merged-ness can
+    # prove its work resolved; never treat the Iteration number as an issue.
+    if github is None or residue.issue is None:
         return False
     if residue.issue not in closed:
         try:

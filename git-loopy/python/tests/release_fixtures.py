@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -115,6 +116,67 @@ def write_release_metadata(root: Path, version: str) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+def commit_release_version(root: Path, version: str) -> str:
+    """Declare a Release version, retaining any already-committed notes."""
+    write_release_metadata(root, version)
+    notes = root / f"docs/releases/v{version}.md"
+    if not notes.exists():
+        notes.write_text(f"# git-loopy {version}\n\nAdvance.\n", encoding="utf-8")
+    git(root, "add", ".")
+    git(root, "commit", "-qm", f"Declare {version}")
+    return git(root, "rev-parse", "HEAD")
+
+
+@dataclass(frozen=True)
+class ReopenWalkCase:
+    """Named history steps and literal expectations at both entry points."""
+
+    versions: dict[str, str]
+    remaining: tuple[str, ...]
+    withdrawn: tuple[str, ...]
+
+    def commit_history(self, root: Path) -> dict[str, str]:
+        commits = {"original": git(root, "rev-parse", "HEAD")}
+        for name, version in self.versions.items():
+            commits[name] = commit_release_version(root, version)
+        return commits
+
+
+# Each history starts with an unpublished 0.11.3.
+REOPEN_WALK_CASES = [
+    ReopenWalkCase(
+        {"reopen": "0.11.3-rc.1", "repromotion": "0.11.3"},
+        ("repromotion",), ("original",),
+    ),
+    ReopenWalkCase(
+        {"advance": "0.12.0-alpha.1", "restored": "0.11.3", "reopen": "0.11.3-rc.1"},
+        (), ("original", "restored"),
+    ),
+    ReopenWalkCase(
+        {"next_target": "0.12.0", "advance": "0.13.0-alpha.1"},
+        ("original", "next_target"), (),
+    ),
+    ReopenWalkCase(
+        {"next_target": "0.12.0", "restored": "0.11.3"},
+        ("original", "next_target", "restored"), (),
+    ),
+    ReopenWalkCase(
+        {
+            "reopen": "0.11.3-rc.1", "repromotion": "0.11.3",
+            "reopen_again": "0.11.3-rc.2", "final_promotion": "0.11.3",
+        },
+        ("final_promotion",), ("original", "repromotion"),
+    ),
+    ReopenWalkCase(
+        {
+            "reopen": "0.11.3-rc.1", "repromotion": "0.11.3",
+            "next_target": "0.12.0", "advance": "0.13.0-alpha.1",
+        },
+        ("repromotion", "next_target"), ("original",),
+    ),
+]
 
 
 def trunk_repository(

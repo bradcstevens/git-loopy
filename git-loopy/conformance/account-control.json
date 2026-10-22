@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.38",
+  "contract_version": "2.40",
   "distributions": ["python"],
   "exit_cases": [
     {"id": "account-failure-is-nonzero", "reason": "account_failure", "exit_code": 1},

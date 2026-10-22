@@ -45,7 +45,9 @@ def _run(tmp_path, monkeypatch, *, parallel=False, code="insufficient_quota",
         async def send_and_wait(self, prompt, *, timeout=60, **extra):
             if commit:
                 target = git.worktree_client(Path(self._working_directory)) if self._working_directory else git
-                ref = Path(self._working_directory).name.removeprefix("issue-") if self._working_directory else "42"
+                # A Lane works in ``issue-<n>``; a serial Iteration in its own Issue clone (#946).
+                name = Path(self._working_directory).name if self._working_directory else ""
+                ref = name.removeprefix("issue-") if name.startswith("issue-") else str(refs[0])
                 target.simulate_agent_commit(subject="fix: work", body=f"Closes #{ref}")
             if session_hook:
                 await session_hook(self, tracker)
@@ -83,7 +85,7 @@ def test_terminal_refusal_stops_admission_without_blaming_or_closing_issue(
     assert end["outcome"] == "account_failure"
     assert end["account_error"]["kind"] == kind
     assert end["iterations_run"] == 1
-    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close")]
+    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close", "wrapper.issue.closed")]
     assert tracker.issue_view(42).state == "OPEN"
     assert len([e for e in events if e["type"] == "wrapper.commit.recorded"]) == int(commit)
     assert git.push_calls == 0, "a close-bearing account-failed commit must not auto-push to base"
@@ -199,7 +201,7 @@ def test_a_close_before_refusal_is_diagnosed_not_reopened_or_verified(
     )
     assert rc == 1
     assert tracker.issue_view(42).state == "CLOSED"
-    assert not [e for e in events if e["type"] == "wrapper.auto_close"]
+    assert not [e for e in events if e["type"] in ("wrapper.auto_close", "wrapper.issue.closed")]
     diagnostics = next((tmp_path / ".git-loopy/logs").glob("*.log")).read_text()
     assert "already closed" in diagnostics and "not verified completion" in diagnostics
 
@@ -260,7 +262,7 @@ def test_recovered_call_error_cannot_mask_a_later_terminal_account_exception(
         tmp_path, monkeypatch, parallel=parallel, commit=commit, session_hook=script,
     )
     assert rc == 1 and len(client.created) == 1
-    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close")]
+    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close", "wrapper.issue.closed")]
     assert tracker.issue_view(42).state == "OPEN"
     assert git.push_calls == 0
     assert len([e for e in events if e["type"] == "wrapper.commit.recorded"]) == int(commit)
@@ -541,7 +543,7 @@ def test_recovery_refusal_stops_further_recovery_and_cannot_publish_commits(tmp_
     )
     assert rc == 1 and sends == 2
     assert tracker.issue_view(42).state == "OPEN"
-    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close")]
+    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close", "wrapper.issue.closed")]
     end = next(e for e in events if e["type"] == "wrapper.contribution.end")
     assert end["reason"] == "account_failure"
     assert end["published"] is False
@@ -581,7 +583,7 @@ def test_account_refused_recovery_preserves_repairs_before_stage_cleanup(tmp_pat
         assert tip.sha == repair
     assert (path in git.active_worktrees) is (work == "checkpoint_failed")
     assert tracker.issue_view(42).state == "OPEN"
-    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close")]
+    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close", "wrapper.issue.closed")]
 
 
 def test_rate_refused_recovery_releases_issue_for_an_ordinary_probe(tmp_path, monkeypatch):
@@ -789,7 +791,7 @@ def test_account_health_does_not_authorize_old_close_bearing_commits(tmp_path, m
     async def script(session, tracker):
         nonlocal sends
         sends += 1
-        git = session._fake_git
+        git = session._fake_git.worktree_client(Path(session._working_directory))
         if sends == 1:
             git.simulate_agent_commit(subject="fix: incomplete work", body="Closes #42")
             return
@@ -806,7 +808,7 @@ def test_account_health_does_not_authorize_old_close_bearing_commits(tmp_path, m
             )
         if probe_work == "unverified":
             def refuse_close(*args, **kwargs):
-                raise RuntimeError("Tracker could not verify completion")
+                raise gh.GhError(["gh", "issue", "close"], 1, "Tracker could not verify completion")
             tracker.issue_close = refuse_close
 
     rc, events, client, tracker, git = _run(
@@ -817,7 +819,9 @@ def test_account_health_does_not_authorize_old_close_bearing_commits(tmp_path, m
     verified = probe_work == "completion"
     assert git.push_calls == int(verified)
     assert tracker.issue_view(42).state == ("CLOSED" if verified else "OPEN")
-    assert bool([e for e in events if e["type"] == "wrapper.auto_close"]) is verified
+    assert bool([e for e in events if e["type"] == "wrapper.issue.closed"]) is verified
+    close_failed = [e for e in events if e["type"] == "wrapper.issue.close_failed"]
+    assert [e["stage"] for e in close_failed] == (["tracker"] if probe_work == "unverified" else [])
 
 
 @pytest.mark.parametrize("code,materializes,later_rate", [
@@ -879,6 +883,6 @@ def test_remote_account_evidence_survives_other_errors_and_failed_materializatio
     assert end["iterations_run"] == 1
     assert end["account_cause"] == ("terminal_refusal" if materializes else "retry_prevented_by_cap")
     assert clock.waits == []
-    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close")]
+    assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close", "wrapper.issue.closed")]
     assert all(e["reason"] == "account_failure" for e in events if e["type"] == "wrapper.contribution.end")
     assert tracker.issue_view(42).state == "OPEN"

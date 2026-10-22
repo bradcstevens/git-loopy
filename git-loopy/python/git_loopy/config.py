@@ -1046,12 +1046,17 @@ def resolve_iteration_model(
 
     The single load-bearing seam per-issue routing hangs off. A call site invokes
     it at **Active-issue pickup**: it filters the issue's ``task-type:<key>`` labels
-    (:data:`TASK_TYPE_LABEL_PREFIX` — the runner *reads* the label, it never infers
-    the type), refuses any key outside the fixed :data:`TASK_TYPE_KEYS` taxonomy,
+    (:data:`TASK_TYPE_LABEL_PREFIX`), refuses any key outside the fixed
+    :data:`TASK_TYPE_KEYS` taxonomy,
     selects a source pair per the locked table below, gates that pair
     (:func:`gate_reasoning_effort`, #145) and the run-level context tier
     (:func:`gate_context_tier`, ADR-0017), and returns all of it as one record.
     The global default is the run config's top-level ``(model, effort)``.
+
+    This resolver is a pure reader of supplied routing inputs and labels; it does
+    not infer Task type from issue content. The separate **Task-type classifier**
+    (:mod:`git_loopy.task_type_classifier`) may infer a missing Task type before
+    those labels reach this seam.
 
     It answers a record rather than a bare pair (#402) because *why* a pair was
     chosen is not recoverable from the pair: two surfaces reporting the same

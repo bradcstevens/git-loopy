@@ -337,13 +337,20 @@ def test_the_shipped_pin_is_read_from_the_manifest_not_restated() -> None:
 
 
 def test_the_sdk_feed_check_is_excluded_from_the_integration_gate() -> None:
-    agents = (_repo_root() / "AGENTS.md").read_text(encoding="utf-8")
+    root = _repo_root()
+    agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+    assert (
+        "For maintainer rationale on whether a command should become a gate row, "
+        "see [Feedback-loop exclusions](docs/agents/feedback-loops.md)."
+        in agents
+    )
     commands = [loop.command for loop in parse_feedback_loops(agents)]
     assert commands
     assert all("sdk_feed" not in command for command in commands)
-    assert "python -m git_loopy.sdk_feed" in agents
-    exclusion = agents[agents.index("python -m git_loopy.sdk_feed"):]
+    reference = (root / "docs/agents/feedback-loops.md").read_text(encoding="utf-8")
+    assert "python -m git_loopy.sdk_feed" in reference
+    exclusion = reference[reference.index("python -m git_loopy.sdk_feed"):]
     exclusion = exclusion.split("\n- **", 1)[0]
     assert "unreachable" in exclusion
     assert "tests/test_sdk_feed.py" in exclusion
-    assert "skill_source" in agents
+    assert "skill_source" in reference

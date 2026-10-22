@@ -107,6 +107,7 @@ class FakeGitClient:
                 )
             ]
         self._log: list[Commit] = list(commits)
+        self.reset_calls: list[str] = []
         self._release_versions = tuple(release_versions)
         # Test-controlled worktree state (read by is_dirty / has_untracked).
         self.dirty = dirty
@@ -305,6 +306,8 @@ class FakeGitClient:
         )
         self._log.append(commit)
         self._store_commit_message(commit)
+        self.dirty = False
+        self.untracked = False
         return commit.sha
 
     def commit_paths(self, message: str, paths: Sequence[Path | str]) -> str:
@@ -647,6 +650,15 @@ class FakeGitClient:
         """
         self.merge_aborts += 1
         self.repo_merge_aborts.append(self._root)
+
+    def reset_hard(self, sha: str) -> None:
+        """Model ``git reset --hard <sha>`` — drop every commit after ``sha``."""
+        for index, commit in enumerate(self._log):
+            if commit.sha == sha:
+                del self._log[index + 1 :]
+                self.reset_calls.append(sha)
+                return
+        raise GitError(["git", "reset", "--hard", sha], 128, "unknown SHA")
 
     def delete_branch(self, branch: str) -> None:
         """Model ``git branch -D <branch>`` — drop an integrated Lane branch.

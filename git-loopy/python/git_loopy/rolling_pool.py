@@ -203,6 +203,11 @@ class RollingPool:
             that changed it, and the forced terminal confirmation. Whether a
             read was worth publishing is this cache's decision and not the
             consumer's, so the callable takes the membership and nothing else.
+        on_visibility_read: Optional Run-owned publisher of complete due
+            sightings, including empty/unchanged reads and serial-required
+            candidates. :meth:`service_visibility` never reconciles this cache.
+            A due scheduler read coalesces the sighting; an equivalent ordinary
+            read and Event also service the cadence. Dispatch policy is unchanged.
     """
 
     diag: logging.Logger
@@ -215,6 +220,7 @@ class RollingPool:
     on_membership_read: Callable[[tuple[PoolCandidate, ...]], None] = (
         _ignore_membership_read
     )
+    on_visibility_read: Callable[[tuple[PoolCandidate, ...]], None] | None = None
     #: Whether a survivor was passed over by a *read that did not happen*,
     #: rather than by an answer. Readiness supplies its own such candidates
     #: below; this is the injection point for the other reads a dispatcher
@@ -246,13 +252,46 @@ class RollingPool:
     _demand_unmet: bool = field(default=False, init=False)
     _interval: float = field(default=0.0, init=False)
     _next_refresh_at: float = field(default=0.0, init=False)
+    _next_visibility_at: float = field(default=0.0, init=False)
     _terminal_survivors: tuple[PoolCandidate, ...] = field(
         default=(), init=False
     )
 
     def __post_init__(self) -> None:
+        self._next_visibility_at = self.clock() + self.backoff.maximum
         if self.jitter is None:
             self.jitter = lambda interval: random.uniform(interval / 2.0, interval)
+
+    def service_visibility(self) -> None:
+        """Take a due add-only sighting, without servicing dispatch demand.
+
+        One Run owns this cooperative tick. No cache reconciliation, Pickup,
+        demand/backoff change or emptiness decision belongs to this read.
+        Even a failed attempt consumes the interval; slow reads never earn
+        catch-up work.
+        """
+        if (
+            self.on_visibility_read is None
+            or self._refreshing
+            or self.clock() < self._next_visibility_at
+        ):
+            return
+        self._refreshing = True
+        try:
+            try:
+                snapshot = self.source.shallow_membership()
+            except Exception as exc:
+                self.diag.warning("membership refresh failed: %s", exc)
+                return
+            if snapshot.complete:
+                self.on_visibility_read(snapshot.candidates)
+            else:
+                self.diag.warning(
+                    "membership refresh incomplete; retaining last complete snapshot"
+                )
+        finally:
+            self._next_visibility_at = self.clock() + self.backoff.maximum
+            self._refreshing = False
 
     # -- read-only views ---------------------------------------------------- #
 
@@ -638,15 +677,33 @@ class RollingPool:
             snapshot = self.source.shallow_membership()
         finally:
             self._refreshing = False
+            visibility_due = (
+                self.on_visibility_read is not None
+                and self.clock() >= self._next_visibility_at
+            )
+            if visibility_due:
+                # Demand and visibility can share this attempt, but not their
+                # backoff state. A failed/incomplete due read is paced too.
+                self._next_visibility_at = self.clock() + self.backoff.maximum
 
         changed = False
         if snapshot.complete:
             before = self.candidate_refs
             self._reconcile(snapshot)
             changed = self.candidate_refs != before
-            if force_emit or not self._membership_read_seen or changed:
+            if visibility_due:
                 self._membership_read_seen = True
-                self.on_membership_read(self._eligible_membership())
+                assert self.on_visibility_read is not None
+                self.on_visibility_read(snapshot.candidates)
+            elif force_emit or not self._membership_read_seen or changed:
+                self._membership_read_seen = True
+                membership = self._eligible_membership()
+                self.on_membership_read(membership)
+                if membership and membership == snapshot.candidates:
+                    # This Event already reported the full source order. An
+                    # eligible-only subset (or the suppressed initial empty
+                    # read) cannot stand in for all AFK-shaped candidates.
+                    self._next_visibility_at = self.clock() + self.backoff.maximum
         else:
             self.diag.warning(
                 "membership refresh incomplete; retaining last complete snapshot"

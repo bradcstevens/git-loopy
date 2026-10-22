@@ -136,6 +136,8 @@ _COMMIT_RECORDED = "wrapper.commit.recorded"
 #: progress.
 _CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 _AUTO_CLOSE = "wrapper.auto_close"
+_ISSUE_CLOSED = "wrapper.issue.closed"
+_ISSUE_CLOSE_FAILED = "wrapper.issue.close_failed"
 _PR_ADVANCED = "wrapper.pr.advanced"
 _ITERATION_END = "wrapper.iteration.end"
 #: A **Lane contribution**'s own accounting boundary under **Rolling dispatch**
@@ -199,6 +201,8 @@ _LANE_EVENTS = frozenset(
         _COMMIT_RECORDED,
         _CHECKPOINT_RECORDED,
         _AUTO_CLOSE,
+        _ISSUE_CLOSED,
+        _ISSUE_CLOSE_FAILED,
         _PR_ADVANCED,
         _ASSISTANT_REASONING,
         _ASSISTANT_MESSAGE,
@@ -1141,9 +1145,11 @@ class LiveRunState:
             # A runner Checkpoint: a distinct Log line, but NOT a commit — it
             # must not advance the issue or reset strikes.
             self._record_event_line(_log_checkpoint_text(event))
-        elif etype == _AUTO_CLOSE:
+        elif etype in (_AUTO_CLOSE, _ISSUE_CLOSED):
             self._record_closure(event.get("issue"), now, status=STATUS_CLOSED)
             self._record_event_line(_log_auto_close_text(event))
+        elif etype == _ISSUE_CLOSE_FAILED:
+            self._record_event_line(_log_close_failed_text(event))
         elif etype == _PR_ADVANCED:
             self._record_closure(event.get("pr"), now, status=STATUS_ADVANCED)
             self._record_event_line(_log_pr_advanced_text(event))
@@ -1870,10 +1876,12 @@ class LiveRunState:
             self._emit_event_line(st, provider, _log_commit_text(event))
         elif etype == _CHECKPOINT_RECORDED:
             self._emit_event_line(st, provider, _log_checkpoint_text(event))
-        elif etype == _AUTO_CLOSE:
+        elif etype in (_AUTO_CLOSE, _ISSUE_CLOSED):
             if not rolling:
                 self._lane_close(key, now, status=STATUS_CLOSED)
             self._emit_event_line(st, provider, _log_auto_close_text(event))
+        elif etype == _ISSUE_CLOSE_FAILED:
+            self._emit_event_line(st, provider, _log_close_failed_text(event))
         elif etype == _PR_ADVANCED:
             entry = self.ledger.get(key)
             if entry is not None:
@@ -3062,6 +3070,18 @@ def _log_auto_close_text(event: Mapping[str, Any]) -> str:
         text += f" #{issue}"
     if short:
         text += f"  ({short})"
+    return text
+
+
+def _log_close_failed_text(event: Mapping[str, Any]) -> str:
+    """A refused closure or publication as a Log ``event`` line."""
+    issue = event.get("issue")
+    text = "✗ close failed"
+    if issue is not None:
+        text += f" #{issue}"
+    stage = event.get("stage")
+    if stage:
+        text += f"  ({stage})"
     return text
 
 

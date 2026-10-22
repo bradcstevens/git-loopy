@@ -220,7 +220,7 @@ def test_saved_authority_requires_durable_provenance_and_pickup(
                 assert Path(call["working_directory"]).name == "issue-42"
                 assert any(event["type"] == "wrapper.contribution.start" for event in events)
             else:
-                assert call["working_directory"] is None
+                assert Path(call["working_directory"]).parent.name == "serial"
             (delivery,) = deliveries
             assert delivery["status"] == "published"
             owned = [

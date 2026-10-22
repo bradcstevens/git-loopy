@@ -34,27 +34,31 @@ Per-iteration sequence:
 5. Capture ``pre_sha`` *immediately* before invoking the SDK — so a slow
    ``gh issue_view`` call before this point cannot affect the
    ``commits_between(pre_sha, head)`` accounting after.
-6. Open :class:`~git_loopy.session.IterationSession`,
+6. Create and prepare a fresh **Issue clone** on the Iteration's Reserved
+   branch, with or without a Sandbox. Open
+   :class:`~git_loopy.session.IterationSession` in that clone and
    ``await session.send_and_wait(prompt, timeout=long)``.
-7. ``head_sha = git.head_sha()``; ``commits = git.commits_between(pre, head)``.
-8. Emit one ``wrapper.commit.recorded`` per new commit so the renderer
-   increments the iteration's commit count.
-9. **Completion backstop** via
-   :meth:`IssueSource.handle_completions`. Each returned
-   :class:`~git_loopy.sources.Completion` produces one
-   ``wrapper.auto_close`` event. The GitHub backend closes issues via
-   ``gh issue close``; the PRDs backend returns an empty list (the
-   agent owns ``git mv ... prds/<feat>/done/``).
-10. **Runner Checkpoint** (ADR-0004) via :meth:`_maybe_checkpoint`: a dirty
-    or untracked worktree is staged and captured in a single
-    close-keyword-free ``wrapper.checkpoint.recorded`` commit attributed to
-    the Active issue. Deliberately ordered *after* the agent-commit
-    accounting (step 8) and *before* strike accounting (step 12), so the
-    Checkpoint is excluded from both the Summary commit tally and the §6
-    progress predicate. Non-fatal: a failure warns and the loop carries on.
+7. Read the clone's agent commits from ``pre_sha`` through its current head,
+   before making any runner Checkpoint.
+8. **Runner Checkpoint** (ADR-0004) and publication via
+   :meth:`_Loop._finish_serial_clone`: Checkpoint dirty or untracked work in
+   the clone, import it, then merge onto base when publication is allowed.
+   Never Checkpoint the operator's checkout. The Checkpoint emits
+   ``wrapper.checkpoint.recorded`` but is excluded from both the agent-commit
+   tally and the progress predicate. Failed publication preserves the branch
+   and contributes no commits to the Iteration's accounting.
+9. **Publication and closure** (#918). The Orchestrator alone publishes and
+   closes: it re-reads the issue, merges the clone's head onto base, pushes,
+   and only then closes the issue and emits ``wrapper.issue.closed``. A merge
+   or push that cannot land publishes and closes nothing and emits
+   ``wrapper.issue.close_failed`` (stage ``publication``). The source's
+   ``handle_completions`` now reports PR advances only; the PRDs backend
+   returns an empty list (the agent owns ``git mv ... prds/<feat>/done/``).
+10. Emit one ``wrapper.commit.recorded`` per published agent commit so the
+    renderer increments the Iteration's commit count.
 11. **Auto-push** (ADR-0004) via :meth:`_maybe_push`: whenever the iteration
-    produced new commits — agent commits (step 8) and/or the Checkpoint from
-    step 10 — the current branch is pushed to its upstream
+    published new commits — agent commits (step 7) and/or the Checkpoint from
+    step 8 — the current branch is pushed to its upstream
     (``wrapper.push.recorded`` on success) so the work reaches the remote.
     Non-fatal: a missing remote/upstream, an auth failure, or a
     non-fast-forward warns and the loop carries on, so a local-only repo
@@ -117,6 +121,7 @@ import os
 import re
 import sys
 import time
+from time import monotonic as _membership_clock
 from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
 from importlib.resources import files
@@ -294,6 +299,7 @@ from git_loopy.session import IterationSession, SandboxError, SandboxPolicy
 from git_loopy.sinks import EventSink, SinkFanout
 from git_loopy.sources import (
     AfkReadyItem,
+    Completion,
     GitHubIssueSource,
     IssueSource,
     LABEL_PARALLEL_SAFE,
@@ -548,10 +554,9 @@ def _make_worktree_setup() -> worktree_module.WorktreeSetup:
     unset or blank the adapter falls back to
     :func:`~git_loopy.worktree.detect_setup_command`'s best-effort auto-detect.
 
-    **Unused by the serial path.** Per-Lane setup only exists in Parallel mode
-    (each **Lane** gets a fresh Issue clone that needs its environment prepared); the
-    serial loop works in place on the repo worktree, so :func:`run` only wires this
-    into the ``_ParallelLoop``.
+    Every Issue clone needs its environment prepared, including serial
+    Iterations with the Sandbox off. ``_ParallelLoop`` shares this setup with
+    its embedded serial driver.
     """
     raw = os.environ.get("GIT_LOOPY_WORKTREE_SETUP")
     command = raw.strip() if raw else None
@@ -1427,6 +1432,7 @@ class _Loop:
         self._sandbox_settings = sandbox_settings
         self._sandbox_state = sandbox_state(sandbox_settings, residence=residence)
         self._issue_clone_setup = issue_clone_setup
+        self._serial_pushed = False
         self._skill_preflight = skill_preflight
         self._skill_exposure = skill_preflight.exposure
         self._source = source
@@ -2276,22 +2282,22 @@ class _Loop:
             # reads it, joined to the Run's own observer rather than replacing it.
             session_watch = session_outcome_module.SessionOutcomeWatch()
             issue_git: git_module.GitClient | None = None
-            sandbox_commits: list[git_module.Commit] = []
+            new_commits: list[git_module.Commit] = []
             checkpoint_sha: str | None = None
+            closures: list[Completion] = []
             sandbox_failed = False
             clone_branch = f"git-loopy/{self._writers.run_id}/serial/iteration-{iter_num}"
             with telemetry.span("git_loopy.session"):
                 try:
-                    if self._sandbox_settings is not None:
-                        path = (
-                            git_module.issue_clone_root(self._git.common_git_dir())
-                            / self._writers.run_id / "serial" / f"iteration-{iter_num}"
-                        )
-                        issue_git = self._git.add_issue_clone(
-                            path, branch=clone_branch, base=pre_sha,
-                        )
-                        if self._issue_clone_setup is not None:
-                            self._issue_clone_setup(path, active.ref)
+                    path = (
+                        git_module.issue_clone_root(self._git.common_git_dir())
+                        / self._writers.run_id / "serial" / f"iteration-{iter_num}"
+                    )
+                    issue_git = self._git.add_issue_clone(
+                        path, branch=clone_branch, base=pre_sha,
+                    )
+                    if self._issue_clone_setup is not None:
+                        self._issue_clone_setup(path, active.ref)
                     async with IterationSession(
                         self._client,
                         config=self._config,
@@ -2302,10 +2308,8 @@ class _Loop:
                         model=model,
                         reasoning_effort=reasoning_effort,
                         context_tier=context_tier,
-                        working_directory=str(issue_git.root) if issue_git else None,
-                        sandbox_policy=self._agent_sandbox_policy(
-                            issue_git.root if issue_git else self._git.root
-                        ),
+                        working_directory=str(issue_git.root),
+                        sandbox_policy=self._agent_sandbox_policy(issue_git.root),
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
                         profile_key=execution_profile_key(resolution.task_type_keys),
@@ -2373,47 +2377,36 @@ class _Loop:
                     ending_error = session_error_for_control(session_watch, raised)
                     if issue_git is not None:
                         account_failed = self._account_affected(ending_error)
-                        sandbox_commits, checkpoint_sha = self._finish_serial_clone(
+                        new_commits, checkpoint_sha, closures = self._finish_serial_clone(
                             issue_git, clone_branch, pre_sha, active, iter_num,
                             publish=not operator_cancelled and not sandbox_failed and not account_failed,
                             account_failed=account_failed,
                         )
 
-            # 6) Post-iteration accounting.
-            try:
-                head = self._git.head_sha()
-            except git_module.GitError as exc:
-                self._diag.warning(
-                    "post-iteration git head_sha failed: %s; "
-                    "skipping commit accounting", exc,
-                )
-                head = pre_sha
-            try:
-                new_commits = self._git.commits_between(pre_sha, head)
-            except git_module.GitError as exc:
-                self._diag.warning(
-                    "post-iteration commits_between failed: %s; "
-                    "skipping commit accounting", exc,
-                )
-                new_commits = []
-            if self._sandbox_settings is not None:
-                new_commits = sandbox_commits
-
-            # 7) Completion backstop — source-specific. The GitHub backend
-            #    closes the issue via gh; the PRDs backend always returns
-            #    [] (the agent owns the `git mv ... done/` step).
+            # 6) Account only for published clone commits, never unrelated
+            #    changes on base or the clone's runner-authored Checkpoint. An
+            #    account-failed session's clone work is counted but never
+            #    published (§19.1, #676).
+            # 7) Completion backstop — source-specific. Only PR advances are
+            #    detected here. An issue is closed solely by the Orchestrator's
+            #    own closure after publication (#918), already in ``closures``.
+            #    Account health is not task completion: an account-affected
+            #    issue stays protected until a fresh closing commit publishes.
             if self._account_affected(ending_error):
                 self._account_issues.add(active.ref)
                 if issue_git is None and new_commits:
                     self._account_base_issues.add(active.ref)
                 self._diagnose_account_closure(active.ref)
             with telemetry.span("git_loopy.enforce_closures"):
-                completions = (
-                    [] if self._account_affected(ending_error)
-                    else self._handle_completions_safely(
-                        pool, new_commits, leased_pool=True, account_completion_ref=active.ref,
-                    )
-                )
+                completions = [
+                    *self._handle_completions_safely(
+                        pool, [], leased_pool=True
+                    ),
+                    *closures,
+                ]
+            for closure in closures:
+                self._account_issues.discard(closure.ref)
+                self._account_base_issues.discard(closure.ref)
 
             if issue_binding.active_ref is None:
                 fallback = self._infer_active_binding(
@@ -2448,14 +2441,6 @@ class _Loop:
                         sha=completion.sha,
                         shas=list(completion.shas),
                     )
-                else:
-                    self._emit(
-                        events_module.WRAPPER_AUTO_CLOSE,
-                        iter_num=iter_num,
-                        issue=completion.ref,
-                        sha=completion.sha,
-                        shas=list(completion.shas),
-                    )
             auto_closures = sum(
                 1
                 for completion in completions
@@ -2464,29 +2449,19 @@ class _Loop:
             pr_advances = len(completions) - auto_closures
             completion_count = len(completions)
 
-            # 8) Runner Checkpoint (ADR-0004). Capture any dirty / untracked
-            #    work-in-progress in a single close-keyword-free Checkpoint
-            #    commit so the next iteration starts from a clean tree and no
-            #    work is ever lost. Deliberately AFTER the agent-commit
-            #    accounting above (step 6) and BEFORE the ending is resolved
-            #    below, so the Checkpoint is structurally excluded from both: it
-            #    never counts as a commit in the Summary (it emits
-            #    ``wrapper.checkpoint.recorded``, not ``wrapper.commit.recorded``)
-            #    and it never counts as progress. Non-fatal — a failure warns and
-            #    the loop carries on (a local-only repo still completes).
-            if self._sandbox_settings is None:
-                checkpoint_sha = self._maybe_checkpoint(
-                    iter_num, issue_binding.active_ref
-                )
+            # 8) The clone was Checkpointed before import, after its agent
+            #    commits were counted. Never Checkpoint the operator's checkout.
 
             # 9) Auto-push (ADR-0004, second half). Whenever this iteration
             #    produced new commits — agent commits (step 6) and/or the
-            #    Checkpoint just made (step 8) — push the current branch to its
+            #    Checkpoint imported from the clone — push the current branch to its
             #    upstream so the work reaches the remote instead of piling up
             #    locally. Non-fatal: a missing remote/upstream, an auth failure,
             #    or a non-fast-forward warns and the loop carries on. Like the
             #    Checkpoint, a push is NOT Strike progress (it creates no commit).
-            if self._account_base_issues or active.ref in self._account_issues:
+            if self._serial_pushed:
+                self._serial_pushed = False
+            elif self._account_base_issues or active.ref in self._account_issues:
                 self._diag.warning(
                     "account failure: withholding automatic base push; "
                     "commits and Checkpoint remain recoverable locally"
@@ -2560,41 +2535,151 @@ class _Loop:
             ),
         )
 
+    def _closing_source(self, item: AfkReadyItem) -> sources_module.IssueClosing | None:
+        """The source to close ``item`` through, or ``None`` when it closes nothing."""
+        if item.kind != "issue" or not isinstance(item.ref, int):
+            return None
+        source = self._source
+        return source if isinstance(source, sources_module.IssueClosing) else None
+
+    def _close_published_issue(
+        self,
+        ref: int,
+        commits: Sequence[git_module.Commit],
+        published_sha: str,
+        emit: Callable[..., None],
+    ) -> Completion | None:
+        """The Orchestrator's closure, once publication has landed (#918).
+
+        Only the finishing commit's closing keyword says the issue is done; a
+        partial commit (``Refs #N``) leaves it open. The tracker is re-read
+        first, so an issue someone else closed is neither commented on nor
+        counted. A close is verified by a re-read and retried once; a second
+        failure emits ``wrapper.issue.close_failed`` with stage ``tracker``.
+        ``emit`` stamps the caller's identity and the issue itself.
+        """
+        source = self._source
+        if not isinstance(source, sources_module.IssueClosing):
+            return None
+        shas = tuple(c.sha for c in commits if ref in extract_close_refs(c.message))
+        if not shas or not self._leased(ref, "issue close"):
+            return None
+        if source.issue_state(ref) == "CLOSED":
+            return None
+        comment = f"Published in {published_sha} and closed by the git-loopy Orchestrator."
+        for _attempt in (1, 2):
+            source.close_issue(ref, comment)
+            if source.issue_state(ref) == "CLOSED":
+                emit(
+                    events_module.WRAPPER_ISSUE_CLOSED,
+                    sha=published_sha,
+                    shas=list(shas),
+                )
+                return Completion(ref=ref, sha=published_sha, shas=shas)
+        self._diag.error(
+            "issue #%s published in %s but the tracker would not close it", ref, published_sha
+        )
+        emit(
+            events_module.WRAPPER_ISSUE_CLOSE_FAILED,
+            stage="tracker",
+            sha=published_sha,
+            reason="the tracker did not report the issue closed after two attempts",
+        )
+        return None
+
     def _finish_serial_clone(
         self, clone: git_module.GitClient, branch: str, base: str,
         active: AfkReadyItem, iter_num: int, *, publish: bool, account_failed: bool = False,
-    ) -> tuple[list[git_module.Commit], str | None]:
-        """Import durable serial work before merging; salvage never needs a Sandbox."""
+    ) -> tuple[list[git_module.Commit], str | None, list[Completion]]:
+        """Import durable serial work, then publish and close it (#918).
+
+        Salvage never needs a Sandbox. For an issue the Orchestrator closes, a
+        merge that conflicts or a push that cannot land publishes nothing: base
+        is put back where it was, the branch is kept, and
+        ``wrapper.issue.close_failed`` records stage ``publication``.
+
+        Account health is not task completion (§19.1, #676). An account-failed
+        session's work is imported and counted but never published. An issue an
+        earlier account failure protects is merged locally but not pushed until
+        its own clone carries a fresh closing commit for it.
+        """
+        closer = self._closing_source(active)
+
+        def emit(event_type: str, **fields: Any) -> None:
+            self._emit(event_type, iter_num=iter_num, issue=active.ref, **fields)
+
+        def fail_publication(reason: str) -> tuple[list[git_module.Commit], None, list[Completion]]:
+            self._diag.error("serial publication of #%s failed: %s", active.ref, reason)
+            if closer is not None:
+                emit(
+                    events_module.WRAPPER_ISSUE_CLOSE_FAILED,
+                    stage="publication",
+                    reason=reason,
+                )
+            return [], None, []
+
         try:
             commits = clone.commits_between(base, clone.head_sha())
             checkpoint = self._maybe_checkpoint(iter_num, active.ref, git=clone)
             if clone.is_dirty() or clone.has_untracked():
                 self._diag.error("serial Issue clone %s remains dirty; preserving it", clone.root)
-                return [], None
+                return [], None, []
             self._git.reclaim_issue_clone(
                 # Published serial Checkpoints reach origin through the base auto-push.
                 clone.root, branch=branch, checkpoint=not publish,
             )
             if account_failed:
-                return commits, checkpoint
+                return commits, checkpoint, []
             if not publish or not self._leased(active.ref, "publication onto base", kind=active.kind):
-                return [], None
+                return [], None, []
+            if closer is not None and closer.issue_state(active.ref) == "CLOSED":
+                self._diag.warning(
+                    "issue #%s was closed by someone else; publishing nothing", active.ref
+                )
+                return [], None, []
+            pre_merge = self._git.head_sha()
             try:
                 self._git.merge(branch)
-            except git_module.GitError:
+            except git_module.GitError as exc:
                 self._git.abort_merge()
-                raise
+                return fail_publication(f"merge onto base conflicted: {exc}")
+            # No upstream means the local base is the whole publication. An issue
+            # an earlier account failure protects stays local until its own clone
+            # carries a fresh closing commit (§19.1, #676).
+            protected = active.ref in self._account_issues and not any(
+                active.ref in extract_close_refs(commit.message) for commit in commits
+            )
+            if (
+                closer is not None
+                and not protected
+                and (commits or checkpoint is not None)
+                and self._git.upstream() is not None
+            ):
+                try:
+                    self._git.push()
+                except git_module.GitError as exc:
+                    self._git.reset_hard(pre_merge)
+                    return fail_publication(f"push did not land: {exc}")
+                self._emit(events_module.WRAPPER_PUSH_RECORDED, iter_num=iter_num)
+                self._serial_pushed = True
             try:
                 self._git.delete_branch(branch)
             except git_module.GitError as exc:
                 self._diag.warning("serial Issue clone branch cleanup failed: %s", exc)
-            return commits, checkpoint
+            closures: list[Completion] = []
+            if closer is not None and isinstance(active.ref, int):
+                closure = self._close_published_issue(
+                    active.ref, commits, self._git.head_sha(), emit
+                )
+                if closure is not None:
+                    closures.append(closure)
+            return commits, checkpoint, closures
         except git_module.GitError as exc:
             self._diag.error(
                 "serial Issue clone %s could not be integrated; work preserved: %s",
                 clone.root, exc,
             )
-            return [], None
+            return [], None, []
 
     def _maybe_checkpoint(
         self,
@@ -4095,7 +4180,6 @@ class _Loop:
         new_commits: list[git_module.Commit],
         *,
         leased_pool: bool = False,
-        account_completion_ref: int | str | None = None,
     ) -> list[Any]:
         """Call ``source.handle_completions`` with crash containment.
 
@@ -4128,21 +4212,10 @@ class _Loop:
         items here would hide every PR-head advance from progress detection
         and earn Strikes for an Iteration that was progressing.
         """
-        # Account health is not task completion. Only a fresh, close-bearing
-        # agent commit from the current bound work may re-enter the ordinary
-        # completion/Lease checks for a protected issue. Checkpoints and old
-        # refused commits cannot supply that evidence.
-        fresh_closes = {
-            ref
-            for commit in new_commits
-            if not is_checkpoint_message(commit.message)
-            for ref in extract_close_refs(commit.message)
-        }
-        guarded = [
-            item for item in pool
-            if item.ref not in self._account_issues
-            or (item.ref == account_completion_ref and item.ref in fresh_closes)
-        ]
+        # Account health is not task completion (§19.1, #676). An issue an
+        # account failure protects completes only through the Orchestrator's
+        # own closure once a fresh closing commit publishes (#918), never here.
+        guarded = [item for item in pool if item.ref not in self._account_issues]
         if leased_pool:
             guarded = [
                 item
@@ -4619,6 +4692,9 @@ the source. This is the guard between retries while genuinely idle (no Lane
 work in flight, nothing currently refillable, no serial turn granted).
 """
 
+_MEMBERSHIP_SERVICE_INTERVAL = 1.0
+"""Cooperative tick spacing; visibility itself uses ``RefreshBackoff.maximum``."""
+
 
 def run_end_refusal(issue: int | str, reason: str) -> dict[str, int | str]:
     """One ``wrapper.run.end`` ``refusals`` entry (contract 2.12, #643).
@@ -4837,9 +4913,10 @@ class _ParallelLoop:
             self._pool = RollingPool(
                 diag=diag,
                 source=source,
-                clock=time.monotonic,
+                clock=_membership_clock,
                 eligible=self._lane_candidate_eligible,
                 on_membership_read=self._emit_membership_read,
+                on_visibility_read=self._emit_visibility_read,
                 read_refused=self._lane_lease_unreadable,
                 terminal_refused=lambda c: self._serial._attempts.skipped(c.ref),
                 lane_first=self._lane_first_pin,
@@ -5198,7 +5275,7 @@ class _ParallelLoop:
             try:
                 if self._rolling_capable:
                     outcome_label, exit_code, iterations_run = (
-                        await self._drive_rolling()
+                        await self._drive_with_visibility()
                     )
                 else:
                     outcome_label, exit_code, iterations_run = (
@@ -5245,6 +5322,28 @@ class _ParallelLoop:
             except Exception as exc:  # pragma: no cover - defensive
                 self._diag.warning("wrapper.run.end emit failed: %s", exc)
         return exit_code
+
+    async def _drive_with_visibility(self) -> tuple[str, int, int]:
+        """Service one Run-wide cadence, including quiet/unattached sessions.
+
+        Reads and Event writes are synchronous on the same event-loop thread
+        as the driver, never a thread or one poller per Lane. The timeout is a
+        cooperative servicing opportunity, not the Membership interval.
+        """
+        assert self._pool is not None
+        work = asyncio.create_task(self._drive_rolling())
+        try:
+            while True:
+                done, _ = await asyncio.wait(
+                    {work}, timeout=_MEMBERSHIP_SERVICE_INTERVAL
+                )
+                if done:
+                    return work.result()
+                self._pool.service_visibility()
+        finally:
+            if not work.done():
+                work.cancel()
+            await asyncio.gather(work, return_exceptions=True)
 
     def _report_parallel_degraded(self) -> None:
         """Say that Parallel mode degraded entirely to the serial path (#414).
@@ -7683,16 +7782,18 @@ class _ParallelLoop:
     def _emit_membership_read(self, candidates: tuple[PoolCandidate, ...]) -> None:
         """Publish the cache's add-only Membership read at Run scope.
 
-        A Run that has never seen Lane work is a **Serial fallback** Run, and
-        its stream stays byte-for-byte what a serial Run's is: an empty read
-        before the first non-empty one adds no **Queue** row and would only
-        announce a Parallel mode that never engaged. Once membership has been
-        published, every later read is news — including the one that empties
-        the Queue, which is how an operator tells "nothing eligible is left"
-        from "the Run stopped looking".
+        Keep the existing suppression of ordinary startup reads with no
+        eligible Lane candidates. Once membership has been published, later
+        changed reads are news, even when empty. These are add-only sightings,
+        never Queue retirement or an emptiness claim. Due visibility reads
+        use the unconditional publisher below, including in Serial fallback.
         """
         if not candidates and not self._membership_read_visible:
             return
+        self._emit_visibility_read(candidates)
+
+    def _emit_visibility_read(self, candidates: tuple[PoolCandidate, ...]) -> None:
+        """A complete due read is observable even when empty or unchanged."""
         self._membership_read_visible = True
         self._serial._emit(
             events_module.WRAPPER_POOL_REFRESHED,
@@ -8464,21 +8565,17 @@ class _ParallelLoop:
         item: AfkReadyItem,
         pre_base: str,
     ) -> None:
-        """Close a landed issue via the serial closure path + emit ``auto_close``.
+        """Close a landed Lane issue through the Orchestrator's closure (#918).
 
         Reads the commits the landing added to base (``pre_base`` -> current
-        head) and drives the same runner-side closure as serial mode
-        (``source.handle_completions`` -> ``gh issue close`` + the ``Closes #N``
-        backstop), emitting one ``wrapper.auto_close`` per closure. Shared by the
+        head) and closes the issue only for a finishing commit, emitting
+        ``wrapper.issue.closed`` stamped with the landing contribution's
+        identity as ``contribution_identity.stamped_types`` requires, so a
+        replay reads it inside that contribution's lifecycle. Shared by the
         happy-path landing and a successful auto-resolution landing.
-
-        The closure is stamped with the landing contribution's identity, as
-        ``contribution_identity.stamped_types`` requires, so a replay reads it
-        inside that contribution's lifecycle rather than as a Run-level record.
-        The pool is ``[item]``: the closure backstop filters closing keywords
-        to it and the PR-advance backstop reads only its items, so each
-        closure here names the landing issue itself.
         """
+        if item.kind != "issue" or not isinstance(item.ref, int):
+            return
         try:
             post_base = self._git.head_sha()
             landed = self._git.commits_between(pre_base, post_base)
@@ -8487,17 +8584,16 @@ class _ParallelLoop:
                 "integration #%s: post-merge accounting failed: %s",
                 item.ref, exc,
             )
-            landed = []
-        for completion in self._serial._handle_completions_safely(
-            [item], landed, leased_pool=True, account_completion_ref=item.ref,
-        ):
+            return
+
+        def emit(event_type: str, **fields: Any) -> None:
             self._emit_contribution_event(
-                contribution,
-                events_module.WRAPPER_AUTO_CLOSE,
-                sha=completion.sha,
-                shas=list(completion.shas),
-                lane_issue=completion.ref,
+                contribution, event_type, lane_issue=item.ref, **fields
             )
+
+        if self._serial._close_published_issue(item.ref, landed, post_base, emit) is not None:
+            self._serial._account_issues.discard(item.ref)
+            self._serial._account_base_issues.discard(item.ref)
 
     def _delete_branch_safely(self, ref: int | str, branch: str) -> None:
         """``git branch -D`` a discarded Lane branch; a failure only warns."""

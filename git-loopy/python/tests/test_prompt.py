@@ -151,8 +151,8 @@ def test_packaged_prompt_is_present_and_nonempty() -> None:
     [
         "# YOUR ISSUE",  # the one-issue contract header (#394)
         "<working issue=N>",  # the working marker
-        "FINAL SEQUENCE",  # the issue-closure contract
-        "Closes #",  # the close-keyword backstop
+        "FINAL SEQUENCE",  # the Agent never closes or pushes
+        "Closes #",  # the finishing-commit close keyword
     ],
 )
 def test_packaged_prompt_carries_runner_contract(marker: str) -> None:
@@ -173,15 +173,13 @@ def test_packaged_prompt_makes_genuine_issue_blockers_native_dependencies() -> N
     assert "comment, then output `<promise>NO MORE TASKS</promise>`" in prompt
 
 
-def test_domain_guidance_prefers_glossary_with_legacy_fallback() -> None:
+def test_domain_guidance_reads_only_the_glossary_entry_points() -> None:
     prompt = _packaged_prompt_text()
     section = prompt.split("# DOMAIN AWARENESS", 1)[1].split("\n# ", 1)[0]
 
     assert "`GLOSSARY.md`" in section
     assert "`GLOSSARY-MAP.md`" in section
     assert "repository root" in section
-    assert "fall back to `CONTEXT.md` / `CONTEXT-MAP.md`" in section
-    assert section.index("`GLOSSARY.md`") < section.index("`CONTEXT.md`")
 
 
 # ---------------------------------------------------------------------------
@@ -468,3 +466,11 @@ def test_leaving_no_process_behind_is_not_scoped_to_deliberate_load() -> None:
     assert "`pgrep`" in section
     assert "end the ones you started by PID" in section
     assert "interrupted" in section
+
+
+def test_packaged_prompt_leaves_publication_and_closure_to_the_run() -> None:
+    prompt = _packaged_prompt_text()
+
+    assert "gh issue close <N>" not in prompt
+    assert "The Run alone publishes and closes" in prompt
+    assert "never run `gh issue close` and you never push" in prompt
