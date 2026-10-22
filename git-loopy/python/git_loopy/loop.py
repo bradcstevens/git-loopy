@@ -47,12 +47,13 @@ Per-iteration sequence:
    ``wrapper.checkpoint.recorded`` but is excluded from both the agent-commit
    tally and the progress predicate. Failed publication preserves the branch
    and contributes no commits to the Iteration's accounting.
-9. **Completion backstop** via
-   :meth:`IssueSource.handle_completions`. Each returned
-   :class:`~git_loopy.sources.Completion` produces one
-   ``wrapper.auto_close`` event. The GitHub backend closes issues via
-   ``gh issue close``; the PRDs backend returns an empty list (the
-   agent owns ``git mv ... prds/<feat>/done/``).
+9. **Publication and closure** (#918). The Orchestrator alone publishes and
+   closes: it re-reads the issue, merges the clone's head onto base, pushes,
+   and only then closes the issue and emits ``wrapper.issue.closed``. A merge
+   or push that cannot land publishes and closes nothing and emits
+   ``wrapper.issue.close_failed`` (stage ``publication``). The source's
+   ``handle_completions`` now reports PR advances only; the PRDs backend
+   returns an empty list (the agent owns ``git mv ... prds/<feat>/done/``).
 10. Emit one ``wrapper.commit.recorded`` per published agent commit so the
     renderer increments the Iteration's commit count.
 11. **Auto-push** (ADR-0004) via :meth:`_maybe_push`: whenever the iteration
@@ -293,6 +294,7 @@ from git_loopy.session import IterationSession, SandboxError, SandboxPolicy
 from git_loopy.sinks import EventSink, SinkFanout
 from git_loopy.sources import (
     AfkReadyItem,
+    Completion,
     GitHubIssueSource,
     IssueSource,
     LABEL_PARALLEL_SAFE,
@@ -1421,6 +1423,7 @@ class _Loop:
         self._sandbox_settings = sandbox_settings
         self._sandbox_state = sandbox_state(sandbox_settings, residence=residence)
         self._issue_clone_setup = issue_clone_setup
+        self._serial_pushed = False
         self._skill_preflight = skill_preflight
         self._skill_exposure = skill_preflight.exposure
         self._source = source
@@ -2268,6 +2271,7 @@ class _Loop:
             issue_git: git_module.GitClient | None = None
             new_commits: list[git_module.Commit] = []
             checkpoint_sha: str | None = None
+            closures: list[Completion] = []
             sandbox_failed = False
             clone_branch = f"git-loopy/{self._writers.run_id}/serial/iteration-{iter_num}"
             with telemetry.span("git_loopy.session"):
@@ -2358,20 +2362,23 @@ class _Loop:
                     )
                 finally:
                     if issue_git is not None:
-                        new_commits, checkpoint_sha = self._finish_serial_clone(
+                        new_commits, checkpoint_sha, closures = self._finish_serial_clone(
                             issue_git, clone_branch, pre_sha, active, iter_num,
                             publish=not operator_cancelled and not sandbox_failed,
                         )
 
             # 6) Account only for published clone commits, never unrelated
             #    changes on base or the clone's runner-authored Checkpoint.
-            # 7) Completion backstop — source-specific. The GitHub backend
-            #    closes the issue via gh; the PRDs backend always returns
-            #    [] (the agent owns the `git mv ... done/` step).
+            # 7) Completion backstop — source-specific. Only PR advances are
+            #    detected here. An issue is closed solely by the Orchestrator's
+            #    own closure after publication (#918), already in ``closures``.
             with telemetry.span("git_loopy.enforce_closures"):
-                completions = self._handle_completions_safely(
-                    pool, new_commits, leased_pool=True
-                )
+                completions = [
+                    *self._handle_completions_safely(
+                        pool, [], leased_pool=True
+                    ),
+                    *closures,
+                ]
 
             if issue_binding.active_ref is None:
                 fallback = self._infer_active_binding(
@@ -2406,14 +2413,6 @@ class _Loop:
                         sha=completion.sha,
                         shas=list(completion.shas),
                     )
-                else:
-                    self._emit(
-                        events_module.WRAPPER_AUTO_CLOSE,
-                        iter_num=iter_num,
-                        issue=completion.ref,
-                        sha=completion.sha,
-                        shas=list(completion.shas),
-                    )
             auto_closures = sum(
                 1
                 for completion in completions
@@ -2432,13 +2431,16 @@ class _Loop:
             #    locally. Non-fatal: a missing remote/upstream, an auth failure,
             #    or a non-fast-forward warns and the loop carries on. Like the
             #    Checkpoint, a push is NOT Strike progress (it creates no commit).
-            self._maybe_push(
-                iter_num,
-                new_commits,
-                checkpoint_sha,
-                active_ref=active.ref,
-                active_kind=active.kind,
-            )
+            if self._serial_pushed:
+                self._serial_pushed = False
+            else:
+                self._maybe_push(
+                    iter_num,
+                    new_commits,
+                    checkpoint_sha,
+                    active_ref=active.ref,
+                    active_kind=active.kind,
+                )
 
             # 10) Resolve this Iteration's ending; the ending charges its Strike.
             commits_in_iter = len(new_commits)
@@ -2502,39 +2504,138 @@ class _Loop:
             ),
         )
 
+    def _closing_source(self, item: AfkReadyItem) -> sources_module.IssueClosing | None:
+        """The source to close ``item`` through, or ``None`` when it closes nothing."""
+        if item.kind != "issue" or not isinstance(item.ref, int):
+            return None
+        source = self._source
+        return source if isinstance(source, sources_module.IssueClosing) else None
+
+    def _close_published_issue(
+        self,
+        ref: int,
+        commits: Sequence[git_module.Commit],
+        published_sha: str,
+        emit: Callable[..., None],
+    ) -> Completion | None:
+        """The Orchestrator's closure, once publication has landed (#918).
+
+        Only the finishing commit's closing keyword says the issue is done; a
+        partial commit (``Refs #N``) leaves it open. The tracker is re-read
+        first, so an issue someone else closed is neither commented on nor
+        counted. A close is verified by a re-read and retried once; a second
+        failure emits ``wrapper.issue.close_failed`` with stage ``tracker``.
+        ``emit`` stamps the caller's identity and the issue itself.
+        """
+        source = self._source
+        if not isinstance(source, sources_module.IssueClosing):
+            return None
+        shas = tuple(c.sha for c in commits if ref in extract_close_refs(c.message))
+        if not shas or not self._leased(ref, "issue close"):
+            return None
+        if source.issue_state(ref) == "CLOSED":
+            return None
+        comment = f"Published in {published_sha} and closed by the git-loopy Orchestrator."
+        for _attempt in (1, 2):
+            source.close_issue(ref, comment)
+            if source.issue_state(ref) == "CLOSED":
+                emit(
+                    events_module.WRAPPER_ISSUE_CLOSED,
+                    sha=published_sha,
+                    shas=list(shas),
+                )
+                return Completion(ref=ref, sha=published_sha, shas=shas)
+        self._diag.error(
+            "issue #%s published in %s but the tracker would not close it", ref, published_sha
+        )
+        emit(
+            events_module.WRAPPER_ISSUE_CLOSE_FAILED,
+            stage="tracker",
+            sha=published_sha,
+            reason="the tracker did not report the issue closed after two attempts",
+        )
+        return None
+
     def _finish_serial_clone(
         self, clone: git_module.GitClient, branch: str, base: str,
         active: AfkReadyItem, iter_num: int, *, publish: bool,
-    ) -> tuple[list[git_module.Commit], str | None]:
-        """Import durable serial work before merging; salvage never needs a Sandbox."""
+    ) -> tuple[list[git_module.Commit], str | None, list[Completion]]:
+        """Import durable serial work, then publish and close it (#918).
+
+        Salvage never needs a Sandbox. For an issue the Orchestrator closes, a
+        merge that conflicts or a push that cannot land publishes nothing: base
+        is put back where it was, the branch is kept, and
+        ``wrapper.issue.close_failed`` records stage ``publication``.
+        """
+        closer = self._closing_source(active)
+
+        def emit(event_type: str, **fields: Any) -> None:
+            self._emit(event_type, iter_num=iter_num, issue=active.ref, **fields)
+
+        def fail_publication(reason: str) -> tuple[list[git_module.Commit], None, list[Completion]]:
+            self._diag.error("serial publication of #%s failed: %s", active.ref, reason)
+            if closer is not None:
+                emit(
+                    events_module.WRAPPER_ISSUE_CLOSE_FAILED,
+                    stage="publication",
+                    reason=reason,
+                )
+            return [], None, []
+
         try:
             commits = clone.commits_between(base, clone.head_sha())
             checkpoint = self._maybe_checkpoint(iter_num, active.ref, git=clone)
             if clone.is_dirty() or clone.has_untracked():
                 self._diag.error("serial Issue clone %s remains dirty; preserving it", clone.root)
-                return [], None
+                return [], None, []
             self._git.reclaim_issue_clone(
                 # Published serial Checkpoints reach origin through the base auto-push.
                 clone.root, branch=branch, checkpoint=not publish,
             )
             if not publish or not self._leased(active.ref, "publication onto base", kind=active.kind):
-                return [], None
+                return [], None, []
+            if closer is not None and closer.issue_state(active.ref) == "CLOSED":
+                self._diag.warning(
+                    "issue #%s was closed by someone else; publishing nothing", active.ref
+                )
+                return [], None, []
+            pre_merge = self._git.head_sha()
             try:
                 self._git.merge(branch)
-            except git_module.GitError:
+            except git_module.GitError as exc:
                 self._git.abort_merge()
-                raise
+                return fail_publication(f"merge onto base conflicted: {exc}")
+            # No upstream means the local base is the whole publication.
+            if (
+                closer is not None
+                and (commits or checkpoint is not None)
+                and self._git.upstream() is not None
+            ):
+                try:
+                    self._git.push()
+                except git_module.GitError as exc:
+                    self._git.reset_hard(pre_merge)
+                    return fail_publication(f"push did not land: {exc}")
+                self._emit(events_module.WRAPPER_PUSH_RECORDED, iter_num=iter_num)
+                self._serial_pushed = True
             try:
                 self._git.delete_branch(branch)
             except git_module.GitError as exc:
                 self._diag.warning("serial Issue clone branch cleanup failed: %s", exc)
-            return commits, checkpoint
+            closures: list[Completion] = []
+            if closer is not None and isinstance(active.ref, int):
+                closure = self._close_published_issue(
+                    active.ref, commits, self._git.head_sha(), emit
+                )
+                if closure is not None:
+                    closures.append(closure)
+            return commits, checkpoint, closures
         except git_module.GitError as exc:
             self._diag.error(
                 "serial Issue clone %s could not be integrated; work preserved: %s",
                 clone.root, exc,
             )
-            return [], None
+            return [], None, []
 
     def _maybe_checkpoint(
         self,
@@ -8230,21 +8331,17 @@ class _ParallelLoop:
         item: AfkReadyItem,
         pre_base: str,
     ) -> None:
-        """Close a landed issue via the serial closure path + emit ``auto_close``.
+        """Close a landed Lane issue through the Orchestrator's closure (#918).
 
         Reads the commits the landing added to base (``pre_base`` -> current
-        head) and drives the same runner-side closure as serial mode
-        (``source.handle_completions`` -> ``gh issue close`` + the ``Closes #N``
-        backstop), emitting one ``wrapper.auto_close`` per closure. Shared by the
+        head) and closes the issue only for a finishing commit, emitting
+        ``wrapper.issue.closed`` stamped with the landing contribution's
+        identity as ``contribution_identity.stamped_types`` requires, so a
+        replay reads it inside that contribution's lifecycle. Shared by the
         happy-path landing and a successful auto-resolution landing.
-
-        The closure is stamped with the landing contribution's identity, as
-        ``contribution_identity.stamped_types`` requires, so a replay reads it
-        inside that contribution's lifecycle rather than as a Run-level record.
-        The pool is ``[item]``: the closure backstop filters closing keywords
-        to it and the PR-advance backstop reads only its items, so each
-        closure here names the landing issue itself.
         """
+        if item.kind != "issue" or not isinstance(item.ref, int):
+            return
         try:
             post_base = self._git.head_sha()
             landed = self._git.commits_between(pre_base, post_base)
@@ -8253,17 +8350,14 @@ class _ParallelLoop:
                 "integration #%s: post-merge accounting failed: %s",
                 item.ref, exc,
             )
-            landed = []
-        for completion in self._serial._handle_completions_safely(
-            [item], landed, leased_pool=True
-        ):
+            return
+
+        def emit(event_type: str, **fields: Any) -> None:
             self._emit_contribution_event(
-                contribution,
-                events_module.WRAPPER_AUTO_CLOSE,
-                sha=completion.sha,
-                shas=list(completion.shas),
-                lane_issue=completion.ref,
+                contribution, event_type, lane_issue=item.ref, **fields
             )
+
+        self._serial._close_published_issue(item.ref, landed, post_base, emit)
 
     def _delete_branch_safely(self, ref: int | str, branch: str) -> None:
         """``git branch -D`` a discarded Lane branch; a failure only warns."""

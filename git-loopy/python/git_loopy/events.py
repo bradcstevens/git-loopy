@@ -97,6 +97,8 @@ __all__ = [
     "WRAPPER_COMMIT_RECORDED",
     "WRAPPER_PUSH_RECORDED",
     "WRAPPER_AUTO_CLOSE",
+    "WRAPPER_ISSUE_CLOSED",
+    "WRAPPER_ISSUE_CLOSE_FAILED",
     "WRAPPER_RELEASE_ADVANCED",
     "WRAPPER_PR_ADVANCED",
     "WRAPPER_STRIKE",
@@ -349,6 +351,13 @@ WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
 # wrapper.integration.push_failed and prevent tracker closure (#418).
 WRAPPER_PUSH_RECORDED = "wrapper.push.recorded"
 WRAPPER_AUTO_CLOSE = "wrapper.auto_close"
+# The Orchestrator's own closure, after publication landed and the tracker read
+# back CLOSED. The only Event that makes a completion (#918); ``auto_close`` is
+# read from older traces and from the dormant shell/PowerShell paths only.
+WRAPPER_ISSUE_CLOSED = "wrapper.issue.closed"
+# A publication that did not land (``stage`` ``publication``) or a published
+# issue the tracker would not close twice (``stage`` ``tracker``).
+WRAPPER_ISSUE_CLOSE_FAILED = "wrapper.issue.close_failed"
 WRAPPER_RELEASE_ADVANCED = "wrapper.release.advanced"
 WRAPPER_PR_ADVANCED = "wrapper.pr.advanced"
 WRAPPER_STRIKE = "wrapper.strike"

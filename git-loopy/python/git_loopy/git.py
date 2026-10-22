@@ -742,6 +742,16 @@ class GitClient(Protocol):
         """
         ...
 
+    def reset_hard(self, sha: str) -> None:
+        """Move the checked-out branch and its worktree back to ``sha``.
+
+        Undoes a local publication whose push could not land (#918).
+
+        Raises:
+            GitError: If ``sha`` does not resolve or ``git`` refuses.
+        """
+        ...
+
     def list_worktrees(self) -> list[Worktree]:
         """Return every worktree this clone registers, main worktree included.
 
@@ -1809,6 +1819,10 @@ class SubprocessGitClient:
         mid-merge, restoring the base branch to its exact pre-merge state.
         """
         _run(["merge", "--abort"], cwd=self._root)
+
+    def reset_hard(self, sha: str) -> None:
+        """Reset the checked-out branch to ``sha`` with ``git reset --hard``."""
+        _run(["reset", "--hard", sha], cwd=self._root)
 
     def list_worktrees(self) -> list[Worktree]:
         """Return every registered worktree via ``git worktree list``.

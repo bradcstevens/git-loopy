@@ -81,7 +81,7 @@ def test_parallel_only_run_pushes_current_base_before_close(
     assert not any(e["type"] == "wrapper.iteration.start" for e in events)
     push_event = next(e for e in events if e["type"] == "wrapper.push.recorded")
     published = next(e for e in events if e["type"] == "wrapper.integration.published")
-    closed = next(e for e in events if e["type"] == "wrapper.auto_close")
+    closed = next(e for e in events if e["type"] == "wrapper.issue.closed")
     assert events.index(push_event) < events.index(published) < events.index(closed)
     for key in ("contribution_id", "issue", "lane_id", "iter"):
         assert push_event[key] == published[key]
@@ -119,7 +119,7 @@ def test_rejected_publication_keeps_local_work_and_issue_open(
     assert failed["contribution_id"] == end["contribution_id"]
     assert end["published"] is False
     assert not any(e["type"] in {
-        "wrapper.integration.published", "wrapper.auto_close", "wrapper.push.recorded",
+        "wrapper.integration.published", "wrapper.issue.closed", "wrapper.push.recorded",
     } for e in events)
 
 
@@ -162,7 +162,7 @@ def test_recovery_publication_push_failure_is_terminal(
     assert failures[0]["contribution_id"] == ends[0]["contribution_id"]
     assert events.index(recovery[-1]) < events.index(failures[0]) < events.index(ends[0])
     assert not any(e["type"] in {
-        "wrapper.integration.published", "wrapper.auto_close",
+        "wrapper.integration.published", "wrapper.issue.closed",
         "wrapper.push.recorded", "wrapper.release.advanced",
         "wrapper.iteration.start",
     } for e in events)
