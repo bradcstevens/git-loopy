@@ -5,10 +5,41 @@
 > label, or nothing when it infers no version change. The ordering argued below is unchanged.
 > The reasoning below is preserved as the record of what was decided at the time.
 
-**Status:** proposed
+**Status:** accepted design; implementation acceptance is tracked by
+[#390](https://github.com/bradcstevens/git-loopy/issues/390).
 
-Implemented by [#390](https://github.com/bradcstevens/git-loopy/issues/390), which is blocked by
-[#389](https://github.com/bradcstevens/git-loopy/issues/389).
+Implemented by [#390](https://github.com/bradcstevens/git-loopy/issues/390). Its ordering
+prerequisite, [#389](https://github.com/bradcstevens/git-loopy/issues/389), has landed.
+
+**Amended by [ADR-0080](0080-the-tracker-is-the-board-and-its-states-are-derived.md):**
+the human mirror is withdrawn. No `in-progress` label and no marker comment mirror a Lease.
+A stored state outlives the Run that died, while a Lease expires on its own, and the Runner
+has no right to relabel an issue. A held Lease is visible as its `git-loopy/leases/issue-<N>`
+branch, whose commit message is the Lease record, and as the board's derived Running column.
+
+**Amended by [ADR-0091](0091-a-dormant-path-stands-at-the-last-stable-family-release-carrying-its-owed-debt-frozen.md):**
+the shell and PowerShell Orchestrators keep the pure record and decision seams they already
+claim in `conformance/issue-lease.json`. Their ref transport, retry and renewal stay
+Python-only until a dormant path resumes, and are computed with that path's resumption
+backlog rather than owed by #390.
+
+**Amended (2026-10-22, [#390](https://github.com/bradcstevens/git-loopy/issues/390)):**
+
+- A proven steal stops the session. A renewal whose compare-and-swap is rejected is an answer
+  about the ref: another Run, or a human, now holds it. The Run then stops that issue's
+  running session at once, rather than letting it run to its end with only its writes
+  fenced. Every other loss signal (an elapsed TTL, a failed write, a dead worker) stays a
+  reason for the next fence to read the remote, so an outage never stops an uncontested
+  session. The stopped session is blameless, as a **Stop**'s is
+  ([ADR-0043](0043-a-stop-drains-before-it-cancels.md)): it reaches no **Session outcome**,
+  so it has no **Ending** and charges no **Strike**.
+- A fence denial charges no **Strike** either. A Strike comes only from a session's own
+  **Session outcome** ([ADR-0070](0070-a-strike-is-charged-to-the-issue.md)), and a denied
+  publication finishes unpublished.
+- Stealing an expired Lease is the one situation that warns. A dead Run's leftover worktree is
+  the **Sweep**'s to reclaim ([ADR-0008](0008-across-issue-parallelism-via-git-worktrees.md),
+  [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md)), not a Lease
+  warning.
 
 [ADR-0010](0010-local-sandbox-per-iteration.md) already recorded the gap as a non-goal:
 *"it does not solve concurrent-run worktree collisions (issues are worked sequentially within
@@ -19,8 +50,8 @@ means two agents working one issue.
 A **Lease** is a git ref pushed to the remote at **Pickup**. Creating it is the compare-and-
 swap: exactly one Run wins, and the loser knows immediately. The commit at that ref carries
 the owning `run_id` and its timestamps. A background task renews it every **60s**; it expires
-after **300s** without renewal. A label and an issue comment mirror it for humans and are
-never authoritative.
+after **300s** without renewal. The ref is its only record: nothing on the issue mirrors it
+(see the ADR-0080 amendment above).
 
 ## Why a ref, when we already have labels
 
@@ -64,8 +95,8 @@ design makes deliberately.
   nothing to recover. `loop.py:3312` already keeps failed Lane branches *"as a breadcrumb"*;
   that philosophy is unchanged.
 - **It does not reap local worktrees.** A dead Run's `<repo>.worktrees/<run_id>/issue-<N>` is
-  still there and nothing removes it (see #359). Its Lease expiring frees the *issue*, not the
-  disk.
+  the **Sweep**'s to reclaim when the next Run starts (ADR-0008, ADR-0068). Its Lease expiring
+  frees the *issue*, not the disk.
 - **It is not a lock on files.** Two Runs working different issues that touch the same code
   still conflict; that is Integration's problem (ADR-0009), not this one.
 
@@ -91,8 +122,8 @@ design makes deliberately.
   degradation is not needed.
 - **Conflicts warn and skip; they never prompt.** `ready-for-agent` means *ready for autonomous
   execution*, and a blocking prompt fires precisely when nobody is watching — crash recovery
-  happens on the *next* run, which is the unattended one. Two situations warn: stealing an
-  expired Lease, and finding a leftover worktree from a dead Run on this host. A Lease held by
+  happens on the *next* run, which is the unattended one. One situation warns: stealing an
+  expired Lease. A dead Run's leftover worktree is the **Sweep**'s to reclaim. A Lease held by
   a live Run is not a conflict; it is the mechanism working, and the runner moves to the next
   candidate silently.
 - **The clock must be injectable.** `rolling_pool.py:126,138` already establishes the
@@ -264,7 +295,8 @@ name would write records each read as belonging to *another* repository, and
 therefore as expired and stealable. `conformance/repository-identity.json` pins
 that decision in all three Orchestrators for exactly that reason. The shell
 and PowerShell pure resolvers now exercise every case through their own
-Conformance adapters; their ref transport and activation remain pending.
+Conformance adapters; their ref transport and activation stay Python-only until a dormant
+path resumes (ADR-0091).
 The ports keep the raw path rather than using a URL helper that decodes
 escapes or normalizes dot segments, because either transformation can invent
 a repository identity the reference Orchestrator would refuse. Only the
@@ -289,6 +321,7 @@ clone cannot take protects nothing, so refusing the work buys nothing.
 
 Live cross-Run exclusivity is now active for a GitHub-backed Python Run's
 **serial** Iterations and its **Lanes** alike, so an issue labelled
-`parallel-safe` is guarded on the path that actually works it. shell/PowerShell
-transport and retry, independent native renewal, the human mirror, and
-Events/Dashboard all remain pending in #390.
+`parallel-safe` is guarded on the path that actually works it. Lease Events with
+their Dashboard aggregation, and stopping a session on a proven steal, remain
+pending in #390. The human mirror is withdrawn (ADR-0080), and shell/PowerShell
+transport, retry and renewal wait for a dormant path to resume (ADR-0091).
