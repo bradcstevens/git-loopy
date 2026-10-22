@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract_version": "2.8",
-  "scope": "Record inspection and the pure Lease action decision (claim, fence, release, renew). The ref transport that carries them is Python-only pending the shell and PowerShell ports under #390.",
+  "scope": "Record inspection and the pure Lease action decision (claim, fence, release, renew). The ref transport that carries them, with its retry and renewal, is Python-only under ADR-0091. Record inspection and the pure Lease action decision are shared by every path that claims this fixture.",
   "repository": "bradcstevens/git-loopy",
   "issue": 390,
   "record": {
