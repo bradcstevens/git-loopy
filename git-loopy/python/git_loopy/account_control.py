@@ -224,12 +224,12 @@ class AccountControl:
         return True
 
     def finished(self, probe: bool, *, successful: bool) -> None:
-        if not probe or self.state != "probing" or self._interrupted.is_set():
+        if not probe or self.state != "probing":
             return
         self._probe_active = False
         if not successful:
             self.stop("probe_unconfirmed")
-        else:
+        elif not self._interrupted.is_set():
             self.cause = "probe_succeeded"
             self._announce()
             self.state = None

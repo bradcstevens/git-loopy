@@ -80,6 +80,32 @@ async def test_successful_probe_finishing_after_operator_stop_cannot_reopen_admi
 
 
 @pytest.mark.asyncio
+async def test_unsuccessful_probe_finishing_after_operator_stop_keeps_account_failure():
+    clock, events = Clock(), []
+    control = AccountControl(
+        emit=lambda type, **kw: events.append(kw), clock=clock, sleep=clock.sleep,
+    )
+    control.refuse(refusal())
+    assert await control.ready(may_start=True)
+    probe = control.admit(ordinary=True)
+    control.interrupt()
+    control.finished(probe, successful=False)
+
+    assert control.state == "stopping"
+    assert control.cause == "probe_unconfirmed"
+    assert not control.ordinary_available
+    assert not await control.ready(may_start=True)
+    for ordinary in (True, False):
+        with pytest.raises(AccountAdmissionClosed):
+            control.admit(ordinary=ordinary)
+    assert not any(event["admission_open"] for event in events)
+    assert events[-1]["state"] == "stopping"
+    assert events[-1]["cause"] == "probe_unconfirmed"
+    assert control.end_payload()["account_error"]["kind"] == "rate_limited"
+    assert clock.waits == [30]
+
+
+@pytest.mark.asyncio
 async def test_rate_retries_are_run_wide_and_success_does_not_reset_budget():
     clock, events = Clock(), []
     control = AccountControl(

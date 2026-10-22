@@ -426,6 +426,44 @@ def test_first_stop_drains_lane_through_bounded_recovery(tmp_path, monkeypatch, 
     assert not [e for e in events if e["type"] == "wrapper.account.state"]
 
 
+def test_unsuccessful_probe_after_operator_stop_keeps_account_failure(tmp_path, monkeypatch):
+    built = _capture_parallel_loops(monkeypatch)
+    clock = Clock()
+    monkeypatch.setattr(loop, "AccountControl", partial(
+        AccountControl, clock=clock, sleep=clock.sleep,
+    ))
+    sends = 0
+
+    async def script(session, _tracker):
+        nonlocal sends
+        sends += 1
+        if sends == 2:
+            built[0].request_stop_drain()
+            raise RuntimeError("Probe session failed after operator Stop")
+
+    rc, events, client, tracker, git = _run(
+        tmp_path, monkeypatch, parallel=True, code="rate_limit_exceeded",
+        session_hook=script,
+    )
+    assert rc == 1 and len(client.created) == sends == 2
+    assert clock.waits == [30]
+    assert not [e for e in events if e["type"] == "wrapper.strike"]
+    contributions = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert len(contributions) == 2
+    assert contributions[-1]["reason"] == "account_failure"
+    assert contributions[-1]["summary"]["strike_reaction"] == "none"
+    assert contributions[-1]["published"] is False
+    assert tracker.issue_view(42).state == "OPEN"
+    end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert end["outcome"] == "operator_stop"
+    assert end["account_cause"] == "probe_unconfirmed"
+    assert end["account_error"]["kind"] == "rate_limited"
+    assert end["iterations_run"] == 2
+    assert not any(
+        e["admission_open"] for e in events if e["type"] == "wrapper.account.state"
+    )
+
+
 def test_first_stop_after_lane_dispatch_still_creates_and_publishes_session(tmp_path, monkeypatch):
     built = _capture_parallel_loops(monkeypatch)
     real_policy = loop._Loop._agent_sandbox_policy
