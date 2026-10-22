@@ -67,6 +67,10 @@ options:
    and **Summary**, and launch discloses that. How a remote Run's record should outlive Teardown
    is #961.
 
+   **Amended by [ADR-0101](0101-a-remote-run-preserves-its-runner-record-for-the-laptop-to-import.md):**
+   the guest also preserves the Runner's `wrapper.*` events and the Summary under a run-addressed
+   ref, and the laptop imports them into the clone's logs. Only diagnostics are lost.
+
 Adoption is gated on proof C (#959), alongside #860 and #861. The proof creates a sandbox exactly
 as launch does, with auto-suspend disabled and auto-delete enabled at a short interval. It passes
 only if all of these hold:

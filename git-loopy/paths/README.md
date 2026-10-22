@@ -69,11 +69,15 @@ were created with `path:shell` and `path:powershell`, respectively, replacing
 #732. Their issues stay open for resumption; #553 and #554 remain unchanged
 here because #797 owns their label migration.
 
-ADR-0093 separately assigns the new Sandbox obligation to every Orchestrator.
-`sandbox.json` records the shell port in #866 and PowerShell port in #868 as
-owed waivers, the explicit exception to ADR-0091's no-new-debt rule. They are
-not historical baseline debt and do not change either manifest's frozen
-Release, Contract support or carried `owed_waivers`.
+ADR-0098 withdraws ADR-0093's Sandbox exception to ADR-0091's no-new-debt rule.
+`sandbox.json` was introduced at contract 2.35, above both dormant paths'
+Contract support 2.26, so their register rows are `waived_out_of_scope` with no
+tracking issue. Neither manifest's frozen Release, Contract support nor carried
+`owed_waivers` changes. The fixture's cases and `distributions` stay unchanged;
+a path that resumes owes a claim or waiver once its Contract support includes
+2.35. Until then, both ports still launch Agents with `copilot --yolo -p`,
+without Sandbox preflight, fail-closed enforcement or bypass denial. An operator
+who needs a Sandbox uses the Python Runner.
 
 No published helper exists at or below this baseline. A default dormant
 installation therefore reports no eligible helper; the launcher remains usable

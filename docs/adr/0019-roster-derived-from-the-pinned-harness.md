@@ -254,6 +254,31 @@ compatibility rows remain unlisted. No roster rows, defaults, or recommended
 routes change, so the fixture's own revision stays at `3`. The SDK 1.0.17rc5
 record above is now historical evidence, not the current pin.
 
+## Corporate-compatible upgrade record: SDK 1.0.22 stable
+
+On 2026-10-22 the Microsoft corporate feed offered stable SDK 1.0.22.
+The operator selected this latest stable release over the also-available
+1.0.23rc0 prerelease.
+This upgrade replaces 1.0.17 with that published wheel and its injected
+`CLI_VERSION = "1.0.98"`. No transitive dependency versions change. The
+in-language roster stamp and Conformance fixture move with the SDK pin.
+
+The live listing was captured through CLI 1.0.98, installed from the corporate
+npm feed with auto-update disabled; the server confirmed version 1.0.98 and
+protocol 3. Its 19 distinct models (18 concrete plus `auto`) were projected
+through `HarnessCapabilities.from_listing`. The capture adds `mai-code-2-flash`
+with `low`, `medium`, `high`, `xhigh`, and `max` efforts and the default context
+tier only. `gpt-6.1-sol` no longer advertises `none`; its remaining efforts and
+all other observed effort sets and context tiers are unchanged.
+
+The seven newly unlisted models (`claude-opus-5`, `claude-opus-4.8`, `gpt-5.5`,
+`gpt-5.4`, `gpt-5.4-mini`, `gpt-5-mini`, and `grok-4.5`) retain their earlier
+efforts alongside the eight existing compatibility entries. Their context-tier
+rows are removed rather than restamped as a fresh capture. No model id is
+removed, and defaults and recommended routes do not change. The fixture's own
+revision advances to `4`; its shape and the Wrapper contract are unchanged.
+The SDK 1.0.17 record above is historical evidence, not the current pin.
+
 ## Amendment: the roster follows the harness you are running
 
 The stamped fixture bounded more than it was meant to. `cli_version` records

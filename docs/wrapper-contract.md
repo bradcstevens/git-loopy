@@ -2433,6 +2433,10 @@ and 2.34 with the Sandbox disclosure (§12, #864),
 and 2.37 with the Python mid-work Membership cadence (§12, #429),
 and 2.38 with Orchestrator-only closure (§21, #918),
 and 2.40 with Python Run-wide account control (§19.1, #676).
+Contract 2.39 withdraws the dormant paths' Sandbox exception (§19, ADR-0098):
+only `fixture-claims.json` advances its provenance; `sandbox.json`'s cases and
+`distributions`, the Event/Dashboard fixture revisions and historical streams'
+interpretation stay unchanged.
 Contract 2.25 adds the Python Rolling-dispatch Priority exception (§3.2, ADR-0032)
 in the new Python-only `rolling-priority.json`, proved through complete Runs in
 `test_loop_parallel.py`. Existing fixtures keep their contract pins and revisions;
@@ -3263,14 +3267,20 @@ It contains Agent commands, not the Runner's Integration feedback loops.
 
 [`sandbox.json`](../git-loopy/conformance/sandbox.json) pins these decisions
 through per-member production adapters. Cases without a `distributions`
-override oblige Python, shell and PowerShell; remote residence and Python-only
+override select Python, shell and PowerShell; remote residence and Python-only
 Lane/Recovery lifecycle cases are explicitly scoped. Python claims the fixture.
-Shell owes #866 and PowerShell owes #868 in `fixture-claims.json`, as ADR-0093's
-explicit Sandbox obligation rather than an inferred advance of their Contract
-support. This is a narrow exception to ADR-0091's no-new-debt rule: their frozen
-2.26 Path baselines and existing carried waivers do not change. The TUI helper
-opens no Agent and resolves no policy; its Sandbox disclosure consumption
-remains pinned by `event-schema.json`.
+ADR-0098 withdraws ADR-0093's exception to ADR-0091: the fixture was introduced
+at contract 2.35, above the dormant shell and PowerShell Path baselines' Contract
+support 2.26. Their register rows are `waived_out_of_scope`, with no tracking
+issue; their frozen baselines and carried waivers do not change. The cases and
+`distributions` stay unchanged: a path that resumes and advances its Contract
+support to include 2.35 owes a claim or waiver again.
+
+Until then, the dormant ports still launch Agents with `copilot --yolo -p`,
+without Sandbox preflight, fail-closed enforcement or bypass denial. An operator
+who needs a Sandbox uses the Python Runner. The TUI helper opens no Agent and
+resolves no policy; its Sandbox disclosure consumption remains pinned by
+`event-schema.json`.
 
 Contract 2.35 adds this enforcement fixture without changing the Event schema,
 the Event/Dashboard fixture revisions, or historical streams' interpretation.

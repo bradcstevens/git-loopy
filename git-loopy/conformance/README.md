@@ -12,7 +12,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | --- | --- |
 | `account-control.json` | Python-only Run-wide account control (§19.1, contract 2.40, #676): nonzero exit mapping and production `wrapper.account.state` transitions. Clock-controlled policy and fake-SDK Run tests prove budgets, provenance, admission, accounting and closure; Dashboard tests consume the Run-level state. Dormant shell/PowerShell Path baselines gain no account-control obligation |
 | `integration-gate.json` | **Integration gate outcomes** (contract 2.36, #904): timeout→pass, persistent timeouts, timeout→red, and red→pass. Python drives complete Runs with a fake gate and observes the contribution ending, Recovery briefs and one-line Run log handoff. Gate-only re-runs share the three-attempt bound without starting Agents; dormant shell/PowerShell and the TUI helper make no such decision and are explicitly waived in `fixture-claims.json`. |
-| `sandbox.json` | **Sandbox** (§19, contract 2.35, ADR-0093): unchanged operator policy plus only explicit git grants, unconditional bypass/permissive refusal, required-but-unenforceable preflight refusal, tool attestation, and once-only Run disclosure beside the Isolation grade. Python drives its production policy/session/preflight seams and complete Runs; shell owes #866 and PowerShell owes #868. Remote residence and Python-only lifecycle cases carry `distributions` overrides; the TUI helper's Event consumption stays in `event-schema.json` |
+| `sandbox.json` | **Sandbox** (§19, contract 2.35, ADR-0093 amended by ADR-0098): unchanged operator policy plus only explicit git grants, unconditional bypass/permissive refusal, required-but-unenforceable preflight refusal, tool attestation, and once-only Run disclosure beside the Isolation grade. Python drives its production policy/session/preflight seams and complete Runs; the dormant shell and PowerShell paths owe no row above Contract support 2.26 (ADR-0091). They still launch Agents with `copilot --yolo -p` without §19's guarantees; an operator who needs a Sandbox uses the Python Runner. Remote residence and Python-only lifecycle cases carry `distributions` overrides; the TUI helper's Event consumption stays in `event-schema.json` |
 | `agent-profiles.json` | **Agent profiles and session isolation** (§18, contracts 2.28/2.30/2.31, ADR-0076/0078/0086): memory disabled and cross-session history refused; Python execution-profile selection, single non-inferable registration, Required preload and exact profile exposure, including distinct `skill_outside_profile` refusal. Reviewer access excludes edit tools and records `profile_read_only` refusals for writes, ref-moving git and tracker commands from Agents and Subagents, while reads and exact snapshotted feedback loops remain available; execution profiles retain full access. Python drives the production session seam; the TUI helper opens no session, and the dormant shell/PowerShell paths owe nothing above Contract support 2.26 (ADR-0091) |
 | `status-endings.json` | Real-session producer obligations for ADR-0075, contract 2.26: all five Endings, ordinary advancement omission, declarations refuted by progress, and timeout/crash beside advanced or closed. Python claims emission; shell owes #834 and PowerShell owes #835 (carried dormant debt split from #732); Rust consumes the resulting facts through the Dashboard fixture |
 | `rolling-priority.json` | Python-only **Rolling dispatch** Priority crossing (§3.2, contract 2.25, #720): complete one-unit Runs pin Priority serial-first, ordinary Lane-first, Priority Parallel-safe Lane work, stronger serial and Parallel-safe Pins, and creation-instant ordering among Priority serial candidates. `python/tests/test_loop_parallel.py` consumes every case through the production Run and observes actual bindings, first-work Events and verified closures; its further regressions prove admission refusals, full drain, serial/refill alternation and retries. Shell, PowerShell and Rust are explicitly waived as out of scope in `fixture-claims.json` |
@@ -55,10 +55,14 @@ stays Python's; the dormant runtime identity suites read their own manifests.
 The manifest member `tui` still uses the legacy register name `rust` until the
 dependent support-scoped register migration lands.
 
-`sandbox.json` is the explicit ADR-0093 exception to ADR-0091's no-new-debt
-rule for dormant paths. Its shell and PowerShell port obligations are recorded
-separately from their unchanged 2.26 Path baselines, not added to the historical
-baseline audit.
+ADR-0098 withdraws ADR-0093's Sandbox exception to ADR-0091's no-new-debt
+rule. `sandbox.json` was introduced at contract 2.35, above the dormant paths'
+Contract support 2.26, so their rows are `waived_out_of_scope` with no tracking
+issue. Contract 2.39 records that decision in `fixture-claims.json`; the fixture's
+cases and `distributions` stay unchanged, and a resumed path owes a claim or
+waiver once its Contract support includes 2.35. The dormant ports still launch
+Agents with `copilot --yolo -p`, without Sandbox preflight, fail-closed enforcement
+or bypass denial; an operator who needs a Sandbox uses the Python Runner.
 
 ### Sandbox adapters
 
