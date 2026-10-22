@@ -2190,7 +2190,8 @@ _Avoid_: contract pin, fixture revision (both name a fixture's latest change).
 
 These terms complete the vocabulary of
 [ADR-0093](docs/adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md) and
-[ADR-0099](docs/adr/0099-a-remote-run-preserves-its-work-halts-and-azure-deletes-it.md), and
+[ADR-0099](docs/adr/0099-a-remote-run-preserves-its-work-halts-and-azure-deletes-it.md) and
+[ADR-0101](docs/adr/0101-a-remote-run-preserves-its-runner-record-for-the-laptop-to-import.md), and
 record decisions whose delivery has not yet been accepted. The **Isolation
 grade** and **Execution host** entries above keep their meanings: a Sandbox does not change
 a host's grade, and a Run residence does not change a host's placement.
@@ -2207,7 +2208,9 @@ _Avoid_: Run placement, Run host, remote Execution host (an Execution host place
 **Teardown**:
 What happens to a remote **Run**'s microVM once its **Orchestrator** has exited, for any reason.
 Every **Issue clone** is **Salvaged**, everything a local **Sweep** would keep is preserved as
-**Breadcrumbs**, and whatever could not be preserved is named on its issue. The microVM then stops,
+**Breadcrumbs**, and whatever could not be preserved is named on its issue. The Run's own record,
+its Runner events and its **Summary**, is preserved for a laptop client to import; only its
+diagnostics are lost. The microVM then stops,
 and it is deleted after a fixed delay. Teardown begins only once the Run has ended, unlike
 **Wind-down**, and it is never a side effect of **Detach**.
 _Avoid_: retention (trace history), cleanup, reaping, shutdown.
