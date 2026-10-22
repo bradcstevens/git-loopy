@@ -198,7 +198,7 @@ flowchart TD
 
 The next Iteration starts with a fresh context and re-collects the Pool. The Run
 continues until ready work is exhausted, an Iteration cap is reached, the loop
-engineer Stops it, or every remaining issue has been skipped. An issue is skipped
+engineer Stops it, every remaining issue has been skipped, or an account refusal ends it. An issue is skipped
 once its sessions have ended badly as many times as its Strike budget
 allows; other issues keep their own budgets.
 

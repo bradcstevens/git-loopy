@@ -331,7 +331,7 @@ if a saved Skill policy still enables the retired name.
 8. **Repeat, then judge.** The next Iteration receives a fresh Pool and context.
    An issue whose sessions keep ending badly is skipped once it holds
    its configured Strikes; the Run stops when work is exhausted, the configured
-   limit is reached, or every remaining issue has been skipped. The loop engineer reviews the pushed result against
+   limit is reached, every remaining issue has been skipped, or an account refusal ends it. The loop engineer reviews the pushed result against
    the spec and repository standards, accepts it, reopens it, or creates a new
    sliced issue. Closed issues and commits preserve the state between Iterations.
 9. **Improve the workflow, not just the code.** Every red gate, wasted Iteration,
