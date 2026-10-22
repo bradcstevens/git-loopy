@@ -336,7 +336,9 @@ _Avoid_: poll, refresh, shallow pool, live pool.
 One **Session outcome** charged to the issue whose session it was. Every ending — silent
 no-progress, timeout, crash, no more tasks, content-filtered — charges exactly one, and a session
 that advanced its issue charges nothing unless the Orchestrator lost it to a timeout or crash,
-which progress does not launder (**Session outcome**). Strikes are counted per issue, per
+which progress does not launder (**Session outcome**). A session a terminal account refusal
+ended is the exception and charges none: in the Python Runner the account failed, not the
+issue, so the Run stops or pauses instead (Wrapper contract §19.1). Strikes are counted per issue, per
 **Run**: what one issue spends no other issue loses. `--max-nmt-strikes` is N, the number each
 issue gets, so it reads as *how many times this Run may try an issue that keeps ending badly*;
 the issue is retried until it holds N and is **Skip**ped then, and the **Attempt lifecycle** is
@@ -367,8 +369,10 @@ type, its message, the service status code where one was reached, and where in t
 session it arose — classified into a closed set of kinds: quota exhaustion, rate
 limiting, authentication, bad request, transport, service fault, and unknown. It
 is what lets an exhausted account be told from a session that merely produced nothing,
-which a flattened string never could. Recording one implies no reaction: the ending is
-still attributed to the issue that happened to be in hand. Content filtering is not one
+which a flattened string never could. Recording one implies no reaction by itself: the ending
+is still attributed to the issue that happened to be in hand, unless the Python Runner's
+Run-wide account control acts on a terminal refusal whose endpoint evidence identifies the
+account (Wrapper contract §19.1). Content filtering is not one
 of these kinds: the harness reports it as a verdict on a call it completed rather than
 as a failure, so it is an ending a session reached, never an identity a failure carries.
 _Avoid_: error message, failure string, exception.
