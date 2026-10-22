@@ -932,7 +932,8 @@ here against `git_loopy.events`. Wrapper-emitted types (phase 1 core): `wrapper.
 `wrapper.run.end`, `wrapper.iteration.start`, `wrapper.iteration.end`,
 `wrapper.afk_ready.collected`, `wrapper.commit.recorded`, `wrapper.checkpoint.recorded`,
 `wrapper.push.recorded`, `wrapper.auto_close`, `wrapper.strike`, `wrapper.pr.advanced`,
-`wrapper.ask_user.attempted`. Contract-1.5 addition within compatibility schema 1:
+`wrapper.ask_user.attempted`. Contract-2.38 additions: `wrapper.issue.closed` and
+`wrapper.issue.close_failed` (§21). Contract-1.5 addition within compatibility schema 1:
 `wrapper.pool.excluded` — one per `ready-for-agent` candidate the discriminator rejected (§3.1),
 carrying `issue`, `title`, and one `reason` from the closed exclusion vocabulary, emitted in source
 order *before* the `wrapper.afk_ready.collected` it explains. That collection Event additionally
@@ -1175,14 +1176,14 @@ contribution.start
   ( work_finished
       ( end[unchanged_branch]
       | [parked] admitted started branch_observed recovery_started{0..3}
-          ( published auto_close [release.advanced] end[published]
+          ( published issue.closed [release.advanced] end[published]
           | [push_failed] end[serial_fallback] ) )
   | end[checkpoint_failed | unchanged_branch | operator_stop] )
 ```
 
 The order covers lifecycle types only, so stamped assistant, tool, usage, commit and Checkpoint
 records interleave freely. Run-exit reclamation may end any open contribution at any point with
-`operator_stop` or `unchanged_branch`. `wrapper.auto_close` is stamped with the landing
+`operator_stop` or `unchanged_branch`. `wrapper.issue.closed` is stamped with the landing
 contribution's triple; `wrapper.release.advanced` is Run-scoped on the wire and belongs to the open
 contribution whose issue it names. The Python Runner declares `true` and is held to it by
 `git-loopy/python/tests/test_contribution_events_gate.py`; the shell and PowerShell Orchestrators
@@ -2420,7 +2421,8 @@ and 2.30 with execution profile selection and Skill exposure (ADR-0078),
 and 2.31 with Reviewer read-only access (ADR-0078/0086),
 and 2.32 with the Host yield disclosure (§4, §12, #817),
 and 2.34 with the Sandbox disclosure (§12, #864),
-and 2.37 with the Python mid-work Membership cadence (§12, #429).
+and 2.37 with the Python mid-work Membership cadence (§12, #429),
+and 2.38 with Orchestrator-only closure (§21, #918).
 Contract 2.39 withdraws the dormant paths' Sandbox exception (§19, ADR-0098):
 only `fixture-claims.json` advances its provenance; `sandbox.json`'s cases and
 `distributions`, the Event/Dashboard fixture revisions and historical streams'
@@ -3286,6 +3288,32 @@ been asked about cannot land at all, and a port that has been asked and has not 
 answer is recorded as *owing* the fixture, with a tracking issue, instead of passing green for never
 having heard of it. The suite still cannot compel a port to implement anything. What it refuses is
 the silent case.
+
+## 21. The Orchestrator alone closes (contract 2.38, #918)
+
+Only the Orchestrator publishes work and closes issues, serial and Parallel. An Agent commits
+its work and ends its turn; it never runs `gh issue close` and never pushes. Its finishing commit
+still names the issue with a closing keyword (`Closes #N`; a partial commit says `Refs #N`), because
+that is how the Orchestrator tells finished work from partial work and how the dormant shell and
+PowerShell backstops keep working.
+
+An Orchestrator that closes MUST:
+
+1. **Re-read before publishing.** Publish nothing for an issue the tracker already reports `CLOSED`;
+   the fence (Lease) applies as before.
+2. **Publish first.** Merge the head onto the current base and push it. A merge that conflicts or a
+   push that cannot land publishes and closes nothing, restores base, keeps the branch, and emits
+   `wrapper.issue.close_failed` with `stage` `publication` and a `reason`.
+3. **Close only after publication lands**, as completed, with a comment linking the published
+   commit. Verify the closure by re-reading the issue and retry a failed close once. Success emits
+   `wrapper.issue.closed` (`issue`, `sha`, `shas`); a persistent failure emits
+   `wrapper.issue.close_failed` with `stage` `tracker`, leaving the published issue open and reported.
+4. **Count only its own closure** as a completion. A closure by anyone else is never one.
+5. **Not emit `wrapper.auto_close`.** Replay and projections still read it from older traces and
+   from the dormant paths.
+
+In Parallel mode both Events are contribution-stamped. The dormant shell and PowerShell
+Orchestrators are `waived_out_of_scope` for this fixture; the TUI helper only projects both Events.
 
 ---
 

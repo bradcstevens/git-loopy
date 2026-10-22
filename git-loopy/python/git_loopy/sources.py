@@ -7,8 +7,8 @@ ways the runner discovers AFK-ready work:
   ``ISSUE_SOURCE=github`` (or unset). Discovers issues via ``gh issue
   list --label ready-for-agent``, applies the AFK-ready body
   discriminator (``^## What to build`` AND ``^## Acceptance criteria``), and
-  backstops the agent's ``gh issue close`` step via
-  :func:`git_loopy.wrapper.extract_close_refs` + :func:`gh.issue_close`.
+  performs the Orchestrator's closure (``issue_state`` / ``close_issue``) once
+  the loop's publication has landed. The keyword backstop is retired (#918).
 * :class:`PrdsIssueSource` — the legacy local-markdown backend used
   when ``ISSUE_SOURCE=prds``. Discovers files matching
   ``prds/<feature>/<NNN>-*.md`` (skipping ``prd.md`` and any path
@@ -73,9 +73,7 @@ from git_loopy.route_identity import (
 )
 from git_loopy.wrapper import (
     CHECKPOINT_COMMENT_MARKER,
-    actionable_close_refs,
     exit_code_for,
-    extract_close_refs,
 )
 
 __all__ = [
@@ -574,8 +572,8 @@ class Completion:
             completions to specific commits.
         kind: ``"issue"`` (default) for a wrapper-closed issue, or ``"pr"``
             for a detected PR-branch advance. The loop emits a different
-            event per kind (``wrapper.auto_close`` vs ``wrapper.pr.advanced``)
-            but both count as iteration progress.
+            event per kind. A PR advance is ``wrapper.pr.advanced``; an issue
+            closure is the loop's own ``wrapper.issue.closed``.
     """
 
     ref: int | str
@@ -828,6 +826,19 @@ class IssueSource(Protocol):
         GitHub's own GraphQL schema has no ``blockedBy`` connection on a pull
         request.
         """
+        ...
+
+
+@runtime_checkable
+class IssueClosing(Protocol):
+    """A source whose tracker the Orchestrator closes after publication (#918)."""
+
+    def issue_state(self, ref: int) -> str | None:
+        """The tracker's live state for ``ref``, or ``None`` when unreadable."""
+        ...
+
+    def close_issue(self, ref: int, comment: str) -> bool:
+        """Close ``ref`` as completed; ``False`` when the tracker refused."""
         ...
 
 
@@ -1489,8 +1500,9 @@ class GitHubIssueSource:
     ) -> list[Completion]:
         """Apply the wrapper-side completion backstops.
 
-        Two independent backstops, both reported as :class:`Completion` so
-        the loop counts them as iteration progress:
+        The PR-advance backstop, reported as :class:`Completion` so the loop
+        counts it as iteration progress. Issues are never closed here: only
+        the loop closes, after publication (#918).
 
         * **PR advances** (only when ``include_prs``): for each ``kind ==
           "pr"`` pool item, re-read the live head SHA and compare it to the
@@ -1499,17 +1511,10 @@ class GitHubIssueSource:
           base branch locally. The wrapper never closes or merges the PR.
           This runs **regardless of** ``new_commits`` because PR work lands
           on the PR branch, not the base branch.
-        * **Issue closures:** for each new base-branch commit, extract
-          closing-keyword refs (``Closes #N`` / ``Fixes #N`` / ``Resolves
-          #N``), filter to the iteration's *issue* pool whitelist, re-verify
-          state via the injected client's ``issue_view``, then close via its
-          ``issue_close``. Per-issue try/except — one failure doesn't
-          lose the rest of the iteration's bookkeeping.
         """
         completions: list[Completion] = []
         if self._include_prs:
             completions.extend(self._detect_pr_advances(pool))
-        completions.extend(self._handle_issue_closures(pool, new_commits))
         return completions
 
     def comment(self, ref: int | str, body: str) -> None:
@@ -1630,92 +1635,24 @@ class GitHubIssueSource:
                 )
         return completions
 
-    def _handle_issue_closures(
-        self,
-        pool: list[AfkReadyItem],
-        new_commits: list[Commit],
-    ) -> list[Completion]:
-        """Close pool *issues* referenced by closing keywords in new commits."""
-        if not new_commits:
-            return []
-
-        concatenated = "\n".join(c.message for c in new_commits)
-        surviving = actionable_close_refs(
-            concatenated,
-            ((item.ref, item.kind) for item in pool),
-        )
-
-        completions: list[Completion] = []
-        for ref in surviving:
-            completion = self._try_close_one(ref, new_commits)
-            if completion is not None:
-                completions.append(completion)
-        return completions
-
-    def _try_close_one(
-        self,
-        issue_number: int,
-        new_commits: list[Commit],
-    ) -> Completion | None:
-        """Re-verify state and close one issue; return the completion or None."""
-        ref_shas: tuple[str, ...] = tuple(
-            c.sha
-            for c in new_commits
-            if issue_number in extract_close_refs(c.message)
-        )
-        if not ref_shas:
-            # Defence-in-depth: should not happen since ``surviving``
-            # came from the same parser. But if a future parser drift
-            # introduced an asymmetry, skipping is safer than
-            # misattributing.
-            self._diag.warning(
-                "auto-close #%s: no commit in this iteration explicitly "
-                "closes the issue via the closing-keyword parser; "
-                "skipping to avoid misattribution",
-                issue_number,
-            )
+    def issue_state(self, ref: int) -> str | None:
+        """The tracker's live state for ``ref``, or ``None`` when unreadable."""
+        try:
+            return self._gh.issue_view(ref).state
+        except gh_module.GhError as exc:
+            self._diag.warning("gh issue view #%s failed: %s", ref, exc)
             return None
 
+    def close_issue(self, ref: int, comment: str) -> bool:
+        """Close ``ref`` as completed with ``comment``; ``False`` on a failure."""
         try:
-            current = self._gh.issue_view(issue_number)
+            self._gh.issue_close(ref, comment)
         except gh_module.GhError as exc:
             self._diag.warning(
-                "gh issue view #%s during auto-close failed: %s",
-                issue_number,
-                exc,
+                "gh issue close #%s failed: %s; issue remains open", ref, exc
             )
-            return None
-        if current.state == "CLOSED":
-            return None
-        if current.state != "OPEN":
-            self._diag.warning(
-                "issue #%s has unexpected state %r; not auto-closing",
-                issue_number,
-                current.state,
-            )
-            return None
-
-        shas_str = " ".join(ref_shas)
-        comment = (
-            f"Implemented in {shas_str}.\n\n"
-            f"Closed by the git-loopy loop because the agent did not run "
-            f"`gh issue close` itself this iteration (commit messages did "
-            f"reference `Closes #{issue_number}`).\n\n"
-            f"If this closure looks wrong, reopen with `gh issue reopen "
-            f"{issue_number}` — the loop will not re-close it without a "
-            f"new commit that references it."
-        )
-        try:
-            self._gh.issue_close(issue_number, comment)
-        except gh_module.GhError as exc:
-            self._diag.warning(
-                "gh issue close #%s failed: %s; issue remains open",
-                issue_number,
-                exc,
-            )
-            return None
-
-        return Completion(ref=issue_number, sha=ref_shas[0], shas=ref_shas)
+            return False
+        return True
 
 
 def _format_github_issue_block(issue: gh_module.Issue) -> str:

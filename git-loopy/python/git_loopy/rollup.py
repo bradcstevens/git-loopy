@@ -46,6 +46,7 @@ _USAGE_CONTEXT_WINDOW = "usage.context_window"
 _TOOL_CALL = "tool.call"
 _COMMIT_RECORDED = "wrapper.commit.recorded"
 _AUTO_CLOSE = "wrapper.auto_close"
+_ISSUE_CLOSED = "wrapper.issue.closed"
 
 _PR_ADVANCED = "wrapper.pr.advanced"
 _SKILL_PATH_PREFIX = ".copilot/skills/"
@@ -210,7 +211,7 @@ class IterationRollupAccumulator:
             current.commits += 1
             if contribution is not None:
                 contribution.commits += 1
-        elif event_type == _AUTO_CLOSE:
+        elif event_type in (_AUTO_CLOSE, _ISSUE_CLOSED):
             current.auto_closures += 1
             issue = event.get("issue")
             if issue is None:

@@ -454,8 +454,8 @@ def test_unforwarded_dashboard_stop_survives_client_failure_and_is_redelivered(
     _, guest, receipt, trace = remote_run
     queued = tmp_path / "queued-control"
     dashboard(tmp_path, monkeypatch, (
-        "submit_stop(control, 'durable-dashboard-stop')\n"
         f"Path({str(queued)!r}).write_text(str(control))\n"
+        "submit_stop(control, 'durable-dashboard-stop')\n"
         "time.sleep(15)\n"
     ))
 

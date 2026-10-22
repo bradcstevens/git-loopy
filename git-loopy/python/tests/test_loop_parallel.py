@@ -708,8 +708,8 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
     # ascending issue-number order.
     assert fake_git.head_sha() != "0000000000000000000000000000000000000001"
     assert [n for (n, _c) in fake_gh.issue_close_calls] == [42, 43]
-    # One wrapper.auto_close event per landed + closed Lane, same order.
-    auto_closes = [e for e in events if e["type"] == "wrapper.auto_close"]
+    # One wrapper.issue.closed event per landed + closed Lane, same order.
+    auto_closes = [e for e in events if e["type"] == "wrapper.issue.closed"]
     assert [e["issue"] for e in auto_closes] == [42, 43]
     # Both integrated Lane branches deleted (breadcrumbs are for failures only),
     # alongside the throwaway private Integration branch each one was gated on.
@@ -1010,7 +1010,7 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
     assert {e["lane_issue"] for e in commit_events} == {42, 43}
 
     # Each landed closure is stamped, and the stamp matches the closed issue.
-    auto_closes = [e for e in events if e["type"] == "wrapper.auto_close"]
+    auto_closes = [e for e in events if e["type"] == "wrapper.issue.closed"]
     assert auto_closes, "expected per-Lane closures"
     for e in auto_closes:
         assert e["lane_issue"] == e["issue"]
@@ -1637,7 +1637,7 @@ def test_parallel_contribution_survives_lane_reuse(
         assert fake_gh.issue_view(n).state == "CLOSED", f"#{n} was not closed"
     events = _logged_events(tmp_path)
     auto_closes = sorted(
-        e["issue"] for e in events if e["type"] == "wrapper.auto_close"
+        e["issue"] for e in events if e["type"] == "wrapper.issue.closed"
     )
     assert auto_closes == [42, 43, 44]
     # No stranding, no strikes -- every Contribution made progress regardless
@@ -2907,9 +2907,9 @@ def test_parallel_integration_lands_and_closes_both_lanes(
     assert fake_gh.issue_view(42).state == "CLOSED"
     assert fake_gh.issue_view(43).state == "CLOSED"
 
-    # One wrapper.auto_close event per landed Lane.
+    # One wrapper.issue.closed event per landed Lane.
     events = _logged_events(tmp_path)
-    auto_closes = [e for e in events if e["type"] == "wrapper.auto_close"]
+    auto_closes = [e for e in events if e["type"] == "wrapper.issue.closed"]
     assert sorted(e["issue"] for e in auto_closes) == [42, 43]
 
     # A successful Integration counts as Strike progress: both contributions
@@ -3041,7 +3041,7 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
         }
         event_types = [event["type"] for event in _logged_events(tmp_path)]
         release_index = event_types.index("wrapper.release.advanced")
-        assert event_types[release_index - 1] == "wrapper.auto_close"
+        assert event_types[release_index - 1] == "wrapper.issue.closed"
         assert (
             event_types.index("wrapper.integration.published") < release_index
         )
@@ -3708,8 +3708,8 @@ def test_parallel_rollup_preserves_published_unclosed_contribution_and_stops(
 
     assert exit_code == 1
     # #42 published (base advanced) but its close call failed -> stays open,
-    # never retried. #43's merge was a no-op -> never even attempted.
-    assert [n for (n, _msg) in fake_gh.issue_close_calls] == [42]
+    # retried once. #43's merge was a no-op -> never even attempted.
+    assert [n for (n, _msg) in fake_gh.issue_close_calls] == [42, 42]
     assert fake_gh.issue_view(42).state == "OPEN"
     assert fake_gh.issue_view(43).state == "OPEN"
 
@@ -3820,7 +3820,7 @@ def test_parallel_integration_red_gate_keeps_branch_and_publishes_nothing(
     contributions = [e for e in events if e["type"] == "wrapper.contribution.end"]
     assert [c["published"] for c in contributions] == [False, False]
     assert sorted(c["issue"] for c in contributions) == [42, 43]
-    assert [e for e in events if e["type"] == "wrapper.auto_close"] == []
+    assert [e for e in events if e["type"] == "wrapper.issue.closed"] == []
     # No serial Iteration ever ran: both Lane sessions already spent the
     # `max_iterations=2` budget, so the run ends via `iteration_cap` before
     # either fallback's latched serial request could be granted.
@@ -3907,7 +3907,7 @@ def test_parallel_integration_auto_resolves_red_lane_then_lands(
 
     events = _logged_events(tmp_path)
     assert [
-        e["issue"] for e in events if e["type"] == "wrapper.auto_close"
+        e["issue"] for e in events if e["type"] == "wrapper.issue.closed"
     ] == [42, 43]
     # Two Integrations landed = progress, so the round records no strike.
     assert [e for e in events if e["type"] == "wrapper.strike"] == []
@@ -4741,7 +4741,7 @@ def test_parallel_run_drains_lanes_then_serial_in_one_run(
     #     Integration, in this deterministic fake's completion order), then the
     #     plain issue (serial turn).
     auto_closes = [
-        e["issue"] for e in events if e["type"] == "wrapper.auto_close"
+        e["issue"] for e in events if e["type"] == "wrapper.issue.closed"
     ]
     assert auto_closes == [42, 43, 44]
 
@@ -6313,7 +6313,7 @@ def test_parallel_reports_latched_serial_demand_when_it_latches(
     lane_closure = next(
         index
         for index, event in enumerate(events)
-        if event["type"] == "wrapper.auto_close" and event.get("issue") == 42
+        if event["type"] == "wrapper.issue.closed" and event.get("issue") == 42
     )
     assert types.index("wrapper.serial.requested") < lane_closure
     assert types.index("wrapper.serial.requested") < types.index(
@@ -13717,7 +13717,7 @@ def test_a_lane_whose_lease_was_stolen_publishes_nothing_and_closes_nothing(
     assert fake_gh.issue_comment_calls == []
     assert fake_git.head_sha() == base_before
     events = _logged_events(tmp_path)
-    assert [e for e in events if e["type"] == "wrapper.auto_close"] == []
+    assert [e for e in events if e["type"] == "wrapper.issue.closed"] == []
     # The thief's ref is left exactly as the thief wrote it: a Lease this Run
     # no longer owns is never deleted, or it would free an issue another Run
     # is now working (§5.4).

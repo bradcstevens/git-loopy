@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.37",
+  "contract_version": "2.38",
   "event_schema_version": "1.10",
   "membership_cadence_cases": [
     {
@@ -658,6 +658,8 @@
       "subagent.completed",
       "subagent.failed",
       "wrapper.auto_close",
+      "wrapper.issue.closed",
+      "wrapper.issue.close_failed",
       "wrapper.checkpoint.recorded",
       "wrapper.commit.recorded",
       "wrapper.push.recorded"
@@ -755,6 +757,8 @@
     "WRAPPER_COMMIT_RECORDED": "wrapper.commit.recorded",
     "WRAPPER_PUSH_RECORDED": "wrapper.push.recorded",
     "WRAPPER_AUTO_CLOSE": "wrapper.auto_close",
+    "WRAPPER_ISSUE_CLOSED": "wrapper.issue.closed",
+    "WRAPPER_ISSUE_CLOSE_FAILED": "wrapper.issue.close_failed",
     "WRAPPER_PR_ADVANCED": "wrapper.pr.advanced",
     "WRAPPER_STRIKE": "wrapper.strike",
     "WRAPPER_ASK_USER_ATTEMPTED": "wrapper.ask_user.attempted",

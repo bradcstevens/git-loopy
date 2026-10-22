@@ -42,11 +42,26 @@ def agents_md(repo_root: Path) -> str:
     return (repo_root / "AGENTS.md").read_text(encoding="utf-8")
 
 
-def test_agents_md_declares_the_skills_repository_as_a_working_surface(
-    agents_md: str,
+@pytest.fixture(scope="module")
+def skills_repository_reference(repo_root: Path) -> str:
+    return (repo_root / "docs/agents/skills-repository.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_agents_md_points_skill_changes_to_the_reference(agents_md: str) -> None:
+    assert (
+        "When changing a Skill or Agent profile, follow [Skills repository "
+        "guidance](docs/agents/skills-repository.md)."
+        in agents_md
+    )
+
+
+def test_skills_repository_reference_describes_its_working_surface(
+    skills_repository_reference: str,
 ) -> None:
     """The Skills repository is changed here, not merely consumed (#634)."""
-    section = _section(agents_md, "### Skills repository")
+    section = _section(skills_repository_reference, "# Skills repository")
     assert "bradcstevens/git-loopy-skills" in section
     assert "working surface" in section
     assert "../git-loopy-skills" in section
@@ -78,9 +93,13 @@ def _section(text: str, heading: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def test_agents_md_requires_publish_then_prove_then_pin(agents_md: str) -> None:
+def test_skills_repository_reference_requires_publish_then_prove_then_pin(
+    skills_repository_reference: str,
+) -> None:
     """The pin moves last. A pin that moves before the proof is the failure."""
-    section = " ".join(_section(agents_md, "### Skills repository").lower().split())
+    section = " ".join(
+        _section(skills_repository_reference, "# Skills repository").lower().split()
+    )
     publish = section.find("publish")
     prove = section.find("prove")
     pin_last = section.find("pin last")
@@ -125,11 +144,14 @@ def test_an_incomplete_upstream_half_does_not_move_the_pin(
 
 
 def test_a_paired_change_names_the_revision_and_the_skill_edit(
-    agents_md: str, run_instructions: str
+    skills_repository_reference: str, run_instructions: str
 ) -> None:
     """A reviewer can see both halves without inferring which edit a pin bump carries."""
     for label, text in (
-        ("AGENTS.md", _section(agents_md, "### Skills repository")),
+        (
+            "docs/agents/skills-repository.md",
+            _section(skills_repository_reference, "# Skills repository"),
+        ),
         ("PROMPT.md", _section(run_instructions, "# PAIRED SKILL CHANGE")),
     ):
         collapsed = " ".join(text.split())
@@ -164,7 +186,9 @@ def test_the_authoring_adr_relationship_is_recorded(repo_root: Path) -> None:
         assert "ADR-0064" in earlier_text, earlier
 
 
-def test_the_gate_still_runs_from_this_repository_alone(agents_md: str) -> None:
+def test_the_gate_still_runs_from_this_repository_alone(
+    agents_md: str, skills_repository_reference: str
+) -> None:
     """A working surface is not a feedback-loop row. A row would reach the network."""
     commands = [
         loop.command
@@ -190,7 +214,7 @@ def test_the_gate_still_runs_from_this_repository_alone(agents_md: str) -> None:
         "a declared feedback loop leaves this checkout or reaches the network: "
         f"{offenders}"
     )
-    surface = " ".join(_section(agents_md, "### Skills repository").split())
+    surface = " ".join(skills_repository_reference.split())
     assert "reaches no network" in surface
     assert "this repository alone" in surface
 

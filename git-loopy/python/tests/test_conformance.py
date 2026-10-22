@@ -1362,7 +1362,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.10"
-    assert _EVENT_SCHEMA["contract_version"] == "2.37"
+    assert _EVENT_SCHEMA["contract_version"] == "2.38"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -3694,7 +3694,7 @@ def test_the_roster_preserves_compatibility_efforts_alongside_pinned_models() ->
     """A pinned-harness refresh does not erase saved Config's compatibility rows.
 
     ADR-0019 recorded that CLI ``1.0.67`` lacked the later Gemini capabilities.
-    CLI ``1.0.93`` verified the current observed rows. The upgrade account did
+    CLI ``1.0.98`` verified the current observed rows. The upgrade account did
     not list Gemini, so those rows are retained compatibility data, not a live
     capture.
     """
@@ -3709,11 +3709,9 @@ def test_the_roster_fixture_pins_the_context_tier_half_of_the_roster() -> None:
     """Tier capability lives **on** the roster, not in a parallel table (ADR-0017).
 
     One lockstep point with the live catalog, not two. ADR-0017 requires a
-    pinned-harness capture before a tier row is added; the 2026-10-09 refresh
-    records those tiers without guessing at compatibility-only models. The
-    CLI ``1.0.92-4`` capture lists four Opus/Astra models again, each with a
-    long-context price block, so they regain tier rows; ``claude-opus-4.7``
-    stays unlisted and tierless.
+    pinned-harness capture before a tier row is added. The CLI ``1.0.98``
+    capture lists Opus 5.5 and Astra with long context and MAI Code 2 with only
+    the default tier; models absent from that capture retain no tier claim.
     """
     tiers = {
         model: frozenset(offered)
@@ -3722,9 +3720,14 @@ def test_the_roster_fixture_pins_the_context_tier_half_of_the_roster() -> None:
     assert tiers == MODEL_CONTEXT_TIERS
     assert set(tiers) <= set(_MODEL_ROSTER["roster"])
     assert all(offered <= CONTEXT_TIERS for offered in tiers.values())
-    for relisted in ("claude-opus-5.5", "claude-opus-5", "claude-opus-4.8", "gpt-6-astra"):
+    for relisted in ("claude-opus-5.5", "gpt-6-astra"):
         assert tiers[relisted] == frozenset({"default", "long_context"})
-    assert "claude-opus-4.7" not in tiers
+    assert tiers["mai-code-2-flash"] == frozenset({"default"})
+    for unlisted in (
+        "claude-opus-5", "claude-opus-4.8", "claude-opus-4.7", "gpt-5.5",
+        "gpt-5.4", "gpt-5.4-mini", "gpt-5-mini", "grok-4.5",
+    ):
+        assert unlisted not in tiers
 
 
 _EFFORT_GATE = _load_fixture("effort-gate.json")

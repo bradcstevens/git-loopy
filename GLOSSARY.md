@@ -896,9 +896,18 @@ _Avoid_: severity, impact, semver level, `semver:` label.
 **Promotion**:
 Cutting a stable **Release version** from a **Release line**. Triggered by the
 `vX.Y.Z` **milestone** closing, which is what makes "when it makes sense" a tracker
-event rather than a judgement. It promotes from any prerelease stage, and it is the only
-trigger: a `major` **Bump class** is a prerelease like any other.
+event rather than a judgement. It promotes from any prerelease stage. The milestone is
+the only unattended trigger; an operator's by-exception promotion
+([ADR-0079](docs/adr/0079-a-human-opens-a-major-line-and-the-1-0-0-cut-waits-for-the-python-path.md))
+is the other route, and the same
+**Rehearsal** proves both. A `major` **Bump class** is a prerelease like any other.
 _Avoid_: release cut, graduation, publish.
+
+**Reopen**:
+Moving an unpublished stable **Release target** back onto its prerelease line, which withdraws
+its stable commit from the **Promotion** walk. Only an operator does it, by exception
+([ADR-0097](docs/adr/0097-reopening-an-unpublished-release-target-withdraws-its-stable-commit.md)).
+_Avoid_: release candidate (the `-rc.N` stage), rollback, downgrade, revert.
 
 **Release assessment**:
 A read-only, advisory reading of one repository's **Release line** that tells a Loop engineer
@@ -1796,7 +1805,9 @@ workspace is preserved on exactly one condition, salvage itself failing, which i
 case where reclaiming would lose work. Salvage emits no **Event**, not even a Checkpoint
 one, because reclamation is not issue work and a **Queue** row for it would trace
 work that did not happen. Both a live Run reclaiming its own workspaces at
-Stop/exit and a later **Sweep** reclaiming a dead Run's residue perform Salvage.
+Stop/exit and a later **Sweep** reclaiming a dead Run's residue perform Salvage. So does a
+remote Run's **Teardown**, where work it cannot preserve outlives the Run only by Teardown's
+fixed delay: the one case in which reclamation destroys work.
 It makes cancelled work *recoverable, not resumable*:
 a later Run mints a new Lane branch for the issue rather than continuing the salvaged one,
 which is what lets a Stop cancel safely without pretending the work will be picked up.
@@ -2178,8 +2189,10 @@ _Avoid_: contract pin, fixture revision (both name a fixture's latest change).
 ### Run residence (accepted design)
 
 These terms complete the vocabulary of
-[ADR-0093](docs/adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md)
-and record decisions whose delivery has not yet been accepted. The **Isolation
+[ADR-0093](docs/adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md) and
+[ADR-0099](docs/adr/0099-a-remote-run-preserves-its-work-halts-and-azure-deletes-it.md) and
+[ADR-0101](docs/adr/0101-a-remote-run-preserves-its-runner-record-for-the-laptop-to-import.md), and
+record decisions whose delivery has not yet been accepted. The **Isolation
 grade** and **Execution host** entries above keep their meanings: a Sandbox does not change
 a host's grade, and a Run residence does not change a host's placement.
 
@@ -2191,6 +2204,16 @@ the default; a Run resides remotely only when the operator asks for it. Every is
 Agents work in their own **Sandbox** in either residence.
 _Avoid_: Run placement, Run host, remote Execution host (an Execution host places one
 **Lane contribution**, not a Run).
+
+**Teardown**:
+What happens to a remote **Run**'s microVM once its **Orchestrator** has exited, for any reason.
+Every **Issue clone** is **Salvaged**, everything a local **Sweep** would keep is preserved as
+**Breadcrumbs**, and whatever could not be preserved is named on its issue. The Run's own record,
+its Runner events and its **Summary**, is preserved for a laptop client to import; only its
+diagnostics are lost. The microVM then stops,
+and it is deleted after a fixed delay. Teardown begins only once the Run has ended, unlike
+**Wind-down**, and it is never a side effect of **Detach**.
+_Avoid_: retention (trace history), cleanup, reaping, shutdown.
 
 ## Relationships
 
