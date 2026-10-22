@@ -336,7 +336,9 @@ _Avoid_: poll, refresh, shallow pool, live pool.
 One **Session outcome** charged to the issue whose session it was. Every ending — silent
 no-progress, timeout, crash, no more tasks, content-filtered — charges exactly one, and a session
 that advanced its issue charges nothing unless the Orchestrator lost it to a timeout or crash,
-which progress does not launder (**Session outcome**). Strikes are counted per issue, per
+which progress does not launder (**Session outcome**). In the Python Runner, a session a
+terminal account refusal ended is the exception and charges none: the account failed, not the
+issue, so the Run stops or pauses instead (Wrapper contract §19.1). Strikes are counted per issue, per
 **Run**: what one issue spends no other issue loses. `--max-nmt-strikes` is N, the number each
 issue gets, so it reads as *how many times this Run may try an issue that keeps ending badly*;
 the issue is retried until it holds N and is **Skip**ped then, and the **Attempt lifecycle** is
@@ -356,8 +358,10 @@ timeout, crash, an explicit declaration that no tasks remain, and content-filter
 a session that advanced its issue reached none of the three that are claims about the
 work, because a commit refutes each. A timeout and a crash are facts about a session the
 Orchestrator lost, which progress does not launder. Distinct from a **Strike**,
-which is the Run's *accounting* of a result: each ending charges its issue one, and the
-ending is what says why. Distinct too from an Iteration's outcome in the Run
+which is the Run's *accounting* of a result: each ending charges its issue one, except, in the
+Python Runner, an ending a terminal account refusal caused, which charges none (Wrapper contract
+§19.1), and
+the ending is what says why. Distinct too from an Iteration's outcome in the Run
 summary, which reports what the work produced rather than how the session finished.
 _Avoid_: exit code, session status, failure reason.
 
@@ -367,8 +371,10 @@ type, its message, the service status code where one was reached, and where in t
 session it arose — classified into a closed set of kinds: quota exhaustion, rate
 limiting, authentication, bad request, transport, service fault, and unknown. It
 is what lets an exhausted account be told from a session that merely produced nothing,
-which a flattened string never could. Recording one implies no reaction: the ending is
-still attributed to the issue that happened to be in hand. Content filtering is not one
+which a flattened string never could. Recording one implies no reaction by itself: the ending
+is still attributed to the issue that happened to be in hand, unless the Python Runner's
+Run-wide account control acts on a terminal refusal whose endpoint evidence identifies the
+account (Wrapper contract §19.1). Content filtering is not one
 of these kinds: the harness reports it as a verdict on a call it completed rather than
 as a failure, so it is an ending a session reached, never an identity a failure carries.
 _Avoid_: error message, failure string, exception.
@@ -1378,7 +1384,8 @@ _Avoid_: retry model, fallback pair (that is the **Default pair**), escalation l
 How many attempts one issue gets in one **Run**, as a single monotonic state per issue projected
 from its **Strikes**: **fresh** (none), **retrying** (fewer than N, the `--max-nmt-strikes`
 budget) and **skipped** (N, out of contention for the rest of the Run). Every **Session outcome**
-charges the issue one Strike, so every ending is retried until N — an operator who wants an ending
+charges the issue one Strike, except, in the Python Runner, one a terminal account refusal
+caused, which charges none and moves no state (Wrapper contract §19.1), so every ending is retried until N — an operator who wants an ending
 to defeat an issue on first sight sets N to `1` — and an **Iteration** that advanced its issue
 without losing its session reached no ending, so it spends no attempt and refunds none (ADR-0070). It is the other dial the
 **Escalation rung** shares an ending with: the rung decides whether the *pair* changes, this

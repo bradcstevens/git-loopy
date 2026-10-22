@@ -83,6 +83,7 @@ from git_loopy.events import (
     WRAPPER_RUN_END,
     WRAPPER_RUN_START,
     WRAPPER_SANDBOX_RESOLVED,
+    WRAPPER_ACCOUNT_STATE,
     WRAPPER_SERIAL_REQUESTED,
     WRAPPER_STRIKE,
     WRAPPER_STOP_LIFTED,
@@ -249,6 +250,15 @@ class Renderer:
             state = "unknown"
         label = "remote (always on)" if state == "remote" else state
         self.console.print(Text(f"  Sandbox: {label}", style=STYLES["meta"]))
+
+    def _on_account_state(self, event: dict[str, Any]) -> None:
+        state = "confirmed" if event.get("admission_open") else event.get("state")
+        self.console.print(Text(
+            f"account {state}: {event.get('kind')} / {event.get('cause')} · "
+            f"{event.get('retries_remaining')} retries · "
+            f"{event.get('wait_remaining_seconds')}s wait budget left",
+            style=STYLES["warning"],
+        ))
 
     def _print_run_readback(self, event: dict[str, Any]) -> None:
         """Read back what this Run parsed, and what the gate makes of it (#410).
@@ -477,7 +487,10 @@ class Renderer:
         outcome = event.get("outcome")
         if outcome is not None:
             text = Text()
-            text.append("✓ ", style=STYLES["success"])
+            if outcome == "account_failure":
+                text.append("⚠ ", style=STYLES["warning"])
+            else:
+                text.append("✓ ", style=STYLES["success"])
             text.append(f"run end: {outcome}", style=STYLES["meta"])
             self.console.print(text)
 
@@ -1451,6 +1464,7 @@ def _run_readback_lines(event: dict[str, Any]) -> list[tuple[str, str, str]]:
 _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_RUN_START: Renderer._on_run_start,
     WRAPPER_SANDBOX_RESOLVED: Renderer._on_sandbox_resolved,
+    WRAPPER_ACCOUNT_STATE: Renderer._on_account_state,
     WRAPPER_RUN_END: Renderer._on_run_end,
     WRAPPER_ITERATION_START: Renderer._on_iteration_start,
     WRAPPER_ITERATION_END: Renderer._on_iteration_end,

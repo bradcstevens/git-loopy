@@ -326,11 +326,12 @@ if a saved Skill policy still enables the retired name.
    work in a Checkpoint when necessary, pushes new commits, updates the live
    interface and Summary, and charges the issue a Strike whenever its session
    reaches an ending: no progress, a timeout or crash, no more tasks, or a
-   content filter.
+   content filter. In the Python Runner, a session a terminal account refusal
+   ended charges none: the Run stops or pauses instead.
 8. **Repeat, then judge.** The next Iteration receives a fresh Pool and context.
    An issue whose sessions keep ending badly is skipped once it holds
    its configured Strikes; the Run stops when work is exhausted, the configured
-   limit is reached, or every remaining issue has been skipped. The loop engineer reviews the pushed result against
+   limit is reached, every remaining issue has been skipped, or an account refusal ends it. The loop engineer reviews the pushed result against
    the spec and repository standards, accepts it, reopens it, or creates a new
    sliced issue. Closed issues and commits preserve the state between Iterations.
 9. **Improve the workflow, not just the code.** Every red gate, wasted Iteration,

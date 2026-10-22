@@ -10,6 +10,43 @@ fn at(rfc3339: &str) -> Timestamp {
     Timestamp::parse_rfc3339(rfc3339).expect("fixture timestamp parses")
 }
 
+#[test]
+fn account_control_is_run_level_and_retains_budgets_without_issue_status() {
+    let mut state = DashboardState::new(RunInputs::new("work-model", "high"));
+    let ctx = context("2026-05-16T00:00:01Z", 0);
+    assert!(
+        view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]
+            .get("account")
+            .is_none()
+    );
+    for (phase, cause, opened) in [
+        ("cooldown", "rate_refusal", false),
+        ("probing", "probe_admitted", false),
+        ("probing", "probe_succeeded", true),
+        ("stopping", "terminal_refusal", false),
+    ] {
+        let payload = serde_json::json!({
+            "type": "wrapper.account.state", "iter": null, "state": phase,
+            "kind": "rate_limited", "cause": cause, "retries_remaining": 1,
+            "wait_remaining_seconds": 90.0, "admission_open": opened,
+        });
+        state.apply(&Event::from_jsonl_line(&payload.to_string()).unwrap());
+        let projected = view(&state, &ctx, IssueRef::number(42));
+        assert_eq!(
+            projected["dashboard"]["header"]["account"],
+            serde_json::json!({
+                "state": phase, "kind": "rate_limited", "cause": cause,
+                "retries_remaining": 1, "wait_remaining_seconds": 90.0,
+                "admission_open": opened,
+            })
+        );
+        assert_eq!(
+            projected["dashboard"]["queue"]["rows"],
+            serde_json::json!([])
+        );
+    }
+}
+
 fn context(now: &str, offset_minutes: i32) -> ViewContext {
     ViewContext {
         now: at(now),

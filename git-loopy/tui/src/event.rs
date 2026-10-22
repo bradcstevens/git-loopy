@@ -290,6 +290,8 @@ pub enum EventPayload {
     RunEnd(RunEnd),
     /// `wrapper.stop.requested`
     StopRequested(StopRequested),
+    /// `wrapper.account.state`, a Run fact, never an issue Status.
+    AccountState(AccountState),
     /// `wrapper.stop.lifted`
     StopLifted(StopLifted),
     /// `wrapper.contribution.end`
@@ -1011,7 +1013,8 @@ pub struct PrAdvanced {
 /// One Strike.
 ///
 /// The Python Runner charges a Strike to the issue a Session worked, once per
-/// Session ending, and names that `issue`; `strikes` is then that issue's count
+/// Session ending except one a terminal account refusal caused (contract
+/// §19.1), and names that `issue`; `strikes` is then that issue's count
 /// and `max_strikes` its budget (ADR-0070). The shell and PowerShell
 /// Orchestrators name no issue: theirs is one Run-wide count of consecutive
 /// no-progress Iterations.
@@ -1067,6 +1070,17 @@ pub struct StopRequested {
     /// Contributions still in flight when the latch became true.
     #[serde(default)]
     pub draining: Option<i64>,
+}
+
+/// Python Run-wide account control, including the remaining lifetime budgets.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct AccountState {
+    pub state: String,
+    pub kind: String,
+    pub cause: String,
+    pub retries_remaining: u32,
+    pub wait_remaining_seconds: f64,
+    pub admission_open: bool,
 }
 
 /// A revocable Strike drain clearing after a green publication.
@@ -1374,6 +1388,7 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),
         "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
+        "wrapper.account.state" => EventPayload::AccountState(decode_or_default(value)),
         "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),
         // Only the rolling types with a producer are modelled (ADR-0044): the
         // Lane-contribution lifecycle, parking and admission (#682),

@@ -4,7 +4,8 @@
 
 **Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):** the budget is no longer two
 attempts with three endings defeating an issue on first sight. Every **Session outcome** charges
-its issue one **Strike**, and an issue is skipped at `max_nmt_strikes` (N). The lifecycle is the
+its issue one **Strike**, except, in the Python Runner, one a terminal account refusal caused
+(ADR-0070's #676 amendment), and an issue is skipped at `max_nmt_strikes` (N). The lifecycle is the
 projection of that count — `fresh` at none, `retrying` below N, `skipped` at N — and stays per
 issue, per Run, monotonic, and a **Pickup** filter.
 
@@ -79,8 +80,8 @@ fallback model and no automatic model switch**.
 
 That routing boundary does not reinstate the table's historical immediate-skip rules:
 [ADR-0070](0070-a-strike-is-charged-to-the-issue.md) supersedes its lifecycle accounting,
-and current account-condition behavior is governed separately by
-[#676](https://github.com/bradcstevens/git-loopy/issues/676).
+and current account-condition behavior is governed separately by its
+[#676 amendment](0070-a-strike-is-charged-to-the-issue.md#a-terminal-account-refusal-is-run-control-not-a-strike).
 
 ## Skipping is a Pickup filter, never a Pool filter
 

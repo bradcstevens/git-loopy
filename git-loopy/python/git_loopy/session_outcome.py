@@ -15,16 +15,16 @@ Two axes, deliberately separate:
   one string. It is what makes an exhausted quota, a rate limit and an expired
   credential three different facts instead of three ways of spelling "no progress".
 
-**Recording is the whole of the job.** Nothing here decides to abort a Run, to back
-off, or to leave an issue alone: an account-level condition is still attributed to
-the individual issue whose Iteration met it, exactly as before. Whether quota
-deserves a Run-level stop and rate limiting deserves a delay are undecided
-questions, and answering them by accident inside a classifier would be the worst
-possible place to answer them.
+**Recording is the whole of this module's job.** Nothing here decides to abort a
+Run, back off, or leave an issue alone. The separate Run-wide account-control
+policy (:mod:`git_loopy.account_control`, #676) requires terminal endpoint
+provenance before acting on an account refusal; the descriptive classifier alone
+supplies no authority for that reaction.
 """
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -41,6 +41,7 @@ __all__ = [
     "SessionOutcomeWatch",
     "SessionTermination",
     "classify_error_kind",
+    "normalize_retry_delay",
     "resolve_session_outcome",
     "strongest_error",
 ]
@@ -77,9 +78,9 @@ class SessionErrorKind(Enum):
 
     Named for the *condition*, never for a reaction to it. ``RATE_LIMITED`` says a
     limiter refused the call, not that the Run should wait; ``QUOTA_EXHAUSTED``
-    says the account is spent, not that the Run should stop. Whether either
-    deserves a reaction is undecided (#403), and a vocabulary that answered it
-    would have decided it here by accident.
+    says the account is spent, not that the Run should stop. The separate
+    Run-wide account policy (#676) requires terminal endpoint provenance and
+    account identity before reacting; this classifier alone grants no control.
 
     ``UNKNOWN`` is a real member rather than a ``None``: the harness reported a
     failure git-loopy could not place, which is a different fact from no failure
@@ -226,6 +227,9 @@ class SessionError:
         model: The model whose call failed, where the record named one.
         service_request_id: The service's request id, so a condition can be taken
             to whoever operates the service.
+        retry_after_seconds: Reported provider timing, retained through remote
+            artifacts. Unusable values remain diagnosable rather than becoming
+            missing timing; the separate account controller decides what to do.
     """
 
     kind: SessionErrorKind
@@ -236,6 +240,7 @@ class SessionError:
     message: str | None = None
     model: str | None = None
     service_request_id: str | None = None
+    retry_after_seconds: int | float | str | bool | None = None
 
     @classmethod
     def from_event(cls, event: Mapping[str, Any]) -> SessionError | None:
@@ -266,23 +271,32 @@ class SessionError:
             message=message,
             model=_text(event.get("model")),
             service_request_id=_text(event.get("service_request_id")),
+            retry_after_seconds=normalize_retry_delay(event.get("retry_after_seconds")),
         )
 
     @classmethod
     def from_exception(cls, exc: BaseException, *, origin: str = "runner") -> SessionError:
         """Read one failure identity off an exception the Orchestrator caught.
 
-        The exception's type name and text are all there is, so this is the one
-        path where the identity is inferred from prose — but it is inferred once,
-        here, instead of being left as prose for every reader to squint at.
+        Retain structured code/status attributes when the harness supplies them.
+        Otherwise the descriptive identity may be inferred from type/text;
+        that inference alone is not authority for Run-wide account control.
         """
         error_type = type(exc).__name__
         message = str(exc)
+        error_code = _text(getattr(exc, "error_code", None)) or _text(getattr(exc, "code", None))
+        status = getattr(exc, "status_code", None)
         return cls(
-            kind=classify_error_kind(error_type=error_type, message=message),
+            kind=classify_error_kind(
+                error_type=error_type, error_code=error_code,
+                status_code=status if isinstance(status, int) else None, message=message,
+            ),
             origin=origin,
             error_type=error_type,
+            error_code=error_code,
+            status_code=status if isinstance(status, int) else None,
             message=message or None,
+            retry_after_seconds=normalize_retry_delay(getattr(exc, "retry_after_seconds", None)),
         )
 
     def as_payload(self) -> dict[str, Any]:
@@ -295,11 +309,21 @@ class SessionError:
             "message",
             "model",
             "service_request_id",
+            "retry_after_seconds",
         ):
             value = getattr(self, name)
             if value is not None:
                 payload[name] = value
         return payload
+
+
+def normalize_retry_delay(value: object) -> int | float | str | bool | None:
+    """Retain timing evidence in JSON-safe form, including unusable timing."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    return "invalid"
 
 
 def _text(value: Any) -> str | None:
@@ -408,6 +432,14 @@ class SessionOutcomeWatch:
         from would name a condition the session had already survived.
         """
         return self._errors[-1] if self._errors else None
+
+    @property
+    def terminal_error(self) -> SessionError | None:
+        """The session endpoint's refusal, distinct from per-call telemetry."""
+        return next(
+            (error for error in reversed(self._errors) if error.origin == events.SESSION_ERROR),
+            None,
+        )
 
 
 class SessionTermination(Enum):

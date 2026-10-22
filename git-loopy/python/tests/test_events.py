@@ -303,6 +303,7 @@ def test_contribution_scoped_lifecycle_types_are_the_pinned_set() -> None:
         "checkpoint_failed",
         "serial_fallback",
         "operator_stop",
+        "account_failure",
     )
 
 

@@ -594,12 +594,14 @@ class RollingScheduler:
         return self.lane_first_in_setup or self.pool.lane_first_paced()
 
     def reserve(
-        self, *, only: frozenset[int | str] | None = None
+        self, *, only: frozenset[int | str] | None = None, limit: int | None = None,
     ) -> tuple[Reservation, ...]:
         """Reserve refillable Lanes, optionally only a Priority prefix (#720)."""
         self.pool.service(refillable=self.refillable, only=only)
         reservations: list[Reservation] = []
         while self.refillable > 0 and not self.lane_first_in_setup:
+            if limit is not None and len(reservations) >= limit:
+                break
             take = self.pool.take(only=only)
             item = take.item
             if item is None:

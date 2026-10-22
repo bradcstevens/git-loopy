@@ -2260,6 +2260,64 @@ def test_second_stop_before_host_dispatch_starts_no_host_contribution(
     assert _work_finished(tmp_path) == []
 
 
+def test_first_stop_before_host_dispatch_still_runs_and_publishes_contribution(
+    tmp_path, monkeypatch
+) -> None:
+    """The first Stop drains a dispatched Lane on an external host too."""
+    fake_git = _wire_repo(tmp_path)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module, "_make_client",
+        lambda: _ParallelFakeClient(fake_git=fake_git, scripted_events=[]),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda **_kwargs: FakeGateRunner())
+
+    class _RecordingHost(_RemoteBranchExecutionHost):
+        calls = 0
+
+        async def run_contribution(self, request: ContributionRequest) -> ContributionOutcome:
+            self.calls += 1
+            return await super().run_contribution(request)
+
+    host = _RecordingHost(fake_git)
+    real_parallel_loop = loop_module._ParallelLoop
+    real_request = real_parallel_loop._build_contribution_request
+
+    def inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", inject_host)
+
+    def stop_before_dispatch(
+        self: loop_module._ParallelLoop, *args: Any, **kwargs: Any
+    ) -> ContributionRequest:
+        request = real_request(self, *args, **kwargs)
+        self.request_stop_drain()
+        return request
+
+    monkeypatch.setattr(real_parallel_loop, "_build_contribution_request", stop_before_dispatch)
+
+    assert asyncio.run(loop_module.run(RunConfig(
+        model="claude-opus-4.8-max", max_iterations=5, verbosity=0, render_reasoning=False,
+    ))) == 1
+    assert host.calls == 1
+    events = _logged_events(tmp_path)
+    (end,) = [event for event in events if event["type"] == "wrapper.contribution.end"]
+    assert end["published"] is True
+    assert end["reason"] != "account_failure"
+    assert fake_gh.issue_view(42).state == "CLOSED"
+    run_end = next(event for event in events if event["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "operator_stop"
+    assert "account_cause" not in run_end and "account_error" not in run_end
+    assert not [event for event in events if event["type"] == "wrapper.account.state"]
+    assert len(_work_finished(tmp_path)) == 1
+
+
 def test_parallel_the_first_stop_stops_refill_and_still_integrates_started_work(
     tmp_path, monkeypatch
 ) -> None:

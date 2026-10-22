@@ -102,8 +102,8 @@ no longer read as `ADVANCED` or retain its success meaning, but it neither
 blacklists a configuration nor creates an escalation trigger for a Static route.
 An intermediate Integration failure that Recovery turns green is not terminal;
 Review rejection and publication push failure alone do not establish this outcome.
-Recognized account interruption remains subject to
-[#676](https://github.com/bradcstevens/git-loopy/issues/676), not adverse routing
+Recognized account interruption is Run control under ADR-0070's
+[#676 amendment](0070-a-strike-is-charged-to-the-issue.md#a-terminal-account-refusal-is-run-control-not-a-strike), not adverse routing
 evidence.
 
 This is accepted design under [#932](https://github.com/bradcstevens/git-loopy/issues/932),

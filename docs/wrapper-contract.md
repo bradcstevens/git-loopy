@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.39 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.40 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -764,7 +764,9 @@ Runner that does not yet hold it keeps the second accounting below:
 
 - **A Runner with an Attempt lifecycle** (contract 2.22, ADR-0070) MUST charge **one Strike to the issue a
   session worked for every Session outcome** that session reaches (§14.3) — silent no-progress,
-  timeout, crash, no more tasks, or content-filtered. A session that advanced its issue MUST charge
+  timeout, crash, no more tasks, or content-filtered. In the Python Runner, a session that a
+  terminal account refusal ended MUST charge none (§19.1, contract 2.40). A session that advanced
+  its issue MUST charge
   nothing unless it timed out or crashed: progress refutes silent no-progress, no more tasks and
   content-filtered, but a timeout or crash is an ending whether or not the session advanced.
   Strikes are counted **per issue, per Run**: one issue's Strikes MUST NOT count against any other
@@ -824,6 +826,7 @@ error (exit `2`).
 | `1`  | Waiting — all blocked | Every Pickup refusal proved a wait: an open native blocker, or an open closing pull request (§3.3.1, contract 2.17). |
 | `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), or an unread refusal left it unresolved (§3.3.1). |
 | `1`  | Stopped — operator   | The operator ended the Run deliberately (§10.1, contract 2.3).       |
+| `1`  | Stopped — account    | A terminal, account-identifying harness refusal ended a Python Run: `account_failure` (§19.1, contract 2.40). |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
 
 Exit code `3` is retired. It used to mean a Run that continued past a Dashboard
@@ -1174,12 +1177,17 @@ types, MUST also follow this order:
 ```
 contribution.start
   ( work_finished
-      ( end[unchanged_branch]
+      ( end[unchanged_branch | account_failure]
       | [parked] admitted started branch_observed recovery_started{0..3}
           ( published issue.closed [release.advanced] end[published]
-          | [push_failed] end[serial_fallback] ) )
-  | end[checkpoint_failed | unchanged_branch | operator_stop] )
+          | [push_failed] end[serial_fallback]
+          | end[account_failure] ) )
+  | end[checkpoint_failed | unchanged_branch | operator_stop | account_failure] )
 ```
+
+`account_failure` (§19.1, contract 2.40) ends a Lane unpublished wherever an account refusal
+stops it: a host failure before `work_finished`, a refused session after it, or a refused
+Recovery during Integration.
 
 The order covers lifecycle types only, so stamped assistant, tool, usage, commit and Checkpoint
 records interleave freely. Run-exit reclamation may end any open contribution at any point with
@@ -1927,7 +1935,8 @@ run-wide default:
   declares — as the projection of that issue's **Strikes** (§6): `fresh` at none, `retrying` at
   fewer than N (`GIT_LOOPY_MAX_NMT_STRIKES`), and `skipped` at N. From contract 2.22 every one of
   the five **Session outcomes** charges one Strike and so moves the issue one step, as that
-  fixture's table states (ADR-0070); before it, a timeout, an explicit no-more-tasks and a
+  fixture's table states (ADR-0070), unless, in the Python Runner, a terminal account refusal
+  ended the session, which moves nothing (§19.1, contract 2.40); before it, a timeout, an explicit no-more-tasks and a
   content-filtered turn moved it straight to `skipped`. An Iteration that advanced its issue
   without timing out or crashing reached no ending and MUST move it neither forward nor back.
   The lifecycle MUST NOT regress — including on an advancing Iteration between two failures, because an issue
@@ -1954,7 +1963,9 @@ run-wide default:
   retry at all.
   **The lifecycle is what the Strikes count (contract 2.22, ADR-0070).** An Orchestrator that
   holds it MUST charge one **Strike** to an issue for each Session outcome a session on it reaches,
-  and the ending that charges the N-th is the one recorded as its defeat. It MUST charge nothing
+  except, in the Python Runner, one a terminal account refusal caused (§19.1), and the ending that
+  charges the N-th is
+  the one recorded as its defeat. It MUST charge nothing
   for an Iteration that bound nothing, and nothing further once the issue is `skipped`. Because
   the lifecycle is a property of the issue and not of the seam that observed it, the Strike MUST
   be charged where the ending is observed, which is the one seam every pickup mode already
@@ -2422,7 +2433,8 @@ and 2.31 with Reviewer read-only access (ADR-0078/0086),
 and 2.32 with the Host yield disclosure (§4, §12, #817),
 and 2.34 with the Sandbox disclosure (§12, #864),
 and 2.37 with the Python mid-work Membership cadence (§12, #429),
-and 2.38 with Orchestrator-only closure (§21, #918).
+and 2.38 with Orchestrator-only closure (§21, #918),
+and 2.40 with Python Run-wide account control (§19.1, #676).
 Contract 2.39 withdraws the dormant paths' Sandbox exception (§19, ADR-0098):
 only `fixture-claims.json` advances its provenance; `sandbox.json`'s cases and
 `distributions`, the Event/Dashboard fixture revisions and historical streams'
@@ -2433,8 +2445,9 @@ in the new Python-only `rolling-priority.json`, proved through complete Runs in
 it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1), then 2.29 with the Python-only non-execution Task-type exclusion.
-Event revision 1.10 and Dashboard revision 1.26 record current provenance;
-the Membership cadence adds no Dashboard projection. Revision 1.25 added the
+Event revision 1.11 and Dashboard revision 1.27 record current provenance;
+the Dashboard adds the Run-level account state. Revision 1.26 tracked the
+Membership cadence, which adds no Dashboard projection. Revision 1.25 added the
 optional Header Sandbox state. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle
 types, the `subagents` capability key and the `usage.tokens` attribution fields;
 the Dashboard fixture moves to 1.15 for the Activity total field. Compatibility
@@ -3273,6 +3286,100 @@ resolves no policy; its Sandbox disclosure consumption remains pinned by
 
 Contract 2.35 adds this enforcement fixture without changing the Event schema,
 the Event/Dashboard fixture revisions, or historical streams' interpretation.
+
+## 19.1 Python Run-wide account control (#676)
+
+Terminal, account-identifying harness refusal is Run control, not an issue failure.
+The Python Runner requires an account code/type or an explicitly account-identifying
+message at the session endpoint (for example, premium-request exhaustion or invalid
+credentials, not generic permission denial or filesystem quota);
+a bare HTTP 403/429, classifier kind alone, arbitrary tool stderr, or recovered
+`model.call_failure` does not authorize it. A normal SDK return and commits made
+before the refusal do not override this evidence. Unknown, network, server and
+bad-request failures retain their existing policy.
+
+Quota exhaustion or authentication refusal stops new account-dependent sessions:
+workers, Reviewers, selectors, classifiers and Recovery share one admission gate.
+Already-started sessions drain through the existing bounded completion/cancellation
+paths and their work is salvaged. Only independently proved results may finish
+ordinary gated, Lease-fenced publication and closure. No account, credential or
+model fallback is authorized.
+Account-interrupted Recovery retains its Integration branch and Checkpoints dirty
+repairs before reclaiming the workspace; a failed salvage preserves the workspace
+instead of forcing removal. This applies with or without a Sandbox.
+
+A terminal rate refusal pauses admission under one Run-wide cooldown. The Run
+allows at most two retry admissions and 120 cumulative seconds of cooldown.
+Fallbacks are 30 seconds, then 60 seconds; a valid provider delay is a minimum
+(the larger of it and the fallback is used). Missing timing uses the fallback;
+invalid timing stops with `invalid_retry_delay`. A delay beyond the remaining
+budget stops with `wait_budget_exhausted`, never retries early. The pinned SDK's
+typed terminal error currently has no retry-delay field; it therefore supplies
+missing timing, not a guessed delay parsed from prose.
+When an endpoint exception or remote artifact reports `retry_after_seconds`,
+the Session error preserves it across the host boundary, including unusable
+timing for diagnosis. Replaying or finalizing that same refusal is not another
+cooldown observation.
+
+Concurrent refusals coalesce: missing timing does not reset the clock or consume
+another retry. An explicit later provider minimum can extend that same deadline
+only within the remaining budget. After cooldown, at most one ordinary eligible
+worker is admitted as the probe, under the usual Pin, eligibility, Lease, routing
+and cap constraints. No paid health-check or auxiliary session is a probe.
+Positive successful harness interaction is required to reopen admission; absence
+of an error or a commit alone is not health. Success does not reset either budget.
+An unconfirmed probe, no eligible probe, an exhausted retry budget, or a cap that
+prevents a retry terminates explicitly. Quota/auth stops dominate a rate pause.
+Operator Stop interrupts cooldown promptly and keeps `operator_stop` primary;
+hard deadlines remain in force.
+
+An affected session records its actual ending, work, elapsed time and credits but
+charges no issue Strike, Attempt transition, escalation or adverse route-quality
+evidence. Earlier legitimate history is never refunded. An already-granted
+session consumes its Iteration/Lane-work unit, even when its remote delivery fails
+afterwards; cooldown consumes none. Unaffected
+issue failures keep their ordinary accounting. An affected attempt's work, including
+any commits it left, is counted but never published or closed: a serial attempt's
+Issue clone is reclaimed with its branch kept, and an affected Lane ends unpublished.
+An already-closed affected issue is diagnosed, preserved and not treated as verified
+completion; it is never automatically reopened. A Checkpoint does not prove
+completion, and no Agent closes an issue (§21).
+Restored account health does not release this publication protection. Only the
+Orchestrator's own closure (§21) releases it, once a later ordinary attempt's fresh
+close-bearing Agent commit has passed the ordinary Lease-fenced publication and
+source-verified closure. Until then a serial attempt on the protected issue is merged
+onto local base without its own push, so its Checkpoints and non-closing progress
+reach the upstream only with a later publication of other work, and never close the
+issue. Closure follows publication (§21), so a fresh closing commit is pushed before
+the tracker close; if the tracker then refuses it, the published issue stays open and
+protected, with `wrapper.issue.close_failed` (stage `tracker`). The protection is held
+for the Run that observed the refusal and is not persisted across Runs.
+
+The terminal reason is **`account_failure` / exit 1**, carrying `account_error`
+(the original Session error identity) and `account_cause` on `wrapper.run.end`.
+These fields also retain evidence when a deliberate `operator_stop` takes priority.
+An affected Lane's terminal contribution reason is `account_failure`, unpublished.
+
+### Account Event (Event fixture 1.11; envelope compatibility 1)
+
+Python alone produces **`wrapper.account.state`**, at Run scope (`iter: null`):
+
+| Field | Meaning |
+| --- | --- |
+| `state` | `cooldown`, `probing`, or `stopping` |
+| `kind` | Original `quota_exhausted`, `authentication_failed`, or `rate_limited` |
+| `cause` | Specific transition/stopping cause, pinned in `event-schema.json` |
+| `retries_remaining` | Remaining Run-wide retry admissions, initially 2 |
+| `wait_remaining_seconds` | Unreserved cumulative cooldown budget, initially 120 |
+| `admission_open` | True only on `probing` / `probe_succeeded`, after positive interaction |
+
+Dashboard Headers expose this as Run-level `account` state, never a new issue
+Status. Historical silence is unknown. The successful-probe record retains the
+spent budgets while reopening admission; a consumer must not leave that Run
+displayed as paused. `python_event_types` extends the common Event catalogue
+without adding a literal or behavior obligation to dormant adapters.
+`account-control.json` pins Python-only exit and Event cases. Shell/PowerShell
+frozen Path baselines and account behavior remain unchanged.
 
 ## 20. Changing this contract
 

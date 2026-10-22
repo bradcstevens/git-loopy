@@ -177,7 +177,8 @@ One serial Iteration makes one bounded attempt at one Active issue:
 7. **Push and account.** The Orchestrator pushes new commits, updates the
    Dashboard and Summary, and charges the issue a Strike whenever its session
    reaches an ending: no progress, a timeout or crash, no more tasks, or a
-   content filter.
+   content filter. In the Python Runner, a session a terminal account refusal
+   ended charges none: the Run stops or pauses instead.
 
 ```mermaid
 flowchart TD
@@ -197,7 +198,7 @@ flowchart TD
 
 The next Iteration starts with a fresh context and re-collects the Pool. The Run
 continues until ready work is exhausted, an Iteration cap is reached, the loop
-engineer Stops it, or every remaining issue has been skipped. An issue is skipped
+engineer Stops it, every remaining issue has been skipped, or an account refusal ends it. An issue is skipped
 once its sessions have ended badly as many times as its Strike budget
 allows; other issues keep their own budgets.
 

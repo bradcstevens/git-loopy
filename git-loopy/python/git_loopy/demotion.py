@@ -114,7 +114,9 @@ def tally_no_progress(contributions: Iterable[Contribution]) -> dict[Pair, int]:
     ``checkpoint_failed`` and ``serial_fallback`` are each a contribution that
     reached a terminal disposition without publishing, which is precisely the
     experience Demotion acts on. ``operator_stop`` records a human ending work
-    that was still running, not evidence against its Routed pair.
+    that was still running, not evidence against its Routed pair. Likewise
+    ``account_failure`` records unavailable account service or a controller-
+    withheld Recovery, not evidence against a pair.
 
     Two rows are deliberately skipped rather than bucketed. A contribution that
     is still **open** carries ``reason is None``, which means "has not finished"
@@ -138,6 +140,7 @@ def tally_no_progress(contributions: Iterable[Contribution]) -> dict[Pair, int]:
             None,
             REASON_OPERATOR_STOP,
             REASON_PUBLISHED,
+            "account_failure",
         }:
             continue
         if contribution.model is None:

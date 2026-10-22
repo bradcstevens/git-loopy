@@ -101,6 +101,7 @@ _RUN_TEST_MODULES = frozenset(
         "test_contribution_events_gate.py",
         "test_iteration_end_to_end.py",
         "test_loop_parallel.py",
+        "test_account_run.py",
         "test_membership_cadence.py",
         "test_integration_gate_conformance.py",
         "test_parallel_publication.py",

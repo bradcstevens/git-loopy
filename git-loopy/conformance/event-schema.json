@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
-  "contract_version": "2.38",
-  "event_schema_version": "1.10",
+  "contract_version": "2.40",
+  "event_schema_version": "1.11",
+  "python_event_types": {"WRAPPER_ACCOUNT_STATE": "wrapper.account.state"},
   "membership_cadence_cases": [
     {
       "id": "quiet-serial-mid-iteration",
@@ -205,6 +206,15 @@
     "note": "Contract 2.2. Host metering and CI-trigger identity are siblings of execution_host on wrapper.run.start, because where the orchestrator publishes is a deployment fact, not an Execution-host fact. host_metering declares no meter for local work as not applicable, a free standard GitHub Actions runner on a public target, or metered GitHub Actions work. It is a disclosure, never host-compute Cost: no number, unit, Dashboard column, or Consumption entry follows from it. ci_trigger_identity names the GitHub Actions deployment route whose existing job identity cannot trigger downstream CI; git-loopy never selects, transports, or upgrades a credential to change that behaviour. host_yield (contract 2.32) is a third sibling, naming the Host yield policy the Run actually applied: utility under the macOS QoS clamp, none when the operator opted out, unsupported on a platform that declares no policy. It is deliberately not the resolved Config value, because a host that was never offered the choice has not opted out and must never report none. An absent disclosure is unknown on an old trace."
   },
   "payload_contracts": {
+    "wrapper.account.state": {
+      "required": ["state", "kind", "cause", "retries_remaining", "wait_remaining_seconds", "admission_open"],
+      "state_values": ["cooldown", "probing", "stopping"],
+      "scope": "Run, Python-only; iter is null. No issue Status is added.",
+      "producers": ["python"],
+      "legacy_value": "unknown",
+      "emitted": "On account-control transitions and coalesced provider-deadline extensions. probing/probe_succeeded with admission_open true confirms positive harness interaction; silence never confirms health. Remaining budgets are Run-wide, never reset.",
+      "cause_values": ["terminal_refusal", "rate_refusal", "probe_admitted", "probe_succeeded", "retry_budget_exhausted", "wait_budget_exhausted", "invalid_retry_delay", "probe_unconfirmed", "retry_prevented_by_cap", "no_eligible_probe"]
+    },
     "wrapper.sandbox.resolved": {
       "required": ["state"],
       "state_values": ["local", "off", "remote"],
@@ -214,6 +224,8 @@
       "legacy_value": "unknown"
     },
     "wrapper.run.end": {
+      "account_optional": ["account_error", "account_cause"],
+      "account_note": "Python account_failure exits 1. Original Session error identity and stopping cause accompany it. operator_stop stays primary when deliberate, while these fields retain the observed account evidence.",
       "refusals_optional": ["refusals"],
       "refusals_entry_keys": ["issue", "reason"],
       "refusals_note": "Contract 2.12, #643. Rolling Pool-cache all_blocked and all_skipped endings carry one refusal per surviving candidate, in selection order, with the wrapper.pickup.skipped reason vocabulary; no other ending carries it. It is not a Pool collection. A consumer ignores malformed entries without losing outcome, and an absent field preserves the old notice. Event schema compatibility stays 1.2."
@@ -539,7 +551,8 @@
         "unchanged_branch",
         "checkpoint_failed",
         "serial_fallback",
-        "operator_stop"
+        "operator_stop",
+        "account_failure"
       ],
       "summary_required": [
         "model",

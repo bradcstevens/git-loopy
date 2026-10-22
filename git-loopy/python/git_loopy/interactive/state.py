@@ -792,6 +792,7 @@ class LiveRunState:
         self.execution_host = ExecutionHostSnapshot()
         # Undeclared is unknown, never an inferred opt-out or Isolation grade.
         self.sandbox: str | None = None
+        self.account: dict[str, object] | None = None
         # None is historical silence: a trace that predates Wind-down says
         # neither that the Run was healthy nor that it was stopped.
         self.wind_down: WindDownSnapshot | None = None
@@ -1036,6 +1037,20 @@ class LiveRunState:
             _INTEGRATION_BRANCH_OBSERVED,
         }:
             self._record_integration(str(etype), event, now)
+            return
+        if etype == "wrapper.account.state":
+            if (
+                event.get("state") in ("cooldown", "probing", "stopping")
+                and isinstance(event.get("kind"), str)
+                and isinstance(event.get("cause"), str)
+                and isinstance(event.get("retries_remaining"), int)
+                and isinstance(event.get("wait_remaining_seconds"), (int, float))
+                and isinstance(event.get("admission_open"), bool)
+            ):
+                self.account = {key: event[key] for key in (
+                    "state", "kind", "cause", "retries_remaining",
+                    "wait_remaining_seconds", "admission_open",
+                )}
             return
         if etype == _SANDBOX_RESOLVED:
             sandbox = event.get("state")

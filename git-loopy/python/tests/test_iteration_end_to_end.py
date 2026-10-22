@@ -3492,10 +3492,19 @@ def test_loop_records_the_session_ending_and_its_error_identity(
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
 
     cfg = RunConfig(issue_source="github", max_iterations=1)
-    assert asyncio.run(loop_module.run(cfg)) == 0
+    assert asyncio.run(loop_module.run(cfg)) == 1
 
     logs = tmp_path / ".git-loopy" / "logs"
     jsonl = next(iter(logs.glob("*.jsonl")))
+    account_events = [json.loads(line) for line in jsonl.read_text().splitlines()]
+    end = next(e for e in account_events if e["type"] == "wrapper.run.end")
+    assert end["outcome"] == "account_failure"
+    assert end["account_error"]["kind"] == "quota_exhausted"
+    assert end["account_cause"] == "terminal_refusal"
+    assert not any(e["type"] == "wrapper.strike" for e in account_events)
+    state = next(e for e in account_events if e["type"] == "wrapper.account.state")
+    assert state["state"] == "stopping"
+    assert state["retries_remaining"] == 2
     recorded = [
         json.loads(line)
         for line in jsonl.read_text(encoding="utf-8").splitlines()

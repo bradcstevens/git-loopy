@@ -582,6 +582,7 @@ pub struct DashboardState {
     pub(crate) capabilities: InsightCapabilities,
     execution_host: ExecutionHostProvenance,
     pub(crate) sandbox: Option<String>,
+    pub(crate) account: Option<crate::event::AccountState>,
     contribution_hosts: BTreeMap<String, String>,
     /// Issues whose open contribution is past its Lane-work boundary
     /// (ADR-0065, #681).
@@ -668,6 +669,7 @@ impl DashboardState {
             capabilities: InsightCapabilities::default(),
             execution_host: ExecutionHostProvenance::default(),
             sandbox: None,
+            account: None,
             contribution_hosts: BTreeMap::new(),
             lane_work_finished: BTreeSet::new(),
             branch_drift: BTreeMap::new(),
@@ -1022,6 +1024,13 @@ impl DashboardState {
                 self.ended_monotonic = now_monotonic.or(self.ended_monotonic);
             }
             EventPayload::StopRequested(stop) => self.record_wind_down(stop),
+            EventPayload::AccountState(account) => {
+                if matches!(account.state.as_str(), "cooldown" | "probing" | "stopping")
+                    && account.wait_remaining_seconds >= 0.0
+                {
+                    self.account = Some(account.clone());
+                }
+            }
             EventPayload::StopLifted(stop)
                 if self
                     .wind_down
