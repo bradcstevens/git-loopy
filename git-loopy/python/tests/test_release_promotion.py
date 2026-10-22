@@ -28,13 +28,93 @@ from git_loopy.release_promotion import (
 from git_loopy.release_rehearsal import SOURCE_ONLY, stable_commit_promotion
 from git_loopy.release_smoke import EVIDENCE_SCHEMA, EXECUTION_HOSTS, PASSED
 from tests.fakes import FakeReleaseService
-from tests.release_fixtures import git, trunk_repository
+from tests.release_fixtures import (
+    AGENTS_MD,
+    REOPEN_WALK_CASES,
+    ReopenWalkCase,
+    commit_release_version,
+    git,
+    trunk_repository,
+    write_release_metadata,
+)
 from tests.test_release_publication import _remote_refs, remote_git
 
 
 GATE_RUNNER = AgentsMdGateRunner(timeout_seconds=120.0)
 VERSION = "0.11.0"
 TAG = f"v{VERSION}"
+
+
+@pytest.mark.parametrize("case", REOPEN_WALK_CASES)
+def test_the_promotion_walk_keeps_only_unwithdrawn_candidates_in_order(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    case: ReopenWalkCase,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    commits = case.commit_history(trunk)
+
+    assert untagged_stable_commits(trunk) == tuple(
+        commits[name] for name in case.remaining
+    )
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("landing", ["--ff-only", "--no-ff", "--squash"])
+def test_a_reopen_and_repromotion_must_land_on_first_parent_history(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], landing: str
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    original = git(trunk, "rev-parse", "HEAD")
+    git(trunk, "checkout", "-qb", "repair")
+    commit_release_version(trunk, "0.11.3-rc.1")
+    repromotion = commit_release_version(trunk, "0.11.3")
+    git(trunk, "checkout", "-q", "main")
+    git(trunk, "merge", landing, "repair", "-m", "Integrate repair")
+    if landing == "--squash":
+        git(trunk, "commit", "-qm", "Squashed repair")
+
+    expected = repromotion if landing == "--ff-only" else original
+    assert untagged_stable_commits(trunk) == (expected,)
+    assert capsys.readouterr().err == ""
+
+
+def test_a_merged_stable_commit_buried_under_a_different_target_remains_a_candidate(
+    tmp_path: Path,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3-alpha.1")
+    git(trunk, "checkout", "-qb", "release")
+    stable = commit_release_version(trunk, "0.11.3")
+    commit_release_version(trunk, "0.12.0-alpha.1")
+    git(trunk, "checkout", "-q", "main")
+    git(trunk, "merge", "--no-ff", "release", "-m", "Integrate release")
+
+    assert untagged_stable_commits(trunk) == (stable,)
+
+
+def test_a_reopen_does_not_withdraw_a_stable_commit_a_public_tag_reaches(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    published = git(trunk, "rev-parse", "HEAD")
+    git(trunk, "tag", "-a", "v0.11.3", "-m", "Published")
+    tag_object = git(trunk, "rev-parse", "refs/tags/v0.11.3")
+    commit_release_version(trunk, "0.11.3-rc.1")
+    repromotion = commit_release_version(trunk, "0.11.3")
+    remote, checkout = _remote_checkout_from_trunk(trunk, tmp_path)
+    git(checkout, "fetch", str(trunk), "refs/tags/v0.11.3:refs/tags/v0.11.3")
+    service = FakeReleaseService()
+
+    assert untagged_stable_commits(checkout) == (repromotion,)
+    assert published not in capsys.readouterr().err
+    with pytest.raises(ReleasePromotionError, match="already a public tag"):
+        publish_untagged_stable(
+            checkout, workspace_root=tmp_path / "work", gate_runner=GATE_RUNNER,
+            release_service=service, smoke_for=lambda workspace: RecordingSmoke(),
+        )
+    assert service.create_calls == []
+    assert git(trunk, "rev-parse", "refs/tags/v0.11.3") == tag_object
+    assert not any(ref.startswith("refs/tags/") for ref in _remote_refs(remote))
 
 
 class RecordingSmoke:
@@ -112,6 +192,49 @@ def test_a_proved_stable_commit_is_published_only_after_its_smoke_passes(
     assert published.body.strip() == notes.strip()
 
 
+@pytest.mark.parametrize("smoke_passes", [True, False])
+def test_after_reopen_publication_keeps_order_and_stops_at_the_first_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], smoke_passes: bool
+) -> None:
+    trunk = trunk_repository(
+        tmp_path / "trunk", "0.11.3",
+        agents_md=AGENTS_MD.replace("test -s VERSION", "false"),
+    )
+    # Repair on the prerelease line, then promote the corrected snapshot.
+    (trunk / "AGENTS.md").write_text(AGENTS_MD, encoding="utf-8")
+    commit_release_version(trunk, "0.11.3-rc.1")
+    first = commit_release_version(trunk, "0.11.3")
+    second = commit_release_version(trunk, "0.12.0")
+    commit_release_version(trunk, "0.13.0-alpha.1")
+    remote, checkout = _remote_checkout_from_trunk(trunk, tmp_path)
+    service = FakeReleaseService()
+    smoke = RecordingSmoke(verdict=PASSED if smoke_passes else "failed")
+
+    def publish():
+        return publish_untagged_stable(
+            checkout,
+            workspace_root=tmp_path / "work",
+            gate_runner=GATE_RUNNER,
+            release_service=service,
+            smoke_for=lambda workspace: smoke,
+        )
+
+    if smoke_passes:
+        outcomes = publish()
+        assert [(outcome.tag, outcome.commit) for outcome in outcomes] == [
+            ("v0.11.3", first), ("v0.12.0", second)
+        ]
+        assert remote_git(remote, "rev-parse", "v0.11.3^{commit}") == first
+        assert remote_git(remote, "rev-parse", "v0.12.0^{commit}") == second
+    else:
+        with pytest.raises(ReleasePromotionError, match="v0.11.3 was not published"):
+            publish()
+        assert len(smoke.proofs) == 1
+        assert service.create_calls == []
+        assert not any(ref.startswith("refs/tags/") for ref in _remote_refs(remote))
+    assert capsys.readouterr().err == ""
+
+
 @pytest.mark.parametrize(
     "smoke",
     [
@@ -172,6 +295,92 @@ def test_an_unreadable_release_host_refuses_before_any_tag_is_pushed(
 
     assert f"refs/tags/{TAG}" not in _remote_refs(remote)
     assert service.create_calls == []
+
+
+def test_a_reopen_withdraws_the_old_stable_commit_not_its_repromotion(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    for version in ("0.11.3-rc.1", "0.11.3"):
+        write_release_metadata(trunk, version)
+        git(trunk, "add", ".")
+        git(trunk, "commit", "-qm", f"Declare {version}")
+    candidate = git(trunk, "rev-parse", "HEAD")
+
+    assert untagged_stable_commits(trunk) == (candidate,)
+    assert capsys.readouterr().err == ""
+
+
+def test_a_reopen_nobody_re_promotes_publishes_nothing_and_names_the_withdrawn(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    withdrawn = git(trunk, "rev-parse", "HEAD")
+    commit_release_version(trunk, "0.12.0-alpha.1")
+    also_withdrawn = commit_release_version(trunk, "0.11.3")
+    write_release_metadata(trunk, "0.11.3-rc.1")
+    git(trunk, "add", ".")
+    git(trunk, "commit", "-qm", "Reopen 0.11.3")
+
+    assert untagged_stable_commits(trunk) == ()
+    assert capsys.readouterr().err == ""
+    assert main(
+        [
+            "--repository-root", str(trunk),
+            "--workspace", str(tmp_path / "w"),
+            "--archive-output", str(tmp_path / "a.tar"),
+            "--evidence-output", str(tmp_path / "e.json"),
+            "--distribution-mode", SOURCE_ONLY,
+            "--publish-untagged-stable",
+        ]
+    ) == 0
+    output = capsys.readouterr()
+    assert output.out == "no untagged stable Release on the trunk; nothing to publish\n"
+    assert output.err.count(f"stable commit {withdrawn} ") == 1
+    assert output.err.count(f"stable commit {also_withdrawn} ") == 1
+    assert not (tmp_path / "w").exists()
+    assert git(trunk, "tag", "--list") == ""
+
+
+@pytest.mark.parametrize("trigger", ["--publish-untagged-stable", "--stable-commit"])
+def test_a_promotion_command_names_withdrawals_once_before_a_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], trigger: str,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    withdrawn = git(trunk, "rev-parse", "HEAD")
+    commit_release_version(trunk, "0.11.3-rc.1")
+    (trunk / "git-loopy/conformance/event-schema.json").write_text(
+        '{"contract_version": "99.0"}\n', encoding="utf-8"
+    )
+    commit_release_version(trunk, "0.11.3")
+
+    status = main([
+        "--repository-root", str(trunk),
+        "--workspace", str(tmp_path / "work"),
+        "--archive-output", str(tmp_path / "source.tar"),
+        "--evidence-output", str(tmp_path / "evidence.json"),
+        "--distribution-mode", SOURCE_ONLY,
+        trigger,
+    ])
+
+    output = capsys.readouterr()
+    assert status == 1
+    assert output.out == ""
+    assert output.err.count(f"stable commit {withdrawn} ") == 1
+    assert "no other Conformance fixture" in output.err
+    assert git(trunk, "tag", "--list") == ""
+
+
+def test_a_later_stable_value_of_the_same_version_withdraws_nothing(
+    tmp_path: Path,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    first = git(trunk, "rev-parse", "HEAD")
+    (trunk / "VERSION").write_text("0.11.3", encoding="utf-8")
+    git(trunk, "commit", "-aqm", "Restore stable VERSION")
+    second = git(trunk, "rev-parse", "HEAD")
+
+    assert untagged_stable_commits(trunk) == (first, second)
 
 
 def test_a_stable_commit_buried_under_a_later_prerelease_is_still_the_candidate(

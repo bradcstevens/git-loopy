@@ -323,16 +323,26 @@ def _promote_milestone(workspace: Path, trigger: PromotionTrigger) -> str:
     return outputs["version"]
 
 
-def _untagged_stable_commit(workspace: Path) -> str:
-    """The oldest trunk commit declaring a stable Release version no tag reaches.
+@dataclass(frozen=True)
+class StableCommitWalk:
+    """Remaining candidates and the withdrawals a command should explain."""
 
-    The same walk `release-promotion.yml` publishes by, and for the same reason:
-    a Run lands a Release-line commit per closed issue, so a committed stable
-    Promotion can be buried under the next issue's prerelease advance. The
-    head's ``VERSION`` is not the candidate.
+    commits: tuple[str, ...]
+    withdrawals: tuple[str, ...]
+
+
+def walk_untagged_stable(repository_root: Path) -> StableCommitWalk:
+    """Unwithdrawn stable commits no ``v*`` tag reaches, oldest first.
+
+    Keep Git's existing VERSION-path history simplification: a Reopen and its
+    re-promotion disappear inside a merge that leaves VERSION unchanged. A later
+    prerelease withdraws every earlier unpublished stable commit of its own
+    Release target (ADR-0097), never a different target or a later promotion.
+    Return withdrawals as data; only command entry points write diagnostics.
     """
+    root = Path(repository_root).resolve()
     walk = _run_git(
-        workspace,
+        root,
         "log",
         "--format=%H",
         "--reverse",
@@ -342,12 +352,36 @@ def _untagged_stable_commit(workspace: Path) -> str:
         "--",
         "VERSION",
     )
+    candidates: dict[str, release_version.ReleaseLine] = {}
+    withdrawals: list[str] = []
     for commit in walk.splitlines():
-        version = _committed_bytes(workspace, commit, Path("VERSION")).decode(
-            "utf-8", errors="replace"
-        ).strip()
-        if not is_prerelease(version):
-            return commit
+        version = _run_git(root, "show", f"{commit}:VERSION").strip()
+        if not version:
+            continue
+        try:
+            line = release_version.parse_release_line(version)
+        except ReleaseVersionError as exc:
+            raise ReleaseRehearsalError(
+                f"cannot read Release line at {commit}: {exc}"
+            ) from exc
+        if is_prerelease(version):
+            for stable_commit, stable_line in tuple(candidates.items()):
+                if stable_line.target == line.target:
+                    withdrawals.append(
+                        f"Reopen {commit} ({version}) withdraws unpublished "
+                        f"stable commit {stable_commit} ({stable_line.target})"
+                    )
+                    del candidates[stable_commit]
+        else:
+            candidates[commit] = line
+    return StableCommitWalk(tuple(candidates), tuple(withdrawals))
+
+
+def _untagged_stable_commit(workspace: Path) -> str:
+    """Select the same oldest remaining candidate the Promotion would publish."""
+    commits = walk_untagged_stable(workspace).commits
+    if commits:
+        return commits[0]
     raise ReleaseRehearsalError(
         "no untagged stable Release on the trunk: a committed Promotion is the "
         "candidate, so one has to already be committed"
@@ -780,9 +814,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Rehearse one candidate and print the publication input it proved."""
     args = _build_parser().parse_args(argv)
     try:
+        trigger = _trigger_from(args)
+        if trigger.kind == STABLE_COMMIT_TRIGGER and trigger.candidate_commit is None:
+            for withdrawal in walk_untagged_stable(args.repository_root).withdrawals:
+                print(withdrawal, file=sys.stderr)
         publication_input = rehearse_promotion(
             args.repository_root,
-            _trigger_from(args),
+            trigger,
             workspace=args.workspace,
             archive_output=args.archive_output,
             gate_runner=_default_gate_runner(),

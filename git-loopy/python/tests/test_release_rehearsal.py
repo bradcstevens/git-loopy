@@ -17,12 +17,17 @@ from git_loopy.release_rehearsal import (
     SOURCE_ONLY,
     ReleaseRehearsalError,
     confirm_publication_input,
+    main,
+    prepare_promotion_candidate,
     stable_commit_promotion,
     milestone_promotion,
     rehearse_promotion,
 )
 from tests.release_fixtures import (
     AGENTS_MD,
+    REOPEN_WALK_CASES,
+    ReopenWalkCase,
+    commit_release_version,
     git,
     trunk_repository,
     write_release_metadata,
@@ -30,6 +35,137 @@ from tests.release_fixtures import (
 
 
 GATE_RUNNER = AgentsMdGateRunner(timeout_seconds=120.0)
+
+
+@pytest.mark.parametrize("case", REOPEN_WALK_CASES)
+def test_implicit_rehearsal_selects_the_first_remaining_promotion_candidate(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    case: ReopenWalkCase,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    commits = case.commit_history(trunk)
+
+    status = main([
+        "--repository-root", str(trunk),
+        "--workspace", str(tmp_path / "candidate"),
+        "--archive-output", str(tmp_path / "source.tar"),
+        "--distribution-mode", SOURCE_ONLY,
+        "--stable-commit",
+    ])
+    output = capsys.readouterr()
+    if case.remaining:
+        assert status == 0
+        assert json.loads(output.out)["commit"] == commits[case.remaining[0]]
+    else:
+        assert status == 1
+        assert "no untagged stable Release" in output.err
+        assert output.out == ""
+    for name in case.withdrawn:
+        assert output.err.count(f"stable commit {commits[name]} ") == 1
+    for name in case.remaining:
+        assert commits[name] not in output.err
+
+
+@pytest.mark.parametrize("landing", ["--ff-only", "--no-ff", "--squash"])
+def test_implicit_rehearsal_sees_only_reopens_not_hidden_by_the_landing(
+    tmp_path: Path, landing: str,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    original = git(trunk, "rev-parse", "HEAD")
+    git(trunk, "checkout", "-qb", "repair")
+    commit_release_version(trunk, "0.11.3-rc.1")
+    repromotion = commit_release_version(trunk, "0.11.3")
+    git(trunk, "checkout", "-q", "main")
+    git(trunk, "merge", landing, "repair", "-m", "Integrate repair")
+    if landing == "--squash":
+        git(trunk, "commit", "-qm", "Squashed repair")
+
+    candidate = prepare_promotion_candidate(
+        trunk, stable_commit_promotion(), workspace=tmp_path / "candidate"
+    )
+
+    assert candidate.commit == (repromotion if landing == "--ff-only" else original)
+
+
+def test_implicit_rehearsal_keeps_a_merged_stable_commit_under_a_different_target(
+    tmp_path: Path,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3-alpha.1")
+    git(trunk, "checkout", "-qb", "release")
+    stable = commit_release_version(trunk, "0.11.3")
+    commit_release_version(trunk, "0.12.0-alpha.1")
+    git(trunk, "checkout", "-q", "main")
+    git(trunk, "merge", "--no-ff", "release", "-m", "Integrate release")
+
+    candidate = prepare_promotion_candidate(
+        trunk, stable_commit_promotion(), workspace=tmp_path / "candidate"
+    )
+
+    assert candidate.commit == stable
+
+
+def test_a_reopen_selects_its_repromotion_for_implicit_rehearsal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    for version in ("0.11.3-rc.1", "0.11.3"):
+        write_release_metadata(trunk, version)
+        git(trunk, "add", ".")
+        git(trunk, "commit", "-qm", f"Declare {version}")
+    repromotion = git(trunk, "rev-parse", "HEAD")
+
+    candidate = prepare_promotion_candidate(
+        trunk, stable_commit_promotion(), workspace=tmp_path / "candidate"
+    )
+
+    assert candidate.commit == repromotion
+    assert candidate.version == "0.11.3"
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("outcome", ["passed", "unpromoted", "refused"])
+def test_the_rehearsal_command_reports_reopens_without_polluting_its_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], outcome: str
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    withdrawn = git(trunk, "rev-parse", "HEAD")
+    commit_release_version(trunk, "0.11.3-rc.1")
+    if outcome == "refused":
+        (trunk / "git-loopy/conformance/event-schema.json").write_text(
+            '{"contract_version": "99.0"}\n', encoding="utf-8"
+        )
+    repromotion = (
+        commit_release_version(trunk, "0.11.3")
+        if outcome != "unpromoted" else None
+    )
+    github_output = tmp_path / "github-output"
+
+    status = main([
+        "--repository-root", str(trunk),
+        "--workspace", str(tmp_path / "candidate"),
+        "--archive-output", str(tmp_path / "source.tar"),
+        "--distribution-mode", SOURCE_ONLY,
+        "--stable-commit",
+        "--github-output", str(github_output),
+    ])
+
+    output = capsys.readouterr()
+    assert withdrawn in output.err
+    if outcome == "passed":
+        assert status == 0
+        assert json.loads(output.out)["commit"] == repromotion
+        assert f"commit={repromotion}\n" in github_output.read_text(encoding="utf-8")
+    else:
+        assert status == 1
+        assert output.out == ""
+        assert not github_output.exists()
+        diagnostic = (
+            "no untagged stable Release" if outcome == "unpromoted"
+            else "no other Conformance fixture"
+        )
+        assert diagnostic in output.err
+    assert git(trunk, "tag", "--list") == ""
 
 
 def test_a_closed_milestone_rehearses_the_stable_snapshot_it_names(
