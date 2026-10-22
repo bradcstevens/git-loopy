@@ -326,8 +326,8 @@ if a saved Skill policy still enables the retired name.
    work in a Checkpoint when necessary, pushes new commits, updates the live
    interface and Summary, and charges the issue a Strike whenever its session
    reaches an ending: no progress, a timeout or crash, no more tasks, or a
-   content filter. A session a terminal account refusal ended charges none:
-   the Run stops or pauses instead.
+   content filter. In the Python Runner, a session a terminal account refusal
+   ended charges none: the Run stops or pauses instead.
 8. **Repeat, then judge.** The next Iteration receives a fresh Pool and context.
    An issue whose sessions keep ending badly is skipped once it holds
    its configured Strikes; the Run stops when work is exhausted, the configured

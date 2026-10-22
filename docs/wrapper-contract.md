@@ -764,8 +764,9 @@ Runner that does not yet hold it keeps the second accounting below:
 
 - **A Runner with an Attempt lifecycle** (contract 2.22, ADR-0070) MUST charge **one Strike to the issue a
   session worked for every Session outcome** that session reaches (§14.3) — silent no-progress,
-  timeout, crash, no more tasks, or content-filtered. A session that a terminal account refusal
-  ended MUST charge none (§19.1, contract 2.40). A session that advanced its issue MUST charge
+  timeout, crash, no more tasks, or content-filtered. In the Python Runner, a session that a
+  terminal account refusal ended MUST charge none (§19.1, contract 2.40). A session that advanced
+  its issue MUST charge
   nothing unless it timed out or crashed: progress refutes silent no-progress, no more tasks and
   content-filtered, but a timeout or crash is an ending whether or not the session advanced.
   Strikes are counted **per issue, per Run**: one issue's Strikes MUST NOT count against any other
@@ -1934,8 +1935,8 @@ run-wide default:
   declares — as the projection of that issue's **Strikes** (§6): `fresh` at none, `retrying` at
   fewer than N (`GIT_LOOPY_MAX_NMT_STRIKES`), and `skipped` at N. From contract 2.22 every one of
   the five **Session outcomes** charges one Strike and so moves the issue one step, as that
-  fixture's table states (ADR-0070), unless a terminal account refusal ended the session, which
-  moves nothing (§19.1, contract 2.40); before it, a timeout, an explicit no-more-tasks and a
+  fixture's table states (ADR-0070), unless, in the Python Runner, a terminal account refusal
+  ended the session, which moves nothing (§19.1, contract 2.40); before it, a timeout, an explicit no-more-tasks and a
   content-filtered turn moved it straight to `skipped`. An Iteration that advanced its issue
   without timing out or crashing reached no ending and MUST move it neither forward nor back.
   The lifecycle MUST NOT regress — including on an advancing Iteration between two failures, because an issue
@@ -1962,7 +1963,8 @@ run-wide default:
   retry at all.
   **The lifecycle is what the Strikes count (contract 2.22, ADR-0070).** An Orchestrator that
   holds it MUST charge one **Strike** to an issue for each Session outcome a session on it reaches,
-  except one a terminal account refusal caused (§19.1), and the ending that charges the N-th is
+  except, in the Python Runner, one a terminal account refusal caused (§19.1), and the ending that
+  charges the N-th is
   the one recorded as its defeat. It MUST charge nothing
   for an Iteration that bound nothing, and nothing further once the issue is `skipped`. Because
   the lifecycle is a property of the issue and not of the seam that observed it, the Strike MUST
