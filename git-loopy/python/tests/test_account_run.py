@@ -17,11 +17,19 @@ from git_loopy.config import RunConfig
 from git_loopy.account_control import AccountControl
 from tests.test_account_control import Clock
 from tests.fakes import FakeGitHubClient
+from tests.test_contribution_events_gate import WAIVERS, gate_findings
+from tests.test_contribution_events_gate import _EVENT_SCHEMA as _GATE_SCHEMA
 from tests.test_iteration_end_to_end import _make_issue, _sdk_event, _stub_run_skill_catalog  # noqa: F401
 from tests.test_loop_parallel import (
     FakeGateRunner, _NoProgressFakeSession, _ParallelFakeClient,
     _capture_parallel_loops, _logged_events, _wire_repo,
 )
+
+
+def _assert_contribution_order(events):
+    """An account-ended Lane still follows the §12 contribution order (contract 2.40)."""
+    findings = gate_findings({"account": events}, schema=_GATE_SCHEMA, waivers=WAIVERS)
+    assert [finding for finding in findings if "out of order" in finding] == []
 
 
 def _run(tmp_path, monkeypatch, *, parallel=False, code="insufficient_quota",
@@ -92,6 +100,7 @@ def test_terminal_refusal_stops_admission_without_blaming_or_closing_issue(
     output = capsys.readouterr().out
     assert "account stopping" in output
     assert "✓ run end: account_failure" not in output
+    _assert_contribution_order(events)
 
 
 @pytest.mark.parametrize("parallel", [False, True])
@@ -547,6 +556,7 @@ def test_recovery_refusal_stops_further_recovery_and_cannot_publish_commits(tmp_
     end = next(e for e in events if e["type"] == "wrapper.contribution.end")
     assert end["reason"] == "account_failure"
     assert end["published"] is False
+    _assert_contribution_order(events)
 
 
 @pytest.mark.parametrize("work", ["committed", "dirty", "checkpoint_failed"])
@@ -584,6 +594,7 @@ def test_account_refused_recovery_preserves_repairs_before_stage_cleanup(tmp_pat
     assert (path in git.active_worktrees) is (work == "checkpoint_failed")
     assert tracker.issue_view(42).state == "OPEN"
     assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close", "wrapper.issue.closed")]
+    _assert_contribution_order(events)
 
 
 def test_rate_refused_recovery_releases_issue_for_an_ordinary_probe(tmp_path, monkeypatch):
@@ -781,8 +792,11 @@ def test_probe_needs_positive_harness_interaction_even_when_it_commits(
     assert not [e for e in events if e["type"] == "wrapper.strike"]
 
 
+@pytest.mark.parametrize("upstream", [False, True])
 @pytest.mark.parametrize("probe_work", ["checkpoint", "progress", "completion", "unverified"])
-def test_account_health_does_not_authorize_old_close_bearing_commits(tmp_path, monkeypatch, probe_work):
+def test_account_health_does_not_authorize_old_close_bearing_commits(
+    tmp_path, monkeypatch, probe_work, upstream,
+):
     sends, clock = 0, Clock()
     monkeypatch.setattr(loop, "AccountControl", partial(
         AccountControl, clock=clock, sleep=clock.sleep,
@@ -793,6 +807,8 @@ def test_account_health_does_not_authorize_old_close_bearing_commits(tmp_path, m
         sends += 1
         git = session._fake_git.worktree_client(Path(session._working_directory))
         if sends == 1:
+            if upstream:
+                session._fake_git.configured_upstream = ("origin", "main")
             git.simulate_agent_commit(subject="fix: incomplete work", body="Closes #42")
             return
         session._scripted_events = [_sdk_event(
@@ -817,7 +833,10 @@ def test_account_health_does_not_authorize_old_close_bearing_commits(tmp_path, m
     assert rc == 0 and sends == 2
     assert any(e.get("cause") == "probe_succeeded" for e in events)
     verified = probe_work == "completion"
-    assert git.push_calls == int(verified)
+    # With an upstream, publication pushes before the Orchestrator closes (#918),
+    # so a refused close follows a published fresh closing commit (§19.1).
+    pushed = verified or (upstream and probe_work == "unverified")
+    assert git.push_calls == int(pushed)
     assert tracker.issue_view(42).state == ("CLOSED" if verified else "OPEN")
     assert bool([e for e in events if e["type"] == "wrapper.issue.closed"]) is verified
     close_failed = [e for e in events if e["type"] == "wrapper.issue.close_failed"]
@@ -886,3 +905,4 @@ def test_remote_account_evidence_survives_other_errors_and_failed_materializatio
     assert not [e for e in events if e["type"] in ("wrapper.strike", "wrapper.auto_close", "wrapper.issue.closed")]
     assert all(e["reason"] == "account_failure" for e in events if e["type"] == "wrapper.contribution.end")
     assert tracker.issue_view(42).state == "OPEN"
+    _assert_contribution_order(events)

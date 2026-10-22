@@ -824,6 +824,7 @@ error (exit `2`).
 | `1`  | Waiting — all blocked | Every Pickup refusal proved a wait: an open native blocker, or an open closing pull request (§3.3.1, contract 2.17). |
 | `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), or an unread refusal left it unresolved (§3.3.1). |
 | `1`  | Stopped — operator   | The operator ended the Run deliberately (§10.1, contract 2.3).       |
+| `1`  | Stopped — account    | A terminal, account-identifying harness refusal ended a Python Run: `account_failure` (§19.1, contract 2.40). |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
 
 Exit code `3` is retired. It used to mean a Run that continued past a Dashboard
@@ -1174,12 +1175,17 @@ types, MUST also follow this order:
 ```
 contribution.start
   ( work_finished
-      ( end[unchanged_branch]
+      ( end[unchanged_branch | account_failure]
       | [parked] admitted started branch_observed recovery_started{0..3}
           ( published issue.closed [release.advanced] end[published]
-          | [push_failed] end[serial_fallback] ) )
-  | end[checkpoint_failed | unchanged_branch | operator_stop] )
+          | [push_failed] end[serial_fallback]
+          | end[account_failure] ) )
+  | end[checkpoint_failed | unchanged_branch | operator_stop | account_failure] )
 ```
+
+`account_failure` (§19.1, contract 2.40) ends a Lane unpublished wherever an account refusal
+stops it: a host failure before `work_finished`, a refused session after it, or a refused
+Recovery during Integration.
 
 The order covers lifecycle types only, so stamped assistant, tool, usage, commit and Checkpoint
 records interleave freely. Run-exit reclamation may end any open contribution at any point with
@@ -3317,18 +3323,22 @@ charges no issue Strike, Attempt transition, escalation or adverse route-quality
 evidence. Earlier legitimate history is never refunded. An already-granted
 session consumes its Iteration/Lane-work unit, even when its remote delivery fails
 afterwards; cooldown consumes none. Unaffected
-issue failures keep their ordinary accounting. The completion backstop excludes
-affected issues, including attempts that left commits. An already-closed affected
-issue is diagnosed, preserved and not treated as verified completion; it is never
-automatically reopened. A Checkpoint does not prove completion. Preventing
-Agent-owned early closure remains #913's separate obligation.
-Restored account health does not release this publication protection. A later
-ordinary attempt must supply a fresh close-bearing Agent commit and pass the
-ordinary Lease-fenced, source-verified completion boundary; Checkpoints,
-non-closing progress and failed closure verification leave the protection intact.
-The protection is held for the Run that observed the refusal and is not persisted
-across Runs; that boundary is recorded for the Orchestrator-only publication and
-closure work (#918).
+issue failures keep their ordinary accounting. An affected attempt's work, including
+any commits it left, is counted but never published or closed: a serial attempt's
+Issue clone is reclaimed with its branch kept, and an affected Lane ends unpublished.
+An already-closed affected issue is diagnosed, preserved and not treated as verified
+completion; it is never automatically reopened. A Checkpoint does not prove
+completion, and no Agent closes an issue (§21).
+Restored account health does not release this publication protection. Only the
+Orchestrator's own closure (§21) releases it, once a later ordinary attempt's fresh
+close-bearing Agent commit has passed the ordinary Lease-fenced publication and
+source-verified closure. Until then a serial attempt on the protected issue is merged
+onto local base without its own push, so its Checkpoints and non-closing progress
+reach the upstream only with a later publication of other work, and never close the
+issue. Closure follows publication (§21), so a fresh closing commit is pushed before
+the tracker close; if the tracker then refuses it, the published issue stays open and
+protected, with `wrapper.issue.close_failed` (stage `tracker`). The protection is held
+for the Run that observed the refusal and is not persisted across Runs.
 
 The terminal reason is **`account_failure` / exit 1**, carrying `account_error`
 (the original Session error identity) and `account_cause` on `wrapper.run.end`.

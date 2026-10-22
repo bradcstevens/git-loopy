@@ -93,11 +93,12 @@ def _lifecycle_sequences() -> list[tuple[Token, ...]]:
 
         contribution.start
           ( work_finished
-              ( end[unchanged_branch]
+              ( end[unchanged_branch | account_failure]
               | [parked] admitted started branch_observed recovery_started{0..3}
                   ( published issue.closed [release.advanced] end[published]
-                  | [push_failed] end[serial_fallback] ) )
-          | end[checkpoint_failed | unchanged_branch | operator_stop] )
+                  | [push_failed] end[serial_fallback]
+                  | end[account_failure] ) )
+          | end[checkpoint_failed | unchanged_branch | operator_stop | account_failure] )
 
     The language is finite, so it is enumerated rather than parsed: that keeps
     waiver filtering and prefix checks trivially correct.
@@ -107,8 +108,12 @@ def _lifecycle_sequences() -> list[tuple[Token, ...]]:
         (_PUBLISHED, _AUTO_CLOSE, _RELEASE_ADVANCED, _end("published")),
         (_end("serial_fallback"),),
         (_PUSH_FAILED, _end("serial_fallback")),
+        (_end("account_failure"),),
     ]
-    after_work: list[tuple[Token, ...]] = [(_end("unchanged_branch"),)]
+    after_work: list[tuple[Token, ...]] = [
+        (_end("unchanged_branch"),),
+        (_end("account_failure"),),
+    ]
     for parked, recoveries, tail in itertools.product(
         ((), (_PARKED,)), range(4), integration_tails
     ):
@@ -120,7 +125,9 @@ def _lifecycle_sequences() -> list[tuple[Token, ...]]:
         )
     bodies = [(_WORK_FINISHED, *rest) for rest in after_work] + [
         (_end(reason),)
-        for reason in ("checkpoint_failed", "unchanged_branch", "operator_stop")
+        for reason in (
+            "checkpoint_failed", "unchanged_branch", "operator_stop", "account_failure",
+        )
     ]
     return [(_START, *body) for body in bodies]
 

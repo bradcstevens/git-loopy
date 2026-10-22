@@ -2405,8 +2405,7 @@ class _Loop:
                     *closures,
                 ]
             for closure in closures:
-                self._account_issues.discard(closure.ref)
-                self._account_base_issues.discard(closure.ref)
+                self._release_account_protection(closure.ref)
 
             if issue_binding.active_ref is None:
                 fallback = self._infer_active_binding(
@@ -2600,8 +2599,9 @@ class _Loop:
 
         Account health is not task completion (§19.1, #676). An account-failed
         session's work is imported and counted but never published. An issue an
-        earlier account failure protects is merged locally but not pushed until
-        its own clone carries a fresh closing commit for it.
+        earlier account failure protects is merged onto local base without its
+        own push until its clone carries a fresh closing commit for it; a later
+        publication of other work carries that progress upstream, never closed.
         """
         closer = self._closing_source(active)
 
@@ -2644,8 +2644,8 @@ class _Loop:
                 self._git.abort_merge()
                 return fail_publication(f"merge onto base conflicted: {exc}")
             # No upstream means the local base is the whole publication. An issue
-            # an earlier account failure protects stays local until its own clone
-            # carries a fresh closing commit (§19.1, #676).
+            # an earlier account failure protects gets no push of its own until its
+            # clone carries a fresh closing commit (§19.1, #676).
             protected = active.ref in self._account_issues and not any(
                 active.ref in extract_close_refs(commit.message) for commit in commits
             )
@@ -4229,8 +4229,7 @@ class _Loop:
                 )
             )
             for completion in completions:
-                self._account_issues.discard(completion.ref)
-                self._account_base_issues.discard(completion.ref)
+                self._release_account_protection(completion.ref)
             return completions
         except Exception as exc:  # pragma: no cover - defensive
             self._diag.warning(
@@ -4278,6 +4277,11 @@ class _Loop:
                 "account failure: issue #%s was already closed; preserving its state, "
                 "not verified completion and not reopening", ref,
             )
+
+    def _release_account_protection(self, ref: int | str) -> None:
+        """Verified completion releases an issue's account protection (§19.1)."""
+        self._account_issues.discard(ref)
+        self._account_base_issues.discard(ref)
 
     def _account_affected(self, error: session_outcome_module.SessionError | None) -> bool:
         return account_interruption(error) or self._account.cause == "probe_unconfirmed"
@@ -8592,8 +8596,7 @@ class _ParallelLoop:
             )
 
         if self._serial._close_published_issue(item.ref, landed, post_base, emit) is not None:
-            self._serial._account_issues.discard(item.ref)
-            self._serial._account_base_issues.discard(item.ref)
+            self._serial._release_account_protection(item.ref)
 
     def _delete_branch_safely(self, ref: int | str, branch: str) -> None:
         """``git branch -D`` a discarded Lane branch; a failure only warns."""
