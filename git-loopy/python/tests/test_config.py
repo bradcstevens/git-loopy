@@ -166,7 +166,7 @@ def test_run_config_routing_copies_input_not_aliased() -> None:
 
 
 def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -> None:
-    """Pin CLI 1.0.93's observed capabilities without dropping compatibility IDs."""
+    """Pin CLI 1.0.98's observed capabilities without dropping compatibility IDs."""
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         REASONING_EFFORTS,
@@ -192,7 +192,7 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
         "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
         "gpt-6-astra": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "gpt-6.1-sol": frozenset(
-            {"none", "low", "medium", "high", "xhigh", "max"}
+            {"low", "medium", "high", "xhigh", "max"}
         ),
         "gpt-6-luna": frozenset(
             {"none", "low", "medium", "high", "xhigh", "max"}
@@ -224,6 +224,7 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
         "grok-4.6": frozenset({"low", "medium", "high", "xhigh"}),
         "grok-4.7": frozenset({"low", "medium", "high", "xhigh"}),
         "mai-code-1.1-flash": frozenset({"low", "medium", "high"}),
+        "mai-code-2-flash": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
     }
 
@@ -232,6 +233,38 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
     assert SUPPORTED_MODELS == frozenset(expected)
     for model, efforts in MODEL_REASONING_EFFORTS.items():
         assert efforts <= REASONING_EFFORTS, model
+
+
+def test_mai_code_2_flash_accepts_max_but_not_long_context() -> None:
+    from git_loopy.config import (
+        ContextTierGateWarning,
+        gate_context_tier,
+        gate_reasoning_effort,
+    )
+
+    gated = gate_reasoning_effort("mai-code-2-flash", "max")
+    assert (gated.model, gated.effort, gated.warning) == (
+        "mai-code-2-flash", "max", None,
+    )
+    assert gate_context_tier("mai-code-2-flash", "default") == ("default", None)
+    assert gate_context_tier("mai-code-2-flash", "long_context") == (
+        "default", ContextTierGateWarning.UNSUPPORTED_CONTEXT_TIER,
+    )
+
+
+@pytest.mark.parametrize(
+    ("effort", "expected_effort", "warning"),
+    [("none", None, "dropped_effort"), (None, None, None), ("max", "max", None)],
+)
+def test_gpt_6_1_sol_gates_against_the_pinned_harness(
+    effort: str | None, expected_effort: str | None, warning: str | None,
+) -> None:
+    from git_loopy.config import gate_reasoning_effort
+
+    gated = gate_reasoning_effort("gpt-6.1-sol", effort)
+    assert gated.model == "gpt-6.1-sol"
+    assert gated.effort == expected_effort
+    assert (gated.warning.value if gated.warning else None) == warning
 
 
 def test_recommended_routing_is_the_locked_core() -> None:

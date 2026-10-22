@@ -116,7 +116,7 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
     "gpt-6-astra": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "gpt-6.1-sol": frozenset(
-        {"none", "low", "medium", "high", "xhigh", "max"}
+        {"low", "medium", "high", "xhigh", "max"}
     ),
     "gpt-6-luna": frozenset(
         {"none", "low", "medium", "high", "xhigh", "max"}
@@ -148,6 +148,7 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "grok-4.6": frozenset({"low", "medium", "high", "xhigh"}),
     "grok-4.7": frozenset({"low", "medium", "high", "xhigh"}),
     "mai-code-1.1-flash": frozenset({"low", "medium", "high"}),
+    "mai-code-2-flash": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
 }
 
@@ -165,7 +166,7 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
 #: differs from the CLI the SDK actually spawns, every gate verdict in the Run
 #: was reached against a description of some *other* binary, and the divergence
 #: is what the **Run readback** reports at Run start.
-MODEL_ROSTER_CLI_VERSION = "1.0.93"
+MODEL_ROSTER_CLI_VERSION = "1.0.98"
 
 #: The model ids the kit officially supports (the keys of
 #: :data:`MODEL_REASONING_EFFORTS`). :mod:`git_loopy.cli` uses this to
@@ -206,7 +207,7 @@ DEFAULT_CONTEXT_TIER = "default"
 #: "unknown": the tier passes through untouched, exactly as an off-roster model
 #: keeps its effort, because the live Copilot CLI is the authority.
 #:
-#: Captured from the SDK-pinned CLI 1.0.93 on 2026-10-14 (ADR-0019), not
+#: Captured from the SDK-pinned CLI 1.0.98 on 2026-10-22 (ADR-0019), not
 #: inferred from a model's maximum window. ``auto`` is model-dependent.
 #: Compatibility-only models have no tier row: their earlier effort data does
 #: not establish current tier support.
@@ -217,13 +218,9 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {
     "gpt-5.6-sol-fast": frozenset({"default", "long_context"}),
     "gpt-5.6-terra": frozenset({"default", "long_context"}),
     "gpt-5.6-luna": frozenset({"default", "long_context"}),
-    "gpt-5.5": frozenset({"default", "long_context"}),
-    "gpt-5.4": frozenset({"default", "long_context"}),
-    "gpt-5.4-mini": frozenset({"default"}),
     "gpt-5.3-codex": frozenset({"default"}),
-    "gpt-5-mini": frozenset({"default"}),
     "mai-code-1.1-flash": frozenset({"default"}),
-    "grok-4.5": frozenset({"default", "long_context"}),
+    "mai-code-2-flash": frozenset({"default"}),
     "claude-haiku-5.5": frozenset({"default", "long_context"}),
     "claude-sonnet-5.5": frozenset({"default", "long_context"}),
     "gpt-6.1-sol": frozenset({"default", "long_context"}),
@@ -232,8 +229,6 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {
     "grok-4.6": frozenset({"default", "long_context"}),
     "grok-4.7": frozenset({"default", "long_context"}),
     "claude-opus-5.5": frozenset({"default", "long_context"}),
-    "claude-opus-5": frozenset({"default", "long_context"}),
-    "claude-opus-4.8": frozenset({"default", "long_context"}),
     "gpt-6-astra": frozenset({"default", "long_context"}),
 }
 
