@@ -10,7 +10,9 @@ Python Runner it also amends the Run-wide Strike abort, reset and drain that
 [ADR-0030](0030-demotion-is-measured-per-pair.md) and
 [ADR-0043](0043-a-stop-drains-before-it-cancels.md) relied on.
 For the Python Runner, #703 additionally supersedes ADR-0020's one-Lane-per-issue-per-Run
-rule with one Lane contribution at a time and lifecycle-driven retries below.
+rule with one Lane contribution at a time and lifecycle-driven retries below, and #676
+takes a session that a terminal account refusal ended out of this accounting and adds
+`account_failure` to the closed Run endings (below).
 
 A **Run** picked up #680 and ended 38 seconds later having done nothing. Its work was already
 sitting in an open pull request; the **Session** said so with *no more tasks*, which defeated
@@ -98,6 +100,33 @@ Skipped candidates remain Pool membership but are refused at Pickup. An authorit
 terminal read therefore reports `all_skipped` for surviving skipped candidates,
 `empty_pool` if none remain, and never spends an extra Iteration just to classify them.
 The shared `max_iterations` budget still bounds Lane starts and serial Iterations together.
+
+## A terminal account refusal is Run control, not a Strike
+
+For the Python Runner, #676 takes one family of endings out of this accounting
+([Wrapper contract §19.1](../wrapper-contract.md), contract 2.40). Sometimes a session ends
+because the endpoint identified the account as refused: quota exhaustion, an authentication
+refusal, or a rate refusal it attributes to the account. That session records its actual
+**Session outcome**, work, elapsed time and credits. It charges no Strike, no **Attempt lifecycle**
+transition, no escalation and no adverse route evidence, because the account failed, not the
+issue. Earlier Strikes are never refunded.
+
+The reaction is Run-wide instead:
+
+- Quota exhaustion and authentication refusal stop admission of every new account-dependent
+  session. Once work in flight has drained, the Run ends on a sixth closed reason,
+  `account_failure` (exit 1).
+- A rate refusal pauses admission under one Run-wide cooldown, with at most two retries and
+  120 seconds in total. A single ordinary probe must then show positive harness interaction
+  before admission reopens. An unconfirmed probe also ends the Run `account_failure`.
+- An operator Stop keeps `operator_stop` primary.
+
+An affected attempt's work is counted, but it is never published or closed. Its issue stays
+protected for the rest of that Run, and only the Orchestrator's own closure (Wrapper contract
+§21, #918) releases it, after a later attempt's fresh closing commit has been published.
+
+This is delivered for the Python Runner. The dormant shell and PowerShell paths keep their
+frozen baselines and are unchanged.
 
 ## What this does not do
 

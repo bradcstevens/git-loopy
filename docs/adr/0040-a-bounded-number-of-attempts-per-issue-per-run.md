@@ -79,8 +79,8 @@ fallback model and no automatic model switch**.
 
 That routing boundary does not reinstate the table's historical immediate-skip rules:
 [ADR-0070](0070-a-strike-is-charged-to-the-issue.md) supersedes its lifecycle accounting,
-and current account-condition behavior is governed separately by
-[#676](https://github.com/bradcstevens/git-loopy/issues/676).
+and current account-condition behavior is governed separately by its
+[#676 amendment](0070-a-strike-is-charged-to-the-issue.md#a-terminal-account-refusal-is-run-control-not-a-strike).
 
 ## Skipping is a Pickup filter, never a Pool filter
 

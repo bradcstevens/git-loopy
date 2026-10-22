@@ -95,8 +95,8 @@ model switch.
 This records a routing boundary, not a new Strike disposition. It does not restore this
 ADR's superseded Run-wide ceiling or ADR-0040's immediate-skip rules.
 [ADR-0070](0070-a-strike-is-charged-to-the-issue.md) remains the accounting decision;
-current account-condition behavior is governed separately by
-[#676](https://github.com/bradcstevens/git-loopy/issues/676).
+current account-condition behavior is governed separately by its
+[#676 amendment](0070-a-strike-is-charged-to-the-issue.md#a-terminal-account-refusal-is-run-control-not-a-strike).
 
 ## What this does not do
 
