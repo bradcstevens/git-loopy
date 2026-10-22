@@ -244,6 +244,15 @@ unchanged, a Run's `--no-ff` Integration included. Every Rehearsal rule, the
 tagged trust policy and its declaration rules, and publication readback are
 unchanged. Public tags never move, so a Reopen cannot repair a published target.
 
+Before the re-promotion's full local Rehearsal, secure a quiet trunk window:
+announce the window or pause sessions that push directly to `main` for the
+expected duration. Every feedback loop runs, so allow tens of minutes (38 to
+50 minutes locally for the 0.11.3 repair). If `main` still moves before the
+push, rebuild the Reopen and re-promotion on the new head, extend the release
+notes to cover the intervening changes, and run the full Rehearsal again.
+Never push a re-promotion on the strength of a stale Rehearsal; Promotion
+must use the snapshot that passed.
+
 Promotion only accepts a milestone that exists. List them rather than inventing
 one:
 
