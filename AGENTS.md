@@ -267,5 +267,6 @@ ones that exist. See `docs/releases/README.md#release-target-and-promotion`.
 
 ### Domain docs
 
-Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. See
-`docs/agents/domain.md`.
+Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. Older
+ADRs and release notes still use the glossary's former name: read it as
+`GLOSSARY.md` and never recreate it. See `docs/agents/domain.md`.

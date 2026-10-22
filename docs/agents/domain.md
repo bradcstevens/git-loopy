@@ -10,6 +10,8 @@ How the engineering skills should consume this repo's domain documentation when 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
+`CONTEXT.md` and `CONTEXT-MAP.md` are the former names of `GLOSSARY.md` and `GLOSSARY-MAP.md`, renamed in [#790](https://github.com/bradcstevens/git-loopy/pull/790). ADRs and release notes written before then still use them: read those mentions as the glossary, and never recreate or cite the old files.
+
 ## File structure
 
 Single-context repo (most repos):

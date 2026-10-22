@@ -12,9 +12,9 @@ You've also been passed the last few commits. Read them to understand what work 
 
 # DOMAIN AWARENESS
 
-Before exploring code or proposing changes, read `docs/agents/domain.md` for the consumer rules. Read `GLOSSARY.md` at the repository root, or follow `GLOSSARY-MAP.md` there to the relevant context glossaries. If neither exists, fall back to `CONTEXT.md` / `CONTEXT-MAP.md` for repositories that have not migrated. If `docs/adr/` exists, respect any ADRs that touch the area you're about to change. Use the project's vocabulary in issue comments, commit messages, test names, and module names. When in doubt about how a section of code fits in, go up a layer of abstraction and map the relevant modules and callers (in the project's glossary vocabulary) before drilling in.
+Before exploring code or proposing changes, read `docs/agents/domain.md` for the consumer rules. Read `GLOSSARY.md` at the repository root, or follow `GLOSSARY-MAP.md` there to the relevant context glossaries. If `docs/adr/` exists, respect any ADRs that touch the area you're about to change. Use the project's vocabulary in issue comments, commit messages, test names, and module names. When in doubt about how a section of code fits in, go up a layer of abstraction and map the relevant modules and callers (in the project's glossary vocabulary) before drilling in.
 
-If you're about to commit to a non-trivial plan (cross-cutting refactor, ambiguous requirements, new module boundary), pause and stress-test that plan against `docs/agents/domain.md`, `GLOSSARY.md` or the context glossaries reached through `GLOSSARY-MAP.md` at the repository root, and any ADRs under `docs/adr/`. If neither glossary entry point exists, fall back to `CONTEXT.md` / `CONTEXT-MAP.md` before you start — does the plan fit the existing vocabulary and decisions? Cheap stress-test, big save when you're wrong.
+If you're about to commit to a non-trivial plan (cross-cutting refactor, ambiguous requirements, new module boundary), pause and stress-test that plan against `docs/agents/domain.md`, `GLOSSARY.md` or the context glossaries reached through `GLOSSARY-MAP.md` at the repository root, and any ADRs under `docs/adr/` before you start — does the plan fit the existing vocabulary and decisions? Cheap stress-test, big save when you're wrong.
 
 # CONFIRM YOUR ACTIVE ISSUE (working marker)
 
