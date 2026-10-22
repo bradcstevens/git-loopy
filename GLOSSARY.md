@@ -1796,7 +1796,9 @@ workspace is preserved on exactly one condition, salvage itself failing, which i
 case where reclaiming would lose work. Salvage emits no **Event**, not even a Checkpoint
 one, because reclamation is not issue work and a **Queue** row for it would trace
 work that did not happen. Both a live Run reclaiming its own workspaces at
-Stop/exit and a later **Sweep** reclaiming a dead Run's residue perform Salvage.
+Stop/exit and a later **Sweep** reclaiming a dead Run's residue perform Salvage. So does a
+remote Run's **Teardown**, where work it cannot preserve outlives the Run only by Teardown's
+fixed delay: the one case in which reclamation destroys work.
 It makes cancelled work *recoverable, not resumable*:
 a later Run mints a new Lane branch for the issue rather than continuing the salvaged one,
 which is what lets a Stop cancel safely without pretending the work will be picked up.
@@ -2178,8 +2180,9 @@ _Avoid_: contract pin, fixture revision (both name a fixture's latest change).
 ### Run residence (accepted design)
 
 These terms complete the vocabulary of
-[ADR-0093](docs/adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md)
-and record decisions whose delivery has not yet been accepted. The **Isolation
+[ADR-0093](docs/adr/0093-agents-work-in-copilots-sandbox-and-a-run-may-reside-remotely.md) and
+[ADR-0099](docs/adr/0099-a-remote-run-preserves-its-work-halts-and-azure-deletes-it.md), and
+record decisions whose delivery has not yet been accepted. The **Isolation
 grade** and **Execution host** entries above keep their meanings: a Sandbox does not change
 a host's grade, and a Run residence does not change a host's placement.
 
@@ -2191,6 +2194,14 @@ the default; a Run resides remotely only when the operator asks for it. Every is
 Agents work in their own **Sandbox** in either residence.
 _Avoid_: Run placement, Run host, remote Execution host (an Execution host places one
 **Lane contribution**, not a Run).
+
+**Teardown**:
+What happens to a remote **Run**'s microVM once its **Orchestrator** has exited, for any reason.
+Every **Issue clone** is **Salvaged**, everything a local **Sweep** would keep is preserved as
+**Breadcrumbs**, and whatever could not be preserved is named on its issue. The microVM then stops,
+and it is deleted after a fixed delay. Teardown begins only once the Run has ended, unlike
+**Wind-down**, and it is never a side effect of **Detach**.
+_Avoid_: retention (trace history), cleanup, reaping, shutdown.
 
 ## Relationships
 

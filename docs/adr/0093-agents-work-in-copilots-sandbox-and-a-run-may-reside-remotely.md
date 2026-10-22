@@ -12,6 +12,11 @@ placement of Lane workspaces inside the clone's git directory. Its two
 decision 7 no longer reaches the dormant shell and PowerShell paths. Prompt mode cannot meet the
 Sandbox rules, so under ADR-0091 those paths owe no Sandbox row until one resumes.
 
+**Amended by [ADR-0099](0099-a-remote-run-preserves-its-work-halts-and-azure-deletes-it.md):**
+decision 6's last bullet. When a remote Run ends, a supervisor in the guest preserves its work as
+Breadcrumbs and halts the microVM. Azure then deletes the microVM after a fixed delay. Work that
+could not be preserved is named, and outlives the Run only by that delay.
+
 ## Context
 
 ADR-0010's spike (CLI 1.0.67) found no way to sandbox the headless SDK session
