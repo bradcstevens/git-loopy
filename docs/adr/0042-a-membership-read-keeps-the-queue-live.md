@@ -2,9 +2,11 @@
 
 **Status:** accepted
 
-Implemented by [#429](https://github.com/bradcstevens/git-loopy/issues/429) (PR #934).
+Implemented by [#431](https://github.com/bradcstevens/git-loopy/issues/431) and
+[#429](https://github.com/bradcstevens/git-loopy/issues/429) (PR #934) as amended below; the amendment
+supersedes parts of the original decision.
 
-**Amendment (#429; residual cadence implemented by PR #934):**
+**Amendment ([#429](https://github.com/bradcstevens/git-loopy/issues/429), residual cadence implemented by PR #934):**
 #431 delivered the Rolling-dispatch Membership read as `wrapper.pool.refreshed`,
 with add-only consumers in both Dashboards. The residual serial and full-Lane
 visibility reads reuse that Event and its run-scoped envelope rather than add the

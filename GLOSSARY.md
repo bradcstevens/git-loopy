@@ -2031,21 +2031,11 @@ the ordering constraint is the **Integration backlog**.
 _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap**, or
 **Rolling dispatch** instead.
 
-### Publication reconciliation
-
 **Publication reconciliation**:
 The restart-time reconciliation of an interrupted **Integration** publication against
 durable evidence of its identity and landed result. Distinct from **Recovery**, which
-repairs a contribution in its private **Integration stage**; delivered by #419 (PR #933).
+repairs a contribution in its private **Integration stage**.
 _Avoid_: Recovery, Sweep (as synonyms).
-
-### Completion check (accepted design)
-
-**Completion check**:
-A read-only verdict on whether one identified **Run** completed an explicitly named
-set of issues with the required evidence. Distinct from the comparative research
-**Completion proof**; delivery is tracked by #674.
-_Avoid_: finalizer, Completion proof (as synonyms).
 
 ### Board (accepted design)
 
@@ -2159,6 +2149,12 @@ judge both arms. It shows non-regression, never a lift or a confidence level. Th
 **Rehearsal** refuses a Python stable at or above 1.0.0 without a committed record of a
 passing proof. It is not a **Calibration**, and it works within no **Run**.
 _Avoid_: replay (the event log's word), benchmark, evaluation.
+
+**Completion check**:
+A read-only verdict on whether one identified **Run** completed an explicitly named
+set of issues with the required evidence. Distinct from the comparative research
+**Completion proof**; delivery is tracked by #674.
+_Avoid_: finalizer, Completion proof (as synonyms).
 
 ### Stable surface (accepted design)
 

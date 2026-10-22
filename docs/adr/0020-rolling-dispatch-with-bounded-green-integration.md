@@ -25,7 +25,7 @@ a prepared Release-line commit stays local without announcing `wrapper.release.a
 on publication failure. A later publish or serial push may carry the work. Recovery of a
 lost acknowledgement or torn worktree by SHA remains #419.
 
-**Amendment (#419; implemented by PR #933):**
+**Amendment ([#419](https://github.com/bradcstevens/git-loopy/issues/419), implemented by PR #933):**
 the Python Runner's Parallel publication gains **Publication reconciliation** at
 restart. A durable record made before base mutation binds the issue, base branch,
 verified-stage SHA and upstream identity; reconciliation must also account for a
