@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "contract_version": "2.41",
+  "contract_version": "2.42",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
     "rolling-unread-pin.json": {
-      "python": {"kind": "claimed", "reason": "python/tests/test_loop_parallel.py drives every Lane-path case through the complete Run seam with fake gh/git, observing bindings, units, ordering and wrapper.pin.unread transitions."},
-      "shell": {"kind": "waived_out_of_scope", "reason": "Contract 2.41 is above the dormant Path baseline 2.26; the shell Orchestrator is serial-only and does not implement Rolling dispatch."},
-      "powershell": {"kind": "waived_out_of_scope", "reason": "Contract 2.41 is above the dormant Path baseline 2.26; the PowerShell Orchestrator is serial-only and does not implement Rolling dispatch."},
-      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard is an Event consumer only; it does not make Lane Pickup or Unread-Pin lapse decisions."}
+      "python": {"kind": "claimed", "reason": "python/tests/test_loop_parallel.py drives every Lane and serial case through the complete Run seam with fake gh/git, observing bindings, units, pin_unread Iterations, ordering and wrapper.pin.unread transitions."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "Contract 2.42 is above the dormant Path baseline 2.26; the shell Orchestrator is serial-only and does not implement Rolling dispatch."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "Contract 2.42 is above the dormant Path baseline 2.26; the PowerShell Orchestrator is serial-only and does not implement Rolling dispatch."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard is an Event consumer only; it does not make Pickup, serial-hold accounting or Unread-Pin lapse decisions."}
     },
     "account-control.json": {
       "python": {"kind": "claimed", "reason": "tests/test_account_conformance.py drives exit mapping and the account Event producer; test_account_run.py and test_account_control.py prove Run admission, accounting, closure and clock-controlled budgets."},
