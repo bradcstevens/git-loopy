@@ -128,6 +128,12 @@ def _packaged_prompt_text() -> str:
     return loop_module._packaged_prompt_path().read_text(encoding="utf-8")
 
 
+def _prompt_section(start: str, end: str) -> str:
+    text = _packaged_prompt_text()
+    offset = text.index(start)
+    return text[offset : text.index(end, offset)]
+
+
 def test_role_rules_belong_to_profiles_not_shared_run_instructions() -> None:
     prompt = _packaged_prompt_text()
     for retired in (
@@ -427,18 +433,16 @@ def test_packaged_prompt_makes_the_working_marker_a_confirmation() -> None:
 
 def test_packaged_prompt_bounds_deliberate_load() -> None:
     """#818: every bound on deliberate host load is pinned in the Run instructions."""
-    text = (Path(git_loopy.__file__).parent / "PROMPT.md").read_text(encoding="utf-8")
-    start = text.index("# DELIBERATE LOAD")
-    section = text[start : text.index("# LEAVE NO PROCESS BEHIND", start)]
+    section = _prompt_section("# DELIBERATE LOAD", "# LEAVE NO PROCESS BEHIND")
     for bound in (
         "taskpolicy -c utility",
         "`nice` is not a substitute",
-        "2× the logical CPUs",
+        "2× the logical CPUs as a total-host budget, "
+        "counting what the command's own runner already started",
         "the issue's own cap",
         "30 minutes",
         "inconclusive, never as a pass",
         "Never escalate",
-        "Never raise the priority",
     ):
         assert bound in section
 
@@ -457,10 +461,12 @@ def test_deliberate_load_bounds_exempt_a_declared_feedback_loop() -> None:
     So the exemption is pinned as *position*, not merely presence: it must be
     stated before the first bound, and it must name the parallelism that misled.
     """
-    text = (Path(git_loopy.__file__).parent / "PROMPT.md").read_text(encoding="utf-8")
-    start = text.index("# DELIBERATE LOAD")
-    section = text[start : text.index("# LEAVE NO PROCESS BEHIND", start)]
+    section = _prompt_section("# DELIBERATE LOAD", "# LEAVE NO PROCESS BEHIND")
 
+    assert "Never raise the priority" not in section
+    policy = _prompt_section("# HOST YIELD POLICY", "# DELIBERATE LOAD")
+    assert "Never raise the priority you inherited." in policy
+    assert "every command, including ordinary feedback loops and deliberate load" in policy
     assert "Ordinary feedback loops are **not** deliberate load" in section
     assert section.index("Ordinary feedback loops") < section.index("taskpolicy"), (
         "the feedback-loop exemption must precede the bounds, or an agent "
@@ -479,23 +485,27 @@ def test_deliberate_load_bounds_exempt_a_declared_feedback_loop() -> None:
     assert "beyond what its own runner starts" in section
 
 
-def test_leaving_no_process_behind_is_not_scoped_to_deliberate_load() -> None:
+def test_survivor_check_is_not_scoped_to_deliberate_load() -> None:
     """A leaked helper is what starved the host, and it comes from an ordinary loop.
 
-    #818 scoped cleanup to a *"load process"* inside the deliberate-load section,
+    #818 scoped the Survivor check to a *"load process"* in the deliberate-load section,
     so the leak that actually happens — `test_attach_command.py` leaving its
     `git_loopy` helper alive when it fails — fell outside the rule twice over:
-    it is not load, and its loop is explicitly exempt. Cleanup therefore stands
+    it is not load, and its loop is explicitly exempt. The Survivor check stands
     as its own section, covering every process a Run starts.
     """
-    text = (Path(git_loopy.__file__).parent / "PROMPT.md").read_text(encoding="utf-8")
-    start = text.index("# LEAVE NO PROCESS BEHIND")
-    section = text[start : text.index("# FEEDBACK LOOPS", start)]
+    section = _prompt_section("# LEAVE NO PROCESS BEHIND", "# FEEDBACK LOOPS")
 
+    assert "Survivor check" in section
     assert "deliberate load and ordinary feedback loops alike" in section
     assert "`pgrep`" in section
     assert "end the ones you started by PID" in section
-    assert "interrupted" in section
+    assert "before you finish, and after any command you interrupted" in section
+    assert "Report what you ended." in section
+    assert (
+        "If a process is still alive and you cannot establish that it is yours, "
+        "say so on the issue rather than leaving it unmentioned."
+    ) in section
 
 
 def test_packaged_prompt_leaves_publication_and_closure_to_the_run() -> None:

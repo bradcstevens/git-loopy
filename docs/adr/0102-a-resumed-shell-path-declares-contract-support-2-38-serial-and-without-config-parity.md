@@ -3,6 +3,10 @@
 **Status:** accepted design. Planning only: nothing here activates the shell manifest, edits the
 Conformance register or makes a tracked issue agent-ready.
 
+**Amended by [ADR-0105](0105-a-resumed-shell-path-cuts-its-own-releases-and-records-the-helper-release-it-consumes.md):**
+resumption also advances `release_authority`, which moves to the shell-owned
+`git-loopy/shell/release.json`, and adds `docs/releases/shell/**` to `owned_files` (decision 10).
+
 Decided by [Decide the resumed shell path's supported surface](https://github.com/bradcstevens/git-loopy/issues/982)
 on [Wayfinder: resume the shell Language path](https://github.com/bradcstevens/git-loopy/issues/979),
 from the [contract-gap ledger](https://github.com/bradcstevens/git-loopy/blob/037e180352b0aecf6e25beeabaa36f73e34cda97/docs/research/shell-resumption-contract-gaps.md)

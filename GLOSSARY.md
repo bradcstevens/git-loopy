@@ -120,6 +120,20 @@ client. It covers the Run's Agent tools and **Integration** feedback loops,
 not a CPU quota or a Lane ceiling.
 _Avoid_: background mode, load budget, concurrency limit.
 
+**Deliberate load**:
+Load added on top of a command to reproduce or measure something, such as stress
+loops, CPU burners or extra concurrent copies; never a declared feedback loop or
+the parallelism its runner starts.
+_Avoid_: test parallelism, feedback-loop load, stress test (as a blanket name).
+
+**Survivor check**:
+The **Agent**'s check before finishing and after any interrupted command for
+processes its commands started that are still running, whether from
+**Deliberate load** or ordinary feedback loops. It ends only attributable
+survivors by PID, reports what it ended, and names on the issue any survivor it
+cannot attribute.
+_Avoid_: cleanup, reap, sweep.
+
 **Isolation grade**:
 The Execution host's declared isolation boundary: **workspace separation only**
 (separate worktrees with the operator's authority) or **machine boundary** (a
@@ -2245,6 +2259,21 @@ diagnostics are lost. The microVM then stops,
 and it is deleted after a fixed delay. Teardown begins only once the Run has ended, unlike
 **Wind-down**, and it is never a side effect of **Detach**.
 _Avoid_: retention (trace history), cleanup, reaping, shutdown.
+
+### Shell resumption (accepted design)
+
+This term completes the vocabulary of
+[ADR-0105](docs/adr/0105-a-resumed-shell-path-cuts-its-own-releases-and-records-the-helper-release-it-consumes.md).
+A resumed non-Python path also qualifies the identity it reports with its path's name, as its tag
+namespace already does. The existing **Release version**, **Path artifact** and **TUI helper**
+entries above describe current behavior and keep their meanings; this decision record does not
+establish delivery acceptance.
+
+**Consumed Release**:
+The exact Release of another path's **Path artifact** that one Release of a consuming
+**Language path** was proven with and installs. The consumer measures drift against it, and it
+never becomes the consumer's own **Release version**.
+_Avoid_: helper pin (**Pin** names an issue), pinned helper, shared version.
 
 ## Relationships
 
