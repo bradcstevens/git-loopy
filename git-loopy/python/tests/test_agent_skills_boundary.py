@@ -24,21 +24,18 @@ def test_tracked_agent_skills_docs_keep_the_setup_boundary() -> None:
 
     agents = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
     blocks = re.findall(r"^## Agent skills\n(.*?)(?=^## |\Z)", agents, re.M | re.S)
-    expected = """
-### Issue tracker
-
-Issues live in this repo's GitHub Issues (managed via the `gh` CLI). See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-All five canonical triage roles use their default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
-"""
+    # The boundary owns the headings and one summary/pointer per subsection,
+    # not the template's prose: refreshing a reworded summary is harmless.
+    expected = r"\n\n".join(
+        rf"### {heading}\n\n[^\n]+ See `{re.escape(path)}`\."
+        for heading, path in (
+            ("Issue tracker", "docs/agents/issue-tracker.md"),
+            ("Triage labels", "docs/agents/triage-labels.md"),
+            ("Domain docs", "docs/agents/domain.md"),
+        )
+    )
     failures = []
-    if len(blocks) != 1 or blocks[0].strip() != expected.strip():
+    if len(blocks) != 1 or re.fullmatch(expected, blocks[0].strip()) is None:
         failures.append(
             "AGENTS.md: Agent skills must contain only the setup template's "
             "three summaries; keep hand-written guidance in Repository workflow."

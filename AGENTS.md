@@ -160,7 +160,8 @@ labels (ADR-0066); an issue with no such label changes no version. Never invent 
 milestone — `gh api repos/{owner}/{repo}/milestones --jq '.[].title'` lists the
 ones that exist. See `docs/releases/README.md#release-target-and-promotion`.
 
-### Domain docs
+### Glossary former names
 
-Older ADRs and release notes still use the glossary's former name: read it as
-`GLOSSARY.md` and never recreate it.
+Older ADRs and release notes still use `CONTEXT.md` / `CONTEXT-MAP.md`, renamed
+in #790 to `GLOSSARY.md` / `GLOSSARY-MAP.md`. Read those former names as the
+current ones and never recreate the retired files.
