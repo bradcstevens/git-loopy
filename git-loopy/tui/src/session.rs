@@ -23,6 +23,7 @@ use crate::render::{
 };
 use crate::state::{DashboardState, LogLine, RunInputs};
 use crate::timestamp::{Timestamp, Zone};
+use crate::unread_pin_notice::UnreadPinNotice;
 use crate::view::{project_run_view, RunView, TerminalCapabilities, ViewContext};
 
 /// One complete frame: what the Run states, and how the operator is looking.
@@ -57,6 +58,8 @@ pub struct DashboardFrame {
     pub diagnostics: Diagnostics,
     /// The **Unbound-Run notice**, when the Run ended without binding (#642).
     pub notice: Option<Vec<String>>,
+    /// The live **Unread-Pin notice**, independent of any Run-end hold.
+    pub unread_pin_notice: Option<Vec<String>>,
 }
 
 /// The longest an unreadable line is quoted back at the operator.
@@ -150,6 +153,7 @@ pub struct DashboardSession {
     diagnostics: Diagnostics,
     /// Whether this Run ever bound an issue, and why it ended if not.
     unbound: UnboundRunTally,
+    unread_pin: UnreadPinNotice,
     /// The line a held Dashboard adds telling the operator how to leave it;
     /// `Some` is what holds an **Unbound Run** until the operator quits.
     unbound_hold_hint: Option<String>,
@@ -193,6 +197,7 @@ impl DashboardSession {
             last_monotonic: None,
             diagnostics,
             unbound: UnboundRunTally::default(),
+            unread_pin: UnreadPinNotice::default(),
             unbound_hold_hint: None,
         }
     }
@@ -263,6 +268,7 @@ impl DashboardSession {
         self.last_instant = event.ts.or(self.last_instant);
         self.last_monotonic = event.observed_monotonic.or(self.last_monotonic);
         self.unbound.observe(&event);
+        self.unread_pin.observe(&event);
         let active = self.state.active_ref.clone();
         let log_head = first_ordinal(self.state.issue_log(self.cursor.selected()));
         let activity_head = first_ordinal(self.state.live_log());
@@ -373,6 +379,7 @@ impl DashboardSession {
             capabilities: self.capabilities,
             diagnostics: self.diagnostics.clone(),
             notice: self.notice(),
+            unread_pin_notice: self.unread_pin.lines.clone(),
         }
     }
 

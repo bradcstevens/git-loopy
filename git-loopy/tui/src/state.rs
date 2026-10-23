@@ -1104,7 +1104,7 @@ impl DashboardState {
                     effective_lane_limit: turn.effective_lane_limit,
                 });
             }
-            EventPayload::Other | EventPayload::PoolExcluded(_) => {}
+            EventPayload::Other | EventPayload::PoolExcluded(_) | EventPayload::PinUnread(_) => {}
         }
     }
 

@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.42 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.43 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -996,6 +996,22 @@ text changes. This Event remains additive within schema compatibility 1.
 It is not a Run outcome, a preflight failure, a Session outcome, or a Strike.
 Unchanged unread retries emit neither `wrapper.iteration.start` nor
 `wrapper.iteration.end`.
+
+**Unread-Pin notice (contract 2.43).** The Python attach client and Rust
+Dashboard MUST fold `wrapper.pin.unread` into the identical lines pinned by
+`unread-pin-notice.json`: the Pin, failing read and its reason, and
+`first_unread_at`. While `holding`, the notice says new work is held until
+`first_unread_at` plus ten minutes; while `lapsed`, it says the order is
+proceeding behind the Pin. Instants use UTC RFC3339 with `Z`, no zero fraction,
+and six fractional digits otherwise, independent of the viewer's zone.
+Only Events change the notice: the viewer MUST NOT infer a lapse from its
+clock. A changed read replaces the notice; `ended` (whether `bound`, `spent`,
+or `stopped`) or Run end clears it. The line-printing attach client prints
+each changed notice once and retains historical scrollback when clearing its
+current fold. The Dashboard updates or removes its live notice without
+holding the Run open. Shell and PowerShell have no attach client and waive
+this presentation fixture as out of scope. Older consumers may continue to
+ignore the additive Event.
 
 Every line shares this envelope, with keys in a stable order (envelope keys first, then payload
 keys sorted):
