@@ -1332,8 +1332,15 @@ with no estimate. Closing the launching client does not stop the Run.
 Use `runs`, `attach <run-id>` and `stop <run-id>` from the launching clone just
 as for a local Run. The client uses its existing Azure CLI login and the
 Container Apps execution API; no guest login or credential copy is needed.
-Automatic remote teardown remains separate delivery work (#871). Preserve
-salvage and reclaim the VM and disk after the Run; client Detach deletes neither.
+Automatic remote teardown remains separate delivery work (#871). Remote Sweep
+runs before a remote launch and in `git-loopy sweep` (`--dry-run` plans without
+mutating). It preserves a proven-dead Run's work before halting its VM, leaves
+Stopped VMs to Azure's seven-day deletion delay, and reclaims the per-launch
+disk image and receipt only after the VM is gone. Client Detach deletes neither.
+`git-loopy sweep --retry-remote <run-id>` explicitly resumes **one** Stopped VM
+and retries preservation; no automatic pass resumes it. Live or unprovable
+Runs and failed preservations are retained. Guests predating the preservation
+module fail closed rather than being upgraded or deleted by Sweep.
 See the [remote launch reference](../../docs/run-residence.md#detached-azure-launch-870)
 for image prerequisites, corporate package feeds, credential handling and
 unconfirmed-launch recovery.
