@@ -573,7 +573,15 @@ def _rejected_publication(root: Path, mp: pytest.MonkeyPatch) -> None:
     assert not gh.issue_close_calls
 
 
+def _unread_pin_lapses(root: Path, mp: pytest.MonkeyPatch) -> None:
+    _gh, git = lp._wire_parallel_safe_pin(root, mp)
+    mp.setattr(loop_module, "_PIN_UNREAD_HOLD_SECONDS", 0.01)
+    lp._fail_lease_probes(mp, git, 43, times=3)
+    assert asyncio.run(loop_module.run(_config(3, issue_pin=43))) == 0
+
+
 SCENARIOS: dict[str, Callable[[Path, pytest.MonkeyPatch], None]] = {
+    "unread-pin-lapses": _unread_pin_lapses,
     "rejected-publication": _rejected_publication,
     "two-lanes-park": _two_lanes_park_against_a_full_backlog,
     "red-then-green-recovery": _red_then_green_recovery,

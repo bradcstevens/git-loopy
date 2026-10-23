@@ -1364,8 +1364,8 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     moving the fixture to 1.11 with compatibility schema 1 unchanged.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.11"
-    assert _EVENT_SCHEMA["contract_version"] == "2.40"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.12"
+    assert _EVENT_SCHEMA["contract_version"] == "2.41"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -1792,7 +1792,7 @@ def test_event_fixture_pins_rolling_contribution_contract() -> None:
         events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
     )
 
-    literals = set(_EVENT_SCHEMA["event_types"].values())
+    literals = set((_EVENT_SCHEMA["event_types"] | _EVENT_SCHEMA["python_event_types"]).values())
     grouped = (
         identity["lifecycle_types"]
         + identity["stamped_types"]
@@ -1950,6 +1950,28 @@ def test_event_fixture_pins_the_serial_latch_contract() -> None:
     assert events_module.WRAPPER_SERIAL_REQUESTED not in (
         events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
     )
+
+
+def test_event_fixture_pins_the_unread_pin_contract() -> None:
+    contract = _EVENT_SCHEMA["payload_contracts"][events_module.WRAPPER_PIN_UNREAD]
+    assert contract["required_when_present"] == [
+        "issue", "state", "read", "reason", "first_unread_at",
+    ]
+    assert contract["state_values"] == ["holding", "lapsed", "ended"]
+    assert contract["read_values"] == [
+        "tracker", "readiness", "lease", "route_evidence", "route_capabilities",
+        "route_selector", "base_revision", "worktree",
+    ]
+    assert contract["outcome_on_ended_only"] == ["bound", "spent", "stopped"]
+    assert events_module.WRAPPER_PIN_UNREAD not in events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
+    for case in _EVENT_SCHEMA["serialization_cases"]:
+        event = case["event"]
+        if event["type"] != events_module.WRAPPER_PIN_UNREAD:
+            continue
+        assert set(contract["required_when_present"]) <= event.keys()
+        assert event["iter"] is None
+        assert not {"lane_id", "contribution_id"} & event.keys()
+        assert ("outcome" in event) == (event["state"] == "ended")
 
 
 def test_event_fixture_pins_the_parallel_degrade_contract() -> None:

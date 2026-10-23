@@ -122,6 +122,7 @@ import re
 import sys
 import time
 from time import monotonic as _membership_clock
+from time import monotonic as _pin_unread_clock
 from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
 from importlib.resources import files
@@ -183,6 +184,7 @@ from git_loopy.dynamic_route import (
     DynamicRouter,
     ReusableRoute,
     FreshEvidence,
+    FreshHarnessCapabilities,
     RoutingAdmissionLedger,
     RoutingCallCancelled,
     RoutingProposal,
@@ -1185,6 +1187,13 @@ class _CandidateUnread(DynamicRouteUnavailable):
     own Iteration treats it as the Pin unread (#430).
     """
 
+    def __init__(
+        self, reason: str, *, read: str = "tracker", detail: str | None = None
+    ) -> None:
+        super().__init__(reason)
+        self.read = read
+        self.detail = detail or reason
+
 
 #: Dynamic-routing refusals caused by an external read or call that did not
 #: happen — the evidence feed, the capability listing, the selector — rather
@@ -1198,10 +1207,20 @@ _TRANSIENT_ROUTING_REFUSALS: frozenset[RoutingUnavailableReason] = frozenset(
 )
 
 
-def _routing_refusal(reason: RoutingUnavailableReason) -> DynamicRouteUnavailable:
+def _routing_refusal(
+    reason: RoutingUnavailableReason, *, detail: str | None = None
+) -> DynamicRouteUnavailable:
     """The exception a router refusal raises: unread when transient (#430)."""
     if reason in _TRANSIENT_ROUTING_REFUSALS:
-        return _CandidateUnread(reason.value)
+        return _CandidateUnread(
+            reason.value,
+            read={
+                RoutingUnavailableReason.SOURCE_UNAVAILABLE: "route_evidence",
+                RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE: "route_capabilities",
+                RoutingUnavailableReason.SELECTOR_UNAVAILABLE: "route_selector",
+            }[reason],
+            detail=detail,
+        )
     return DynamicRouteUnavailable(reason.value)
 
 
@@ -1353,11 +1372,21 @@ def _make_dynamic_router(
             ),
         )
 
+    async def capabilities_fetch() -> FreshHarnessCapabilities | None:
+        failures: list[str] = []
+
+        def report(message: str) -> None:
+            failures.append(message)
+            warn(message)
+
+        evidence = await _fetch_harness_evidence(warn=report)
+        if evidence is None and failures:
+            raise DynamicRouteUnavailable(failures[-1])
+        return evidence
+
     return DynamicRouter(
         evidence_fetch=SharedLiveRead(evidence_fetch),
-        capabilities_fetch=SharedLiveRead(
-            lambda: _fetch_harness_evidence(warn=warn)
-        ),
+        capabilities_fetch=SharedLiveRead(capabilities_fetch),
         selector_assess=selector_assess,
         recorder=recorder,
         admission_ledger=admission_ledger,
@@ -1446,6 +1475,7 @@ class _Loop:
         #: every later read.
         self._live_pin: int | None = config.issue_pin
         self._pin_unread = False
+        self._on_pin_end: Callable[[str], None] | None = None
         self._priority_lanes_deferred = False
         self._priority_lane_eligible: Callable[[PoolCandidate], bool] | None = None
         self._pin_lease_unread = False
@@ -2822,18 +2852,18 @@ class _Loop:
             if self._preparation is not None:
                 await self._preparation.prioritize(item.ref)
                 current = await asyncio.to_thread(
-                    self._source.refresh_for_preparation, item
+                    self._source.refresh_for_preparation, item,
+                    report_failure=not (parallel_required and item.ref == self.live_pin),
                 )
                 if current.outcome != PICKUP_VALIDATED:
                     self._preparation.take(item.ref)
-                    unavailable = (
-                        _CandidateUnread
-                        if current.outcome == PICKUP_UNAVAILABLE
-                        else DynamicRouteUnavailable
-                    )
-                    raise unavailable(
-                        f"current candidate eligibility {current.outcome}"
-                    )
+                    if current.outcome == PICKUP_UNAVAILABLE:
+                        raise _CandidateUnread(
+                            f"current candidate eligibility {current.outcome}",
+                            read=current.unread_source or "tracker",
+                            detail=current.reason,
+                        )
+                    raise DynamicRouteUnavailable(f"current candidate eligibility {current.outcome}")
                 assert current.item is not None
                 item = current.item
                 if parallel_required and LABEL_PARALLEL_SAFE not in item.labels:
@@ -2909,7 +2939,7 @@ class _Loop:
         else:
             task_type_labelled = await self._labelled_for_routing(item)
         if isinstance(task_type_labelled, RoutingUnavailable):
-            raise _routing_refusal(task_type_labelled.reason)
+            raise _routing_refusal(task_type_labelled.reason, detail=task_type_labelled.detail)
         resolution = routed
         if task_type_labelled is not item:
             try:
@@ -3173,7 +3203,7 @@ class _Loop:
         request = self._routing_request(item, resolution)
         decision = await self._bound_dynamic_decision(item, request, router)
         if isinstance(decision, RoutingUnavailable):
-            raise _routing_refusal(decision.reason)
+            raise _routing_refusal(decision.reason, detail=decision.detail)
         self._diag.info(
             "issue #%s %s to %s @ %s (%s): %s",
             item.ref,
@@ -3857,6 +3887,8 @@ class _Loop:
         if live and not pin_live_after(
             live, listed=listed, complete=complete, read=read
         ):
+            if self._on_pin_end is not None:
+                self._on_pin_end("bound" if read == PIN_READ_BOUND else "spent")
             self.spend_pin()
 
     def spend_pin(self) -> None:
@@ -4702,6 +4734,18 @@ work in flight, nothing currently refillable, no serial turn granted).
 _MEMBERSHIP_SERVICE_INTERVAL = 1.0
 """Cooperative tick spacing; visibility itself uses ``RefreshBackoff.maximum``."""
 
+_PIN_UNREAD_HOLD_SECONDS = 600.0
+
+
+@dataclass
+class _UnreadPin:
+    issue: int
+    first_unread: float
+    first_unread_at: str
+    read: str
+    reason: str
+    lapsed: bool = False
+
 
 def run_end_refusal(issue: int | str, reason: str) -> dict[str, int | str]:
     """One ``wrapper.run.end`` ``refusals`` entry (contract 2.12, #643).
@@ -4928,6 +4972,8 @@ class _ParallelLoop:
                 terminal_refused=lambda c: self._serial._attempts.skipped(c.ref),
                 lane_first=self._lane_first_pin,
                 lane_first_read=self._lane_first_read,
+                lane_first_holds=self._lane_pin_holds,
+                lane_first_unread=self._note_unread_pin,
             )
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
@@ -4937,6 +4983,7 @@ class _ParallelLoop:
                 concurrency=self._pressure.controller,
             )
         self._rolling_capable = self._scheduler is not None
+        self._unread_pin: _UnreadPin | None = None
         # Per-Lane-contribution state, keyed by `contribution_id` (never
         # `lane_id`) so it survives the reusable Lane slot moving on to
         # another issue once this contribution is admitted (#219 §7).
@@ -5046,6 +5093,7 @@ class _ParallelLoop:
             issue_clone_setup=self._setup_issue_clone,
         )
         self._client = self._serial._client
+        self._serial._on_pin_end = self._end_unread_pin
         if self._scheduler is not None:
             self._serial._release_lane_ownership = self._scheduler.release_attempt
 
@@ -5493,6 +5541,7 @@ class _ParallelLoop:
             while True:
                 if self._crash is not None:
                     raise self._crash
+                self._lapse_unread_pin()
                 if self._dispatch_failures_exhausted:
                     if self._pending:
                         await self._await_capacity()
@@ -5547,7 +5596,7 @@ class _ParallelLoop:
                     not spending_refill_turn
                     and not scheduler.serial_latched
                     and scheduler.may_start_work
-                    and self._serial.live_pin is None
+                    and (self._serial.live_pin is None or not self._lane_pin_holds())
                 ):
                     collection = self._collect_pool_safely()
                     priority_demand = await self._priority_serial_work(collection)
@@ -5808,7 +5857,7 @@ class _ParallelLoop:
                         exit_code_for(terminal_outcome),
                         scheduler._units_spent,
                     )
-                if not serial_pool_seen:
+                if not serial_pool_seen and not scheduler.lane_first_awaited:
                     # #219 §2.13: the **serial-required** half of the Pool was
                     # not fully read this turn, so nothing may claim it empty.
                     # Poll again rather than exit — the Run has no evidence yet,
@@ -5831,6 +5880,8 @@ class _ParallelLoop:
                     await asyncio.gather(*self._pending, return_exceptions=True)
                     self._pending.clear()
             finally:
+                if self._serial._stop_drain_requested:
+                    self._end_unread_pin("stopped")
                 self._reclaim_open_lane_workspaces()
 
     @property
@@ -5908,7 +5959,14 @@ class _ParallelLoop:
         freed = asyncio.ensure_future(self._capacity_freed.wait())
         try:
             done, _still_pending = await asyncio.wait(
-                {*self._pending, freed}, return_when=asyncio.FIRST_COMPLETED
+                {*self._pending, freed}, return_when=asyncio.FIRST_COMPLETED,
+                timeout=(
+                    max(0.0, _PIN_UNREAD_HOLD_SECONDS - (
+                        _pin_unread_clock() - self._unread_pin.first_unread
+                    ))
+                    if self._unread_pin is not None and not self._unread_pin.lapsed
+                    else None
+                ),
             )
         finally:
             freed.cancel()
@@ -5991,8 +6049,73 @@ class _ParallelLoop:
         return None
 
     def _lane_first_pin(self) -> int | None:
-        """The unspent Pin, if it is ``parallel-safe``: the next Lane is its."""
+        """The live Lane Pin, still promoted after its unread hold lapses."""
         return self._serial.live_pin if self._pin_parallel_safe() else None
+
+    def _note_unread_pin(self, read: str, reason: str) -> None:
+        pin = self._lane_first_pin()
+        if pin is None:
+            return
+        condition = self._unread_pin
+        changed = condition is None or condition.read != read
+        if condition is None:
+            condition = self._unread_pin = _UnreadPin(
+                issue=pin,
+                first_unread=_pin_unread_clock(),
+                first_unread_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                read=read,
+                reason=reason,
+            )
+        condition.read = read
+        condition.reason = reason
+        if (
+            not condition.lapsed
+            and _pin_unread_clock() - condition.first_unread >= _PIN_UNREAD_HOLD_SECONDS
+        ):
+            condition.lapsed = True
+            changed = True
+        if changed:
+            self._emit_unread_pin("lapsed" if condition.lapsed else "holding")
+
+    def _lane_pin_holds(self) -> bool:
+        return self._unread_pin is None or not self._unread_pin.lapsed
+
+    def _lapse_unread_pin(self) -> None:
+        condition = self._unread_pin
+        if (
+            condition is not None and not condition.lapsed
+            and _pin_unread_clock() - condition.first_unread >= _PIN_UNREAD_HOLD_SECONDS
+        ):
+            condition.lapsed = True
+            self._emit_unread_pin("lapsed")
+
+    def _emit_unread_pin(self, state: str, *, outcome: str | None = None) -> None:
+        condition = self._unread_pin
+        assert condition is not None
+        payload: dict[str, Any] = {
+            "issue": condition.issue,
+            "state": state,
+            "read": condition.read,
+            "reason": condition.reason,
+            "first_unread_at": condition.first_unread_at,
+        }
+        if outcome is not None:
+            payload["outcome"] = outcome
+        self._serial._emit(
+            events_module.WRAPPER_PIN_UNREAD,
+            iter_num=None,
+            **payload,
+        )
+        self._diag.warning(
+            "Unread Pin #%s: %s%s; %s: %s",
+            condition.issue, state, f" ({outcome})" if outcome else "",
+            condition.read, " ".join(condition.reason.split()),
+        )
+
+    def _end_unread_pin(self, outcome: str) -> None:
+        if self._unread_pin is not None:
+            self._emit_unread_pin("ended", outcome=outcome)
+            self._unread_pin = None
 
     def _lane_first_read(
         self, *, listed: bool, complete: bool, read: str | None
@@ -6337,11 +6460,11 @@ class _ParallelLoop:
             if not still_owed:
                 self._release_lane_lease(ref)
 
-    def _take_lane_lease(self, item: AfkReadyItem) -> str | None:
+    def _take_lane_lease(self, item: AfkReadyItem) -> tuple[str | None, str | None]:
         """Take ``item``'s **Lease** — Lane **Pickup**'s last step — or say why not.
 
-        Returns ``None`` when this Lane may work the item, and otherwise the
-        **Pickup skip** reason that passes the candidate over.
+        Returns the **Pickup skip** reason and optional read-failure detail,
+        or two ``None`` values when this Lane may work the item.
 
         Placed where the serial path places it (§2.4): the last step of
         **Pickup**, after routing has admitted the candidate and *before*
@@ -6364,19 +6487,19 @@ class _ParallelLoop:
             or item.kind != "issue"
             or not isinstance(ref, int)
         ):
-            return None
-        take = self._lease.take(ref)
+            return None, None
+        take = self._lease.take(ref, report_failure=ref != self._lane_first_pin())
         if take.granted:
             self._lane_leases.add(ref)
-            return None
+            return None, None
         if self._lease.disabled():
             # This clone may never write a Lease ref, so a Lease here protects
             # nothing and refusing the work buys nothing. Same answer as no
             # lifecycle at all — the warning has already been issued once.
-            return None
+            return None, None
         if take.verdict == "refused":
-            return _LEASE_HELD_ELSEWHERE
-        return _LEASE_UNREADABLE
+            return _LEASE_HELD_ELSEWHERE, None
+        return _LEASE_UNREADABLE, take.reason
 
     def _lane_lease_unreadable(self, candidate: PoolCandidate) -> bool:
         """Was ``candidate`` passed over by a **Lease** read that did not happen?
@@ -6484,12 +6607,8 @@ class _ParallelLoop:
         # candidate keeps exactly today's handling.
         is_pin = ref == self._lane_first_pin()
 
-        def pin_unread(what: str) -> None:
-            self._diag.warning(
-                "lane #%s: the Pin was not read (%s); it keeps the next Lane",
-                ref,
-                what,
-            )
+        def pin_unread(read: str, what: str) -> None:
+            self._note_unread_pin(read, what)
             self._release_lane_lease(ref)
             scheduler.release(
                 reservation, retry_after=_ROLLING_EMPTY_POLL_INTERVAL
@@ -6551,9 +6670,9 @@ class _ParallelLoop:
         # doing it. A Lane that classified first would write twice onto an
         # issue a rival Run holds a live Lease on, and buy an AI session for
         # work it is about to be refused.
-        refusal = self._take_lane_lease(item)
+        refusal, lease_reason = self._take_lane_lease(item)
         if refusal == _LEASE_UNREADABLE and is_pin:
-            pin_unread(refusal)
+            pin_unread("lease", lease_reason or refusal)
             return
         if refusal is not None:
             # Refused *candidacy* for the rest of this Run, not merely this
@@ -6586,7 +6705,7 @@ class _ParallelLoop:
             )
         except DynamicRouteUnavailable as exc:
             if is_pin and isinstance(exc, _CandidateUnread):
-                pin_unread(f"dynamic route unavailable: {exc}")
+                pin_unread(exc.read, exc.detail)
                 return
             # The Lane half of AC11's explicit unavailable decision, and it
             # takes the candidate out of this Run's rolling pool exactly as the
@@ -6622,14 +6741,14 @@ class _ParallelLoop:
         try:
             base = self._git.head_sha()
         except git_module.GitError as exc:
+            if is_pin:
+                pin_unread("base_revision", str(exc))
+                return
             self._diag.warning(
                 "base head_sha for issue #%s failed: %s; releasing reservation",
                 ref,
                 exc,
             )
-            if is_pin:
-                pin_unread(f"base revision failed: {exc}")
-                return
             passed_over(f"base revision failed: {exc}")
             scheduler.release(reservation)
             return
@@ -6642,13 +6761,13 @@ class _ParallelLoop:
         try:
             wt_git = self._git.add_issue_clone(path, branch=branch, base=base)
         except git_module.GitError as exc:
+            if is_pin:
+                pin_unread("worktree", str(exc))
+                return
             self._diag.warning(
                 "Issue clone setup for issue #%s failed: %s; releasing reservation",
                 ref, exc,
             )
-            if is_pin:
-                pin_unread(f"worktree setup failed: {exc}")
-                return
             passed_over(f"worktree setup failed: {exc}")
             scheduler.release(reservation)
             return

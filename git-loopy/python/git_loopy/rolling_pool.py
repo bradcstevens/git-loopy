@@ -104,6 +104,10 @@ def _ignore_lane_first_read(
     """Default for callers with no **Pin**: nobody tracks its lifetime."""
 
 
+def _ignore_lane_first_unread(read: str, reason: str) -> None:
+    """No Unread-Pin observer outside a Rolling Run."""
+
+
 def _never_read_refused(_candidate: PoolCandidate) -> bool:
     """Default for callers whose **Pickup** performs no read beyond Readiness."""
     return False
@@ -237,7 +241,7 @@ class RollingPool:
     #: ``parallel-safe`` **Pin**, which takes the first Lane. When its
     #: validation read fails, the walk stops there rather than give that Lane to
     #: the next candidate, and the candidate is retried on the next walk even
-    #: while quarantined — the one exception to §2.11's head-of-line rule.
+    #: while quarantined, until ``lane_first_holds`` releases that exception.
     lane_first: Callable[[], int | str | None] = _no_lane_first
     #: Told what this cache read of :attr:`lane_first` (#644), with the keyword
     #: arguments of :func:`git_loopy.issue_pin.pin_live_after`: a walk that
@@ -245,6 +249,8 @@ class RollingPool:
     #: Membership read that no longer lists it. The caller decides whether that
     #: spends the Pin.
     lane_first_read: Callable[..., None] = _ignore_lane_first_read
+    lane_first_holds: Callable[[], bool] = field(default=lambda: True)
+    lane_first_unread: Callable[[str, str], None] = _ignore_lane_first_unread
 
     _entries: list[_CachedCandidate] = field(default_factory=list, init=False)
     _refreshing: bool = field(default=False, init=False)
@@ -367,6 +373,13 @@ class RollingPool:
                 and not entry.quarantined and self.eligible(entry.candidate)
             )
         )
+        first = self.lane_first()
+        if first is not None and self.lane_first_holds() and any(
+            entry.candidate.ref == first
+            and (entry.quarantined or not self.eligible(entry.candidate))
+            for entry in self._entries
+        ):
+            available = 0
         unmet = refillable > available
         if not unmet:
             # Demand met (or absent). Forget the wait: if demand reappears it is
@@ -399,7 +412,7 @@ class RollingPool:
         quarantined, keeps its position, and stops being retried until a later
         complete refresh still lists it, so one unreachable issue can never
         head-of-line-block the candidates behind it — except
-        :attr:`lane_first`, which the walk retries and will not pass (#430).
+        :attr:`lane_first` while its bounded hold remains live (#995).
         ``only`` fences this walk to a Priority prefix without changing the
         FIFO or touching ordinary candidates before serial demand latches.
 
@@ -412,12 +425,19 @@ class RollingPool:
         """
         walked = list(self._entries)
         first = self.lane_first()
+        if first is not None:
+            walked.sort(key=lambda entry: entry.candidate.ref != first)
+            if self.lane_first_holds() and not any(
+                entry.candidate.ref == first for entry in walked
+            ):
+                return PoolTake(item=None, position=None, considered=len(walked))
         now = self.clock()
         for position, entry in enumerate(walked, start=1):
             if only is not None and entry.candidate.ref not in only:
                 continue
-            held = first is not None and entry.candidate.ref == first
-            if held and not self.eligible(entry.candidate):
+            is_pin = first is not None and entry.candidate.ref == first
+            held = is_pin and self.lane_first_holds()
+            if is_pin and not self.eligible(entry.candidate):
                 # The walk passes the Pin over (#644): a proven open blocker is
                 # an answer about it, an unread one is not.
                 if has_proven_open_blocker(entry.candidate):
@@ -425,9 +445,15 @@ class RollingPool:
                         listed=True, complete=True, read=PIN_READ_REFUSED
                     )
                 elif has_unresolved_readiness(entry.candidate):
+                    entry.quarantined = True
+                    self.lane_first_unread(
+                        "readiness", "readiness_unprovable",
+                    )
                     self.lane_first_read(
                         listed=True, complete=True, read=PIN_READ_UNREAD
                     )
+                    if self.lane_first_holds():
+                        return PoolTake(item=None, position=None, considered=len(walked))
                 continue
             if (entry.quarantined and not held) or not self.eligible(entry.candidate):
                 continue
@@ -437,7 +463,7 @@ class RollingPool:
                 if held:
                     return PoolTake(item=None, position=None, considered=len(walked))
                 continue
-            pickup = self.source.pickup(entry.candidate.ref)
+            pickup = self.source.pickup(entry.candidate.ref, report_failure=not is_pin)
             if pickup.outcome == PICKUP_VALIDATED and pickup.item is not None:
                 self._entries.remove(entry)
                 return PoolTake(
@@ -445,19 +471,25 @@ class RollingPool:
                 )
             if pickup.outcome == PICKUP_UNAVAILABLE:
                 entry.quarantined = True
-                self.diag.warning(
-                    "candidate %s could not be validated; quarantined until "
-                    "a later refresh still lists it",
-                    entry.candidate.ref,
-                )
-                if held:
+                if is_pin:
+                    self.lane_first_unread(
+                        pickup.unread_source or "tracker",
+                        pickup.reason or "candidate could not be validated",
+                    )
                     self.lane_first_read(
                         listed=True, complete=True, read=PIN_READ_UNREAD
                     )
-                    return PoolTake(item=None, position=None, considered=len(walked))
+                    if self.lane_first_holds():
+                        return PoolTake(item=None, position=None, considered=len(walked))
+                else:
+                    self.diag.warning(
+                        "candidate %s could not be validated; quarantined until "
+                        "a later refresh still lists it",
+                        entry.candidate.ref,
+                    )
                 continue
             self._entries.remove(entry)
-            if held:
+            if is_pin:
                 # Stale at its authoritative read: no longer eligible (#644).
                 self.lane_first_read(
                     listed=True, complete=True, read=PIN_READ_REFUSED
@@ -507,7 +539,7 @@ class RollingPool:
         Lane step went unread, holding the next Lane until its paced retry.
         """
         first = self.lane_first()
-        if first is None:
+        if first is None or not self.lane_first_holds():
             return False
         now = self.clock()
         return any(
@@ -674,7 +706,9 @@ class RollingPool:
             return MembershipSnapshot(candidates=(), complete=False)
         self._refreshing = True
         try:
-            snapshot = self.source.shallow_membership()
+            snapshot = self.source.shallow_membership(
+                report_failure=self.lane_first() is None
+            )
         finally:
             self._refreshing = False
             visibility_due = (
@@ -705,9 +739,14 @@ class RollingPool:
                     # read) cannot stand in for all AFK-shaped candidates.
                     self._next_visibility_at = self.clock() + self.backoff.maximum
         else:
-            self.diag.warning(
-                "membership refresh incomplete; retaining last complete snapshot"
-            )
+            if self.lane_first() is not None:
+                self.lane_first_unread(
+                    "tracker", snapshot.reason or "membership refresh incomplete"
+                )
+            else:
+                self.diag.warning(
+                    "membership refresh incomplete; retaining last complete snapshot"
+                )
 
         # §2.5: a membership change is fresh evidence, so the next unmet-demand
         # look happens immediately; otherwise the window widens toward its bound.

@@ -1,8 +1,11 @@
 {
   "schema_version": 1,
-  "contract_version": "2.40",
-  "event_schema_version": "1.11",
-  "python_event_types": {"WRAPPER_ACCOUNT_STATE": "wrapper.account.state"},
+  "contract_version": "2.41",
+  "event_schema_version": "1.12",
+  "python_event_types": {
+    "WRAPPER_ACCOUNT_STATE": "wrapper.account.state",
+    "WRAPPER_PIN_UNREAD": "wrapper.pin.unread"
+  },
   "membership_cadence_cases": [
     {
       "id": "quiet-serial-mid-iteration",
@@ -599,6 +602,14 @@
       "emitted": "Only for an authoritative effective-limit transition, never per observation. The configured Lane cap is immutable for the Run.",
       "unavailable": "A signal the Run cannot observe is null, never an estimated or zero value."
     },
+    "wrapper.pin.unread": {
+      "required_when_present": ["issue", "state", "read", "reason", "first_unread_at"],
+      "state_values": ["holding", "lapsed", "ended"],
+      "read_values": ["tracker", "readiness", "lease", "route_evidence", "route_capabilities", "route_selector", "base_revision", "worktree"],
+      "outcome_on_ended_only": ["bound", "spent", "stopped"],
+      "first_unread_at": "UTC RFC3339 at the first unread Pickup; never reset by retries or a different failing read. The ten-minute bound uses monotonic elapsed time.",
+      "emitted": "Python Rolling dispatch, once per transition: first unread, changed failing read, lapse, or end. Run-scoped: iter is null and contribution_id and lane_id are absent. No outcome except on ended."
+    },
     "wrapper.serial.requested": {
       "required_when_present": [
         "issue",
@@ -687,6 +698,7 @@
       "wrapper.routing.prepared",
       "wrapper.concurrency.changed",
       "wrapper.serial.requested",
+      "wrapper.pin.unread",
       "wrapper.rolling.refill_turn",
       "wrapper.parallel.serial_fallback",
       "wrapper.parallel.degraded"
@@ -1565,6 +1577,21 @@
   ],
   "rolling_stream_cases": [
     {
+      "id": "unread-lane-pin-lapses-and-stop-ends-the-condition",
+      "description": "The Lane Pin shares one clock across failing reads. Its Run-scoped condition outlives the lapse and ends on Stop without minting a contribution.",
+      "distributions": ["python"],
+      "events": [
+        {"ts": "2026-05-16T00:00:00.000Z", "run_id": "pin-run", "iter": null, "type": "wrapper.pin.unread", "issue": 43, "state": "holding", "read": "lease", "reason": "remote unreadable", "first_unread_at": "2026-05-16T00:00:00.000Z"},
+        {"ts": "2026-05-16T00:10:00.000Z", "run_id": "pin-run", "iter": null, "type": "wrapper.pin.unread", "issue": 43, "state": "lapsed", "read": "lease", "reason": "remote unreadable", "first_unread_at": "2026-05-16T00:00:00.000Z"},
+        {"ts": "2026-05-16T00:11:00.000Z", "run_id": "pin-run", "iter": null, "type": "wrapper.pin.unread", "issue": 43, "state": "ended", "read": "lease", "reason": "remote unreadable", "first_unread_at": "2026-05-16T00:00:00.000Z", "outcome": "stopped"}
+      ],
+      "jsonl": [
+        "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"pin-run\", \"iter\": null, \"type\": \"wrapper.pin.unread\", \"first_unread_at\": \"2026-05-16T00:00:00.000Z\", \"issue\": 43, \"read\": \"lease\", \"reason\": \"remote unreadable\", \"state\": \"holding\"}\n",
+        "{\"ts\": \"2026-05-16T00:10:00.000Z\", \"run_id\": \"pin-run\", \"iter\": null, \"type\": \"wrapper.pin.unread\", \"first_unread_at\": \"2026-05-16T00:00:00.000Z\", \"issue\": 43, \"read\": \"lease\", \"reason\": \"remote unreadable\", \"state\": \"lapsed\"}\n",
+        "{\"ts\": \"2026-05-16T00:11:00.000Z\", \"run_id\": \"pin-run\", \"iter\": null, \"type\": \"wrapper.pin.unread\", \"first_unread_at\": \"2026-05-16T00:00:00.000Z\", \"issue\": 43, \"outcome\": \"stopped\", \"read\": \"lease\", \"reason\": \"remote unreadable\", \"state\": \"ended\"}\n"
+      ]
+    },
+    {
       "id": "upstream-push-rejected-after-green-local-landing",
       "description": "An upstream rejection leaves the green work on local base, records the failure before the terminal unpublished contribution, and never attests to publication or closure. All members serialize or consume the additive record; only Python performs Lane publication.",
       "distributions": ["python", "shell", "powershell", "rust"],
@@ -2213,6 +2240,21 @@
     }
   ],
   "serialization_cases": [
+    {
+      "id": "pin-unread-holding",
+      "event": {"ts": "2026-05-16T00:00:00.000Z", "run_id": "pin-run", "iter": null, "type": "wrapper.pin.unread", "issue": 43, "state": "holding", "read": "lease", "reason": "remote unreadable", "first_unread_at": "2026-05-16T00:00:00.000Z"},
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"pin-run\", \"iter\": null, \"type\": \"wrapper.pin.unread\", \"first_unread_at\": \"2026-05-16T00:00:00.000Z\", \"issue\": 43, \"read\": \"lease\", \"reason\": \"remote unreadable\", \"state\": \"holding\"}\n"
+    },
+    {
+      "id": "pin-unread-lapsed",
+      "event": {"ts": "2026-05-16T00:10:00.000Z", "run_id": "pin-run", "iter": null, "type": "wrapper.pin.unread", "issue": 43, "state": "lapsed", "read": "worktree", "reason": "disk full", "first_unread_at": "2026-05-16T00:00:00.000Z"},
+      "jsonl": "{\"ts\": \"2026-05-16T00:10:00.000Z\", \"run_id\": \"pin-run\", \"iter\": null, \"type\": \"wrapper.pin.unread\", \"first_unread_at\": \"2026-05-16T00:00:00.000Z\", \"issue\": 43, \"read\": \"worktree\", \"reason\": \"disk full\", \"state\": \"lapsed\"}\n"
+    },
+    {
+      "id": "pin-unread-ended",
+      "event": {"ts": "2026-05-16T00:11:00.000Z", "run_id": "pin-run", "iter": null, "type": "wrapper.pin.unread", "issue": 43, "state": "ended", "read": "worktree", "reason": "disk full", "first_unread_at": "2026-05-16T00:00:00.000Z", "outcome": "bound"},
+      "jsonl": "{\"ts\": \"2026-05-16T00:11:00.000Z\", \"run_id\": \"pin-run\", \"iter\": null, \"type\": \"wrapper.pin.unread\", \"first_unread_at\": \"2026-05-16T00:00:00.000Z\", \"issue\": 43, \"outcome\": \"bound\", \"read\": \"worktree\", \"reason\": \"disk full\", \"state\": \"ended\"}\n"
+    },
     {
       "id": "sandbox-local",
       "event": {"ts": "2026-05-16T00:00:00.000Z", "run_id": "sandbox-run", "iter": null, "type": "wrapper.sandbox.resolved", "state": "local"},

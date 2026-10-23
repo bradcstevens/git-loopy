@@ -78,7 +78,7 @@ class ScriptedSource:
         self.pickup_calls: list[int | str] = []
         self.on_membership = None
 
-    def shallow_membership(self) -> MembershipSnapshot:
+    def shallow_membership(self, *, report_failure: bool = True) -> MembershipSnapshot:
         self.membership_calls += 1
         if self.on_membership is not None:
             self.on_membership()
@@ -86,7 +86,7 @@ class ScriptedSource:
             return self._memberships.pop(0)
         return self._memberships[0]
 
-    def pickup(self, ref: int | str) -> Pickup:
+    def pickup(self, ref: int | str, *, report_failure: bool = True) -> Pickup:
         self.pickup_calls.append(ref)
         outcome = self._pickups.get(ref, PICKUP_VALIDATED)  # type: ignore[arg-type]
         if outcome != PICKUP_VALIDATED:

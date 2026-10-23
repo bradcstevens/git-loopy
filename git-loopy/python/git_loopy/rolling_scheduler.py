@@ -575,23 +575,27 @@ class RollingScheduler:
     def lane_first_in_setup(self) -> bool:
         """Whether the Lane the **Pin** owns is reserved and not yet bound (#645).
 
-        Until it binds, refill waits behind it: a setup step whose read did not
+        Until it binds or its hold lapses, refill waits behind it: a setup step whose read did not
         happen puts the Pin back to take the next Lane
         (:meth:`release` with ``retry_after``), and a Lane filled behind it
         in the meantime could bind first.
         """
-        return self.pool.lane_first() in self._in_setup
+        return (
+            self.pool.lane_first_holds()
+            and self.pool.lane_first() in self._in_setup
+        )
 
     @property
     def lane_first_awaited(self) -> bool:
         """Whether the next Lane is held for the **Pin** until it binds (#645).
 
-        True while the Pin's Lane is in setup (:attr:`lane_first_in_setup`)
-        and while the Pin, put back after an unread setup step, waits for its
-        paced retry. Freeing its Lane leaves the pipeline quiescent in that
-        wait, so serial work latched then would take the turn the Pin is owed.
+        True while a live Pin holds precedence, including its setup and paced
+        retries. Freeing its Lane leaves the pipeline quiescent in that wait,
+        so serial work must wait too. A lapsed Pin no longer holds either path.
         """
-        return self.lane_first_in_setup or self.pool.lane_first_paced()
+        return self.lane_first_in_setup or (
+            self.pool.lane_first() is not None and self.pool.lane_first_holds()
+        )
 
     def reserve(
         self, *, only: frozenset[int | str] | None = None, limit: int | None = None,

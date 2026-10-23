@@ -114,6 +114,7 @@ class LeaseTake:
     verdict: TakeVerdict
     hold: LeaseHold | None = None
     displaced_run_id: str | None = None
+    reason: str | None = None
 
     @property
     def granted(self) -> bool:
@@ -239,7 +240,7 @@ class LeaseLifecycle:
     def _now(self) -> int:
         return int(self._clock())
 
-    def take(self, issue: int) -> LeaseTake:
+    def take(self, issue: int, *, report_failure: bool = True) -> LeaseTake:
         """Take the Lease on ``issue``, the last step of **Pickup**.
 
         Three outcomes are *this Run's* answer and one is nobody's.
@@ -278,7 +279,8 @@ class LeaseLifecycle:
                 ttl_seconds=self._ttl_seconds,
             )
         except GitError as exc:
-            self._warn(f"Lease for issue #{issue} could not be read or taken: {exc}")
+            if report_failure:
+                self._warn(f"Lease for issue #{issue} could not be read or taken: {exc}")
             if not self._ever_held and is_permanent_lease_write_refusal(exc):
                 # Not an outage: this clone may never write the Lease
                 # namespace. Latched only before the first successful write,
@@ -296,7 +298,7 @@ class LeaseLifecycle:
                     "token push access to 'refs/heads/git-loopy/leases/*' to "
                     "restore it."
                 )
-            return LeaseTake("unavailable")
+            return LeaseTake("unavailable", reason=str(exc))
         if hold is None:
             return LeaseTake("refused")
         self._holds[issue] = hold

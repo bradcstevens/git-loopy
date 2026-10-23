@@ -675,6 +675,7 @@ class MembershipSnapshot:
 
     candidates: tuple[PoolCandidate, ...]
     complete: bool
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -694,6 +695,9 @@ class Pickup:
 
     outcome: str
     item: AfkReadyItem | None = None
+    # Preserved for the Run's transition-only Unread-Pin report.
+    unread_source: str | None = None
+    reason: str | None = None
 
     @property
     def validated(self) -> bool:
@@ -716,7 +720,7 @@ class RollingIssueSource(Protocol):
     per Lane reservation.
     """
 
-    def shallow_membership(self) -> MembershipSnapshot:
+    def shallow_membership(self, *, report_failure: bool = True) -> MembershipSnapshot:
         """Read current candidate membership without per-issue enrichment.
 
         The candidates MUST come back in the Wrapper contract §3.2 **selection
@@ -729,7 +733,7 @@ class RollingIssueSource(Protocol):
         """
         ...
 
-    def pickup(self, ref: int | str) -> Pickup:
+    def pickup(self, ref: int | str, *, report_failure: bool = True) -> Pickup:
         """Re-read one candidate authoritatively immediately before reservation."""
         ...
 
@@ -767,7 +771,9 @@ class IssueSource(Protocol):
         """
         ...
 
-    def refresh_for_preparation(self, item: AfkReadyItem) -> Pickup:
+    def refresh_for_preparation(
+        self, item: AfkReadyItem, *, report_failure: bool = True
+    ) -> Pickup:
         """Authoritatively re-read one item before routing preparation.
 
         Unlike :meth:`RollingIssueSource.pickup`, this applies to both serial
@@ -1209,7 +1215,7 @@ class GitHubIssueSource:
             complete=page.complete and not unread,
         )
 
-    def shallow_membership(self) -> MembershipSnapshot:
+    def shallow_membership(self, *, report_failure: bool = True) -> MembershipSnapshot:
         """Read AFK-shaped ``ready-for-agent`` membership, in §3.2 order.
 
         One paginated list call. Nothing is viewed per-issue, so a **Rolling
@@ -1233,12 +1239,15 @@ class GitHubIssueSource:
         try:
             page = self._gh.issue_list(LABEL_READY_FOR_AGENT)
         except gh_module.GhError as exc:
-            self._diag.warning(
-                "gh issue list (membership refresh) failed: %s; "
-                "retaining last complete snapshot",
-                exc,
+            if report_failure:
+                self._diag.warning(
+                    "gh issue list (membership refresh) failed: %s; "
+                    "retaining last complete snapshot",
+                    exc,
+                )
+            return MembershipSnapshot(
+                candidates=(), complete=False, reason=str(exc)
             )
-            return MembershipSnapshot(candidates=(), complete=False)
 
         ordered, undated = in_selection_order(
             [
@@ -1260,7 +1269,10 @@ class GitHubIssueSource:
             )
             for issue in ordered
         )
-        return MembershipSnapshot(candidates=candidates, complete=page.complete)
+        return MembershipSnapshot(
+            candidates=candidates, complete=page.complete,
+            reason=None if page.complete else "gh issue list did not paginate to completion",
+        )
 
     def _report_undated(self, undated: Sequence[UndatedIssue]) -> None:
         """Name each issue §3.2 could not date, once per Run.
@@ -1287,7 +1299,9 @@ class GitHubIssueSource:
                 entry.defect.value,
             )
 
-    def refresh_for_preparation(self, item: AfkReadyItem) -> Pickup:
+    def refresh_for_preparation(
+        self, item: AfkReadyItem, *, report_failure: bool = True
+    ) -> Pickup:
         """Re-read one serial or Parallel candidate before preparing its route.
 
         This is intentionally distinct from :meth:`pickup`: a Rolling
@@ -1304,18 +1318,26 @@ class GitHubIssueSource:
         try:
             full = self._gh.issue_view(item.ref)
         except gh_module.GhError as exc:
-            self._diag.warning(
-                "gh issue view #%s during preparation refresh failed: %s",
-                item.ref,
-                exc,
+            if report_failure:
+                self._diag.warning(
+                    "gh issue view #%s during preparation refresh failed: %s",
+                    item.ref,
+                    exc,
+                )
+            return Pickup(
+                outcome=PICKUP_UNAVAILABLE, unread_source="tracker", reason=str(exc)
             )
-            return Pickup(outcome=PICKUP_UNAVAILABLE)
 
-        states = self._closing_states((full.closing_references,))
+        states = self._closing_states(
+            (full.closing_references,), report_failure=report_failure
+        )
         closing = gh_module.closing_pull_request_read(full.closing_references, states)
         readiness = decide_readiness(full.blocked_by, closing)
         if readiness_unresolved(readiness):
-            return Pickup(outcome=PICKUP_UNAVAILABLE)
+            return Pickup(
+                outcome=PICKUP_UNAVAILABLE, unread_source="readiness",
+                reason=readiness.refusal_reason,
+            )
 
         labels = tuple(full.labels)
         if (
@@ -1376,7 +1398,7 @@ class GitHubIssueSource:
             ),
         )
 
-    def pickup(self, ref: int | str) -> Pickup:
+    def pickup(self, ref: int | str, *, report_failure: bool = True) -> Pickup:
         """Re-read ``ref`` authoritatively and render it for dispatch.
 
         Applies #219 §2.10 verbatim: the issue must still be open, still carry
@@ -1403,12 +1425,15 @@ class GitHubIssueSource:
         try:
             full = self._gh.issue_view(ref)
         except gh_module.GhError as exc:
-            self._diag.warning(
-                "gh issue view #%s during pickup failed: %s; quarantining candidate",
-                ref,
-                exc,
+            if report_failure:
+                self._diag.warning(
+                    "gh issue view #%s during pickup failed: %s; quarantining candidate",
+                    ref,
+                    exc,
+                )
+            return Pickup(
+                outcome=PICKUP_UNAVAILABLE, unread_source="tracker", reason=str(exc)
             )
-            return Pickup(outcome=PICKUP_UNAVAILABLE)
 
         labels = tuple(full.labels)
         if (
@@ -1427,7 +1452,9 @@ class GitHubIssueSource:
         # round-trip this adds, and `_closing_states` makes no request when the
         # issue carries no reference. Deferred past the cheap discriminators so
         # a candidate refused above never pays it.
-        states = self._closing_states((full.closing_references,))
+        states = self._closing_states(
+            (full.closing_references,), report_failure=report_failure
+        )
         closing = gh_module.closing_pull_request_read(
             full.closing_references, states
         )
@@ -1435,7 +1462,10 @@ class GitHubIssueSource:
         if readiness_unresolved(readiness):
             # A read that did not happen is not a disqualification: quarantine
             # and retry rather than dropping the candidate from the cache.
-            return Pickup(outcome=PICKUP_UNAVAILABLE)
+            return Pickup(
+                outcome=PICKUP_UNAVAILABLE, unread_source="readiness",
+                reason=readiness.refusal_reason,
+            )
         if not readiness.admissible:
             return Pickup(outcome=PICKUP_STALE)
 
@@ -1568,7 +1598,8 @@ class GitHubIssueSource:
         )
 
     def _closing_states(
-        self, references: Sequence[gh_module.ClosingReferences]
+        self, references: Sequence[gh_module.ClosingReferences],
+        *, report_failure: bool = True,
     ) -> dict[str, gh_module.PullRequestStateNode]:
         """Resolve closing-pull-request states once for this read.
 
@@ -1583,7 +1614,8 @@ class GitHubIssueSource:
         try:
             nodes = self._gh.pull_request_states(ids)
         except gh_module.GhError as exc:
-            self._diag.warning("pull-request state read failed: %s", exc)
+            if report_failure:
+                self._diag.warning("pull-request state read failed: %s", exc)
             return {
                 node_id: gh_module.PullRequestStateNode(
                     node_id=node_id, state=None, unread="state_request_failed"
@@ -1918,7 +1950,9 @@ class PrdsIssueSource:
             exclusions=tuple(exclusion for _, exclusion in exclusions),
         )
 
-    def refresh_for_preparation(self, item: AfkReadyItem) -> Pickup:
+    def refresh_for_preparation(
+        self, item: AfkReadyItem, *, report_failure: bool = True
+    ) -> Pickup:
         """Re-read one locally collected item without escaping the PRDs tree."""
         if item.kind != "issue" or not isinstance(item.ref, str):
             return Pickup(outcome=PICKUP_STALE)

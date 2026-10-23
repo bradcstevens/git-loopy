@@ -6718,7 +6718,7 @@ def test_priority_lane_prefix_refreshes_even_with_an_ordinary_cache_surplus(
     original = loop_module.GitHubIssueSource.shallow_membership
     reads = 0
 
-    def membership(source):
+    def membership(source, *, report_failure=True):
         nonlocal reads
         reads += 1
         snapshot = original(source)
@@ -6743,7 +6743,7 @@ def test_priority_lane_prefix_refreshes_even_with_an_ordinary_cache_surplus(
     pickup = loop_module.GitHubIssueSource.pickup
     unread = cached == "quarantined"
 
-    def transient_pickup(source, ref):
+    def transient_pickup(source, ref, *, report_failure=True):
         nonlocal unread
         if ref == 41 and unread:
             unread = False
@@ -7100,7 +7100,7 @@ def test_mixed_priority_dynamic_routes_keep_proposals_for_their_own_pickups(
             for e in _logged_events(tmp_path)
         )
 
-    def held_refresh(self, item):
+    def held_refresh(self, item, *, report_failure=True):
         if item.ref == slower_refill_lane and bound(44):
             deadline = time.monotonic() + 10
             while bound(other_lane) < other_bindings:
@@ -7279,7 +7279,7 @@ def test_dynamic_priority_peek_recovers_its_second_unread_candidate_read(
     unread = False
     reads = 0
 
-    def refresh(source, item):
+    def refresh(source, item, *, report_failure=True):
         nonlocal unread, reads
         if item.ref == 49:
             reads += 1
@@ -8198,17 +8198,34 @@ def test_a_parallel_safe_pin_absent_from_a_complete_read_is_spent(
 def test_a_parallel_safe_pin_whose_readiness_was_unread_stays_live(
     tmp_path, monkeypatch
 ) -> None:
-    """A Pin whose Readiness could not be read first still binds `pin` (#644)."""
-    bindings = _run_parallel_safe_pin(
-        tmp_path,
-        monkeypatch,
-        first_43=_make_issue(
-            43, labels=_PARALLEL_SAFE, blocked_by=BlockedByRead.unprovable()
-        ),
-    )
+    """Readiness recovery releases the hold, not work behind the Pin (#995)."""
+    class Tracker(FakeGitHubClient):
+        lists = 0
 
-    assert (43, "pin") in bindings
-    assert [reason for _issue, reason in bindings].count("pin") == 1
+        def issue_list(self, label: str, state: str = "open") -> gh_module.IssueListPage:
+            page = super().issue_list(label, state)
+            self.lists += 1
+            if self.lists >= 2:
+                self.seed_issue(_make_issue(43, labels=_PARALLEL_SAFE))
+            return page
+
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(41, labels=_PARALLEL_SAFE),
+            _make_issue(43, labels=_PARALLEL_SAFE, blocked_by=BlockedByRead.unprovable()),
+        ],
+        gh_cls=Tracker,
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=1)), timeout=15
+    ))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(43, "pin")]
+    assert [
+        (e["state"], e["read"]) for e in events if e["type"] == "wrapper.pin.unread"
+    ] == [("holding", "readiness"), ("ended", "readiness")]
 
 
 def test_a_serial_pickup_that_skips_a_blocked_parallel_safe_pin_spends_it(
@@ -12356,6 +12373,291 @@ def test_a_failed_lease_probe_of_a_parallel_safe_pin_keeps_its_lane(
     assert _bindings(_logged_events(tmp_path)) == [(43, "pin")]
 
 
+def test_a_lane_pin_read_within_the_bound_announces_only_transitions(
+    tmp_path, monkeypatch
+) -> None:
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    _fail_lease_probes(monkeypatch, fake_git, 43, times=3)
+
+    asyncio.run(loop_module.run(_pinned_config(43, max_iterations=1)))
+
+    events = _logged_events(tmp_path)
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [(e["state"], e.get("outcome")) for e in unread] == [
+        ("holding", None), ("ended", "bound"),
+    ]
+    assert {e["read"] for e in unread} == {"lease"}
+    assert len({e["first_unread_at"] for e in unread}) == 1
+    assert all(e["issue"] == 43 and e["iter"] is None for e in unread)
+    assert all("lane_id" not in e and "contribution_id" not in e for e in unread)
+    assert _bindings(events) == [(43, "pin")]
+    assert len([e for e in events if e["type"] == "wrapper.contribution.start"]) == 1
+    log = _diag_log(tmp_path)
+    lines = [line for line in log.splitlines() if "Unread Pin #43" in line]
+    assert len(lines) == 2
+    assert "the Pin was not read" not in log
+    assert "no route to host" in unread[0]["reason"]
+    assert "Lease for issue #43 could not be read or taken" not in log
+    assert "serial-required Pool read was partial" not in log
+
+
+def test_a_lane_pin_keeps_one_clock_when_its_read_changes_after_lapse(
+    tmp_path, monkeypatch
+) -> None:
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    monkeypatch.setattr(loop_module, "_PIN_UNREAD_HOLD_SECONDS", 0.01)
+    _fail_lease_probes(monkeypatch, fake_git, 43, times=3)
+    real_add = fake_git.add_worktree
+    failures = 3
+
+    def add(path: Path, *, branch: str, base: str):
+        nonlocal failures
+        if Path(path).name == "issue-43" and failures:
+            failures -= 1
+            raise git_module.GitError(
+                ["git", "worktree", "add"], 128, "disk full\nstorage unavailable"
+            )
+        return real_add(path, branch=branch, base=base)
+
+    monkeypatch.setattr(fake_git, "add_worktree", add)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=3)), timeout=15
+    ))
+    events = _logged_events(tmp_path)
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [(e["state"], e["read"]) for e in unread] == [
+        ("holding", "lease"), ("lapsed", "lease"),
+        ("lapsed", "worktree"), ("ended", "worktree"),
+    ]
+    assert unread[-1]["outcome"] == "bound"
+    assert len({e["first_unread_at"] for e in unread}) == 1
+    assert _bindings(events) == [(41, "order"), (42, "order"), (43, "pin")]
+    assert "Issue clone setup for issue #43 failed" not in _diag_log(tmp_path)
+    assert "disk full\nstorage unavailable" in unread[2]["reason"]
+    assert "\nstorage unavailable" not in _diag_log(tmp_path)
+
+
+def test_a_lane_pin_changing_reads_does_not_restart_the_monotonic_bound(
+    tmp_path, monkeypatch
+) -> None:
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    now = 0.0
+    monkeypatch.setattr(loop_module, "_pin_unread_clock", lambda: now, raising=False)
+    _fail_lease_probes(monkeypatch, fake_git, 43, times=1)
+    real_add = fake_git.add_worktree
+    attempts = 0
+
+    def add(path: Path, *, branch: str, base: str):
+        nonlocal now, attempts
+        if Path(path).name == "issue-43":
+            attempts += 1
+            if attempts <= 2:
+                now = 599.0 if attempts == 1 else 600.0
+                raise git_module.GitError(["git", "worktree", "add"], 128, "disk full")
+        return real_add(path, branch=branch, base=base)
+
+    monkeypatch.setattr(fake_git, "add_worktree", add)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=3)), timeout=15
+    ))
+    events = _logged_events(tmp_path)
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [(e["state"], e["read"]) for e in unread] == [
+        ("holding", "lease"), ("holding", "worktree"),
+        ("lapsed", "worktree"), ("ended", "worktree"),
+    ]
+    assert len({e["first_unread_at"] for e in unread}) == 1
+    assert events.index(unread[2]) < events.index(_first_work(events))
+
+
+def test_a_lapsed_pin_read_again_binds_before_priority_serial(
+    tmp_path, monkeypatch
+) -> None:
+    _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(42, labels=["ready-for-agent", "priority"]),
+        _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+    ])
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    _fail_lease_probes(monkeypatch, fake_git, 43, times=1)
+    now = 0.0
+
+    def clock() -> float:
+        nonlocal now
+        result = now
+        now = 600.0
+        return result
+
+    monkeypatch.setattr(loop_module, "_pin_unread_clock", clock)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=1)), timeout=15
+    ))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(43, "pin")]
+    assert next(
+        e for e in events if e["type"] == "wrapper.pin.unread" and e["state"] == "ended"
+    )["outcome"] == "bound"
+
+
+def test_a_lane_pin_read_as_blocked_after_a_hold_is_spent(
+    tmp_path, monkeypatch
+) -> None:
+    fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    real_probe = fake_git.probe_remote_ref
+
+    def probe(remote: str, ref: str) -> str | None:
+        if ref == lease_ref(43):
+            fake_gh.seed_issue(_make_issue(
+                43, labels=_PARALLEL_SAFE, blocked_by=_OPEN_BLOCKER,
+            ))
+            raise git_module.GitError(["git", "ls-remote"], 128, "offline")
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=2)), timeout=15
+    ))
+    events = _logged_events(tmp_path)
+    assert [(e["state"], e.get("outcome")) for e in events if e["type"] == "wrapper.pin.unread"] == [
+        ("holding", None), ("ended", "spent"),
+    ]
+    assert _bindings(events) == [(41, "order"), (42, "order")]
+
+
+@pytest.mark.parametrize("end", ["stopped", "spent"])
+def test_a_lane_pin_announces_the_end_of_an_unread_hold(
+    tmp_path, monkeypatch, end
+) -> None:
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    built = _capture_parallel_loops(monkeypatch)
+    real_probe = fake_git.probe_remote_ref
+    attempts = 0
+
+    def probe(remote: str, ref: str) -> str | None:
+        nonlocal attempts
+        if ref == lease_ref(43):
+            attempts += 1
+            if attempts == 1:
+                raise git_module.GitError(["git", "ls-remote"], 128, "offline")
+            if end == "stopped":
+                built[0].request_stop_drain()
+                raise git_module.GitError(["git", "ls-remote"], 128, "offline")
+            _rival_lease(fake_git, 43, repository="x/y")
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=2)), timeout=15
+    ))
+    events = _logged_events(tmp_path)
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [(e["state"], e.get("outcome")) for e in unread] == [
+        ("holding", None), ("ended", end),
+    ]
+    if end == "stopped":
+        assert _bindings(events) == []
+        assert next(e for e in events if e["type"] == "wrapper.run.end")["outcome"] == (
+            "operator_stop"
+        )
+    else:
+        assert _bindings(events) == [(41, "order"), (42, "order")]
+
+
+@pytest.mark.parametrize("failure", ["tracker", "readiness", "membership"])
+def test_a_lane_pin_announces_tracker_and_readiness_holds(
+    tmp_path, monkeypatch, failure
+) -> None:
+    class Tracker(FakeGitHubClient):
+        failures = 0
+        views = 0
+
+        def issue_view(self, number: int) -> gh_module.Issue:
+            issue = super().issue_view(number)
+            if number == 43:
+                self.views += 1
+                if self.views > 1 and self.failures < 3:
+                    self.failures += 1
+                    if failure == "tracker":
+                        raise gh_module.GhError(["gh", "issue", "view"], 1, "HTTP 502")
+                    if failure == "readiness":
+                        return dataclass_replace(issue, blocked_by=BlockedByRead.unprovable())
+            return issue
+
+        def issue_list(self, label: str, state: str = "open") -> gh_module.IssueListPage:
+            page = super().issue_list(label, state)
+            if failure == "membership" and self.failures < 3:
+                self.failures += 1
+                return dataclass_replace(page, complete=False)
+            return page
+
+    _wire_parallel_safe_pin(tmp_path, monkeypatch, gh_cls=Tracker)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=1)), timeout=15
+    ))
+    events = _logged_events(tmp_path)
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [(e["state"], e["read"]) for e in unread] == [
+        ("holding", "readiness" if failure == "readiness" else "tracker"),
+        ("ended", "readiness" if failure == "readiness" else "tracker"),
+    ]
+    assert unread[-1]["outcome"] == "bound"
+    assert _bindings(events) == [(43, "pin")]
+    if failure == "tracker":
+        assert "HTTP 502" in unread[0]["reason"]
+    log = _diag_log(tmp_path)
+    assert len([line for line in log.splitlines() if "Unread Pin #43" in line]) == 2
+    assert "quarantin" not in log
+    assert "serial-required Pool read was partial" not in log
+
+
+@pytest.mark.parametrize(
+    "case",
+    json.loads(
+        (Path(__file__).resolve().parents[2] / "conformance" / "rolling-unread-pin.json")
+        .read_text(encoding="utf-8")
+    )["cases"],
+    ids=lambda case: case["name"],
+)
+def test_rolling_unread_pin_fixture_at_the_complete_run_seam(
+    tmp_path, monkeypatch, case
+) -> None:
+    _wire_rolling_run(
+        tmp_path, monkeypatch,
+        [
+            _make_issue(41, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(42, labels=[
+                "ready-for-agent", "priority",
+                *([] if case.get("priority_serial") else ["parallel-safe"]),
+            ]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(loop_module, "_PIN_UNREAD_HOLD_SECONDS", case["bound_seconds"])
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    _fail_lease_probes(monkeypatch, fake_git, 43, times=case["failed_lease_reads"])
+
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=case.get("max_iterations", 3))),
+        timeout=15,
+    ))
+
+    events = _logged_events(tmp_path)
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [e["state"] for e in unread] == case["expected_states"]
+    assert unread[-1].get("outcome") == case["outcome"]
+    assert _bindings(events) == [tuple(binding) for binding in case["expected_bindings"]]
+    assert len({e["first_unread_at"] for e in unread}) == 1
+    if not case.get("priority_serial"):
+        assert not any(e["type"] == "wrapper.iteration.start" for e in events)
+    if "lapsed" in case["expected_states"]:
+        assert events.index(next(e for e in unread if e["state"] == "lapsed")) < (
+            events.index(_first_work(events))
+        )
+
+
 def test_serial_work_waits_while_a_parallel_safe_pin_is_paced(
     tmp_path, monkeypatch
 ) -> None:
@@ -12620,6 +12922,110 @@ def test_a_failed_preparation_read_of_a_parallel_safe_pin_keeps_its_lane(
     assert fake_gh.refusals == 1
     events = _logged_events(tmp_path)
     assert _bindings(events) == [(43, "pin")]
+    assert [(e["state"], e["read"]) for e in events if e["type"] == "wrapper.pin.unread"] == [
+        ("holding", "tracker"), ("ended", "tracker"),
+    ]
+
+
+@pytest.mark.parametrize("read", ["route_evidence", "route_capabilities", "route_selector"])
+def test_a_lane_pin_names_each_dynamic_read_that_failed(
+    tmp_path, monkeypatch, read
+) -> None:
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    _no_preparation_ahead(monkeypatch)
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    elect = _elects_lane_model("claude-opus-5")
+    failed = False
+    at_pickup = False
+    real_probe = fake_git.probe_remote_ref
+
+    def probe(remote: str, ref: str) -> str | None:
+        nonlocal at_pickup
+        if ref == lease_ref(43):
+            at_pickup = True
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
+
+    def answer(request):
+        nonlocal failed
+        if read == "route_selector" and not failed:
+            failed = True
+            raise RuntimeError("selector endpoint returned 502")
+        return elect(request)
+
+    _dynamic_lane_ports(monkeypatch, answer=answer)
+    real_fetch = dynamic_route._stdlib_fetch
+    real_capabilities = loop_module._fetch_harness_evidence
+
+    async def fetch(*args, **kwargs):
+        nonlocal failed
+        if read == "route_evidence" and at_pickup and not any(
+            e["type"] == "wrapper.pin.unread" for e in _logged_events(tmp_path)
+        ):
+            failed = True
+            raise OSError("evidence endpoint returned 502")
+        return await real_fetch(*args, **kwargs)
+
+    async def capabilities(**kwargs):
+        nonlocal failed
+        if read == "route_capabilities" and at_pickup and not any(
+            e["type"] == "wrapper.pin.unread" for e in _logged_events(tmp_path)
+        ):
+            failed = True
+            kwargs["warn"]("capability listing failed")
+            return None
+        return await real_capabilities(**kwargs)
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", fetch)
+    monkeypatch.setattr(loop_module, "_fetch_harness_evidence", capabilities)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_dynamic_parallel_config(issue_pin=43, max_iterations=1)),
+        timeout=15,
+    ))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(43, "pin")]
+    assert [(e["state"], e["read"]) for e in events if e["type"] == "wrapper.pin.unread"] == [
+        ("holding", read), ("ended", read),
+    ]
+    unread = next(e for e in events if e["type"] == "wrapper.pin.unread")
+    assert unread["reason"] == {
+        "route_evidence": "Artificial Analysis evidence retrieval failed",
+        "route_capabilities": "capability listing failed",
+        "route_selector": "selector endpoint returned 502",
+    }[read]
+
+
+def test_a_lane_pin_refused_for_exhausted_allowance_ends_its_hold(
+    tmp_path, monkeypatch
+) -> None:
+    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    _fail_lease_probes(monkeypatch, fake_git, 43, times=1)
+    _no_preparation_ahead(monkeypatch)
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_dynamic_parallel_config(
+            issue_pin=43, max_iterations=0, routing_credit_allowance=Decimal("0"),
+        )),
+        timeout=15,
+    ))
+    events = _logged_events(tmp_path)
+    assert spied["assessments"] == []
+    assert [(e["state"], e.get("outcome")) for e in events if e["type"] == "wrapper.pin.unread"] == [
+        ("holding", None), ("ended", "spent"),
+    ]
+    assert any(
+        e["type"] == "wrapper.pickup.skipped" and e["issue"] == 43
+        and "quota_exhausted" in e["reason"]
+        for e in events
+    )
 
 
 def test_a_non_pin_whose_preparation_read_fails_is_still_refused_for_the_run(
