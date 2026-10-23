@@ -1618,12 +1618,18 @@ spent, an issue that is still open rejoins the selection order like any other,
 so a pinned issue that makes no progress does not head every later Iteration.
 The shell and PowerShell Orchestrators follow the same rule.
 
-Under Rolling dispatch, an unread `parallel-safe` Pin holds new Lane and serial
+Under Rolling dispatch, an unread Pin holds new Lane and serial
 work for at most ten minutes from its first failed Pickup read. All failing
 reads share one monotonic clock, including Lease, Dynamic-route and Lane setup
 failures. After that, ordinary order proceeds behind it, Priority first. The Pin
 stays live and is retried after a complete refresh still lists it; it binds first
-when readable, but a later setup failure never starts another hold. Lane retries
+when readable, but a later setup failure never starts another hold. A serial
+Pickup still promotes a lapsed Pin, but walks on if it cannot read it. Priority
+can latch serial demand again, subject to the ordinary refill interleave.
+A serial hold costs one Iteration, ending `pin_unread` (non-terminal); retries
+wait on the failed read without opening Iterations or spending more units.
+Selector retries run at most once per idle poll interval through the routing
+ledger. A retry that binds the Pin opens an ordinary Iteration. Lane retries
 spend no iteration unit. `wrapper.pin.unread` records each `holding`, `lapsed`
 and `ended` transition once, with the failing read and reason. Serial-only
 dispatch and the Pin's preflight validation are unchanged.
