@@ -74,6 +74,20 @@ operator has. Never hard-code a host-specific executable path here.
 
 ## Agent skills
 
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (managed via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+All five canonical triage roles use their default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Repository workflow
+
 Agent skills come from
 [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills),
 the source of record. `git-loopy init` installs it at the revision this
@@ -123,15 +137,7 @@ folders. All four files are written by `/setup-git-loopy-skills`; the
 `agentStop` helper is a copy of the one bundled with that Skill, so re-run it
 rather than editing the copy.
 
-### Issue tracker
-
-Issues live in this repo's GitHub Issues (managed via the `gh` CLI). See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-All five canonical triage roles use their default label strings (`needs-triage`,
-`needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See
-`docs/agents/triage-labels.md`.
+### Planning documents and Task types
 
 Issues whose titles begin with `PRD:` or `Spec:` (case-insensitive), and issues
 labelled `wayfinder:map`, are planning documents, not executable tickets. Never
@@ -156,6 +162,5 @@ ones that exist. See `docs/releases/README.md#release-target-and-promotion`.
 
 ### Domain docs
 
-Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. Older
-ADRs and release notes still use the glossary's former name: read it as
-`GLOSSARY.md` and never recreate it. See `docs/agents/domain.md`.
+Older ADRs and release notes still use the glossary's former name: read it as
+`GLOSSARY.md` and never recreate it.
