@@ -32,6 +32,7 @@ from git_loopy.sources import (
     LABEL_READY_FOR_AGENT,
     is_planning_document,
 )
+from tests.pinned_catalog import local_pinned_catalog
 
 
 def _write_mapping(repo_root: Path, rows: str) -> None:
@@ -711,7 +712,7 @@ def _pinned_skill_file(skill: str, name: str) -> Path:
 
     git-loopy ships no Skills (ADR-0025), so a template a consumer repository
     receives lives upstream. This reads it from a local acquisition and skips
-    when there is none — the suite never reaches the network.
+    when there is none at the pin — the suite never reaches the network.
     """
     for parent in Path(__file__).resolve().parents:
         if (parent / "docs" / "adr").is_dir() and (parent / "GLOSSARY.md").is_file():
@@ -720,13 +721,14 @@ def _pinned_skill_file(skill: str, name: str) -> Path:
     else:  # pragma: no cover - installed wheel, no source checkout
         pytest.skip("no source checkout")
     pin = read_skill_source_pin()
-    path = root / DEFAULT_CHECKOUT / pin.skills_directory / skill / name
-    if not path.is_file():
-        pytest.skip(
+    checkout = root / DEFAULT_CHECKOUT
+    local_pinned_catalog(
+        pin, checkout, missing_reason=(
             f"the pinned catalog is not acquired at {DEFAULT_CHECKOUT}; "
             f"run `{ACQUIRE_COMMAND}`"
-        )
-    return path
+        ),
+    )
+    return checkout / pin.skills_directory / skill / name
 
 
 def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -> None:

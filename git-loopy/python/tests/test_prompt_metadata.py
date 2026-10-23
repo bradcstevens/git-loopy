@@ -23,6 +23,7 @@ from git_loopy.agent_profiles import (
 )
 from git_loopy.config import EXECUTION_TASK_TYPE_KEYS
 from git_loopy.skill_install import installed_required_skills
+from tests.pinned_catalog import local_pinned_catalog
 
 EXPECTED_PROFILE_REQUIRED_SKILLS = (
     "code-review",
@@ -174,11 +175,12 @@ def test_every_required_skill_exists_at_the_pinned_revision() -> None:
         pytest.skip("no source checkout")
     pin = read_skill_source_pin()
     checkout = root / DEFAULT_CHECKOUT
-    if not (checkout / pin.skills_directory).is_dir():
-        pytest.skip(
+    local_pinned_catalog(
+        pin, checkout, missing_reason=(
             f"the pinned catalog is not acquired at {DEFAULT_CHECKOUT}; "
             f"run `{ACQUIRE_COMMAND}`"
-        )
+        ),
+    )
     skills_root = checkout / pin.skills_directory
     assert pin.profiles_directory is not None
     assert validate_profiles(

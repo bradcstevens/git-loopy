@@ -50,7 +50,11 @@ blocking gate:
   it — that the profiles' Required and Permitted Skills resolve at the pin,
   that Skill reference routing resolves, and that the Skill-authored label vocabulary
   matches what this repository provisions — each of which otherwise skips rather
-  than fails when the catalog is not acquired. It inherits the same network
+  than fails when the catalog is not acquired or its HEAD differs from the pin.
+  A stale-acquisition skip names both revisions and the re-acquire command;
+  an unprovable revision, dirty working tree at the pin, or invalid pinned
+  content still fails. These guards never refresh the acquisition themselves.
+  It inherits the same network
   exclusion as `python -m git_loopy.skill_source` above for the same reason: an
   unreachable `bradcstevens/git-loopy-skills` would make Integration red for a
   reason no change here caused. CI supplies this as a required job precisely

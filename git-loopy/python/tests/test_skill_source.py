@@ -373,6 +373,146 @@ def test_an_unreadable_or_unparsable_pin_is_refused(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _run_catalog_check(
+    check: str, root: Path, pin: SkillSourcePin, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests import test_labels, test_prompt_metadata, test_skill_reference_routing
+
+    monkeypatch.setattr(skill_source, "read_skill_source_pin", lambda: pin)
+    monkeypatch.setattr(test_labels, "read_skill_source_pin", lambda: pin)
+    monkeypatch.setattr(test_prompt_metadata, "read_skill_source_pin", lambda: pin)
+    monkeypatch.setattr(test_prompt_metadata, "_repo_root", lambda: root)
+    monkeypatch.setattr(test_labels, "__file__", str(root / "tests" / "test_labels.py"))
+    (root / "docs" / "adr").mkdir(parents=True, exist_ok=True)
+    (root / "GLOSSARY.md").touch()
+    if check == "routing":
+        test_skill_reference_routing.test_every_documented_skill_exists_in_the_pinned_catalog(root)
+    elif check == "labels":
+        test_labels.test_the_template_setup_writes_into_a_consumer_repo_parses(
+            root / "consumer"
+        )
+    else:
+        assert check == "profiles"
+        test_prompt_metadata.test_every_required_skill_exists_at_the_pinned_revision()
+
+
+@pytest.mark.parametrize("check", ["routing", "labels", "profiles"])
+def test_catalog_checks_skip_a_stale_acquisition(
+    tmp_path: Path, upstream: tuple[Path, SkillSourcePin],
+    monkeypatch: pytest.MonkeyPatch, check: str,
+) -> None:
+    root, stale_pin = upstream
+    checkout = tmp_path / skill_source.DEFAULT_CHECKOUT
+    acquire_skill_source(stale_pin, checkout)
+    _git(root, "commit", "--quiet", "--allow-empty", "-m", "advance the pin")
+    pin = replace(stale_pin, revision=_git(root, "rev-parse", "HEAD"))
+
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        _run_catalog_check(check, tmp_path, pin, monkeypatch)
+
+    message = str(skipped.value)
+    assert stale_pin.revision in message
+    assert pin.revision in message
+    assert skill_source.ACQUIRE_COMMAND in message
+
+
+@pytest.mark.parametrize("check", ["routing", "labels", "profiles"])
+def test_catalog_checks_preserve_the_absent_acquisition_skip(
+    tmp_path: Path, upstream: tuple[Path, SkillSourcePin],
+    monkeypatch: pytest.MonkeyPatch, check: str,
+) -> None:
+    _, pin = upstream
+
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        _run_catalog_check(check, tmp_path, pin, monkeypatch)
+
+    expected = (
+        "no acquisition of the pinned catalog on disk -- run "
+        if check == "routing"
+        else f"the pinned catalog is not acquired at {skill_source.DEFAULT_CHECKOUT}; run "
+    )
+    assert str(skipped.value) == expected + f"`{skill_source.ACQUIRE_COMMAND}`"
+
+
+@pytest.mark.parametrize("check", ["routing", "labels", "profiles"])
+@pytest.mark.parametrize("damage", ["dirty", "unprovable"])
+def test_catalog_checks_fail_when_the_pinned_acquisition_cannot_be_proven(
+    tmp_path: Path, upstream: tuple[Path, SkillSourcePin],
+    monkeypatch: pytest.MonkeyPatch, check: str, damage: str,
+) -> None:
+    _, pin = upstream
+    checkout = tmp_path / skill_source.DEFAULT_CHECKOUT
+    acquire_skill_source(pin, checkout)
+    if damage == "dirty":
+        (checkout / "README.md").write_text("edited\n", encoding="utf-8")
+        message = "holds content"
+    else:
+        (checkout / ".git" / "HEAD").write_text(
+            "ref: refs/heads/missing\n", encoding="utf-8"
+        )
+        message = "cannot prove the revision"
+
+    with pytest.raises(SkillSourceRevisionError, match=message):
+        _run_catalog_check(check, tmp_path, pin, monkeypatch)
+
+
+@pytest.mark.parametrize("check", ["routing", "labels", "profiles"])
+@pytest.mark.parametrize(
+    ("missing", "error"),
+    [
+        ("skills/tdd/SKILL.md", SkillSourceLayoutError),
+        ("LICENSE", SkillSourceProvenanceError),
+    ],
+)
+def test_catalog_checks_fail_on_invalid_content_committed_at_the_pin(
+    tmp_path: Path, upstream: tuple[Path, SkillSourcePin],
+    monkeypatch: pytest.MonkeyPatch, check: str,
+    missing: str, error: type[SkillSourceError],
+) -> None:
+    root, pin = upstream
+    _git(root, "rm", missing)
+    if missing.endswith("SKILL.md"):
+        (root / "skills" / "tdd").mkdir(exist_ok=True)
+        (root / "skills" / "tdd" / "other.md").write_text(
+            "not Skill metadata\n", encoding="utf-8"
+        )
+        _git(root, "add", ".")
+    _git(root, "commit", "--quiet", "-m", "publish invalid content")
+    pin = replace(pin, revision=_git(root, "rev-parse", "HEAD"))
+    acquire_skill_source(pin, tmp_path / skill_source.DEFAULT_CHECKOUT)
+
+    with pytest.raises(error):
+        _run_catalog_check(check, tmp_path, pin, monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("documented", "failure"),
+    [
+        (("tdd", "triage"), None),
+        (("tdd", "triage", "absent"), "documented but absent"),
+        (("tdd",), "front door's table"),
+    ],
+)
+def test_catalog_routing_still_checks_both_directions_at_the_pin(
+    tmp_path: Path, upstream: tuple[Path, SkillSourcePin],
+    monkeypatch: pytest.MonkeyPatch, documented: tuple[str, ...],
+    failure: str | None,
+) -> None:
+    _, pin = upstream
+    acquire_skill_source(pin, tmp_path / skill_source.DEFAULT_CHECKOUT)
+    (tmp_path / "README.md").write_text(
+        "".join(f"| [`/{name}`](https://example.invalid/{name}) |\n"
+                for name in documented),
+        encoding="utf-8",
+    )
+
+    if failure is None:
+        _run_catalog_check("routing", tmp_path, pin, monkeypatch)
+    else:
+        with pytest.raises(AssertionError, match=failure):
+            _run_catalog_check("routing", tmp_path, pin, monkeypatch)
+
+
 def test_acquisition_checks_out_exactly_the_pinned_revision(
     tmp_path: Path, upstream: tuple[Path, SkillSourcePin]
 ) -> None:

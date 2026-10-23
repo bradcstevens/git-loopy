@@ -37,6 +37,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.pinned_catalog import local_pinned_catalog
+
 #: The external catalog: the one source of record for git-loopy's Skills.
 SKILL_CATALOG_REPOSITORY = "bradcstevens/git-loopy-skills"
 
@@ -187,20 +189,17 @@ def test_every_documented_skill_exists_in_the_pinned_catalog(
     """
     from git_loopy.skill_source import (
         DEFAULT_CHECKOUT,
-        is_previous_acquisition,
         read_skill_source_pin,
-        validate_skill_source,
     )
 
     checkout = repo_root / DEFAULT_CHECKOUT
-    if not is_previous_acquisition(checkout):
-        pytest.skip(
+    pin = read_skill_source_pin()
+    catalog = set(local_pinned_catalog(
+        pin, checkout, missing_reason=(
             "no acquisition of the pinned catalog on disk -- run "
             "`uv run --project git-loopy/python python -m git_loopy.skill_source`"
-        )
-
-    pin = read_skill_source_pin()
-    catalog = set(validate_skill_source(pin, checkout).skills)
+        ),
+    ).skills)
     assert catalog, "the acquired catalog carries no Skills"
 
     documented = _documented_skills(repo_root)
