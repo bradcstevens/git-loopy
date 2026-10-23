@@ -4,6 +4,12 @@
 changes here. [Decide the shell resumption delivery and activation gates](https://github.com/bradcstevens/git-loopy/issues/985)
 sequences the delivery.
 
+**Amended by [ADR-0106](0106-a-resumed-shell-path-is-delivered-outside-runs-and-activates-in-one-approved-change.md):**
+decision 10's re-runs are settled. After Path activation, a shell Release re-runs ADR-0103's five
+runtime proofs only when an adapter file changed since the recorded proof commit or the documented
+minimum Copilot CLI or protocol version rose, and the `shell/v*` rehearsal refuses notes whose proof
+commit predates the last adapter change.
+
 Decided by [Decide which artifacts the resumed shell path pins or shares](https://github.com/bradcstevens/git-loopy/issues/988)
 on [Wayfinder: resume the shell Language path](https://github.com/bradcstevens/git-loopy/issues/979).
 Builds on [ADR-0073](0073-language-paths-release-and-gate-independently.md),

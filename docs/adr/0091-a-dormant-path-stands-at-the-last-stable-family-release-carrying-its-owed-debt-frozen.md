@@ -2,6 +2,11 @@
 
 **Status:** accepted design; implementation acceptance is tracked by the delivery issues.
 
+**Amended by [ADR-0106](0106-a-resumed-shell-path-is-delivered-outside-runs-and-activates-in-one-approved-change.md):**
+a dormant path's carried debt is scheduled when the Loop engineer approves its resumption graph,
+and is delivered while the path stays dormant, outside every Run. The path resumes at its Path
+activation.
+
 Decided by [Decide what the shell and PowerShell Path baselines declare and what becomes of
 their open work](https://github.com/bradcstevens/git-loopy/issues/779). Builds on
 [ADR-0073](0073-language-paths-release-and-gate-independently.md),
