@@ -118,6 +118,7 @@ __all__ = [
     "WRAPPER_CONTRIBUTION_END",
     "WRAPPER_CONCURRENCY_CHANGED",
     "WRAPPER_SERIAL_REQUESTED",
+    "WRAPPER_PIN_UNREAD",
     "WRAPPER_ROLLING_REFILL_TURN",
     "WRAPPER_PARALLEL_SERIAL_FALLBACK",
     "WRAPPER_PARALLEL_DEGRADED",
@@ -385,6 +386,7 @@ WRAPPER_INTEGRATION_PUSH_FAILED = "wrapper.integration.push_failed"
 WRAPPER_CONTRIBUTION_END = "wrapper.contribution.end"
 WRAPPER_CONCURRENCY_CHANGED = "wrapper.concurrency.changed"
 WRAPPER_SERIAL_REQUESTED = "wrapper.serial.requested"
+WRAPPER_PIN_UNREAD = "wrapper.pin.unread"
 WRAPPER_ROLLING_REFILL_TURN = "wrapper.rolling.refill_turn"
 # Emitted once per serial **Iteration** a Parallel-mode Run works because it
 # found no eligible **Parallel-safe** candidate (#304). Scheduler-scoped: it
