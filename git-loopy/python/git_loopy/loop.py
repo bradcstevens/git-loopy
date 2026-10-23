@@ -184,6 +184,7 @@ from git_loopy.dynamic_route import (
     DynamicRouter,
     ReusableRoute,
     FreshEvidence,
+    FreshHarnessCapabilities,
     RoutingAdmissionLedger,
     RoutingCallCancelled,
     RoutingProposal,
@@ -1206,7 +1207,9 @@ _TRANSIENT_ROUTING_REFUSALS: frozenset[RoutingUnavailableReason] = frozenset(
 )
 
 
-def _routing_refusal(reason: RoutingUnavailableReason) -> DynamicRouteUnavailable:
+def _routing_refusal(
+    reason: RoutingUnavailableReason, *, detail: str | None = None
+) -> DynamicRouteUnavailable:
     """The exception a router refusal raises: unread when transient (#430)."""
     if reason in _TRANSIENT_ROUTING_REFUSALS:
         return _CandidateUnread(
@@ -1216,6 +1219,7 @@ def _routing_refusal(reason: RoutingUnavailableReason) -> DynamicRouteUnavailabl
                 RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE: "route_capabilities",
                 RoutingUnavailableReason.SELECTOR_UNAVAILABLE: "route_selector",
             }[reason],
+            detail=detail,
         )
     return DynamicRouteUnavailable(reason.value)
 
@@ -1368,11 +1372,21 @@ def _make_dynamic_router(
             ),
         )
 
+    async def capabilities_fetch() -> FreshHarnessCapabilities | None:
+        failures: list[str] = []
+
+        def report(message: str) -> None:
+            failures.append(message)
+            warn(message)
+
+        evidence = await _fetch_harness_evidence(warn=report)
+        if evidence is None and failures:
+            raise DynamicRouteUnavailable(failures[-1])
+        return evidence
+
     return DynamicRouter(
         evidence_fetch=SharedLiveRead(evidence_fetch),
-        capabilities_fetch=SharedLiveRead(
-            lambda: _fetch_harness_evidence(warn=warn)
-        ),
+        capabilities_fetch=SharedLiveRead(capabilities_fetch),
         selector_assess=selector_assess,
         recorder=recorder,
         admission_ledger=admission_ledger,
@@ -2925,7 +2939,7 @@ class _Loop:
         else:
             task_type_labelled = await self._labelled_for_routing(item)
         if isinstance(task_type_labelled, RoutingUnavailable):
-            raise _routing_refusal(task_type_labelled.reason)
+            raise _routing_refusal(task_type_labelled.reason, detail=task_type_labelled.detail)
         resolution = routed
         if task_type_labelled is not item:
             try:
@@ -3189,7 +3203,7 @@ class _Loop:
         request = self._routing_request(item, resolution)
         decision = await self._bound_dynamic_decision(item, request, router)
         if isinstance(decision, RoutingUnavailable):
-            raise _routing_refusal(decision.reason)
+            raise _routing_refusal(decision.reason, detail=decision.detail)
         self._diag.info(
             "issue #%s %s to %s @ %s (%s): %s",
             item.ref,
@@ -4708,17 +4722,6 @@ class _IntegrationStage:
 
 
 _ROLLING_EMPTY_POLL_INTERVAL = 1.0
-_PIN_UNREAD_HOLD_SECONDS = 600.0
-
-
-@dataclass
-class _UnreadPin:
-    issue: int
-    first_unread: float
-    first_unread_at: str
-    read: str
-    reason: str
-    lapsed: bool = False
 """Seconds between idle ``confirm_empty`` retries under Rolling dispatch.
 
 :meth:`~git_loopy.rolling_pool.RollingPool.confirm_empty` always forces an
@@ -4730,6 +4733,18 @@ work in flight, nothing currently refillable, no serial turn granted).
 
 _MEMBERSHIP_SERVICE_INTERVAL = 1.0
 """Cooperative tick spacing; visibility itself uses ``RefreshBackoff.maximum``."""
+
+_PIN_UNREAD_HOLD_SECONDS = 600.0
+
+
+@dataclass
+class _UnreadPin:
+    issue: int
+    first_unread: float
+    first_unread_at: str
+    read: str
+    reason: str
+    lapsed: bool = False
 
 
 def run_end_refusal(issue: int | str, reason: str) -> dict[str, int | str]:

@@ -12976,7 +12976,8 @@ def test_a_lane_pin_names_each_dynamic_read_that_failed(
             e["type"] == "wrapper.pin.unread" for e in _logged_events(tmp_path)
         ):
             failed = True
-            raise OSError("capability listing failed")
+            kwargs["warn"]("capability listing failed")
+            return None
         return await real_capabilities(**kwargs)
 
     monkeypatch.setattr(dynamic_route, "_stdlib_fetch", fetch)
@@ -12990,6 +12991,12 @@ def test_a_lane_pin_names_each_dynamic_read_that_failed(
     assert [(e["state"], e["read"]) for e in events if e["type"] == "wrapper.pin.unread"] == [
         ("holding", read), ("ended", read),
     ]
+    unread = next(e for e in events if e["type"] == "wrapper.pin.unread")
+    assert unread["reason"] == {
+        "route_evidence": "Artificial Analysis evidence retrieval failed",
+        "route_capabilities": "capability listing failed",
+        "route_selector": "selector endpoint returned 502",
+    }[read]
 
 
 def test_a_lane_pin_refused_for_exhausted_allowance_ends_its_hold(
