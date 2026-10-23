@@ -3422,6 +3422,19 @@ An Orchestrator that closes MUST:
 In Parallel mode both Events are contribution-stamped. The dormant shell and PowerShell
 Orchestrators are `waived_out_of_scope` for this fixture; the TUI helper only projects both Events.
 
+## Lease (Python-only transport)
+
+The **Lease** is the one-issue-one-Run claim ([ADR-0033](adr/0033-one-issue-one-run-lease.md)).
+
+- **Shared:** record inspection and the pure Lease action decision (claim, fence, release,
+  renew), pinned by `git-loopy/conformance/issue-lease.json`. Every path that claims that fixture
+  honours them.
+- **Python-only:** the ref transport that carries the Lease, its retry and its renewal. They stay
+  Python-only until a dormant path resumes and takes up that work from its own backlog
+  ([ADR-0091](adr/0091-a-dormant-path-stands-at-the-last-stable-family-release-carrying-its-owed-debt-frozen.md)).
+
+This section changes no Contract version.
+
 ---
 
 **See also:** [`docs/runners.md`](runners.md) (the operator-facing runner reference),
