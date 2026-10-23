@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.41",
+  "contract_version": "2.43",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
     "rolling-unread-pin.json": {
@@ -200,6 +200,12 @@
       "shell": {"kind": "claimed", "reason": "shell/tests/test-tui-install.sh drives fixture selection cases through production installer functions."},
       "powershell": {"kind": "claimed", "reason": "powershell/tests/test-tui-install.ps1 drives fixture selection cases through production installer functions."},
       "rust": {"kind": "waived_out_of_scope", "reason": "Release artifact selection belongs to installation and distribution tooling, not Dashboard-core behavior."}
+    },
+    "unread-pin-notice.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_unread_pin_notice.py folds every fixture step through UnreadPinNotice and the attach client's Renderer, and checks trace replay through attach_to_run."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "The notice is presentation owned by the Python attach client and the Rust Dashboard; the shell Orchestrator has no attach client."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "The notice is presentation owned by the Python attach client and the Rust Dashboard; the PowerShell Orchestrator has no attach client."},
+      "rust": {"kind": "claimed", "reason": "tui/tests/unread_pin_notice.rs folds every fixture step through DashboardSession and draws its current notice on both Dashboard and drill-in screens."}
     },
     "unbound-run-notice.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_unbound_run_notice.py drives git_loopy.unbound_run_notice.unbound_run_notice with fixture Event streams."},

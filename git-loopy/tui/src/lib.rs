@@ -22,6 +22,7 @@ mod render;
 mod session;
 mod state;
 mod timestamp;
+mod unread_pin_notice;
 mod view;
 mod zoneinfo;
 
