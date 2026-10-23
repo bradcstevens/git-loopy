@@ -173,6 +173,36 @@ def test_packaged_prompt_makes_genuine_issue_blockers_native_dependencies() -> N
     assert "comment, then output `<promise>NO MORE TASKS</promise>`" in prompt
 
 
+@pytest.mark.parametrize("copy", ["project", "packaged"])
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "first search open issues for one that already asks that decision",
+        "Reuse it if found; only if none exists, open one decision issue",
+        "stating the question, the options you see, and a link back to your own issue",
+        "Label the new decision issue `needs-triage` only",
+        "never `ready-for-agent` or any `task-type:*` label",
+        "only a human asserts `task-type:planning`",
+        "Open at most one decision issue per blocker and never work on it",
+        "Record the decision issue as a native dependency on your own issue",
+        "comment on your own issue naming the decision issue",
+        "then output `<promise>NO MORE TASKS</promise>` and stop",
+        "If the blocker is neither an issue nor a human decision, comment",
+    ],
+)
+def test_decision_blocker_instructions_in_both_prompt_copies(
+    copy: str, clause: str
+) -> None:
+    path = (
+        Path(__file__).resolve().parents[2] / "PROMPT.md"
+        if copy == "project"
+        else loop_module._packaged_prompt_path()
+    )
+    final_rules = path.read_text(encoding="utf-8").split("# FINAL RULES\n", 1)[1]
+    decision_rule = final_rules.split("When the blocker is a human decision,", 1)[1]
+    assert clause in decision_rule
+
+
 def test_domain_guidance_reads_only_the_glossary_entry_points() -> None:
     prompt = _packaged_prompt_text()
     section = prompt.split("# DOMAIN AWARENESS", 1)[1].split("\n# ", 1)[0]

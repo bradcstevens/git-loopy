@@ -894,7 +894,13 @@ class Renderer:
         except (TypeError, ValueError):
             strikes_value = None
         issue = event.get("issue")
-        self.summary.record_strike(strikes=strikes_value, issue=issue)
+        ending = event.get("ending")
+        self.summary.record_strike(
+            strikes=strikes_value,
+            issue=issue,
+            max_strikes=max_strikes if isinstance(max_strikes, int) else None,
+            ending=ending if isinstance(ending, str) else None,
+        )
         snap = self.summary.current
         if issue is not None and strikes_value is not None:
             current_strikes = strikes_value
@@ -909,7 +915,6 @@ class Renderer:
             text.append(f"{current_strikes}/{max_strikes}", style=STYLES["warning"])
         else:
             text.append(str(current_strikes), style=STYLES["warning"])
-        ending = event.get("ending")
         if ending:
             text.append(f"  ({ending})", style=STYLES["meta"])
         if event.get("outcome") == STRIKE_OUTCOME_SKIP:

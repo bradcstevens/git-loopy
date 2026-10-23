@@ -1518,6 +1518,14 @@ two stages. Shell and PowerShell do not attach and do not provide this command.
 | Stopped — account     | `1`  | A terminal, account-identifying refusal stopped the Run: quota or authentication, or a rate refusal the Run could not recover from within its retry and cooldown budget (`account_failure`, Wrapper contract §19.1). |
 | Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, `CopilotClient` construction failed, writers bundle failed, or unknown `GIT_LOOPY_ISSUE_SOURCE`. Surfaces cleanly via stderr. |
 
+The run-end table adds `Strikes exhausted: #N (ending)` for each issue that
+reached its Strike budget this Run, using its last Strike's ending. This line
+is absent when none did; exhaustion remains Run-scoped and changes no labels.
+For human-decision blockers, the Run instructions instead require the Agent to
+reuse or open a decision issue and record it as a native blocker, keeping the
+blocked issue out of later Pickups until that decision is closed
+([ADR-0100](../../docs/adr/0100-a-decision-blocked-agent-opens-the-decision-as-its-blocker.md)).
+
 ---
 
 ## Env-var surface
