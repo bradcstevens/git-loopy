@@ -2,6 +2,11 @@
 
 **Status:** accepted design; implementation acceptance is tracked by the delivery issues.
 
+**Amended by [ADR-0105](0105-a-resumed-shell-path-cuts-its-own-releases-and-records-the-helper-release-it-consumes.md):**
+a resumed shell path installs the exact helper Release its own Release records as its Consumed
+Release, rather than the newest helper at or below its Release version, and measures drift
+against it.
+
 Decided by [Decide whether the Rust Dashboard helper stays inside the Python 1.0.0
 boundary](https://github.com/bradcstevens/git-loopy/issues/665). Builds on
 [ADR-0073](0073-language-paths-release-and-gate-independently.md) (every published

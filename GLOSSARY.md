@@ -2246,6 +2246,21 @@ and it is deleted after a fixed delay. Teardown begins only once the Run has end
 **Wind-down**, and it is never a side effect of **Detach**.
 _Avoid_: retention (trace history), cleanup, reaping, shutdown.
 
+### Shell resumption (accepted design)
+
+This term completes the vocabulary of
+[ADR-0105](docs/adr/0105-a-resumed-shell-path-cuts-its-own-releases-and-records-the-helper-release-it-consumes.md).
+A resumed non-Python path also qualifies the identity it reports with its path's name, as its tag
+namespace already does. The existing **Release version**, **Path artifact** and **TUI helper**
+entries above describe current behavior and keep their meanings; this decision record does not
+establish delivery acceptance.
+
+**Consumed Release**:
+The exact Release of another path's **Path artifact** that one Release of a consuming
+**Language path** was proven with and installs. The consumer measures drift against it, and it
+never becomes the consumer's own **Release version**.
+_Avoid_: helper pin (**Pin** names an issue), pinned helper, shared version.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
