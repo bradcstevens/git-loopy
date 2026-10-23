@@ -374,6 +374,7 @@ class RunSummary:
     #: (ADR-0070). ``None`` until then, so a producer whose Strikes are one
     #: Run-wide count keeps the last-Iteration reading in :meth:`totals`.
     issue_strikes: Optional[dict[int | str, int]] = None
+    exhausted_issue_endings: dict[int | str, str | None] = field(default_factory=dict)
     #: The issue at stake, whose count :meth:`totals` reports: the one named
     #: by whichever came last, a serial **Pickup**'s binding (:meth:`bind_issue`)
     #: or a Strike (:meth:`record_strike`). A Lane's binding does not move it,
@@ -665,13 +666,20 @@ class RunSummary:
         snap.auto_closures += 1
 
     def record_strike(
-        self, *, strikes: Optional[int] = None, issue: int | str | None = None
+        self,
+        *,
+        strikes: Optional[int] = None,
+        issue: int | str | None = None,
+        max_strikes: int | None = None,
+        ending: str | None = None,
     ) -> None:
         if issue is not None and strikes is not None:
             if self.issue_strikes is None:
                 self.issue_strikes = {}
             self.issue_strikes[issue] = int(strikes)
             self.strike_focus = issue
+            if max_strikes is not None and strikes >= max_strikes:
+                self.exhausted_issue_endings[issue] = ending
         snap = self.current
         if snap is None:
             return
@@ -893,7 +901,8 @@ class RunSummary:
         One row per completed iteration, plus a totals footer that
         surfaces summed tokens / cost / commits / auto-closures and the
         Run's ``final_strikes`` (see :meth:`totals`). The caption keeps
-        run-level skill adoption readable without widening the table.
+        run-level skill adoption and strike-exhausted issues with their last
+        endings readable without widening the table (ADR-0100).
         """
         totals = self.totals()
         caption = (
@@ -906,6 +915,11 @@ class RunSummary:
                 f"out={self.run_usage.tokens_out:,}, "
                 f"{_format_credits(self.denomination.cost(self.run_usage))} credits "
                 "(included in totals, not work rows)"
+            )
+        if self.exhausted_issue_endings:
+            caption += "\nStrikes exhausted: " + ", ".join(
+                f"#{issue} ({ending or '—'})"
+                for issue, ending in self.exhausted_issue_endings.items()
             )
         table = Table(
             title="[bold]Run summary[/bold]",

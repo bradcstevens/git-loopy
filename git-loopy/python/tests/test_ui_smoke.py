@@ -1296,6 +1296,42 @@ def _charge(issue: int, strikes: int) -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("max_strikes", [2, 3])
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_run_end_table_names_only_strike_exhausted_issues_with_last_ending(
+    max_strikes: int, exhausted: bool
+) -> None:
+    renderer, _summary, buf = _make_renderer()
+    renderer.render({"type": WRAPPER_RUN_START, "run_id": "decision-blocker"})
+    for issue, strikes, ending in (
+        (42, 1, "no_progress"),
+        (43, max_strikes - 1, "error"),
+        (44, max_strikes if exhausted else 1, "timeout"),
+        (42, max_strikes if exhausted else 1, "no_more_tasks"),
+    ):
+        renderer.render({
+            **_charge(issue, strikes),
+            "max_strikes": max_strikes,
+            "ending": ending,
+            "outcome": "skip" if strikes == max_strikes else "warn",
+        })
+
+    buf.seek(0)
+    buf.truncate()
+    renderer.render({"type": WRAPPER_RUN_END, "outcome": "all_skipped"})
+    out = buf.getvalue()
+    if exhausted:
+        assert "Strikes exhausted:" in out
+        assert "#42 (no_more_tasks)" in out
+        assert "#44 (timeout)" in out
+        assert "#43" not in out
+        assert "no_progress" not in out
+        assert out.count("#42") == 1
+    else:
+        assert "Strikes exhausted:" not in out
+        assert "#42" not in out and "#43" not in out and "#44" not in out
+
+
 def test_run_end_final_strikes_is_the_issue_at_stakes_count() -> None:
     """Per-issue Strikes show the issue at stake's count, never a sum (ADR-0070).
 
