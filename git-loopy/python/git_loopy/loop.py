@@ -5763,6 +5763,15 @@ class _ParallelLoop:
                     # `gh` call. Both fall through to the idle-check, which polls
                     # until a read completes or the Run runs out of units.
                     if pin_unread:
+                        if scheduler.remaining_units == 0:
+                            # The hold's one unit can itself exhaust a cap of
+                            # one. No retry can fund an ordinary Iteration.
+                            self._announce_iteration_cap(scheduler.open_count)
+                            self._end_unread_pin("stopped")
+                            return (
+                                "iteration_cap", exit_code_for("iteration_cap"),
+                                scheduler._units_spent,
+                            )
                         # Keep the serial grant through the bounded hold, but
                         # spend no further unit until a retry can open an Iteration.
                         pin = self._serial.live_pin

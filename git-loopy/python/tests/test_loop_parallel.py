@@ -7838,6 +7838,39 @@ def test_a_serial_pin_lapses_instead_of_draining_the_cap(
     assert run_ends == ["iteration_cap"]
 
 
+def test_a_serial_hold_that_spends_the_last_unit_does_not_poll(tmp_path, monkeypatch) -> None:
+    class Tracker(FakeGitHubClient):
+        views = 0
+
+        def issue_view(self, number: int) -> gh_module.Issue:
+            if number == 44:
+                self.views += 1
+                assert self.views <= 3, "no retry can start work after the cap"
+                if self.views == 3:
+                    raise gh_module.GhError(["gh", "issue", "view"], 1, "offline")
+            return super().issue_view(number)
+
+    _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+        _make_issue(44, labels=["ready-for-agent"]),
+    ], gh_cls=Tracker)
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(44, max_iterations=1)), timeout=15,
+    ))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == []
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.iteration.end"] == [
+        "pin_unread",
+    ]
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == [
+        "iteration_cap",
+    ]
+    assert [(e["state"], e.get("outcome")) for e in events if e["type"] == "wrapper.pin.unread"] == [
+        ("holding", None), ("ended", "stopped"),
+    ]
+
+
 def test_a_pin_whose_lease_read_fails_keeps_its_serial_iteration(
     tmp_path, monkeypatch
 ) -> None:

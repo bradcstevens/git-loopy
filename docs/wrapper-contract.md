@@ -399,6 +399,8 @@ unread attempt is an Iteration on the trace, ending with the **non-terminal**
 outcome `pin_unread`, never `preflight_failed`. Retries that still cannot read
 the Pin MUST NOT spend a unit or write an Iteration record. A retry that binds
 the Pin opens an ordinary Iteration, with its ordinary unit.
+If the hold spends the last allowed unit, the normal cap wind-down ends it
+without polling: a cap of one cannot fund both the hold and a later Iteration.
 
 Between attempts the Runner MUST wait on the read that failed: a Pool read
 for tracker or Readiness failure, evaluating Readiness from that same read;
