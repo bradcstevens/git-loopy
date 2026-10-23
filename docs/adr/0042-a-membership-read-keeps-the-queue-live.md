@@ -2,7 +2,40 @@
 
 **Status:** accepted
 
-Implemented by [#429](https://github.com/bradcstevens/git-loopy/issues/429).
+Implemented by [#431](https://github.com/bradcstevens/git-loopy/issues/431) and
+[#429](https://github.com/bradcstevens/git-loopy/issues/429) (PR #934) as amended below; the amendment
+supersedes parts of the original decision.
+
+**Amendment ([#429](https://github.com/bradcstevens/git-loopy/issues/429), residual cadence implemented by PR #934):**
+#431 delivered the Rolling-dispatch Membership read as `wrapper.pool.refreshed`,
+with add-only consumers in both Dashboards. The residual serial and full-Lane
+visibility reads reuse that Event and its run-scoped envelope rather than add the
+historical "55th" type below. Its existing complete-successful-snapshot rule is
+retained: failed or incomplete reads emit nothing and retire nothing. Reusing the
+existing wire shape does not itself require an Event-schema version bump.
+
+The residual read reports all AFK-shaped candidates, including work that is not
+Parallel-safe, on one Run-wide cadence. It is visibility only: it does not alter
+Pickup, Rolling FIFO, dispatch backoff/demand, authoritative emptiness or the `gone`
+sweep. Suitable existing shallow reads may be reused or coalesced; each Lane must
+not create its own polling loop. Runner-owned cooperative ticks continue through
+quiet Agent sessions and without an attached Dashboard. The first tick at or after
+`RefreshBackoff.maximum` takes the read, with no concurrent Event writer or
+catch-up burst; the cadence remains a floor rather than a real-time deadline.
+
+A failed or incomplete visibility read is diagnosed but does not fail active
+work. Its attempt consumes the visibility interval, preventing callback-driven
+retry storms without changing scheduler backoff. Each due, complete successful
+visibility read emits the existing Event, even for empty or unchanged membership,
+unless an equivalent read and Event already serviced that cadence. Empty
+membership remains add-only evidence, never authority to retire a row or declare
+the Pool empty.
+
+ADR-0091 leaves the shell and PowerShell paths dormant. The residual obligation
+and its new Conformance cases therefore belong to Python alone, with per-case
+`distributions` selectors excluding the dormant adapters. These decisions
+supersede the new-Event and all-Orchestrator requirements below, not the add-only,
+cooperative or visibility-only boundary.
 
 A **Run**'s picture of available work is only ever as fresh as its last boundary. A serial
 **Iteration** collects its Pool once, at the top (`loop.py:1395-1397`), and reads nothing

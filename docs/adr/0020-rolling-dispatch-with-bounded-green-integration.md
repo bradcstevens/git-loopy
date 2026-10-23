@@ -25,6 +25,35 @@ a prepared Release-line commit stays local without announcing `wrapper.release.a
 on publication failure. A later publish or serial push may carry the work. Recovery of a
 lost acknowledgement or torn worktree by SHA remains #419.
 
+**Amendment ([#419](https://github.com/bradcstevens/git-loopy/issues/419), implemented by PR #933):**
+the Python Runner's Parallel publication gains **Publication reconciliation** at
+restart. A durable record made before base mutation binds the issue, base branch,
+verified-stage SHA and upstream identity; reconciliation must also account for a
+post-merge Release-line commit. Logs, branch names and closing keywords alone do not
+authorize finishing an interrupted publication. Only proved publication may be
+finished automatically. An unresolved base merge is preserved and stops new work
+with an actionable diagnostic rather than being aborted, reset or repaired by an
+Agent. This deliberately trades automatic repair for preservation of operator work.
+Serial crash recovery, other Runner members and concurrent-Run coordination remain
+outside this delivery.
+
+Reconciliation precedes destructive residue reclamation and new work. It obeys the
+existing Lease protocol before a push or tracker write; it never inherits the dead
+Run's authority. If the recorded final publication is the exact clean base tip,
+one non-force push to its recorded upstream may finish durability. Unrecorded local
+commits must not ride along. If upstream already contains the recorded final
+publication, ancestry rather than tip equality proves durability; a local-only
+publication needs no remote proof. A failed push or unresolved evidence preserves
+work, leaves an open issue open and stops new work with an actionable diagnostic.
+No re-merge, Release-line increment, Recovery Agent or push retry loop is introduced.
+
+Reconciliation is idempotent across further crashes, including tracker closure
+before its local acknowledgement: a closed issue is neither reopened nor closed
+again. An incomplete or contradictory pending record stops new work rather than
+guessing. A clean pre-upgrade checkout with no record remains supported, but
+unrecorded historical publications are not inferred from commit messages and
+automatically closed.
+
 **Amended by [ADR-0070](0070-a-strike-is-charged-to-the-issue.md):**
 for the Python Runner, a Lane's **Strike** is charged by its session's ending, not by its
 contribution's disposition: a terminal unpublished contribution is no longer a Strike in itself,
