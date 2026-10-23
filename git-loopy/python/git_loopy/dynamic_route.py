@@ -1175,22 +1175,25 @@ class RoutingAdmissionLedger:
         self._complete_cost(_validate_routing_credits(routing_credits))
 
     async def run_selector(
-        self, call: Callable[[], Awaitable[SelectorCallResult]]
+        self, call: Callable[[], Awaitable[SelectorCallResult]],
+        *, on_failure: Callable[[str], None] | None = None,
     ) -> tuple[SelectorCallResult | None, _AdmissionRefusal | None]:
         """Run one admitted call, bounded by concurrency, deadline and quota."""
-        return await self._run_call(call, classification=False)
+        return await self._run_call(call, classification=False, on_failure=on_failure)
 
     async def run_classification(
-        self, call: Callable[[], Awaitable[SelectorCallResult]]
+        self, call: Callable[[], Awaitable[SelectorCallResult]],
+        *, on_failure: Callable[[str], None] | None = None,
     ) -> tuple[SelectorCallResult | None, _AdmissionRefusal | None]:
         """Classification shares the selector's admission limits, not its count."""
-        return await self._run_call(call, classification=True)
+        return await self._run_call(call, classification=True, on_failure=on_failure)
 
     async def classify(
         self, call: Callable[[], Awaitable[SelectorCallResult]]
     ) -> SelectorCallResult | RoutingUnavailable:
         """Admit classification independently of leaderboard access or evidence."""
-        result, refusal = await self.run_classification(call)
+        failures: list[str] = []
+        result, refusal = await self.run_classification(call, on_failure=failures.append)
         if refusal is _AdmissionRefusal.QUOTA:
             reason = RoutingUnavailableReason.QUOTA_EXHAUSTED
         elif refusal is _AdmissionRefusal.DEADLINE:
@@ -1199,10 +1202,14 @@ class RoutingAdmissionLedger:
             reason = RoutingUnavailableReason.SELECTOR_UNAVAILABLE
         else:
             return result
-        return RoutingUnavailable(reason=reason, usage=self.snapshot())
+        return RoutingUnavailable(
+            reason=reason, usage=self.snapshot(),
+            detail=failures[-1] if failures else None,
+        )
 
     async def _run_call(
-        self, call: Callable[[], Awaitable[SelectorCallResult]], *, classification: bool
+        self, call: Callable[[], Awaitable[SelectorCallResult]], *, classification: bool,
+        on_failure: Callable[[str], None] | None = None,
     ) -> tuple[SelectorCallResult | None, _AdmissionRefusal | None]:
         async def metered_call() -> SelectorCallResult:
             try:
@@ -1224,7 +1231,9 @@ class RoutingAdmissionLedger:
             return None, _AdmissionRefusal.DEADLINE
         try:
             await asyncio.wait_for(self._semaphore.acquire(), timeout=remaining)
-        except TimeoutError:
+        except TimeoutError as exc:
+            if on_failure is not None:
+                on_failure(str(exc) or "selector call timed out")
             return None, _AdmissionRefusal.DEADLINE
         try:
             async with self._lock:
@@ -1248,7 +1257,9 @@ class RoutingAdmissionLedger:
                         else _AdmissionRefusal.SELECTOR
                     )
                     return None, refusal
-                except Exception:
+                except Exception as exc:
+                    if on_failure is not None:
+                        on_failure(str(exc))
                     return None, _AdmissionRefusal.SELECTOR
             finally:
                 async with self._lock:
@@ -1257,7 +1268,9 @@ class RoutingAdmissionLedger:
                 cost = _validate_routing_credits(result.routing_credits)
                 reported = _validate_routing_credits(result.reported_routing_credits)
                 remainder = _validate_routing_credits(cost - reported)
-            except (AttributeError, ValueError):
+            except (AttributeError, ValueError) as exc:
+                if on_failure is not None:
+                    on_failure(str(exc))
                 return None, _AdmissionRefusal.SELECTOR
             async with self._lock:
                 self._complete_cost(remainder)
@@ -1326,6 +1339,7 @@ class RoutingUnavailable:
 
     reason: RoutingUnavailableReason
     usage: RoutingUsage
+    detail: str | None = None
 
     @property
     def available(self) -> bool:
@@ -1686,8 +1700,8 @@ class RoutingLiveRead:
             return self._unavailable(reason)
         except RoutingPrerequisiteError:
             return self._unavailable(RoutingUnavailableReason.PREREQUISITE_MISSING)
-        except Exception:
-            return self._unavailable(RoutingUnavailableReason.SOURCE_UNAVAILABLE)
+        except Exception as exc:
+            return self._unavailable(RoutingUnavailableReason.SOURCE_UNAVAILABLE, detail=str(exc))
         if isinstance(evidence, ArtificialAnalysisResult):
             evidence = FreshEvidence(
                 source_identity=evidence.source_identity,
@@ -1707,8 +1721,8 @@ class RoutingLiveRead:
             return self._unavailable(reason)
         except RoutingPrerequisiteError:
             return self._unavailable(RoutingUnavailableReason.PREREQUISITE_MISSING)
-        except Exception:
-            return self._unavailable(RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE)
+        except Exception as exc:
+            return self._unavailable(RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE, detail=str(exc))
         if not _valid_fresh_capabilities(capabilities):
             return self._unavailable(RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE)
         election = elect_selector(
@@ -1743,8 +1757,10 @@ class RoutingLiveRead:
             raise TimeoutError
         return await asyncio.wait_for(fetch(), timeout=remaining)
 
-    def _unavailable(self, reason: RoutingUnavailableReason) -> RoutingUnavailable:
-        return RoutingUnavailable(reason=reason, usage=self._ledger.snapshot())
+    def _unavailable(
+        self, reason: RoutingUnavailableReason, *, detail: str | None = None
+    ) -> RoutingUnavailable:
+        return RoutingUnavailable(reason=reason, usage=self._ledger.snapshot(), detail=detail)
 
 
 class DynamicRouter:
@@ -2094,13 +2110,17 @@ class DynamicRouter:
             assert election.selector is not None
             return await self._selector_assess(election.selector, assessment_request)
 
-        result, refusal = await self._ledger.run_selector(call)
+        failures: list[str] = []
+        result, refusal = await self._ledger.run_selector(call, on_failure=failures.append)
         if refusal is _AdmissionRefusal.QUOTA:
             return self._unavailable(RoutingUnavailableReason.QUOTA_EXHAUSTED)
         if refusal is _AdmissionRefusal.DEADLINE:
             return self._unavailable(RoutingUnavailableReason.DEADLINE_EXHAUSTED)
         if refusal is not None or result is None:
-            return self._unavailable(RoutingUnavailableReason.SELECTOR_UNAVAILABLE)
+            return self._unavailable(
+                RoutingUnavailableReason.SELECTOR_UNAVAILABLE,
+                detail=failures[-1] if failures else None,
+            )
         parsed = _parse_selector_output(result.output, candidates, request.prior_attempts)
         if isinstance(parsed, RoutingUnavailableReason):
             return self._unavailable(parsed)
@@ -2142,8 +2162,10 @@ class DynamicRouter:
             raise ValueError("routing clock must return an aware datetime")
         return now
 
-    def _unavailable(self, reason: RoutingUnavailableReason) -> RoutingUnavailable:
-        return RoutingUnavailable(reason=reason, usage=self._ledger.snapshot())
+    def _unavailable(
+        self, reason: RoutingUnavailableReason, *, detail: str | None = None
+    ) -> RoutingUnavailable:
+        return RoutingUnavailable(reason=reason, usage=self._ledger.snapshot(), detail=detail)
 
 
 def _verified_reuse(

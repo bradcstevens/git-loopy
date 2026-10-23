@@ -1,8 +1,14 @@
 {
   "schema_version": 1,
-  "contract_version": "2.39",
+  "contract_version": "2.41",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
+    "rolling-unread-pin.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_loop_parallel.py drives every Lane-path case through the complete Run seam with fake gh/git, observing bindings, units, ordering and wrapper.pin.unread transitions."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "Contract 2.41 is above the dormant Path baseline 2.26; the shell Orchestrator is serial-only and does not implement Rolling dispatch."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "Contract 2.41 is above the dormant Path baseline 2.26; the PowerShell Orchestrator is serial-only and does not implement Rolling dispatch."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard is an Event consumer only; it does not make Lane Pickup or Unread-Pin lapse decisions."}
+    },
     "account-control.json": {
       "python": {"kind": "claimed", "reason": "tests/test_account_conformance.py drives exit mapping and the account Event producer; test_account_run.py and test_account_control.py prove Run admission, accounting, closure and clock-controlled budgets."},
       "shell": {"kind": "waived_out_of_scope", "reason": "ADR-0091: this fixture is introduced at contract 2.40, above the dormant shell Path baseline's Contract support 2.26, and account control is Python-only (§19.1); no new implementation debt is owed."},

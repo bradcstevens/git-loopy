@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.41",
+  "distributions": ["python"],
+  "description": "Lane-path Unread Pin transitions at the complete Run seam, with a shortened fixed bound. Retries spend no iteration unit.",
+  "cases": [
+    {
+      "name": "lane-pin-recovers-within-bound",
+      "bound_seconds": 600,
+      "failed_lease_reads": 3,
+      "expected_bindings": [[43, "pin"], [42, "priority"], [41, "order"]],
+      "expected_states": ["holding", "ended"],
+      "outcome": "bound"
+    },
+    {
+      "name": "lane-pin-lapses-and-priority-proceeds",
+      "bound_seconds": 0.02,
+      "failed_lease_reads": 6,
+      "expected_bindings": [[42, "priority"], [41, "order"], [43, "pin"]],
+      "expected_states": ["holding", "lapsed", "ended"],
+      "outcome": "bound"
+    },
+    {
+      "name": "lane-pin-lapse-releases-priority-serial-work",
+      "bound_seconds": 0.02,
+      "failed_lease_reads": 100,
+      "priority_serial": true,
+      "max_iterations": 1,
+      "expected_bindings": [[42, "priority"]],
+      "expected_states": ["holding", "lapsed"],
+      "outcome": null
+    }
+  ]
+}

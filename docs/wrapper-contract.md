@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.40 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.41 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -364,6 +364,33 @@ Exactly **one** issue may be pinned per invocation; a second `--issue` MUST be r
 **usage error** (§10's `usage_error`, not `preflight_failed`) rather than resolved by taking
 either value. The invocation is malformed, and "the last one wins" is the silent substitution
 this section exists to prevent, arrived at by a CLI parsing default.
+
+**Unread Pin on the Lane path (contract 2.41, Rolling dispatch only).** A live
+`parallel-safe` Pin whose Pickup cannot read it holds new Lanes and serial work
+for at most **ten minutes of monotonic time**, starting with the first unread
+Pickup in the Run. Tracker failure or incompleteness, unprovable Readiness,
+the Lease probe, the Dynamic route's evidence feed, capability listing or
+selector, base revision and worktree setup share this one clock. Neither a
+partial read nor a different failing read resets it. The bound is fixed, not
+a Config key, CLI flag or environment variable.
+
+At the bound the hold **lapses**, finally for this invocation. The Pin stays
+live, rejoins the cache quarantined, and is retried once a later complete
+refresh still lists it (§2.11). Ordinary order resumes behind it, Priority
+first, while each later Pickup still promotes the live Pin. A later Lane
+setup failure re-caches it quarantined: it never holds again and is never
+refused because a read failed. A Pin that is read and refused is spent as
+before, including an open blocker, Awaiting merge, a rival Lease, a refused
+Task type, stale membership, or a Dynamic-route refusal for exhausted
+allowance or deadline. Lease fencing is unchanged.
+
+Lane retries spend no iteration unit. When only the unread candidate remains,
+§3.3.1 applies without a Pin-specific ending. Each condition transition emits
+one `wrapper.pin.unread` Event (§12) and one diagnostic line, not one per retry;
+the Pin's quarantine/setup warnings and the misleading serial-required partial
+Pool warning during the hold MUST NOT repeat. Warnings for other candidates
+are unchanged. `rolling-unread-pin.json` pins this Lane-path rule; it imposes
+no new obligation on serial-only members.
 
 The pin MUST be invocation-scoped, and therefore MUST NOT be expressible as a label, an
 environment variable, or a persisted Config key. All three outlive the invocation: a label is
@@ -922,6 +949,19 @@ not a Run event (#459).
 The additive Event schema has compatibility `schema_version` **1**; changing the Wrapper contract
 does not implicitly change that version. Unknown event types and unknown payload fields remain
 additive and MUST be ignored by compatible consumers.
+
+**`wrapper.pin.unread` (contract 2.41)** announces an Unread Pin on the Rolling
+Lane path. It is Run-scoped: `iter` is null, with no `contribution_id` or
+`lane_id`. Required payload: `issue`, `state`, `read`, `reason` (the failing
+read's own text), and `first_unread_at` (UTC RFC3339, unchanged throughout the
+condition). `read` is one of `tracker`, `readiness`, `lease`, `route_evidence`,
+`route_capabilities`, `route_selector`, `base_revision`, or `worktree`.
+`state` is `holding` on the first unread Pickup or a changed failing read
+while holding; `lapsed` when the bound passes or the failing read changes
+after the lapse; and `ended` when the Pin binds, is spent, or Stop ends the
+condition. Only `ended` carries `outcome`, respectively `bound`, `spent`, or
+`stopped`. Retrying the same failing read emits nothing, even if its reason
+text changes. This Event remains additive within schema compatibility 1.
 
 Every line shares this envelope, with keys in a stable order (envelope keys first, then payload
 keys sorted):
@@ -2434,7 +2474,8 @@ and 2.32 with the Host yield disclosure (§4, §12, #817),
 and 2.34 with the Sandbox disclosure (§12, #864),
 and 2.37 with the Python mid-work Membership cadence (§12, #429),
 and 2.38 with Orchestrator-only closure (§21, #918),
-and 2.40 with Python Run-wide account control (§19.1, #676).
+and 2.40 with Python Run-wide account control (§19.1, #676),
+and 2.41 with the Rolling Lane-path Unread Pin lapse and Event (§3.2, §12, #995).
 Contract 2.39 withdraws the dormant paths' Sandbox exception (§19, ADR-0098):
 only `fixture-claims.json` advances its provenance; `sandbox.json`'s cases and
 `distributions`, the Event/Dashboard fixture revisions and historical streams'
@@ -2445,7 +2486,7 @@ in the new Python-only `rolling-priority.json`, proved through complete Runs in
 it changes no wire shape and adds no serial-only family obligation.
 `discriminator.json` reached 2.10 separately with the Wayfinder-map exclusion
 (§3.1), then 2.29 with the Python-only non-execution Task-type exclusion.
-Event revision 1.11 and Dashboard revision 1.27 record current provenance;
+Event revision 1.12 and Dashboard revision 1.27 record current provenance;
 the Dashboard adds the Run-level account state. Revision 1.26 tracked the
 Membership cadence, which adds no Dashboard projection. Revision 1.25 added the
 optional Header Sandbox state. The Event fixture revision moves 1.5→1.6 for the Subagent lifecycle

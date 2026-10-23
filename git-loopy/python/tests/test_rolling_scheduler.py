@@ -59,13 +59,13 @@ class ScriptedSource:
         self.pickup_calls: list[int | str] = []
         self.unavailable = set(unavailable or ())
 
-    def shallow_membership(self) -> MembershipSnapshot:
+    def shallow_membership(self, *, report_failure: bool = True) -> MembershipSnapshot:
         self.membership_calls += 1
         return MembershipSnapshot(
             candidates=tuple(_candidate(r) for r in self.refs), complete=self.complete
         )
 
-    def pickup(self, ref: int | str) -> Pickup:
+    def pickup(self, ref: int | str, *, report_failure: bool = True) -> Pickup:
         self.pickup_calls.append(ref)
         if ref in self.unavailable:
             return Pickup(outcome=PICKUP_UNAVAILABLE)
@@ -1075,7 +1075,7 @@ def test_the_pin_is_awaited_from_its_reservation_until_it_binds() -> None:
     clock.advance(1.0)
     due = scheduler.lane_first_awaited
 
-    assert (before, in_setup, paced, due) == (False, True, True, False)
+    assert (before, in_setup, paced, due) == (True, True, True, True)
 
 
 def test_a_plain_release_still_leaves_the_candidate_out_of_the_cache() -> None:
