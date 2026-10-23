@@ -106,7 +106,10 @@ class GuestTransport(SweepTransport):
         }]
         self.github = GitHub()
         self.actions = []
-        self.lifecycle = None
+        self.lifecycle = {
+            "autoSuspendPolicy": {"enabled": False},
+            "autoDeletePolicy": {"enabled": True, "deleteIntervalInSeconds": 604800},
+        } if state == "Stopped" else None
         self.fail_preservation = False
         self.lose_halt_response = False
 
@@ -200,6 +203,22 @@ def test_stopped_vm_resumes_only_for_one_explicit_retry(guest_receipt, guest):
     assert ok, actual
     assert transport.actions == ["resume", "inspect", "preserve", "policy", "halt"]
     assert actual == [line.removeprefix("Would ") for line in plan]
+
+
+@pytest.mark.parametrize("policy", [
+    None,
+    {"autoDeletePolicy": {"enabled": False}},
+    {"autoDeletePolicy": {"enabled": True, "deleteIntervalInSeconds": 60}},
+])
+def test_stopped_vm_without_safe_delay_names_explicit_retry(guest_receipt, guest, policy):
+    transport = GuestTransport(guest_receipt, guest[0], "Stopped")
+    transport.lifecycle = policy
+    ok, output = sweep(guest_receipt, transport)
+    assert not ok
+    assert f"--retry-remote {guest_receipt.run_id}" in output[-1]
+    assert "retained" in output[-1]
+    assert transport.actions == []
+    assert remote_run_receipts(SubprocessGitClient(guest_receipt.scope)) == (guest_receipt,)
 
 
 @pytest.mark.parametrize("state", ["live", "unknown", "ambiguous", "Starting", "failed-preservation"])

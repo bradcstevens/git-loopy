@@ -135,3 +135,22 @@ def test_teardown_refuses_unproven_or_unpreserved_work(guest, tmp_path, defect):
             lock.close()
     assert halted == []
     assert (root / "work").exists()
+
+
+def test_merged_branch_tips_are_preserved_without_unfinished_issue_comments(guest):
+    from git_loopy.remote_teardown import teardown_run
+
+    root, origin, identity, _ = guest
+    base = git(root, "branch", "--show-current")
+    branch = lane_branch_name(identity, 7)
+    git(root, "checkout", "-qb", branch)
+    (root / "finished").write_text("already integrated")
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "finished change")
+    sha = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", base)
+    git(root, "merge", "--ff-only", branch)
+    github = GitHub()
+    teardown_run(root, identity, github=github, halt=lambda: None)
+    assert github.comments == {}
+    assert git(origin, "rev-parse", f"refs/heads/git-loopy-checkpoints/run-{identity}/{sha}") == sha

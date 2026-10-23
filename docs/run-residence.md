@@ -78,7 +78,7 @@ Azure credential.
 | --- | --- |
 | No matching VM | Delete the uniquely named `git-loopy-<run-id>` disk image, confirm its absence, then retire the receipt. An asynchronous or failed deletion retains the receipt for another pass. |
 | One Running VM | Read the guest's `remote_control` lock proof. Only a dead Run can enter preservation and halt. |
-| One Stopped VM | Leave it to Azure's deletion delay; never resume automatically. |
+| One Stopped VM | Leave it to Azure's confirmed seven-day deletion delay; never resume automatically. A missing/disabled/mismatched delay retains the VM and reports `--retry-remote RUN`, without changing its policy. |
 | Unknown state, inaccessible provider/guest, or ambiguous VM/image | Retain resources and receipt; never guess. |
 
 `git-loopy sweep --dry-run` reports the same conditional plan but writes no
@@ -98,10 +98,19 @@ It salvages registered Issue clones and working trees, then pushes immutable
 Unattributed work uses `refs/heads/git-loopy-checkpoints/run-<run-id>/<sha>`.
 It conservatively preserves all branch tips, including unresolved reserved
 branches, Checkpoint tips and work ahead of origin, plus detached HEAD work.
+Tips already merged into the guest's local default branch receive run-addressed
+refs, not comments calling them unfinished issue work. Origin's advertised
+default branch identifies that local base; an unprovable base fails closed.
 It never advances base, removes a workspace or deletes a branch. Already
 preserved refs and comments make retries idempotent; conflicting refs are refused.
 Incomplete clone inventories, unresolved merges and work changing during
 preservation refuse a halt.
+
+This dead-Run backstop does not acquire or steal an issue Lease. Its only
+tracker write is the immutable preservation Breadcrumb required by #960; it
+does not publish onto base, close an issue, change labels or claim active work.
+Malformed/unreadable receipt inventory refuses the command before any local
+or remote reclamation, rather than acting from a partial clone inventory.
 
 The execution entry point re-proves death and holds the guest's control lock
 through preservation and halt. Other live or unprovable Runs also prevent

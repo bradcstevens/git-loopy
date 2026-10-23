@@ -38,6 +38,22 @@ def preserve_work(
     origin = source.remote_url("origin")
     if not origin:
         raise RunTargetError("Preservation requires origin.")
+    try:
+        advertised = subprocess.run(
+            ["git", "-C", str(repository), "ls-remote", "--symref", "origin", "HEAD"],
+            capture_output=True, text=True, check=True, timeout=30,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        raise RunTargetError("Origin's default branch is unprovable.") from None
+    base = next((
+        line.split()[1] for line in advertised.splitlines()
+        if line.startswith("ref: refs/heads/") and line.endswith("\tHEAD")
+    ), None)
+    if base is None:
+        raise RunTargetError("Origin's default branch is unprovable.")
+    # Remote Runs start on this branch. Use its local tip, as local Sweep does,
+    # including Integration that completed before the guest lost its connection.
+    base_tip = source.branch_tip(base).sha
     worktrees = source.list_worktrees()
     clones = source.list_issue_clones()
     # list_issue_clones deliberately skips unreadable registrations for local
@@ -71,8 +87,7 @@ def preserve_work(
         if conflicts:
             raise RunTargetError("Unresolved merge; refusing to Checkpoint conflict markers.")
         branch = git.current_branch()
-        match = RESERVED_BRANCH_RE.fullmatch(branch or "")
-        issue = int(match["issue"]) if match and match["issue"] else None
+        issue = _branch_issue(branch or "")
         if git.is_dirty() or git.has_untracked():
             git.add_all()
             git.commit(checkpoint_message(issue))
@@ -80,9 +95,11 @@ def preserve_work(
         if branch is None:
             tips[(None, git.head_sha())] = git
         for name in git.list_branches():
-            match = RESERVED_BRANCH_RE.fullmatch(name)
-            owner = int(match["issue"]) if match and match["issue"] else None
-            tips[(owner, git.branch_tip(name).sha)] = git
+            sha = git.branch_tip(name).sha
+            owner = _branch_issue(name)
+            if owner is not None and git.is_merged_into(sha, base_tip):
+                owner = None  # Resolved work gets a Run ref, not an unfinished-work comment.
+            tips[(owner, sha)] = git
         heads[git.root] = _heads(git)
     preserved = []
     for (issue, sha), git in tips.items():
@@ -112,6 +129,11 @@ def preserve_work(
 
 def _heads(git: SubprocessGitClient) -> dict[str, str]:
     return {name: git.branch_tip(name).sha for name in ["HEAD", *git.list_branches()]}
+
+
+def _branch_issue(branch: str) -> int | None:
+    match = RESERVED_BRANCH_RE.fullmatch(branch)
+    return int(match["issue"]) if match and match["issue"] else None
 
 
 def teardown_run(
@@ -150,6 +172,7 @@ def teardown_run(
 def main() -> int:
     from git_loopy.gh import GhError, SubprocessGitHubClient
     from git_loopy.remote_guest import guest_environment
+    from git_loopy.route_publication import RouteDeliveryError
 
     try:
         request = json.loads(base64.b64decode(sys.argv[1], validate=True))
@@ -175,7 +198,7 @@ def main() -> int:
             "preserved": True, "refs": refs,
         }))
         return 0
-    except (RunTargetError, GitError, GhError, OSError, ValueError, KeyError,
+    except (RunTargetError, GitError, GhError, RouteDeliveryError, OSError, ValueError, KeyError,
             TypeError, IndexError, subprocess.SubprocessError):
         print("Remote preservation failed; the guest was not halted.", file=sys.stderr)
         return 1

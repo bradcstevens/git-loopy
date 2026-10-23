@@ -1341,6 +1341,9 @@ disk image and receipt only after the VM is gone. Client Detach deletes neither.
 and retries preservation; no automatic pass resumes it. Live or unprovable
 Runs and failed preservations are retained. Guests predating the preservation
 module fail closed rather than being upgraded or deleted by Sweep.
+A Stopped VM with no confirmed seven-day deletion delay is reported with its
+explicit retry command; Sweep neither silently abandons it nor arms deletion
+without preservation.
 See the [remote launch reference](../../docs/run-residence.md#detached-azure-launch-870)
 for image prerequisites, corporate package feeds, credential handling and
 unconfirmed-launch recovery.

@@ -15,9 +15,19 @@ from git_loopy.remote_sweep import RemoteSweepResult
 from git_loopy.run_discovery import RunLiveness, RunTargetError
 
 if TYPE_CHECKING:
-    from azure.containerapps.sandbox import SandboxClient
+    from azure.containerapps.sandbox import LifecyclePolicy, SandboxClient
     from azure.core.credentials import TokenCredential
     from azure.core.pipeline.transport import HttpTransport
+
+REMOTE_DELETE_DELAY_SECONDS = 7 * 24 * 60 * 60
+
+
+def _has_deletion_delay(policy: LifecyclePolicy | None) -> bool:
+    return (
+        policy is not None and policy.auto_delete is not None
+        and policy.auto_delete.enabled is True
+        and policy.auto_delete.delete_interval_seconds == REMOTE_DELETE_DELAY_SECONDS
+    )
 
 
 def sweep_receipt(
@@ -53,11 +63,17 @@ def sweep_receipt(
                 raise RunTargetError("Ambiguous remote Run; refusing reclamation.")
             if matches:
                 vm = matches[0]
+                sandbox = stack.enter_context(group.get_sandbox_client(vm.id))
                 if vm.state == "Stopped" and not retry:
+                    observed = sandbox.get()
+                    if observed.state != "Stopped" or not _has_deletion_delay(observed.lifecycle):
+                        raise RunTargetError(
+                            "Stopped VM has no confirmed seven-day deletion delay; "
+                            f"retry preservation with `git-loopy sweep --retry-remote {receipt.run_id}`."
+                        )
                     return RemoteSweepResult()
                 if vm.state not in ("Running", "Stopped"):
                     raise RunTargetError("Remote VM state is unprovable.")
-                sandbox = stack.enter_context(group.get_sandbox_client(vm.id))
                 return _sweep_guest(
                     sandbox, receipt.run_id, stopped=vm.state == "Stopped", dry_run=dry_run,
                 )
@@ -134,14 +150,14 @@ def _sweep_guest(
         raise RunTargetError("Guest preservation response was not confirmed.")
     sandbox.set_lifecycle_policy(LifecyclePolicy(
         auto_suspend=AutoSuspendPolicy(enabled=False, interval=300, mode="Memory"),
-        auto_delete=AutoDeletePolicy(enabled=True, delete_interval_seconds=7 * 24 * 60 * 60),
+        auto_delete=AutoDeletePolicy(
+            enabled=True, delete_interval_seconds=REMOTE_DELETE_DELAY_SECONDS,
+        ),
     ))
     observed = sandbox.get().lifecycle
     if (
         observed is None or observed.auto_suspend is None
-        or observed.auto_suspend.enabled is not False or observed.auto_delete is None
-        or observed.auto_delete.enabled is not True
-        or observed.auto_delete.delete_interval_seconds != 7 * 24 * 60 * 60
+        or observed.auto_suspend.enabled is not False or not _has_deletion_delay(observed)
     ):
         raise RunTargetError("Azure did not confirm the deletion delay; VM not halted.")
     try:

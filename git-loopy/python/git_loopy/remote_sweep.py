@@ -53,7 +53,12 @@ def sweep_remote(
                     ("Would " if dry_run else "")
                     + f"retire remote Run receipt: {receipt.run_id}"
                 )
-        except (RunTargetError, OSError, ImportError):
+        except RunTargetError as exc:
+            # RunTargetError carries the provider's redacted, operator-facing
+            # refusal, including the exact retry command when one is needed.
+            output(f"Remote Run {receipt.run_id} retained: {exc}")
+            ok = False
+        except (OSError, ImportError):
             # Neither provider diagnostics nor guest output may leak secrets.
             output(
                 f"Remote Run {receipt.run_id} retained: reclamation is unconfirmed; "
