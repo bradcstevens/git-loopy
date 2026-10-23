@@ -116,7 +116,7 @@ these, the oldest-first order applies — including to the pinned issue if it is
   the pin back at the head of the cache, quarantined, rather than refuse it for the Run or
   release it uncached, and neither a Lane nor serial work fills behind it until it binds. Its
   retries are paced to one per idle poll interval. The bounds on a pin whose reads keep failing are
-  [#647](https://github.com/bradcstevens/git-loopy/issues/647).
+  [#647](https://github.com/bradcstevens/git-loopy/issues/647)'s, settled in its amendment below.
 
 ## Amendment: one Pin lifetime across the Runner family (#644)
 
@@ -130,7 +130,7 @@ Orchestrators. The Python Runner also spends a `parallel-safe` pin that a Pickup
 or serial, passes over as **Blocked** or stale. A serial-only member walks on past an unread
 pin, as §3.3 does for any candidate; holding for it is **Rolling dispatch** behaviour, and it
 stays under the two exceptions above. The bounds on a pin whose reads keep failing stay with
-[#647](https://github.com/bradcstevens/git-loopy/issues/647).
+[#647](https://github.com/bradcstevens/git-loopy/issues/647), settled in its amendment below.
 
 ## Amendment: Priority crosses the Lane boundary for new reservations (#428, #720)
 
@@ -155,3 +155,67 @@ An authoritative read that failed proves no Ready assertion and retains the exis
 unknown and terminal semantics. With no human assertion, Lane work keeps default precedence.
 Retries still wait for contribution finalization and get no new reservation during a latch.
 This amendment is Python Rolling-dispatch behavior, not a new serial-only Runner obligation.
+
+## Amendment: an Unread Pin holds the Run for ten minutes at most (#647)
+
+[#647](https://github.com/bradcstevens/git-loopy/issues/647) settles the bound the #430 and #644
+amendments left open. Holding new work for an **Unread Pin** is **Rolling dispatch** behaviour,
+and nothing bounded it. A `parallel-safe` pin's Lane retries spend no unit, so no cap could end
+the hold, and `max_iterations` defaults to no cap. A pin whose reads failed for a reason of its
+own (a blocker the token cannot see, a worktree that cannot be made for it, a selector that keeps
+failing on it) idled the whole Run until the operator stopped it, and left nothing on the trace
+that a Dashboard could show.
+
+**The hold lapses; the pin stays live.** Ten minutes after the first Pickup that could not read
+the pin, the hold lapses. The clock is not reset by a partial read or by a change in which read
+fails. From then on, Lanes and serial work start behind the pin in the ordinary order, Priority
+first. The pin is neither spent nor refused, because not knowing is never an answer about it, and
+every later Pickup still promotes it, so it binds ahead of the order the moment a read shows it.
+The lapse is final for the invocation. A later read that shows the pin, followed by a Lane setup
+step that fails, returns it to the order as an ordinary unreadable candidate rather than holding
+the Run again. When a lapsed Unread Pin is the only work left, the Run ends or keeps retrying
+exactly as it would for any unreadable candidate (Wrapper contract §3.3.1); there is no
+pin-specific ending.
+
+**Why lapse, rather than end the Run or spend the pin.** Ending the Run would keep "nothing starts
+ahead of a named pin" absolute, but it would also end an AFK Run during any tracker incident
+longer than the bound, which an unpinned Run rides out. Spending the pin would treat a read that
+failed as an answer about the pin. Lapsing is the serial-only members' rule, applied after a grace
+period, and work that truly depends on the pin is protected by its `blocked_by` edge, not by the
+hold. The bound is a fixed ten minutes rather than a Config key, so the Stable surface does not
+grow. Ten minutes rides out a tracker or network blip, and once it passes, letting the order
+proceed costs the pin nothing.
+
+**One condition, one clock.** Every read the earlier amendments count as not reading the pin is
+one condition:
+
+- a tracker read that failed or came back incomplete
+- unprovable **Readiness**
+- the **Lease** probe
+- the **Dynamic route**'s evidence feed, capability listing or selector
+- a Lane's base revision or worktree
+
+The read that failed is named, not bounded separately. Exhausting the routing allowance or
+deadline remains a **Dynamic route** refusal that spends the pin.
+
+**What a hold costs.** A serial hold costs one unit, however many retries it takes. Between
+attempts the Runner waits on the read that failed: the Pool read for a tracker or Readiness
+failure, the Lease remote for the Lease probe (#645), and the evidence feed or capability listing
+for those reads. The one unread Iteration reports its own `pin_unread` outcome, not
+`preflight_failed`, because the Run's precondition never failed. #430 had every unread Iteration
+spend a unit so that the cap could bound the hold. The lapse bounds it now, so the cap counts work
+again. A failed selector call has no free probe. It is retried once per poll interval through the
+routing ledger and charged only what it billed, so the lapse, the allowance and the deadline
+together bound what one pin can spend. Lane retries still spend no unit.
+
+**What the operator sees.** The Run announces the condition on one Run-scoped Event,
+`wrapper.pin.unread`, once per transition and never per retry. Its states are:
+
+- `holding`: the pin first goes unread, or the read that fails changes while it holds.
+- `lapsed`: the bound passes, or the read that fails changes after it.
+- `ended`: the pin binds, is spent, or a Stop ends the hold.
+
+Each Event names the pin, the read that failed and why, and when the pin first went unread. The
+Dashboard shows a notice for as long as the pin is unread, saying whether it still holds new work
+back. The per-retry warnings collapse to those transitions. The Event is a minor Wrapper contract
+change, emitted only under Rolling dispatch, and no serial-only member owes it.

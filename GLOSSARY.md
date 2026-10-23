@@ -532,13 +532,25 @@ about the pin itself (an open blocker, an open closing pull request that makes i
 **Awaiting merge** pin, a **Lease** held elsewhere, a refused task type, or an
 authoritative read that finds it stale), or completes a Pool or **Membership read** that
 no longer lists it. A **Serial-required** pin is also spent by the end of the serial
-Iteration latched for it. A Pickup that could not read the pin — an incomplete read, or
-**Readiness** it could not prove — leaves it live, so the next Pickup promotes it again.
+Iteration latched for it. A Pickup that could not read the pin leaves it live, an
+**Unread Pin**, so the next Pickup promotes it again.
 Once spent, an issue still open rejoins the order like any other, so an invocation binds
 at most one issue as `pin`. It lasts at most
 one invocation, which is why it is neither a label nor an environment variable — both are
 global, and would point every concurrent run at the same issue.
 _Avoid_: lock, claim, assignment, selection, priority.
+
+**Unread Pin**:
+A live **Pin** that the latest **Pickup** could not read, so it is neither bound nor spent:
+a tracker read failed or came back incomplete, its **Readiness** could not be proved, or a
+**Lease**, **Dynamic route** or **Lane** setup step for it did not happen. Not knowing is
+never an answer about the pin, so being unread neither refuses nor spends it, and every
+later Pickup promotes it again until one reads it. Under **Rolling dispatch** it keeps new
+work from starting for a bounded time, then lets the order proceed behind it; a serial-only
+member walks past it from the first read that failed.
+_Avoid_: stalled, stuck, blocked, held or quarantined pin — **Blocked** and `stuck` name
+proven facts, a **Lease** is what holds an issue, and quarantine is how **Rolling dispatch**
+treats any unreadable candidate.
 
 **Queue**:
 The per-run ledger of every issue seen in any pool or **Membership read** during the run,
