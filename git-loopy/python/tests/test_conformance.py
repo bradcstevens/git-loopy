@@ -4836,7 +4836,7 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
     assert declared["dashboard-insights.json"] == latest
     transport_note = _ROUTING_RESOLUTION["static_route_notes"]["session_interface_provenance"]
     assert transport_note in written
-    match = re.search(r"Only `event-schema.json` advances to (2\.\d+) for", transport_note)
+    match = re.search(r"only `event-schema.json` advances to (2\.\d+) for", transport_note)
     assert match is not None
     assert declared["event-schema.json"] == match[1]
 

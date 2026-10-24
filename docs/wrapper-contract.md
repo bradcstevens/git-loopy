@@ -853,7 +853,7 @@ error (exit `2`).
 | `1`  | Aborted — stuck      | A Runner without an Attempt lifecycle spent its `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling (§6). |
 | `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
 | `1`  | Waiting — all blocked | Every Pickup refusal proved a wait: an open native blocker, or an open closing pull request (§3.3.1, contract 2.17). |
-| `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), or an unread refusal left it unresolved (§3.3.1). |
+| `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), an unread refusal left it unresolved (§3.3.1), or the required session interface refused admission of work (§4, contract 2.44). |
 | `1`  | Stopped — operator   | The operator ended the Run deliberately (§10.1, contract 2.3).       |
 | `1`  | Stopped — account    | A terminal, account-identifying harness refusal ended a Python Run: `account_failure` (§19.1, contract 2.40). |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
@@ -887,6 +887,15 @@ sends to `preflight_failed` instead. Both of these reasons are claims about the 
 Pool, and neither may be established by a *read* that failed.
 For a Rolling terminal decision, the Run-end refusal record (§12, contract 2.12, #643)
 captures the candidates behind either claim; a failed read has no such record.
+
+**Session-interface admission (contract 2.44).** A protocol handshake refusal
+before the first Agent is work-admission failure even if discovery has already
+opened an Iteration. A Run that owns one headless server and must reclaim it
+after a failed turn MUST reconcile that turn normally before refusing further
+work as `preflight_failed`; it MUST NOT restart a second server or leave an
+Iteration or Run without its terminal Event. An already reached Iteration cap
+or Strike limit keeps its normal outcome. This adds no Session outcome or
+Ending and changes no progress/Strike rule (ADR-0103, #1005).
 
 ### 10.1 An operator Stop is a decided outcome (contract 2.3, MUST)
 
@@ -2478,7 +2487,7 @@ and 2.37 with the Python mid-work Membership cadence (§12, #429),
 and 2.38 with Orchestrator-only closure (§21, #918),
 and 2.40 with Python Run-wide account control (§19.1, #676),
 and 2.41 with the Rolling Lane-path Unread Pin lapse and Event (§3.2, §12, #995).
-Only `event-schema.json` advances to 2.44 for the headless session adapter's
+Of these two fixtures, only `event-schema.json` advances to 2.44 for the headless session adapter's
 attributed permission-denial encoding (§4, #1005). The Dashboard fixture keeps
 its 2.41 pin; this transport change adds no Dashboard behavior or Event type.
 Contract 2.39 withdraws the dormant paths' Sandbox exception (§19, ADR-0098):

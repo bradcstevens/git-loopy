@@ -1201,6 +1201,7 @@ git_loopy_preflight() {
   }
 
   git_loopy_assert_skill_policy_supported "$repo_root" || return 1
+  git_loopy_session_validate_deny_tools || return 1
 
   if [[ ! -f "$repo_root/docs/agents/issue-tracker.md" ]]; then
     printf '%s\n' \
@@ -3509,9 +3510,7 @@ git_loopy_run_discovery() {
       outcome="iteration_cap"
       break
     fi
-    if ((_GIT_LOOPY_SESSION_STARTED == 1)) &&
-      { [[ -z "$_GIT_LOOPY_SESSION_PID" ]] ||
-        ! kill -0 "$_GIT_LOOPY_SESSION_PID" 2>/dev/null; }; then
+    if git_loopy_session_unavailable; then
       printf 'git-loopy: the headless server is unavailable; refusing further Iterations in this Run.\n' >&2
       outcome="preflight_failed"
       break

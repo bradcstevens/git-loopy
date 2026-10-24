@@ -32,8 +32,10 @@ reply() {
 }
 event() {
   frame "$(jq -cn --arg sid "$session" --arg type "$1" --argjson data "$2" \
+    --arg agent "${3:-}" \
     '{jsonrpc:"2.0", method:"session.event",
-      params:{sessionId:$sid,event:{type:$type,data:$data}}}')"
+      params:{sessionId:$sid,event:({type:$type,data:$data}
+        + if $agent == "" then {} else {agentId:$agent} end)}}')"
 }
 work() {
   local calls=0
@@ -41,6 +43,11 @@ work() {
   calls=$((calls + 1))
   printf '%s' "$calls" >"$FAKE_COPILOT_CALLS"
   jq -rj '.params.prompt' <<<"$work_message" >"$FAKE_COPILOT_PROMPT"
+  if [[ "${FAKE_COPILOT_MODE:-}" == subagent-idle ]]; then
+    event assistant.message '{"content":"child output is not root output"}' child-1
+    event session.idle '{}' child-1
+    return
+  fi
   if [[ "${FAKE_COPILOT_MODE:-}" == "hang" || "${FAKE_COPILOT_MODE:-}" == "wedged" ||
     "${FAKE_COPILOT_MODE:-}" == "initial-idle" ]]; then
     return
@@ -108,7 +115,7 @@ while IFS= read -r header; do
             event tool.execution_start "$(jq -c \
               '{toolCallId:.permissionRequest.toolCallId,toolName:"bash"}' <<<"$permission")"
           fi
-          event permission.requested "$permission"
+          event permission.requested "$permission" "${FAKE_COPILOT_PERMISSION_AGENT:-}"
         done < <(jq -c '.[]' "$FAKE_COPILOT_PERMISSIONS")
       fi
       if ((permissions_left == 0)); then

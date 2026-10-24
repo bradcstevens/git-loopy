@@ -86,7 +86,18 @@ jq -se '[.[] | select(.type == "wrapper.iteration.end")] | length == 2' \
   "$temp_dir/stdout" >/dev/null || fail "Iterations did not complete"
 assert_reclaimed
 
+for selector in 'shell(git push)' 'MyMCP(tool)' 'shell(*)'; do
+  : >"$FAKE_COPILOT_REQUESTS"
+  if run 1 --deny-tool "$selector"; then
+    fail "unsupported deny selector admitted work: $selector"
+  fi
+  [[ ! -s "$FAKE_COPILOT_REQUESTS" ]] || fail "selector refusal started a server"
+  grep -q 'unsupported deny-tool selector' "$temp_dir/stderr" ||
+    fail "unsupported selector refusal did not explain the restriction"
+done
+
 export FAKE_COPILOT_PERMISSIONS="$temp_dir/permissions"
+export FAKE_COPILOT_PERMISSION_AGENT=child-policy
 cat >"$FAKE_COPILOT_PERMISSIONS" <<'EOF'
 [
   {"requestId":"deny-1","permissionRequest":{"kind":"custom-tool","toolName":"forbidden","toolCallId":"call-1","args":{}}},
@@ -112,7 +123,7 @@ jq -se --slurpfile fixture "$port_dir/../conformance/event-schema.json" \
     | .event | del(.ts,.run_id)) as $expected
   | any(.[]; (del(.ts,.run_id)) == $expected)' "$temp_dir/stdout" >/dev/null ||
   fail "native denial differs from the shared encoding"
-unset FAKE_COPILOT_PERMISSIONS
+unset FAKE_COPILOT_PERMISSIONS FAKE_COPILOT_PERMISSION_AGENT
 assert_reclaimed
 
 : >"$FAKE_COPILOT_REQUESTS"
@@ -142,17 +153,21 @@ for failure in hang crash; do
   else
     export FAKE_COPILOT_EXIT=7
   fi
-  if run 2 --send-timeout-seconds 1; then
-    fail "a reclaimed server must refuse further work"
-  fi
+  expected_exit="$(jq '.cases[] | select(.id == "preflight-failure-is-aborted") | .exit_code' \
+    "$port_dir/../conformance/exit-codes.json")"
+  expected_reason="$(jq -r '.cases[] | select(.id == "preflight-failure-is-aborted") | .reason' \
+    "$port_dir/../conformance/exit-codes.json")"
+  status=0
+  run 2 --send-timeout-seconds 1 || status=$?
+  [[ "$status" == "$expected_exit" ]] || fail "server loss violated the exit-code fixture"
   jq -se 'map(.method) | map(select(. == "connect")) | length == 1' \
     "$FAKE_COPILOT_REQUESTS" >/dev/null || fail "a Run restarted its server"
-  jq -se '
+  jq -se --arg reason "$expected_reason" '
     ([.[] | select(.type == "wrapper.iteration.start") | .iter] == [1])
     and ([.[] | select(.type == "wrapper.iteration.end") | .iter] == [1])
     and ([.[] | select(.type == "wrapper.strike") | .strikes] == [1])
     and .[-1].type == "wrapper.run.end"
-    and .[-1].outcome == "preflight_failed"
+    and .[-1].outcome == $reason
     and .[-1].iterations_run == 1
   ' "$temp_dir/stdout" >/dev/null ||
     fail "$failure left an unfinished Iteration or Run"
@@ -197,6 +212,17 @@ export FAKE_COPILOT_MODE=initial-idle
 run 1 --send-timeout-seconds 1 || fail "initial-idle session did not reconcile"
 jq -se 'any(.[]; .method == "session.abort")' "$FAKE_COPILOT_REQUESTS" >/dev/null ||
   fail "session creation idle was mistaken for work completion"
+unset FAKE_COPILOT_MODE
+assert_reclaimed
+
+: >"$FAKE_COPILOT_REQUESTS"
+export FAKE_COPILOT_MODE=subagent-idle
+run 1 --send-timeout-seconds 1 || fail "root turn did not reconcile"
+jq -se 'any(.[]; .method == "session.abort")' "$FAKE_COPILOT_REQUESTS" >/dev/null ||
+  fail "a Subagent idle completed the root turn"
+grep -q 'exceeded the 1s send timeout' "$temp_dir/stderr" || fail "root deadline was lost"
+jq -se 'all(.[]; .type != "agent.output")' "$temp_dir/stdout" >/dev/null ||
+  fail "Subagent text was attributed to the root turn"
 unset FAKE_COPILOT_MODE
 assert_reclaimed
 

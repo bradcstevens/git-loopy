@@ -22,6 +22,23 @@ _git_loopy_session_error() {
   return 1
 }
 
+git_loopy_session_validate_deny_tools() {
+  local tool
+  for tool in ${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]+"${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}"}; do
+    [[ "$tool" =~ ^[a-zA-Z0-9_.:/-]+$ ||
+      "$tool" =~ ^skill\([a-zA-Z0-9_.:-]+\)$ ]] || {
+      _git_loopy_session_error "unsupported deny-tool selector '$tool'; use an exact tool name, permission kind, or skill(name). Work refused."
+      return 1
+    }
+  done
+}
+
+git_loopy_session_unavailable() {
+  ((_GIT_LOOPY_SESSION_STARTED == 1)) &&
+    { [[ -z "$_GIT_LOOPY_SESSION_PID" ]] ||
+      ! kill -0 "$_GIT_LOOPY_SESSION_PID" 2>/dev/null; }
+}
+
 _git_loopy_session_deadline() {
   local seconds="$1" whole="${1%%.*}" fraction=""
   [[ "$seconds" != *.* ]] || fraction="${seconds#*.}"
@@ -161,11 +178,15 @@ _git_loopy_session_permission() {
 }
 
 _git_loopy_session_event() {
-  local params="$1" type data content
+  local params="$1" type data content agent_id
   [[ "$(jq -r '.sessionId' <<<"$params")" == "$_GIT_LOOPY_SESSION_ID" ]] ||
     { _git_loopy_session_error "event for an unowned session"; return 1; }
   type="$(jq -r '.event.type' <<<"$params")"
   data="$(jq -c '.event.data' <<<"$params")"
+  agent_id="$(jq -r '.event.agentId // empty' <<<"$params")"
+  if [[ -n "$agent_id" ]]; then
+    case "$type" in session.* | assistant.*) return 0 ;; esac
+  fi
   case "$type" in
     tool.execution_start)
       local call_id tool
@@ -229,8 +250,7 @@ _git_loopy_session_rpc() {
 
 git_loopy_session_start() {
   ((_GIT_LOOPY_SESSION_STARTED == 0)) || {
-    [[ -n "$_GIT_LOOPY_SESSION_PID" ]] &&
-      kill -0 "$_GIT_LOOPY_SESSION_PID" 2>/dev/null ||
+    ! git_loopy_session_unavailable ||
       { _git_loopy_session_error "server is no longer running"; return 1; }
     return 0
   }

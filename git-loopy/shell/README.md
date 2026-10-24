@@ -49,6 +49,11 @@ once, not automatically or for the whole session. Named deny-tool entries and
 legacy deny-skill entries are refused; built-in tool names come from their
 `tool.execution_start` records. The permission kind (such as `shell`) also
 matches the deny list, including when no tool name is available.
+The adapter accepts exact names/kinds and `skill(name)`, not Copilot's general
+permission-selector language. Entries such as `shell(git push)`, `MyMCP(tool)`,
+or wildcard selectors refuse the Run before starting a server. Use an exact
+name/kind (for example `shell` to deny all shell tools) rather than silently
+losing the restriction.
 Every refusal records `tool.permission_denied` with `request_id`, `tool_call_id`,
 `tool_name`, and its reason. Managed requests requiring a human are refused too.
 
@@ -62,6 +67,8 @@ server, that turn is reconciled normally; if further Iterations would be needed,
 the Run ends explicitly as `preflight_failed` rather than starting a second
 server or leaving an unfinished Iteration. An already reached Iteration cap or
 Strike limit keeps its normal outcome.
+Subagent idle/error and assistant-message events do not complete or speak for
+the root turn; their tool permission requests still pass through the handler.
 
 This change does **not** activate the dormant path or claim history denial,
 Sandbox enforcement, or Endings. Those are later slices of
