@@ -72,7 +72,8 @@ def test_teardown_salvages_workspaces_and_preserves_all_branches_before_halt(
         salvaged = git(clone.root, "rev-parse", "HEAD")
         assert is_checkpoint_message(git(clone.root, "show", "-s", "--format=%B"))
         assert git(origin, "rev-parse", f"refs/heads/git-loopy-checkpoints/issue-7/{salvaged}") == salvaged
-        assert git(origin, "rev-parse", f"refs/heads/git-loopy-checkpoints/run-{identity}/{ahead}") == ahead
+        git(origin, "merge-base", "--is-ancestor", ahead,
+            f"refs/heads/git-loopy-checkpoints/run-{identity}")
         assert github.comments[7][0].startswith(CHECKPOINT_COMMENT_MARKER)
         assert "unfinished" in git(origin, "ls-tree", "--name-only", salvaged)
         halted.append(True)
@@ -157,4 +158,120 @@ def test_merged_branch_tips_are_preserved_without_unfinished_issue_comments(gues
     github = GitHub()
     teardown_run(root, identity, github=github, halt=lambda: None)
     assert github.comments == {}
-    assert git(origin, "rev-parse", f"refs/heads/git-loopy-checkpoints/run-{identity}/{sha}") == sha
+    git(origin, "merge-base", "--is-ancestor", sha,
+        f"refs/heads/git-loopy-checkpoints/run-{identity}")
+
+
+def test_one_run_ref_retains_independent_tips_across_workspaces_and_retries(guest, tmp_path):
+    from git_loopy.remote_teardown import preserve_work
+
+    root, origin, identity, _ = guest
+    base = git(root, "rev-parse", "HEAD")
+    clone = SubprocessGitClient(root).add_issue_clone(
+        tmp_path / "lane", branch=lane_branch_name(identity, 7), base="HEAD",
+    )
+    tips = []
+    for workspace in (root, clone.root):
+        git(workspace, "checkout", "-qb", "operator-work", base)
+        (workspace / "independent").write_text(str(workspace))
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-qm", "independent work")
+        tips.append(git(workspace, "rev-parse", "HEAD"))
+    ref = f"refs/heads/git-loopy-checkpoints/run-{identity}"
+    github = GitHub()
+
+    assert preserve_work(root, identity, github=github) == (ref,)
+    first = git(origin, "rev-parse", ref)
+    for tip in tips:
+        git(origin, "merge-base", "--is-ancestor", tip, first)
+    assert git(origin, "for-each-ref", "--format=%(refname)",
+               "refs/heads/git-loopy-checkpoints") == ref
+    assert github.comments == {}
+    assert preserve_work(root, identity, github=github) == (ref,)
+    assert git(origin, "rev-parse", ref) == first
+
+    # A retry can see new work after old local branches have disappeared.
+    # Its carrier must retain even the tip now present only on origin.
+    git(clone.root, "checkout", "--detach", base)
+    git(clone.root, "branch", "-D", "operator-work")
+    (root / "later").write_text("new work on retry")
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "later work")
+    latest = git(root, "rev-parse", "HEAD")
+    assert preserve_work(root, identity, github=github) == (ref,)
+    second = git(origin, "rev-parse", ref)
+    for tip in [first, latest, *tips]:
+        git(origin, "merge-base", "--is-ancestor", tip, second)
+    assert git(origin, "for-each-ref", "--format=%(refname)",
+               "refs/heads/git-loopy-checkpoints") == ref
+
+
+@pytest.mark.parametrize("failure", ["transport-fails", "lost-ack", "competing-update"])
+def test_run_preservation_failure_never_halts_or_loses_prior_work(guest, monkeypatch, failure):
+    from git_loopy.git import GitError
+    from git_loopy.remote_teardown import teardown_run
+    from git_loopy.run_discovery import RunTargetError
+
+    root, origin, identity, _ = guest
+    ref = f"refs/heads/git-loopy-checkpoints/run-{identity}"
+    github = GitHub()
+    teardown_run(root, identity, github=github)
+    first = git(origin, "rev-parse", ref)
+    # Detached, independent work must survive as well as branch tips.
+    git(root, "checkout", "--detach")
+    (root / "new-work").write_text("preserve before halting")
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "new detached work")
+    latest = git(root, "rev-parse", "HEAD")
+    git(origin, "config", "user.name", "Test")
+    git(origin, "config", "user.email", "test@example.invalid")
+    competitor = git(origin, "commit-tree", f"{first}^{{tree}}",
+                     "-p", first, "-m", "another preservation attempt")
+    halted = []
+    real_popen = subprocess.Popen
+    intercepted = []
+
+    def transport(args, **kwargs):
+        if "push" in args and any(str(arg).endswith(f":{ref}") for arg in args):
+            intercepted.append(True)
+            if failure == "transport-fails":
+                raise FileNotFoundError("transport unavailable")
+            if failure == "competing-update":
+                git(origin, "update-ref", ref, competitor, first)
+            process = real_popen(args, **kwargs)
+            if failure == "lost-ack":
+                communicate = process.communicate
+
+                def lose_acknowledgement(*args, **kwargs):
+                    communicate(*args, **kwargs)
+                    assert process.returncode == 0
+                    process.returncode = 1
+                    return "", "connection lost before acknowledgement"
+
+                process.communicate = lose_acknowledgement
+            return process
+        return real_popen(args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "Popen", transport)
+        with pytest.raises((GitError, RunTargetError)):
+            teardown_run(root, identity, github=github, halt=lambda: halted.append(True))
+    assert intercepted == [True]
+    assert halted == []
+    observed = git(origin, "rev-parse", ref)
+    git(origin, "merge-base", "--is-ancestor", first, observed)
+    if failure == "transport-fails":
+        assert observed == first
+    elif failure == "competing-update":
+        assert observed == competitor
+    else:
+        git(origin, "merge-base", "--is-ancestor", latest, observed)
+    assert (root / "new-work").read_text() == "preserve before halting"
+
+    teardown_run(root, identity, github=github, halt=lambda: halted.append(True))
+    retried = git(origin, "rev-parse", ref)
+    for tip in (observed, first, latest):
+        git(origin, "merge-base", "--is-ancestor", tip, retried)
+    if failure == "lost-ack":
+        assert retried == observed
+    assert halted == [True]

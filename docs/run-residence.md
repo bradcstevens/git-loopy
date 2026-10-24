@@ -95,14 +95,20 @@ plan names this condition explicitly.
 `remote_teardown.preserve_work` is the shared guest preservation step for #871.
 It salvages registered Issue clones and working trees, then pushes immutable
 `refs/heads/git-loopy-checkpoints/issue-<n>/<sha>` refs and issue Breadcrumbs.
-Unattributed work uses `refs/heads/git-loopy-checkpoints/run-<run-id>/<sha>`.
+Unattributed work uses one `refs/heads/git-loopy-checkpoints/run-<run-id>` ref.
+Its carrier commit has an empty tree and parents retaining every independent
+unattributed tip across the guest's workspaces. Inspect the parents/history,
+not the carrier's empty tree, to recover the work. A retry with no new work
+reuses the carrier; new work creates a successor retaining both the previous
+carrier and the current tips. Updates use compare-and-swap and read-back:
+competing updates or unconfirmed pushes refuse a halt, never overwrite work.
 It conservatively preserves all branch tips, including unresolved reserved
 branches, Checkpoint tips and work ahead of origin, plus detached HEAD work.
-Tips already merged into the guest's local default branch receive run-addressed
-refs, not comments calling them unfinished issue work. Origin's advertised
+Tips already merged into the guest's local default branch go into the Run ref,
+not comments calling them unfinished issue work. Origin's advertised
 default branch identifies that local base; an unprovable base fails closed.
 It never advances base, removes a workspace or deletes a branch. Already
-preserved refs and comments make retries idempotent; conflicting refs are refused.
+preserved refs and comments make retries idempotent; conflicting issue refs are refused.
 Incomplete clone inventories, unresolved merges and work changing during
 preservation refuse a halt.
 

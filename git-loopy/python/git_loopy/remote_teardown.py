@@ -28,7 +28,7 @@ class Breadcrumbs(Protocol):
 def preserve_work(
     repository: Path, run_id: str, *, github: Breadcrumbs,
 ) -> tuple[str, ...]:
-    """Salvage first, then preserve immutable branch tips and issue Breadcrumbs.
+    """Salvage first, then preserve branch tips and issue Breadcrumbs.
 
     Preserve a conservative superset of local Sweep's retention: *all* heads,
     including Checkpoints and branches ahead of origin. Do not collect branches
@@ -106,28 +106,76 @@ def preserve_work(
         heads[git.root] = _heads(git)
     preserved = []
     for (issue, sha), git in tips.items():
-        owner = f"issue-{issue}" if issue is not None else f"run-{run_id}"
-        ref = f"refs/heads/git-loopy-checkpoints/{owner}/{sha}"
+        if issue is None:
+            continue
+        ref = f"refs/heads/git-loopy-checkpoints/issue-{issue}/{sha}"
         existing = git.probe_remote_ref(origin, ref)
         if existing != sha:
             if existing is not None or not git.push_ref(origin, ref, sha, None):
                 raise RunTargetError("Preservation ref differs; refusing to overwrite it.")
         if git.probe_remote_ref(origin, ref) != sha:
             raise RunTargetError("Preservation push is not confirmed.")
-        if issue is not None:
-            marker = f"{CHECKPOINT_COMMENT_MARKER}\nCheckpoint preserved at `{ref}`"
-            if not any(comment.startswith(marker) for comment in github.issue_comments(issue)):
-                github.issue_comment(
-                    issue,
-                    f"{marker} on remote `origin` (commit `{sha}`).\n\n"
-                    "Unfinished work, not published onto base. Inspect explicitly:\n\n"
-                    f"```sh\ngit fetch origin {ref}\ngit show FETCH_HEAD\n```",
-                )
+        marker = f"{CHECKPOINT_COMMENT_MARKER}\nCheckpoint preserved at `{ref}`"
+        if not any(comment.startswith(marker) for comment in github.issue_comments(issue)):
+            github.issue_comment(
+                issue,
+                f"{marker} on remote `origin` (commit `{sha}`).\n\n"
+                "Unfinished work, not published onto base. Inspect explicitly:\n\n"
+                f"```sh\ngit fetch origin {ref}\ngit show FETCH_HEAD\n```",
+            )
         preserved.append(ref)
+    unattributed = {sha: git for (issue, sha), git in tips.items() if issue is None}
+    if unattributed:
+        preserved.append(_preserve_run(source, origin, run_id, unattributed))
     for git in clients.values():
         if git.is_dirty() or git.has_untracked() or _heads(git) != heads[git.root]:
             raise RunTargetError("Work changed during preservation; refusing guest halt.")
     return tuple(preserved)
+
+
+def _preserve_run(
+    source: SubprocessGitClient, origin: str, run_id: str,
+    tips: dict[str, SubprocessGitClient],
+) -> str:
+    """One append-only carrier retains every tip, including earlier attempts.
+
+    Fetch objects only: neither the guest's heads nor its index may move.
+    A retry with no new work reuses the remote carrier. Otherwise its successor
+    parents both the old carrier and today's tips, so even vanished local work
+    remains reachable. Compare-and-swap refuses competing updates; read-back
+    must confirm the candidate before the guest can halt.
+    """
+    def objects(*args: str, input: str | None = None) -> str:
+        return subprocess.run(
+            ["git", "-C", str(source.root), *args],
+            input=input, capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.strip()
+
+    def fetch(remote: str, sha: str) -> None:
+        objects("fetch", "--no-tags", "--no-write-fetch-head", "--refmap=", remote, sha)
+
+    for sha, git in tips.items():
+        if git.root != source.root:
+            fetch(str(git.root), sha)
+    ref = f"refs/heads/git-loopy-checkpoints/run-{run_id}"
+    previous = source.probe_remote_ref(origin, ref)
+    if previous is not None:
+        fetch(origin, previous)
+    if previous is not None and all(source.is_merged_into(sha, previous) for sha in tips):
+        carrier = previous
+    else:
+        parents = ([previous] if previous is not None else []) + sorted(tips.keys() - {previous})
+        tree = objects("hash-object", "-t", "tree", "-w", "--stdin", input="")
+        carrier = objects(
+            "commit-tree", tree,
+            *(arg for parent in parents for arg in ("-p", parent)),
+            "-m", f"Preserved unattributed work for Run {run_id}",
+        )
+        if not source.push_ref(origin, ref, carrier, previous):
+            raise RunTargetError("Run preservation ref changed; retry without overwriting it.")
+    if source.probe_remote_ref(origin, ref) != carrier:
+        raise RunTargetError("Run preservation push is not confirmed.")
+    return ref
 
 
 def _heads(git: SubprocessGitClient) -> dict[str, str]:
