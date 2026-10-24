@@ -102,21 +102,23 @@ cat >"$FAKE_COPILOT_PERMISSIONS" <<'EOF'
 [
   {"requestId":"deny-1","permissionRequest":{"kind":"custom-tool","toolName":"forbidden","toolCallId":"call-1","args":{}}},
   {"requestId":"allow-2","permissionRequest":{"kind":"custom-tool","toolName":"ordinary","toolCallId":"call-2","args":{}}},
-  {"requestId":"deny-3","permissionRequest":{"kind":"custom-tool","toolName":"skill","toolCallId":"call-3","args":{"skill":"blocked-skill"}}},
   {"requestId":"deny-4","permissionRequest":{"kind":"shell","toolCallId":"call-4","fullCommandText":"git status"}}
 ]
 EOF
 : >"$FAKE_COPILOT_REQUESTS"
-run 1 --deny-tool forbidden --deny-tool shell --deny-skill blocked-skill ||
+: >"$FAKE_COPILOT_CONFIG"
+run 1 --deny-tool forbidden --deny-tool shell --deny-skill blocked-skill \
+  --deny-tool 'skill(tool-blocked-skill)' ||
   fail "permission Run refused: $(<"$temp_dir/stderr")"
+jq -se 'length == 1 and .[0].disabledSkills == ["blocked-skill","tool-blocked-skill"]' \
+  "$FAKE_COPILOT_CONFIG" >/dev/null || fail "Skill denials were not applied at creation"
 jq -se '[.[] | select(.method == "session.permissions.handlePendingPermissionRequest")
   | [.params.requestId,.params.result.kind]] ==
-  [["deny-1","reject"],["allow-2","approve-once"],["deny-3","reject"],["deny-4","reject"]]' \
+  [["deny-1","reject"],["allow-2","approve-once"],["deny-4","reject"]]' \
   "$FAKE_COPILOT_REQUESTS" >/dev/null || fail "sole per-request permission policy"
 jq -se '[.[] | select(.type == "tool.permission_denied")
   | [.request_id,.tool_call_id,.reason]] ==
-  [["deny-1","call-1","tool_in_deny_list"],["deny-3","call-3","skill_in_deny_list"],
-   ["deny-4","call-4","tool_in_deny_list"]]' \
+  [["deny-1","call-1","tool_in_deny_list"],["deny-4","call-4","tool_in_deny_list"]]' \
   "$temp_dir/stdout" >/dev/null || fail "attributable denial evidence"
 jq -se --slurpfile fixture "$port_dir/../conformance/event-schema.json" \
   '($fixture[0].serialization_cases[] | select(.id == "headless-permission-denied")
@@ -124,6 +126,12 @@ jq -se --slurpfile fixture "$port_dir/../conformance/event-schema.json" \
   | any(.[]; (del(.ts,.run_id)) == $expected)' "$temp_dir/stdout" >/dev/null ||
   fail "native denial differs from the shared encoding"
 unset FAKE_COPILOT_PERMISSIONS FAKE_COPILOT_PERMISSION_AGENT
+assert_reclaimed
+
+: >"$FAKE_COPILOT_CONFIG"
+run 1 --deny-tool skill || fail "whole-Skill-tool refusal did not run"
+jq -se 'length == 1 and .[0].excludedTools == ["skill"]' \
+  "$FAKE_COPILOT_CONFIG" >/dev/null || fail "whole Skill tool was not excluded at creation"
 assert_reclaimed
 
 : >"$FAKE_COPILOT_REQUESTS"

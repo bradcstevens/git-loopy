@@ -319,7 +319,19 @@ git_loopy_session_stop() {
 
 git_loopy_session_turn() {
   _GIT_LOOPY_SESSION_ITERATION="$1"
-  local prompt="$2" config status=0
+  local prompt="$2" config status=0 tool disabled_json exclude_skill=false
+  local -a disabled_skills=(
+    ${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]+"${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"}
+  )
+  for tool in ${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]+"${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}"}; do
+    if [[ "$tool" =~ ^skill\(([^()]*)\)$ ]]; then
+      disabled_skills+=("${BASH_REMATCH[1]}")
+    elif [[ "$tool" == skill ]]; then
+      exclude_skill=true
+    fi
+  done
+  disabled_json="$(_git_loopy_string_array_json \
+    ${disabled_skills[@]+"${disabled_skills[@]}"} | jq -c 'unique')" || return 1
   _GIT_LOOPY_SESSION_IDLE=0
   _GIT_LOOPY_SESSION_TOOLS=()
   _GIT_LOOPY_SESSION_STATE="$(mktemp -d)" || return 1
@@ -331,8 +343,10 @@ git_loopy_session_turn() {
   _GIT_LOOPY_SESSION_ID="$GIT_LOOPY_RUN_ID-$1"
   config="$(jq -cn --arg sid "$_GIT_LOOPY_SESSION_ID" --arg model "$GIT_LOOPY_MODEL" \
     --arg effort "$GIT_LOOPY_REASONING_EFFORT" --arg cwd "$GIT_LOOPY_REPO_ROOT" \
+    --argjson disabled "$disabled_json" --argjson exclude_skill "$exclude_skill" \
     '{sessionId:$sid,model:$model,workingDirectory:$cwd,memory:{enabled:false},contextTier:"default",
-      requestPermission:true,enableFileHooks:false,streaming:false}
+      requestPermission:true,enableFileHooks:false,streaming:false,disabledSkills:$disabled}
+      + (if $exclude_skill then {excludedTools:["skill"]} else {} end)
       + (if $effort == "" then {} else {reasoningEffort:$effort} end)')" || return 1
   _git_loopy_session_deadline "$GIT_LOOPY_SEND_TIMEOUT_SECONDS"
   _git_loopy_session_rpc session.create "$config" || status=$?

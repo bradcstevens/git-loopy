@@ -776,7 +776,8 @@ cap_flags="$(<"$FAKE_COPILOT_FLAGS")"
 assert_equal $'--headless\n--no-auto-update' "$cap_flags" \
   "the server starts without prompt mode or auto-approval"
 jq -se 'length == 2 and all(.[]; .model == "cli-model"
-  and .reasoningEffort == "medium" and .memory.enabled == false)' \
+  and .reasoningEffort == "medium" and .memory.enabled == false
+  and .disabledSkills == ["cli-skill","env-skill"])' \
   "$FAKE_COPILOT_CONFIG" >/dev/null || fail "Run-wide model/effort precedence"
 jq -se '(.[0].deny_tools | sort) == ["cli-tool","env-tool"]
   and (.[0].deny_skills | sort) == ["cli-skill","env-skill"]' \

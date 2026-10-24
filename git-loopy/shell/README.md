@@ -49,6 +49,11 @@ once, not automatically or for the whole session. Named deny-tool entries and
 legacy deny-skill entries are refused; built-in tool names come from their
 `tool.execution_start` records. The permission kind (such as `shell`) also
 matches the deny list, including when no tool name is available.
+Configured Skill denials are also applied through `disabledSkills` at session
+creation, including `--deny-tool 'skill(name)'`; `--deny-tool skill` excludes
+the entire Skill tool through `excludedTools`. This keeps exposure restricted
+without relying on a built-in Skill emitting a permission callback. The handler
+still refuses and records any matching request it receives.
 The adapter accepts exact names/kinds and `skill(name)`, not Copilot's general
 permission-selector language. Entries such as `shell(git push)`, `MyMCP(tool)`,
 or wildcard selectors refuse the Run before starting a server. Use an exact
