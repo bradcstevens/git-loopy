@@ -150,6 +150,55 @@ class RecordingSmoke:
         return self.exit_code
 
 
+@pytest.mark.parametrize(
+    ("notes", "fact"),
+    [
+        ("Wrapper contract `2.33`.", "Wrapper contract"),
+        ("Skill catalog pin is `a2189cb9`.", "Skill catalog pin"),
+    ],
+)
+def test_stale_notes_refuse_promotion_before_gate_smoke_or_publication(
+    tmp_path: Path, notes: str, fact: str,
+) -> None:
+    recording = AGENTS_MD.replace("`test -s VERSION`", "`touch .gate-ran`")
+    trunk = trunk_repository(
+        tmp_path / "trunk", "0.11.0-alpha.2", agents_md=recording
+    )
+    (trunk / "docs/wrapper-contract.md").write_text(
+        "**Contract version:** 2.40\n", encoding="utf-8"
+    )
+    (trunk / "git-loopy/python/git_loopy/skill_source.json").write_text(
+        '{"revision": "d08c50a517cb4334b6c047b88e6a03514a8fe6c1"}\n',
+        encoding="utf-8",
+    )
+    (trunk / f"docs/releases/v{VERSION}.md").write_text(
+        f"# git-loopy {VERSION}\n\n{notes}\n", encoding="utf-8"
+    )
+    commit_release_version(trunk, VERSION)
+    remote, checkout = _remote_checkout_from_trunk(trunk, tmp_path)
+    smoke = RecordingSmoke()
+    service = FakeReleaseService()
+    workspace = tmp_path / "candidate"
+
+    with pytest.raises(ReleasePromotionError, match=f"stale {fact}"):
+        promote_candidate(
+            checkout,
+            stable_commit_promotion(),
+            workspace=workspace,
+            archive_output=tmp_path / "source.tar",
+            evidence_output=tmp_path / "evidence.json",
+            gate_runner=GATE_RUNNER,
+            release_service=service,
+            smoke=smoke,
+            distribution_mode=SOURCE_ONLY,
+        )
+
+    assert not (workspace / ".gate-ran").exists()
+    assert smoke.proofs == []
+    assert service.create_calls == []
+    assert not any(ref.startswith("refs/tags/") for ref in _remote_refs(remote))
+
+
 def test_a_proved_stable_commit_is_published_only_after_its_smoke_passes(
     tmp_path: Path,
 ) -> None:

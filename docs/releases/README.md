@@ -311,11 +311,25 @@ that exact snapshot:
   the `VERSION` bump — a nearby repair commit is refused however green it is;
 - the committed release notes are non-empty UTF-8 in the tagged tree, and stable
   notes a human already wrote are what gets published;
+- before the gate, any Wrapper contract version or Skill catalog pin named in
+  those notes agrees with the candidate's committed `docs/wrapper-contract.md`
+  or `git-loopy/python/git_loopy/skill_source.json`, respectively. A stale fact
+  refuses the Rehearsal (and therefore Promotion), naming the fact, the notes
+  value and the committed value. Notes naming neither fact pass unchanged;
 - the generated archive extracts to `git-loopy-<version>/`, Python reports that
   Release, and each dormant Orchestrator reports its own manifest's Release
   (historical archives without manifests retain the shared identity);
 - every runnable `AGENTS.md` feedback loop is green **on the candidate**, not on
   its ancestor.
+
+Write these optional declarations as `Wrapper contract 2.41` (optionally
+`Wrapper contract version: 2.41`) and `Skill catalog pin: <commit>` (or
+`Skill catalog pin is <commit>`). Inline code, bold emphasis and wrapped lines
+are accepted; every such declaration is checked. A catalog pin may use the
+full SHA or a prefix of at least seven hex digits, optionally followed by an
+ellipsis; the prefix must match the committed full SHA. This check runs only
+when rehearsing a candidate, not as a live-notes assertion in the trunk suite,
+so an unrelated contract or catalog bump does not make trunk red.
 
 What it returns is the **publication input**: the commit, tree, annotated tag
 object, committed notes and their digest, the archive and its digest, the trunk

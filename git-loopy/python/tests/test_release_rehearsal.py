@@ -348,6 +348,131 @@ def test_a_candidate_whose_release_notes_are_blank_is_refused(
         _rehearse(trunk, tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("notes", "diagnostic"),
+    [
+        ("Wrapper contract `2.33`.", r"Wrapper contract.*2\.33.*2\.40"),
+        (
+            "**Wrapper contract version:** `2.33`.",
+            r"Wrapper contract.*2\.33.*2\.40",
+        ),
+        (
+            "Wrapper contract `2.40`, then Wrapper contract `2.33`.",
+            r"Wrapper contract.*2\.33.*2\.40",
+        ),
+        (
+            "The Skill catalog pin is `a2189cb9`.",
+            r"Skill catalog pin.*a2189cb9.*d08c50a517cb4334b6c047b88e6a03514a8fe6c1",
+        ),
+        (
+            "Skill catalog pin:\n`d08c50a517cb4334b6c047b88e6a03514a8fe6c0`.",
+            r"Skill catalog pin.*d08c50a517cb4334b6c047b88e6a03514a8fe6c0"
+            r".*d08c50a517cb4334b6c047b88e6a03514a8fe6c1",
+        ),
+    ],
+)
+def test_a_stale_fact_in_notes_is_refused_before_the_gate(
+    tmp_path: Path, notes: str, diagnostic: str,
+) -> None:
+    recording = AGENTS_MD.replace("`test -s VERSION`", "`touch .gate-ran`")
+    trunk = trunk_repository(
+        tmp_path / "trunk", "0.11.0-alpha.2", agents_md=recording
+    )
+    (trunk / "docs/wrapper-contract.md").write_text(
+        "**Contract version:** 2.40\n", encoding="utf-8"
+    )
+    (trunk / "git-loopy/python/git_loopy/skill_source.json").write_text(
+        '{"revision": "d08c50a517cb4334b6c047b88e6a03514a8fe6c1"}\n',
+        encoding="utf-8",
+    )
+    (trunk / "docs/releases/v0.11.0.md").write_text(
+        f"# git-loopy 0.11.0\n\n{notes}\n", encoding="utf-8"
+    )
+    git(trunk, "add", ".")
+    git(trunk, "commit", "-qm", "Author notes and contract")
+
+    with pytest.raises(ReleaseRehearsalError, match=diagnostic):
+        _rehearse(trunk, tmp_path, milestone_promotion("v0.11.0"))
+
+    assert not (tmp_path / "candidate/.gate-ran").exists()
+    assert git(trunk, "tag", "--list") == ""
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [
+        "A release with no identity facts.",
+        "Wrapper contract `2.41`.",
+        "Skill catalog pin is `d08c50a517cb4334b6c047b88e6a03514a8fe6c1`.",
+        # Literal declarations from the repaired v0.11.3 notes, not live-tree
+        # assertions that would make an unrelated contract or pin bump red.
+        "Wrapper contract `2.41`.\n"
+        "The Skill catalog pin is `d08c50a517cb4334b6c047b88e6a03514a8fe6c1`.",
+        "**Wrapper contract version:** 2.41.\nSkill catalog pin: `d08c50a5…`.",
+    ],
+)
+def test_repromotion_checks_its_committed_notes_and_facts_not_later_trunk(
+    tmp_path: Path, facts: str,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    commit_release_version(trunk, "0.11.3-rc.1")
+    contract_path = trunk / "docs/wrapper-contract.md"
+    contract_path.write_text("**Contract version:** 2.41\n", encoding="utf-8")
+    pin_path = trunk / "git-loopy/python/git_loopy/skill_source.json"
+    pin_path.write_text(
+        '{"revision": "d08c50a517cb4334b6c047b88e6a03514a8fe6c1"}\n',
+        encoding="utf-8",
+    )
+    notes = f"# git-loopy 0.11.3\n\n{facts}\n"
+    notes_path = trunk / "docs/releases/v0.11.3.md"
+    notes_path.write_text(notes, encoding="utf-8")
+    repromotion = commit_release_version(trunk, "0.11.3")
+    contract_path.write_text("**Contract version:** 9.99\n", encoding="utf-8")
+    pin_path.write_text('{"revision": "' + "a" * 40 + '"}\n', encoding="utf-8")
+    notes_path.write_text("# Later notes\n", encoding="utf-8")
+    git(trunk, "add", ".")
+    git(trunk, "commit", "-qm", "Advance trunk beyond the candidate")
+
+    publication_input = _rehearse(trunk, tmp_path)
+
+    assert publication_input.commit == repromotion
+    assert publication_input.version == "0.11.3"
+    assert publication_input.gate_loops == ("Release identity",)
+    assert publication_input.notes_digest == hashlib.sha256(notes.encode()).hexdigest()
+    assert git(trunk, "tag", "--list") == ""
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "fact"),
+    [
+        ("docs/wrapper-contract.md", b"\xff", "Wrapper contract"),
+        ("docs/wrapper-contract.md", b"# No version\n", "Wrapper contract"),
+        ("git-loopy/python/git_loopy/skill_source.json", b"{", "Skill catalog pin"),
+        ("git-loopy/python/git_loopy/skill_source.json", b"{}", "Skill catalog pin"),
+        ("git-loopy/python/git_loopy/skill_source.json", b"[]", "Skill catalog pin"),
+    ],
+)
+def test_named_notes_facts_require_readable_committed_values_before_the_gate(
+    tmp_path: Path, path: str, content: bytes, fact: str,
+) -> None:
+    recording = AGENTS_MD.replace("`test -s VERSION`", "`touch .gate-ran`")
+    trunk = trunk_repository(
+        tmp_path / "trunk", "0.11.0-alpha.2", agents_md=recording
+    )
+    (trunk / path).write_bytes(content)
+    value = "2.41" if fact == "Wrapper contract" else "d08c50a5"
+    (trunk / "docs/releases/v0.11.0.md").write_text(
+        f"# git-loopy 0.11.0\n\n{fact} `{value}`.\n", encoding="utf-8"
+    )
+    git(trunk, "add", ".")
+    git(trunk, "commit", "-qm", "Commit unreadable identity")
+
+    with pytest.raises(ReleaseRehearsalError, match=fact):
+        _rehearse(trunk, tmp_path, milestone_promotion("v0.11.0"))
+
+    assert not (tmp_path / "candidate/.gate-ran").exists()
+
+
 def test_a_nearby_repair_commit_is_refused_however_green_its_own_history_is(
     tmp_path: Path,
 ) -> None:

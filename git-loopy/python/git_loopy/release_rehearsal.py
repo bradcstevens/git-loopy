@@ -16,11 +16,12 @@ Three properties are load-bearing:
   even by mistake, and a refusal leaves no candidate tag anywhere an operator
   could fetch. This is preparation and proof; it is not a bypass around the
   publication gate that follows it.
-* **The rehearsal owns no rule it can restate.** The transform is
+* **The rehearsal delegates existing rules.** The transform is
   :mod:`git_loopy.release_version`'s own entry point — the one
   `release-promotion.yml` runs — and the tag, bump-commit, committed-note and
-  archive rules are :mod:`git_loopy.source_release`'s. What this module adds is
-  the *ordering*: construct, then judge that construction rather than its
+  archive rules are :mod:`git_loopy.source_release`'s. This module also compares
+  facts named in the notes with the candidate's committed contract and catalog
+  pin before the gate: construct, then judge that construction rather than its
   ancestor.
 * **The promise is stated, never inferred.** A source-only rehearsal proves
   source archives and committed notes and nothing else, so it refuses to
@@ -34,6 +35,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -579,6 +581,68 @@ def _replay_the_release_writer(candidate: PromotionCandidate) -> None:
         )
 
 
+def _verify_notes_facts(candidate: PromotionCandidate, notes: bytes) -> None:
+    """Compare named facts with this snapshot, never the running tool's version."""
+    text = notes.decode("utf-8").replace("`", "").replace("*", "")
+    contracts = re.findall(
+        r"\bWrapper\s+contract(?:\s+version)?\s*(?:is\s+|:\s*)?"
+        r"(\d+\.\d+)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if contracts:
+        path = Path("docs/wrapper-contract.md")
+        try:
+            contract = _committed_bytes(
+                candidate.workspace, candidate.commit, path
+            ).decode("utf-8")
+        except UnicodeError as exc:
+            raise ReleaseRehearsalError(
+                f"cannot read candidate {candidate.commit}'s Wrapper contract: {exc}"
+            ) from exc
+        match = re.search(
+            r"^\*\*Contract version:\*\*\s+(\d+\.\d+)\b", contract, re.MULTILINE
+        )
+        if match is None:
+            raise ReleaseRehearsalError(
+                f"candidate {candidate.commit} has no Wrapper contract version in {path}"
+            )
+        committed = match.group(1)
+        for value in contracts:
+            if value != committed:
+                raise ReleaseRehearsalError(
+                    f"stale Wrapper contract in Release notes: notes name {value}, "
+                    f"but candidate {candidate.commit} commits {committed}"
+                )
+    pins = re.findall(
+        r"\bSkill\s+catalog\s+pin\s*(?:is\s+|:\s*)?"
+        r"([0-9a-f]{7,40})(?![0-9a-z])",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if pins:
+        path = Path("git-loopy/python/git_loopy/skill_source.json")
+        try:
+            pin = json.loads(
+                _committed_bytes(candidate.workspace, candidate.commit, path)
+            )
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ReleaseRehearsalError(
+                f"cannot read candidate {candidate.commit}'s Skill catalog pin: {exc}"
+            ) from exc
+        committed = pin.get("revision") if isinstance(pin, dict) else None
+        if not isinstance(committed, str) or not re.fullmatch(r"[0-9a-f]{40}", committed):
+            raise ReleaseRehearsalError(
+                f"candidate {candidate.commit} has no immutable Skill catalog pin in {path}"
+            )
+        for value in pins:
+            if not committed.startswith(value.lower()):
+                raise ReleaseRehearsalError(
+                    f"stale Skill catalog pin in Release notes: notes name {value}, "
+                    f"but candidate {candidate.commit} commits {committed}"
+                )
+
+
 def verify_promotion_candidate(
     candidate: PromotionCandidate,
     *,
@@ -624,6 +688,11 @@ def verify_promotion_candidate(
             "a rehearsal prepares the stable snapshot a Promotion cuts"
         )
 
+    notes = _committed_bytes(
+        candidate.workspace, candidate.commit, release.notes_path
+    )
+    _verify_notes_facts(candidate, notes)
+
     try:
         gate = gate_runner.run(candidate.workspace)
     except GateError as exc:
@@ -637,9 +706,6 @@ def verify_promotion_candidate(
             f"{gate.failure.name} {gate.failure.summary}"
         )
 
-    notes = _committed_bytes(
-        candidate.workspace, candidate.commit, release.notes_path
-    )
     return VerifiedPublicationInput(
         version=release.version,
         tag=release.tag,
