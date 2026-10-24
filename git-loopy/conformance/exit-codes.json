@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.7",
+  "contract_version": "2.44",
   "cases": [
     {
       "id": "empty-pool-is-clean",
@@ -29,6 +29,7 @@
     },
     {
       "id": "preflight-failure-is-aborted",
+      "note": "Includes session-interface work-admission refusal: a handshake failure before an Agent starts, or refusal of further work after the Run's sole server is reclaimed and the failed turn is reconciled. Already reached cap/Strike outcomes keep precedence; no additional Strike or Ending is invented (contract 2.44, #1005).",
       "reason": "preflight_failed",
       "exit_code": 1
     },

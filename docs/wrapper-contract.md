@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.41 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.44 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -720,7 +720,8 @@ Orchestrator records an **Owed waiver** on it until its own ticket turns that wa
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
-Each Iteration MUST feed a single `copilot --yolo -p` invocation with, at minimum:
+Each Iteration MUST supply one fresh Agent session, through the Orchestrator's
+supported session interface, with at minimum:
 
 - the issue set — for a serial Iteration, the **one** issue bound by §3.3; for a Lane, its own
   reserved issue,
@@ -732,9 +733,10 @@ Within the **project** scope the Orchestrator MUST probe the lowercase `git-loop
 and then the uppercase `git-loopy/PROMPT.md` (first hit wins): the kit ships the uppercase variant,
 and probing the lowercase name first keeps the override resolvable on case-sensitive filesystems
 (typical on Linux) while case-insensitive ones (APFS/HFS+ on macOS, NTFS on Windows) accept either
-casing. The Orchestrator MUST capture the agent process's real exit status
-(not the exit status of a pipe it is teed through) so an agent crash is never mistaken for a clean
-turn. Streaming/live output is rendered per port (plain text in phase 1; the **TUI helper** from
+casing. The Orchestrator MUST observe the session's actual completion or failure,
+including transport loss. A process-based interface MUST capture the agent process's real
+exit status (not the exit status of a pipe it is teed through), so an agent crash is never
+mistaken for a clean turn. Streaming/live output is rendered per port (plain text in phase 1; the **TUI helper** from
 phase 2).
 
 **Host yield policy (contract 2.32).** Every process that does a Run's work — the agent turn and
@@ -851,7 +853,7 @@ error (exit `2`).
 | `1`  | Aborted — stuck      | A Runner without an Attempt lifecycle spent its `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling (§6). |
 | `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
 | `1`  | Waiting — all blocked | Every Pickup refusal proved a wait: an open native blocker, or an open closing pull request (§3.3.1, contract 2.17). |
-| `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), or an unread refusal left it unresolved (§3.3.1). |
+| `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), an unread refusal left it unresolved (§3.3.1), or the required session interface refused admission of work (§4, contract 2.44). |
 | `1`  | Stopped — operator   | The operator ended the Run deliberately (§10.1, contract 2.3).       |
 | `1`  | Stopped — account    | A terminal, account-identifying harness refusal ended a Python Run: `account_failure` (§19.1, contract 2.40). |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
@@ -885,6 +887,15 @@ sends to `preflight_failed` instead. Both of these reasons are claims about the 
 Pool, and neither may be established by a *read* that failed.
 For a Rolling terminal decision, the Run-end refusal record (§12, contract 2.12, #643)
 captures the candidates behind either claim; a failed read has no such record.
+
+**Session-interface admission (contract 2.44).** A protocol handshake refusal
+before the first Agent is work-admission failure even if discovery has already
+opened an Iteration. A Run that owns one headless server and must reclaim it
+after a failed turn MUST reconcile that turn normally before refusing further
+work as `preflight_failed`; it MUST NOT restart a second server or leave an
+Iteration or Run without its terminal Event. An already reached Iteration cap
+or Strike limit keeps its normal outcome. This adds no Session outcome or
+Ending and changes no progress/Strike rule (ADR-0103, #1005).
 
 ### 10.1 An operator Stop is a decided outcome (contract 2.3, MUST)
 
@@ -2476,6 +2487,9 @@ and 2.37 with the Python mid-work Membership cadence (§12, #429),
 and 2.38 with Orchestrator-only closure (§21, #918),
 and 2.40 with Python Run-wide account control (§19.1, #676),
 and 2.41 with the Rolling Lane-path Unread Pin lapse and Event (§3.2, §12, #995).
+Of these two fixtures, only `event-schema.json` advances to 2.44 for the headless session adapter's
+attributed permission-denial encoding (§4, #1005). The Dashboard fixture keeps
+its 2.41 pin; this transport change adds no Dashboard behavior or Event type.
 Contract 2.39 withdraws the dormant paths' Sandbox exception (§19, ADR-0098):
 only `fixture-claims.json` advances its provenance; `sandbox.json`'s cases and
 `distributions`, the Event/Dashboard fixture revisions and historical streams'

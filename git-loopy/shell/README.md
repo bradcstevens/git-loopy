@@ -4,7 +4,7 @@
 [Runner family](../../docs/runners.md) — a **shippable phase-1 Orchestrator**
 that implements the same language-neutral
 [**Wrapper contract**](../../docs/wrapper-contract.md) as the Python reference
-runner. It collects `ready-for-agent` issues, feeds one `copilot --yolo -p` turn
+runner. It collects `ready-for-agent` issues, opens one fresh headless Copilot session
 per **Iteration**, auto-closes finished issues, and keeps your work durable with
 a **Checkpoint** and push — on **Linux** and **macOS**.
 
@@ -30,7 +30,58 @@ the [Wrapper contract](../../docs/wrapper-contract.md), the
 | **Perl 5** | The usual way the Orchestrator restores a default SIGPIPE at the agent boundary — see below. |
 | **`gh`**, authenticated | `gh auth login`. The default issue source is GitHub Issues. |
 | **`git`** | On `PATH`. |
-| **`copilot`** | GitHub Copilot CLI, signed in: `npm install -g @github/copilot`, then run `copilot` once. |
+| **`copilot` >= 1.0.103** | GitHub Copilot CLI, signed in, with headless JSON-RPC protocol **3**. Install through your configured npm feed, then run `copilot` once to sign in. |
+
+### Headless session adapter (resumption tracer bullet)
+
+A Run owns one `copilot --headless --no-auto-update` stdio server, started before
+its first work session. A protocol-3 `connect` handshake must succeed before any
+work is sent. There is no prompt-mode fallback, TCP listener, SDK, or additional
+runtime for the adapter: Bash and `jq` read and write Content-Length frames under
+`LC_ALL=C`, counting UTF-8 bytes rather than characters.
+
+Each Iteration creates a new session with memory disabled, the resolved Run-wide
+model and effort, the default context tier, and the repository working directory.
+The assembled prompt supplies the bound issue, recent commits, and resolved
+`PROMPT.md`. No custom agents or profiles are registered. File permission hooks
+are disabled so this adapter is the sole handler: ordinary requests are approved
+once, not automatically or for the whole session. Named deny-tool entries and
+legacy deny-skill entries are refused; built-in tool names come from their
+`tool.execution_start` records. The permission kind (such as `shell`) also
+matches the deny list, including when no tool name is available.
+Configured Skill denials are also applied through `disabledSkills` at session
+creation, including `--deny-tool 'skill(name)'`; `--deny-tool skill` excludes
+the entire Skill tool through `excludedTools`. This keeps exposure restricted
+without relying on a built-in Skill emitting a permission callback. The handler
+still refuses and records any matching request it receives.
+The adapter accepts exact names/kinds and `skill(name)`, not Copilot's general
+permission-selector language. Entries such as `shell(git push)`, `MyMCP(tool)`,
+or wildcard selectors refuse the Run before starting a server. Use an exact
+name/kind (for example `shell` to deny all shell tools) rather than silently
+losing the restriction.
+Every refusal records `tool.permission_denied` with `request_id`, `tool_call_id`,
+`tool_name`, and its reason. Managed requests requiring a human are refused too.
+
+The adapter's deadline covers session creation and work, not just the wait for a
+reply. An overrun sends `session.abort`, attempts a bounded detach, and reclaims
+the server and its descendants. A successful Iteration detaches its session;
+Wind-down, exit, and INT/TERM/HUP reclaim the server tree. Protocol/transport errors
+are reported as failed turns, never successful work. Git and tracker
+reconciliation still decide progress. Once a failed turn reclaims the Run's only
+server, that turn is reconciled normally; if further Iterations would be needed,
+the Run ends explicitly as `preflight_failed` rather than starting a second
+server or leaving an unfinished Iteration. An already reached Iteration cap or
+Strike limit keeps its normal outcome.
+Subagent idle/error and assistant-message events do not complete or speak for
+the root turn; their tool permission requests still pass through the handler.
+
+This change does **not** activate the dormant path or claim history denial,
+Sandbox enforcement, or Endings. Those are later slices of
+[Spec #1001](https://github.com/bradcstevens/git-loopy/issues/1001).
+The offline `test-headless-adapter.sh` and existing boundary suite use a scripted
+server only. Live compatibility, hook precedence, managed policy, and process
+ownership still require the human proofs in
+[#1008](https://github.com/bradcstevens/git-loopy/issues/1008).
 
 ### The agent process gets a default SIGPIPE
 
