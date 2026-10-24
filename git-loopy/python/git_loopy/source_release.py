@@ -276,9 +276,25 @@ def _source_member_release_version(
     path = manifests / f"{member.lower()}.json"
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
-        value = manifest["baseline"]["release_version"]
+        authority = manifest["release_authority"]
+        file = authority["file"]
+        field = authority["field"]
+        if not isinstance(file, str) or not file or "\0" in file:
+            raise ReleaseVersionError(
+                "release_authority.file must be a non-empty path string without NUL"
+            )
+        if not isinstance(field, str) or not all(field.split(".")):
+            raise ReleaseVersionError("release_authority.field must be a dotted field name")
+        authority_file = source_root / file
+        if Path(file).is_absolute() or not authority_file.resolve().is_relative_to(source_root):
+            raise ReleaseVersionError("release_authority.file must stay within the source tree")
+        value = json.loads(authority_file.read_text(encoding="utf-8"))
+        for part in field.split("."):
+            value = value[part]
         if not isinstance(value, str) or parse_release_version(value) != value:
-            raise ReleaseVersionError("baseline.release_version must be a Semantic Versioning string")
+            raise ReleaseVersionError(
+                "release_authority must resolve to a Semantic Versioning string"
+            )
         return value
     except (OSError, UnicodeError, json.JSONDecodeError, ReleaseVersionError, KeyError, TypeError) as exc:
         raise SourceReleaseError(
@@ -323,7 +339,9 @@ def verify_source_tree_identity(source_root: Path, expected_version: str) -> Non
     }
     for family, command in commands.items():
         member_version = _source_member_release_version(source_root, family, version)
-        expected_output = f"git-loopy {member_version}\n"
+        expected_outputs = [f"git-loopy {member_version}\n"]
+        if family != "python":
+            expected_outputs.append(f"git-loopy {family.lower()} {member_version}\n")
         output = _run_identity_command(
             family,
             "--version",
@@ -331,9 +349,10 @@ def verify_source_tree_identity(source_root: Path, expected_version: str) -> Non
             cwd=source_root,
             env=env,
         )
-        if output != expected_output:
+        if output not in expected_outputs:
             raise SourceReleaseError(
-                f"{family} --version mismatch: expected {expected_output!r}, "
+                f"{family} --version mismatch: expected "
+                f"{' or '.join(repr(value) for value in expected_outputs)}, "
                 f"found {output!r}"
             )
 
