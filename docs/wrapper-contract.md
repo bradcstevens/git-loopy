@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.41 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.44 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -720,7 +720,8 @@ Orchestrator records an **Owed waiver** on it until its own ticket turns that wa
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
-Each Iteration MUST feed a single `copilot --yolo -p` invocation with, at minimum:
+Each Iteration MUST supply one fresh Agent session, through the Orchestrator's
+supported session interface, with at minimum:
 
 - the issue set — for a serial Iteration, the **one** issue bound by §3.3; for a Lane, its own
   reserved issue,
@@ -732,9 +733,10 @@ Within the **project** scope the Orchestrator MUST probe the lowercase `git-loop
 and then the uppercase `git-loopy/PROMPT.md` (first hit wins): the kit ships the uppercase variant,
 and probing the lowercase name first keeps the override resolvable on case-sensitive filesystems
 (typical on Linux) while case-insensitive ones (APFS/HFS+ on macOS, NTFS on Windows) accept either
-casing. The Orchestrator MUST capture the agent process's real exit status
-(not the exit status of a pipe it is teed through) so an agent crash is never mistaken for a clean
-turn. Streaming/live output is rendered per port (plain text in phase 1; the **TUI helper** from
+casing. The Orchestrator MUST observe the session's actual completion or failure,
+including transport loss. A process-based interface MUST capture the agent process's real
+exit status (not the exit status of a pipe it is teed through), so an agent crash is never
+mistaken for a clean turn. Streaming/live output is rendered per port (plain text in phase 1; the **TUI helper** from
 phase 2).
 
 **Host yield policy (contract 2.32).** Every process that does a Run's work — the agent turn and
@@ -2476,6 +2478,9 @@ and 2.37 with the Python mid-work Membership cadence (§12, #429),
 and 2.38 with Orchestrator-only closure (§21, #918),
 and 2.40 with Python Run-wide account control (§19.1, #676),
 and 2.41 with the Rolling Lane-path Unread Pin lapse and Event (§3.2, §12, #995).
+Only `event-schema.json` advances to 2.44 for the headless session adapter's
+attributed permission-denial encoding (§4, #1005). The Dashboard fixture keeps
+its 2.41 pin; this transport change adds no Dashboard behavior or Event type.
 Contract 2.39 withdraws the dormant paths' Sandbox exception (§19, ADR-0098):
 only `fixture-claims.json` advances its provenance; `sandbox.json`'s cases and
 `distributions`, the Event/Dashboard fixture revisions and historical streams'

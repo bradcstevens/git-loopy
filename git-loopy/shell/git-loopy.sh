@@ -16,6 +16,11 @@ packaged_prompt="$(cd "$script_dir/.." && pwd)/PROMPT.md"
 # shellcheck disable=SC1091
 source "$script_dir/lib/orchestrator.sh"
 
+trap 'git_loopy_session_stop; git_loopy_monotonic_clock_stop' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
 set +e
 git_loopy_main "$packaged_prompt" "$@"
 status=$?

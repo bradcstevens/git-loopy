@@ -103,6 +103,7 @@ jobs:
             git-loopy/shell/lib/events.sh \
             git-loopy/shell/lib/issue-lease.sh \
             git-loopy/shell/lib/orchestrator.sh \
+            git-loopy/shell/lib/session.sh \
             git-loopy/shell/lib/release-version.sh \
             git-loopy/shell/lib/tui-install.sh \
             git-loopy/shell/tests/*.sh
@@ -112,6 +113,7 @@ jobs:
           # collapses to nothing (a glob under `nullglob`, say) red instead of green.
           SUITES=(
             git-loopy/shell/tests/test-event-conformance.sh
+            git-loopy/shell/tests/test-headless-adapter.sh
             git-loopy/shell/tests/test-issue-lease-conformance.sh
             git-loopy/shell/tests/test-orchestrator-conformance.sh
             git-loopy/shell/tests/test-orchestrator-boundary.sh

@@ -168,73 +168,7 @@ write_turn_tools() {
   local bin_dir="$1"
   mkdir -p "$bin_dir"
 
-  cat >"$bin_dir/copilot" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-: >"$FAKE_COPILOT_FLAGS"
-prompt=""
-capture=0
-for arg in "$@"; do
-  if ((capture)); then
-    prompt="$arg"
-    capture=0
-    continue
-  fi
-  if [[ "$arg" == "-p" ]]; then
-    capture=1
-    continue
-  fi
-  printf '%s\n' "$arg" >>"$FAKE_COPILOT_FLAGS"
-done
-printf '%s' "$prompt" >"$FAKE_COPILOT_PROMPT"
-# An opt-in record of the signal dispositions this process inherited. The
-# Orchestrator/agent boundary owes the agent a *default* SIGPIPE — both when the
-# live interface has ignored it across its own writes, and when the Orchestrator
-# was handed an ignore it cannot itself lift. Either leak would carry SIG_IGN
-# through `exec` into the agent process and every tool it starts.
-if [[ -n "${FAKE_COPILOT_SIGNALS:-}" ]]; then
-  trap -p PIPE >"$FAKE_COPILOT_SIGNALS"
-fi
-calls=0
-[[ -f "$FAKE_COPILOT_CALLS" ]] && calls="$(<"$FAKE_COPILOT_CALLS")"
-printf '%s' "$((calls + 1))" >"$FAKE_COPILOT_CALLS"
-# Emit on stdout to prove the agent stream is routed away from the JSONL
-# Event stream (the Orchestrator sends it to stderr).
-if [[ -n "${FAKE_COPILOT_OUTPUT_FILE:-}" ]]; then
-  cat "$FAKE_COPILOT_OUTPUT_FILE"
-else
-  printf 'copilot agent stream marker\n'
-fi
-# A per-call commit plan (opt-in) lets a scenario vary commit messages across
-# Iterations — each `<call>/<n>.msg` file is one commit's full message, read via
-# `-F` so multi-line close-keyword bodies survive. Falling back to the simple
-# empty-commit count keeps every existing turn scenario unchanged.
-current_call="$(<"$FAKE_COPILOT_CALLS")"
-if [[ -n "${FAKE_COPILOT_PLAN_DIR:-}" ]]; then
-  call_dir="$FAKE_COPILOT_PLAN_DIR/$current_call"
-  if [[ -d "$call_dir" ]]; then
-    for msg_file in "$call_dir"/*.msg; do
-      [[ -e "$msg_file" ]] || continue
-      git commit -q --allow-empty -F "$msg_file"
-    done
-    # An optional per-call `worktree.sh` hook runs in the repo root so a scenario
-    # can leave the tree dirty/untracked/ignored exactly like a real agent that
-    # forgot to commit — the Checkpoint durability net (ADR-0004) is what
-    # captures it.
-    if [[ -f "$call_dir/worktree.sh" ]]; then
-      (cd "$FAKE_REPO_ROOT" && bash "$call_dir/worktree.sh")
-    fi
-  fi
-else
-  commits="${FAKE_COPILOT_COMMITS:-0}"
-  i=0
-  while ((i < commits)); do
-    git commit -q --allow-empty -m "agent: work $((i + 1))"
-    i=$((i + 1))
-  done
-fi
-exit "${FAKE_COPILOT_EXIT:-0}"
-EOF
+  cp "$script_dir/scripted-copilot.sh" "$bin_dir/copilot"
 
   cat >"$bin_dir/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -438,6 +372,7 @@ setup_copilot_env() {
   export FAKE_COPILOT_FLAGS="$temp_dir/$prefix-copilot.flags"
   export FAKE_COPILOT_PROMPT="$temp_dir/$prefix-copilot.prompt"
   export FAKE_COPILOT_CALLS="$temp_dir/$prefix-copilot.calls"
+  export FAKE_COPILOT_CONFIG="$temp_dir/$prefix-copilot.config"
 }
 
 if [[ -x /bin/bash ]]; then
@@ -838,23 +773,14 @@ assert_contains "$cap_prompt" "# Project prompt" \
 
 # Resolved settings honor CLI-over-environment-over-default precedence.
 cap_flags="$(<"$FAKE_COPILOT_FLAGS")"
-assert_contains "$cap_flags" "--yolo" "turn passes --yolo"
-assert_contains "$cap_flags" "--no-color" "turn streams without color"
-grep -Fxq 'cli-model' "$FAKE_COPILOT_FLAGS" ||
-  fail "CLI --model did not override the environment model"
-if grep -Fxq 'env-model' "$FAKE_COPILOT_FLAGS"; then
-  fail "environment model leaked past the CLI override"
-fi
-grep -Fxq 'medium' "$FAKE_COPILOT_FLAGS" ||
-  fail "environment reasoning effort was not forwarded"
-grep -Fxq 'cli-tool' "$FAKE_COPILOT_FLAGS" ||
-  fail "CLI deny-tool not forwarded"
-grep -Fxq 'env-tool' "$FAKE_COPILOT_FLAGS" ||
-  fail "environment deny-tool not forwarded"
-grep -Fxq 'skill(cli-skill)' "$FAKE_COPILOT_FLAGS" ||
-  fail "CLI deny-skill not mapped onto --deny-tool skill(...)"
-grep -Fxq 'skill(env-skill)' "$FAKE_COPILOT_FLAGS" ||
-  fail "environment deny-skill not mapped onto --deny-tool skill(...)"
+assert_equal $'--headless\n--no-auto-update' "$cap_flags" \
+  "the server starts without prompt mode or auto-approval"
+jq -se 'length == 2 and all(.[]; .model == "cli-model"
+  and .reasoningEffort == "medium" and .memory.enabled == false)' \
+  "$FAKE_COPILOT_CONFIG" >/dev/null || fail "Run-wide model/effort precedence"
+jq -se '(.[0].deny_tools | sort) == ["cli-tool","env-tool"]
+  and (.[0].deny_skills | sort) == ["cli-skill","env-skill"]' \
+  "$temp_dir/github-cap.stdout" >/dev/null || fail "resolved deny policy union"
 
 # The agent's own output remains human-readable on stderr and is also represented
 # once as truthful unclassified Events on stdout/replay.
@@ -1704,7 +1630,7 @@ unset FAKE_COPILOT_COMMITS FAKE_COPILOT_EXIT
 assert_equal "1" "$(<"$FAKE_COPILOT_CALLS")" \
   "the turn ran despite its non-zero exit"
 assert_contains "$(<"$temp_dir/agent-nonzero.stderr")" \
-  "copilot turn exited with status 7" \
+  "copilot turn exited with status 1" \
   "non-zero agent exit warns to stderr"
 jq -se '
   ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
@@ -2717,7 +2643,7 @@ assert_contains "$(<"$temp_dir/local-only.stderr")" \
   "auto-push failed" "the local-only push failure warned"
 
 # A pathologically slow agent turn is bounded by the resolved send timeout: the
-# Orchestrator's built-in watchdog terminates it at ~the bound rather than
+# adapter's own deadline terminates it at the bound rather than
 # letting a hung agent hang the Iteration forever (issue #112). The terminated
 # turn lands no agent commit, so the Iteration is a failed, no-progress turn
 # (contract §4/§6) that still completes cleanly at the cap.
@@ -2725,20 +2651,6 @@ repo="$temp_dir/send-timeout"
 fake_bin="$temp_dir/send-timeout-bin"
 make_real_repo "$repo"
 write_turn_tools "$fake_bin"
-# Overwrite the shared fake `copilot` with one that sleeps far past the bound and
-# dies promptly on SIGTERM (taking its sleep child with it) so nothing lingers.
-cat >"$fake_bin/copilot" <<'EOF'
-#!/usr/bin/env bash
-sleep_child=""
-trap 'if [[ -n "$sleep_child" ]]; then kill "$sleep_child" 2>/dev/null || true; fi; exit 143' TERM
-printf 'slow copilot: turn started\n' >&2
-sleep "${FAKE_COPILOT_SLEEP:-60}" &
-sleep_child=$!
-wait "$sleep_child"
-# Only reached if the turn was never bounded (the pre-fix bug): make it loud.
-printf 'slow copilot: turn finished unbounded\n' >&2
-EOF
-chmod +x "$fake_bin/copilot"
 cp "$temp_dir/github-list.json" "$temp_dir/send-timeout-list.json"
 export FAKE_GH_LOG="$temp_dir/send-timeout-gh.log"
 export FAKE_GH_LIST_COUNT="$temp_dir/send-timeout-list.count"
@@ -2746,7 +2658,7 @@ export FAKE_GH_LIST_JSON="$temp_dir/send-timeout-list.json"
 export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
 setup_copilot_env "send-timeout"
 export GIT_LOOPY_SEND_TIMEOUT_SECONDS=1
-export FAKE_COPILOT_SLEEP=60
+export FAKE_COPILOT_MODE=hang
 send_timeout_start=$SECONDS
 if ! run_turn_entrypoint \
   "$repo" "$fake_bin" "$temp_dir/send-timeout.stdout" \
@@ -2754,7 +2666,7 @@ if ! run_turn_entrypoint \
   fail "a bounded slow turn must not fail the Run: $(<"$temp_dir/send-timeout.stderr")"
 fi
 send_timeout_elapsed=$((SECONDS - send_timeout_start))
-unset GIT_LOOPY_SEND_TIMEOUT_SECONDS FAKE_COPILOT_SLEEP
+unset GIT_LOOPY_SEND_TIMEOUT_SECONDS FAKE_COPILOT_MODE
 ((send_timeout_elapsed < 30)) ||
   fail "the slow turn was not bounded (Run took ${send_timeout_elapsed}s, bound 1s)"
 send_timeout_stderr="$(<"$temp_dir/send-timeout.stderr")"
