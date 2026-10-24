@@ -48,13 +48,17 @@ def guest(tmp_path):
     return root, origin, identity, trace
 
 
-def test_teardown_salvages_issue_clone_and_preserves_all_branches_before_halt(guest, tmp_path):
+@pytest.mark.parametrize("workspace_kind", ["issue-clone", "linked-worktree"])
+def test_teardown_salvages_workspaces_and_preserves_all_branches_before_halt(
+    guest, tmp_path, workspace_kind,
+):
     from git_loopy.remote_teardown import teardown_run
 
     root, origin, identity, _ = guest
     source = SubprocessGitClient(root)
     branch = lane_branch_name(identity, 7)
-    clone = source.add_issue_clone(tmp_path / "lane", branch=branch, base="HEAD")
+    create = source.add_issue_clone if workspace_kind == "issue-clone" else source.add_worktree
+    clone = create(tmp_path / "lane", branch=branch, base="HEAD")
     (clone.root / "unfinished").write_text("do not lose this")
     git(root, "checkout", "-qb", "operator-work")
     (root / "ahead").write_text("unpublished work")

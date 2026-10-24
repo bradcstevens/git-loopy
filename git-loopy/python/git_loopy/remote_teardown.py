@@ -77,8 +77,6 @@ def preserve_work(
         if worktree.preparing or worktree.path.is_symlink():
             raise RunTargetError("Unproven workspace; refusing Teardown.")
         clients[worktree.path.resolve()] = source.open_worktree(worktree.path)
-    tips: dict[tuple[int | None, str], SubprocessGitClient] = {}
-    heads: dict[Path, dict[str, str]] = {}
     for git in clients.values():
         conflicts = subprocess.run(
             ["git", "-C", str(git.root), "diff", "--name-only", "--diff-filter=U"],
@@ -91,8 +89,13 @@ def preserve_work(
         if git.is_dirty() or git.has_untracked():
             git.add_all()
             git.commit(checkpoint_message(issue))
+    # Linked worktrees share refs: every Salvage must finish before any
+    # client's tips or stability snapshot is read.
+    tips: dict[tuple[int | None, str], SubprocessGitClient] = {}
+    heads: dict[Path, dict[str, str]] = {}
+    for git in clients.values():
         # Detached work is also work, even though no branch carries it.
-        if branch is None:
+        if git.current_branch() is None:
             tips[(None, git.head_sha())] = git
         for name in git.list_branches():
             sha = git.branch_tip(name).sha
