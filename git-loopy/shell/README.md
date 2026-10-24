@@ -57,7 +57,11 @@ reply. An overrun sends `session.abort`, attempts a bounded detach, and reclaims
 the server and its descendants. A successful Iteration detaches its session;
 Wind-down, exit, and INT/TERM/HUP reclaim the server tree. Protocol/transport errors
 are reported as failed turns, never successful work. Git and tracker
-reconciliation still decide progress.
+reconciliation still decide progress. Once a failed turn reclaims the Run's only
+server, that turn is reconciled normally; if further Iterations would be needed,
+the Run ends explicitly as `preflight_failed` rather than starting a second
+server or leaving an unfinished Iteration. An already reached Iteration cap or
+Strike limit keeps its normal outcome.
 
 This change does **not** activate the dormant path or claim history denial,
 Sandbox enforcement, or Endings. Those are later slices of

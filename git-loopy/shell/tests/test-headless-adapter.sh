@@ -135,6 +135,31 @@ grep -q 'exceeded the 2s send timeout' "$temp_dir/stderr" || fail "timeout diagn
 unset FAKE_COPILOT_MODE
 assert_reclaimed
 
+for failure in hang crash; do
+  : >"$FAKE_COPILOT_REQUESTS"
+  if [[ "$failure" == hang ]]; then
+    export FAKE_COPILOT_MODE=hang
+  else
+    export FAKE_COPILOT_EXIT=7
+  fi
+  if run 2 --send-timeout-seconds 1; then
+    fail "a reclaimed server must refuse further work"
+  fi
+  jq -se 'map(.method) | map(select(. == "connect")) | length == 1' \
+    "$FAKE_COPILOT_REQUESTS" >/dev/null || fail "a Run restarted its server"
+  jq -se '
+    ([.[] | select(.type == "wrapper.iteration.start") | .iter] == [1])
+    and ([.[] | select(.type == "wrapper.iteration.end") | .iter] == [1])
+    and ([.[] | select(.type == "wrapper.strike") | .strikes] == [1])
+    and .[-1].type == "wrapper.run.end"
+    and .[-1].outcome == "preflight_failed"
+    and .[-1].iterations_run == 1
+  ' "$temp_dir/stdout" >/dev/null ||
+    fail "$failure left an unfinished Iteration or Run"
+  unset FAKE_COPILOT_MODE FAKE_COPILOT_EXIT
+  assert_reclaimed
+done
+
 export FAKE_COPILOT_MODE=wedged
 started=$SECONDS
 run 1 --send-timeout-seconds 1 || fail "wedged session did not reconcile"

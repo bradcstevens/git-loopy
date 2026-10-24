@@ -3509,6 +3509,13 @@ git_loopy_run_discovery() {
       outcome="iteration_cap"
       break
     fi
+    if ((_GIT_LOOPY_SESSION_STARTED == 1)) &&
+      { [[ -z "$_GIT_LOOPY_SESSION_PID" ]] ||
+        ! kill -0 "$_GIT_LOOPY_SESSION_PID" 2>/dev/null; }; then
+      printf 'git-loopy: the headless server is unavailable; refusing further Iterations in this Run.\n' >&2
+      outcome="preflight_failed"
+      break
+    fi
     iteration="$next_iteration"
 
     _GIT_LOOPY_ITERATION_STARTED_AT="$(git_loopy_iso_timestamp)" || return 1
@@ -3649,8 +3656,8 @@ git_loopy_run_discovery() {
     # Assemble the same minimum context as the Python reference (last-5
     # commits + the bound issue's block + the resolved shared prompt) and
     # run exactly one streamed Copilot turn. The agent's own output goes to
-    # stderr so stdout stays the JSONL Event stream; the turn's real exit
-    # status is preserved and a non-zero turn warns without failing the Run.
+    # stderr so stdout stays the JSONL Event stream. A failed turn is reconciled
+    # before a lost server can refuse admission of the next Iteration.
     local prompt
     prompt="$(git_loopy_build_prompt "$GIT_LOOPY_PICKUP_JSON")" || return 1
 
@@ -3658,10 +3665,19 @@ git_loopy_run_discovery() {
     pre_sha="$(git_loopy_head_sha "$GIT_LOOPY_REPO_ROOT")" || return 1
 
     local agent_status=0
-    git_loopy_session_start || return 1
+    if ! git_loopy_session_start; then
+      git_loopy_build_iteration_rollup 0 0 0 "$strikes" "preflight_failed" ||
+        return 1
+      git_loopy_emit_event \
+        "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
+        "$iteration" "$GIT_LOOPY_ITERATION_ROLLUP_JSON" || return 1
+      iterations_run="$iteration"
+      outcome="preflight_failed"
+      break
+    fi
     git_loopy_run_agent_turn "$iteration" "$prompt" || agent_status=$?
     if ((agent_status != 0)); then
-      printf 'git-loopy: copilot turn exited with status %s; continuing.\n' \
+      printf 'git-loopy: copilot turn exited with status %s; reconciling this Iteration.\n' \
         "$agent_status" >&2
     fi
 
