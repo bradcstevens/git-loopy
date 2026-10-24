@@ -226,6 +226,33 @@ def test_source_tree_identity_uses_all_real_orchestrator_entrypoints(
 
 
 @pytest.mark.parametrize(
+    ("entrypoint", "original", "qualified"),
+    [
+        (
+            "git-loopy/shell/lib/orchestrator.sh",
+            "printf 'git-loopy %s\\n'",
+            "printf 'git-loopy shell %s\\n'",
+        ),
+        (
+            "git-loopy/powershell/GitLoopy.Orchestrator.psm1",
+            '"git-loopy $(Get-GitLoopyReleaseVersion)"',
+            '"git-loopy powershell $(Get-GitLoopyReleaseVersion)"',
+        ),
+    ],
+)
+def test_source_identity_accepts_qualified_non_python_entrypoints(
+    tmp_path: Path, entrypoint: str, original: str, qualified: str,
+) -> None:
+    root = _copy_source_distribution(tmp_path)
+    script = root / entrypoint
+    content = script.read_text(encoding="utf-8")
+    assert original in content
+    script.write_text(content.replace(original, qualified, 1), encoding="utf-8")
+
+    verify_source_tree_identity(root, RELEASE_FIXTURE["expected_release_version"])
+
+
+@pytest.mark.parametrize(
     "case",
     RELEASE_FIXTURE["source_tree_drift_cases"],
     ids=lambda case: case["id"],
@@ -286,6 +313,194 @@ def test_source_identity_checks_dormant_versions_independently_of_python(
     _replace_release_version(root, RELEASE_FIXTURE["expected_release_version"], "1.0.0")
 
     verify_source_tree_identity(root, "1.0.0")
+
+
+def _write_native_identity(root: Path, member: str, output: str) -> None:
+    if member == "shell":
+        entrypoint = root / "git-loopy/shell/git-loopy.sh"
+        content = f"printf '%s\\n' '{output}'\n"
+    else:
+        entrypoint = root / "git-loopy/powershell/git-loopy.ps1"
+        content = f"Write-Output '{output}'\n"
+    entrypoint.write_text(content, encoding="utf-8")
+
+
+@pytest.mark.parametrize("member", ["shell", "powershell"])
+@pytest.mark.parametrize("qualified", [False, True], ids=["plain", "qualified"])
+@pytest.mark.parametrize("field", ["release_version", "release.version"])
+def test_source_identity_follows_the_declared_release_authority(
+    tmp_path: Path, member: str, qualified: bool, field: str,
+) -> None:
+    root = _copy_source_distribution(tmp_path)
+    manifest_path = root / f"git-loopy/paths/{member}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["release_authority"] = {
+        "file": f"git-loopy/{member}/release.json",
+        "field": field,
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    authority = root / f"git-loopy/{member}/release.json"
+    authority.write_text(
+        json.dumps(
+            {"release_version": "0.12.0", "consumed_release": None}
+            if field == "release_version"
+            else {"release": {"version": "0.12.0"}}
+        ),
+        encoding="utf-8",
+    )
+    identity = f"git-loopy {member}" if qualified else "git-loopy"
+    _write_native_identity(root, member, f"{identity} 0.12.0")
+
+    verify_source_tree_identity(root, RELEASE_FIXTURE["expected_release_version"])
+
+
+@pytest.mark.parametrize("qualified", [False, True], ids=["plain", "qualified"])
+def test_source_identity_refuses_the_baseline_when_authority_has_advanced(
+    tmp_path: Path, qualified: bool,
+) -> None:
+    root = _copy_source_distribution(tmp_path)
+    manifest_path = root / "git-loopy/paths/shell.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["release_authority"] = {
+        "file": "git-loopy/shell/release.json",
+        "field": "release_version",
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (root / "git-loopy/shell/release.json").write_text(
+        '{"release_version":"0.12.0"}', encoding="utf-8",
+    )
+    identity = "git-loopy shell" if qualified else "git-loopy"
+    _write_native_identity(root, "shell", f"{identity} 0.11.2")
+
+    with pytest.raises(SourceReleaseError, match=r"shell --version mismatch.*0\.12\.0"):
+        verify_source_tree_identity(root, RELEASE_FIXTURE["expected_release_version"])
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [
+        None,
+        {},
+        [],
+        "baseline.release_version",
+        {"field": "baseline.release_version"},
+        {"file": None, "field": "baseline.release_version"},
+        {"file": 123, "field": "baseline.release_version"},
+        {"file": "", "field": "baseline.release_version"},
+        {"file": "release\u0000.json", "field": "release_version"},
+        {"file": "git-loopy/paths/shell.json"},
+        {"file": "git-loopy/paths/shell.json", "field": None},
+        {"file": "git-loopy/paths/shell.json", "field": []},
+        {"file": "git-loopy/paths/shell.json", "field": ""},
+        {"file": "git-loopy/paths/shell.json", "field": ".baseline.release_version"},
+        {"file": "git-loopy/paths/shell.json", "field": "baseline..release_version"},
+        {"file": "git-loopy/paths/shell.json", "field": "baseline.release_version."},
+        {"file": "git-loopy/paths/shell.json", "field": "baseline.missing"},
+    ],
+)
+def test_source_identity_refuses_invalid_release_authority_declarations(
+    tmp_path: Path, authority: object,
+) -> None:
+    root = _copy_source_distribution(tmp_path)
+    manifest_path = root / "git-loopy/paths/shell.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["release_authority"] = authority
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(SourceReleaseError, match="Path manifest"):
+        verify_source_tree_identity(root, RELEASE_FIXTURE["expected_release_version"])
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        b"\xff",
+        b"{",
+        b"null",
+        b"[]",
+        b"{}",
+        b'{"release_version":null}',
+        b'{"release_version":123}',
+        b'{"release_version":"v0.11.2"}',
+        b'{"release_version":"0.11"}',
+        b'{"release_version":"0.11.2\\n"}',
+        b'{"release_version":" 0.11.2"}',
+    ],
+)
+def test_source_identity_refuses_missing_or_malformed_authority_files(
+    tmp_path: Path, content: bytes | None,
+) -> None:
+    root = _copy_source_distribution(tmp_path)
+    manifest_path = root / "git-loopy/paths/shell.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["release_authority"] = {
+        "file": "git-loopy/shell/release.json",
+        "field": "release_version",
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    if content is not None:
+        (root / "git-loopy/shell/release.json").write_bytes(content)
+
+    with pytest.raises(SourceReleaseError, match="Path manifest"):
+        verify_source_tree_identity(root, RELEASE_FIXTURE["expected_release_version"])
+
+
+@pytest.mark.parametrize("escape", ["absolute", "parent", "symlink"])
+def test_source_identity_refuses_authority_outside_the_source_tree(
+    tmp_path: Path, escape: str,
+) -> None:
+    root = _copy_source_distribution(tmp_path)
+    outside = tmp_path / "release.json"
+    outside.write_text('{"release_version":"0.11.2"}', encoding="utf-8")
+    file = "../release.json"
+    if escape == "absolute":
+        file = str(outside)
+    elif escape == "symlink":
+        file = "git-loopy/shell/release.json"
+        (root / file).symlink_to(outside)
+    manifest_path = root / "git-loopy/paths/shell.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["release_authority"] = {"file": file, "field": "release_version"}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(SourceReleaseError, match="within the source tree"):
+        verify_source_tree_identity(root, RELEASE_FIXTURE["expected_release_version"])
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "git-loopy shell 9.9.9",
+        "git-loopy powershell 0.11.2",
+        "git-loopy Shell 0.11.2",
+        "git-loopy shell 0.11.2 extra",
+        "git-loopy shell 0.11.2\nextra",
+    ],
+)
+def test_source_identity_refuses_mismatched_qualified_output(
+    tmp_path: Path, output: str,
+) -> None:
+    root = _copy_source_distribution(tmp_path)
+    _write_native_identity(root, "shell", output)
+
+    with pytest.raises(SourceReleaseError, match="shell --version mismatch"):
+        verify_source_tree_identity(root, RELEASE_FIXTURE["expected_release_version"])
+
+
+@pytest.mark.parametrize("identity", ["git-loopy python {release_version}", "git-loopy 9.9.9"])
+def test_source_identity_keeps_python_unqualified_and_version_checked(
+    tmp_path: Path, identity: str,
+) -> None:
+    root = _copy_source_distribution(tmp_path)
+    cli = root / "git-loopy/python/git_loopy/cli.py"
+    content = cli.read_text(encoding="utf-8")
+    original = 'print(f"git-loopy {release_version}")'
+    assert original in content
+    cli.write_text(content.replace(original, f'print(f"{identity}")', 1), encoding="utf-8")
+
+    with pytest.raises(SourceReleaseError, match="python --version mismatch"):
+        verify_source_tree_identity(root, RELEASE_FIXTURE["expected_release_version"])
 
 
 @pytest.mark.parametrize("content", [None, "{}", '{"baseline":{"release_version":123}}'])

@@ -26,7 +26,13 @@ does not fall back to Python's version. The shell reader uses its existing `jq`
 prerequisite even for `--version`.
 
 Source-tree and tagged-archive verification compare each native entry point with
-that manifest identity, while keeping Python's expected Release unchanged.
+the authority named by its manifest's `release_authority.file` and dotted JSON
+`field`, not a hardcoded baseline. The authority file must stay within the source
+tree, and its selected value must be a Semantic Versioning string; missing or
+malformed declarations, files or fields fail closed. Verification accepts both
+`git-loopy <key> X.Y.Z` and the current plain `git-loopy X.Y.Z` from non-Python
+entry points, with the version checked against that authority. Python's expected
+Release and unqualified identity checks remain unchanged (ADR-0105, #1013).
 Historical distributions without a manifest directory still prove their shared
 Release; an incomplete or malformed manifest set never takes that legacy path.
 
