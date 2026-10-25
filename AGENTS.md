@@ -33,7 +33,7 @@ it contains.
 | Shell Orchestrator suites | `for t in git-loopy/shell/tests/test-*.sh; do bash "$t" \|\| exit 1; done` | Any change under `git-loopy/shell/` or to a Conformance fixture |
 | PowerShell Orchestrator suites | `for t in git-loopy/powershell/tests/test-*.ps1; do pwsh -NoLogo -NoProfile -File "$t" \|\| exit 1; done` | Any change under `git-loopy/powershell/` or to a Conformance fixture |
 
-For a docstring-or-prose or additive-test change, run targeted Python tests instead
+For a docstring-or-prose or test-only change, run targeted Python tests instead
 of the full Python suite only when publishing through a pull request (CI runs the
 full suite on every pull request with no path filters) or delivering a Lane
 contribution in Parallel mode (Integration runs the whole table); a serial Run
@@ -41,19 +41,20 @@ pushes straight to the default branch and still runs the full suite. To qualify 
 docstring-or-prose, compare each changed Python file against the merge-base
 yourself: both versions must parse to the same `ast.dump` after removing module,
 class and function docstrings, and every other changed file must be Markdown.
-An additive-test change qualifies when, against the merge-base, it only adds
-test modules and their owned data files under `git-loopy/python/tests/` plus
-Markdown changes, edits or deletes no existing Python file, adds no `conftest.py`,
+A test-only change qualifies when, against the merge-base, it only adds test
+modules and their owned data files under `git-loopy/python/tests/`, edits existing
+test modules there, or changes Markdown; it deletes no existing Python file,
+touches no `conftest.py`, shared fixture or fake module, or production module,
 and changes no dependency or lockfile.
 Run each changed module's own `tests/test_<module>*.py`, every test file that names
 a changed file (find them with
 `git grep -l -F <basename> -- git-loopy/python/tests` for each changed file),
 and the tracked-tree guards `tests/test_no_*.py` and `tests/test_glossary_*.py`;
-Markdown-only changes run this same set too, and additive-test changes run their
-new tests plus this set. Import-time side effects or leaked global state from new
-tests are an accepted residual risk caught by CI or Integration rather than
-locally. Record the targeted tests run and the full-suite backstop (CI or
-Integration). The known flakes are
+Markdown-only changes run this same set too, and test-only changes add every new
+and edited test module, in full, to this set. Import-time side effects or leaked
+global state from new or edited tests are an accepted residual risk caught by CI
+or Integration rather than locally. Record the targeted tests run and the
+full-suite backstop (CI or Integration). The known flakes are
 `test_release_installation.py::test_reclaims_setup_children_not_just_their_parent[cancelled-init]`
 (a pseudo-terminal "Operation not permitted" error under host load),
 `test_release_smoke.py::test_a_run_still_in_flight_at_the_deadline_is_never_passed`
