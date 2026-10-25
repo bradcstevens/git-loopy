@@ -1682,6 +1682,43 @@ class RoutingLiveRead:
         self._capabilities_fetch = capabilities_fetch
         self._ledger = admission_ledger
 
+    async def retry_read(self, read: str) -> RoutingUnavailable | None:
+        """Probe only an unread input; never admit or call a selector.
+
+        A serial Unread Pin waits here without re-taking a Lease or making a
+        proposal. The eventual Pickup still validates all its live inputs.
+        Limits return their ordinary refusal so Pickup can spend the Pin.
+        """
+        if read == "route_evidence":
+            fetch = self._evidence_fetch
+
+            def valid(value: object) -> bool:
+                if isinstance(value, ArtificialAnalysisResult):
+                    value = FreshEvidence(
+                        source_identity=value.source_identity,
+                        retrieved_at=value.retrieved_at,
+                        records=value.evidence,
+                    )
+                return _valid_fresh_evidence(value)
+            reason = RoutingUnavailableReason.SOURCE_UNAVAILABLE
+        elif read == "route_capabilities":
+            fetch = self._capabilities_fetch
+            valid = _valid_fresh_capabilities
+            reason = RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE
+        else:
+            raise ValueError(f"not a probeable routing read: {read}")
+        if unavailable := self._limit_refusal(require_assessment=True):
+            return unavailable
+        try:
+            value = await self._fetch_before_deadline(fetch)
+        except RoutingPrerequisiteError:
+            return self._unavailable(RoutingUnavailableReason.PREREQUISITE_MISSING)
+        except Exception as exc:
+            if unavailable := self._limit_refusal(require_assessment=True):
+                return unavailable
+            return self._unavailable(reason, detail=str(exc))
+        return None if valid(value) else self._unavailable(reason)
+
     async def read(
         self, bounded_input_tokens: int = 0, *, require_assessment: bool = False,
         work_context_tier: str | None = None,
@@ -1801,6 +1838,10 @@ class DynamicRouter:
     def usage(self) -> RoutingUsage:
         """Current Run-wide routing usage, including interrupted assessments."""
         return self._ledger.snapshot()
+
+    async def retry_read(self, read: str) -> RoutingUnavailable | None:
+        """Wait on one failed source, without a free selector probe."""
+        return await self._live.retry_read(read)
 
     async def reusable_available(
         self, reusable: Sequence[ReusableRoute], request: RoutingRequest
