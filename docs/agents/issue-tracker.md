@@ -1,3 +1,4 @@
+<!-- Generated from `bradcstevens/git-loopy-skills/skills/setup-git-loopy-skills/issue-tracker-github.md`; refreshing the skills setup rewrites this file. -->
 # Issue tracker: GitHub
 
 Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
