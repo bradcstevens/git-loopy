@@ -1641,8 +1641,9 @@ wait on the failed read without opening Iterations or spending more units.
 Selector retries run at most once per idle poll interval through the routing
 ledger. A retry that binds the Pin opens an ordinary Iteration. Lane retries
 spend no iteration unit. `wrapper.pin.unread` records each `holding`, `lapsed`
-and `ended` transition once, with the failing read and reason. Serial-only
-dispatch and the Pin's preflight validation are unchanged.
+and `ended` transition once, with the failing read and reason; the attach
+client and the Dashboard show the Unread-Pin notice from those Events, clearing
+it on `ended`. Serial-only dispatch and the Pin's preflight validation are unchanged.
 
 ---
 
