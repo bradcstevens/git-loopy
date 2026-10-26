@@ -48,25 +48,51 @@ def test_line_renderer_prints_each_changed_notice_once(case: dict[str, Any]) -> 
         previous = step["notice"]
 
 
-def test_attach_replays_the_notice_without_changing_the_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("case", FIXTURE["cases"], ids=lambda case: case["id"])
+def test_attach_replays_every_notice_transition_without_changing_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: dict[str, Any]
 ) -> None:
     from git_loopy import run_sidecar
 
-    step = FIXTURE["cases"][0]["steps"][0]
     trace = tmp_path / "run.trace.jsonl"
-    recorded = json.dumps(step["event"]) + "\n"
-    trace.write_text(recorded)
+    control = tmp_path / "control.json"
+    trace.write_text("")
     output = StringIO()
     monkeypatch.setattr(
         run_sidecar, "get_console",
         lambda: Console(file=output, force_terminal=False, width=200),
     )
+    index = 0
+    printed = []
 
-    run_sidecar.attach_to_run(
-        trace, tmp_path / "control.json",
-        config=RunConfig(), owner_alive=lambda: False,
+    def publish_next_event() -> None:
+        nonlocal index
+        if index:
+            printed.append(output.getvalue().splitlines())
+            output.seek(0)
+            output.truncate()
+        with trace.open("a") as stream:
+            stream.write(json.dumps(case["steps"][index]["event"]) + "\n")
+        index += 1
+
+    outcome = run_sidecar.attach_to_run(
+        trace, control, config=RunConfig(), poll_interval=0,
+        owner_alive=lambda: index < len(case["steps"]),
+        refresh=publish_next_event,
     )
+    printed.append(output.getvalue().splitlines())
 
-    assert output.getvalue().splitlines() == step["notice"]
+    previous = None
+    for step, lines in zip(case["steps"], printed, strict=True):
+        if step["notice"] is not None and step["notice"] != previous:
+            assert lines == step["notice"]
+        else:
+            assert not any("Unread Pin" in line for line in lines)
+        previous = step["notice"]
+    assert outcome.traced
+    assert outcome.run_ended == any(
+        step["event"]["type"] == "wrapper.run.end" for step in case["steps"]
+    )
+    recorded = "".join(json.dumps(step["event"]) + "\n" for step in case["steps"])
     assert trace.read_text() == recorded
+    assert not control.exists()
