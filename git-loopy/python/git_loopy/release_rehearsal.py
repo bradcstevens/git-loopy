@@ -255,7 +255,14 @@ def _committed_bytes(workspace: Path, commit: str, path: Path) -> bytes:
 def _clone_trunk(repository_root: Path, workspace: Path, base_commit: str) -> None:
     """Copy the trunk into a throwaway clone that cannot reach any remote."""
     if workspace.exists():
-        raise ReleaseRehearsalError(f"rehearsal workspace already exists: {workspace}")
+        if not workspace.is_dir():
+            raise ReleaseRehearsalError(
+                f"rehearsal workspace is not a directory: {workspace}"
+            )
+        if any(workspace.iterdir()):
+            raise ReleaseRehearsalError(
+                f"rehearsal workspace is not empty: {workspace}"
+            )
     workspace.parent.mkdir(parents=True, exist_ok=True)
     _run_git(
         repository_root,
@@ -755,7 +762,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--workspace",
         type=Path,
         required=True,
-        help="path for the throwaway candidate clone; must not exist",
+        help=(
+            "path for the throwaway candidate clone; "
+            "must be missing or an existing empty directory"
+        ),
     )
     parser.add_argument(
         "--archive-output",

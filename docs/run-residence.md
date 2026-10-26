@@ -65,6 +65,84 @@ cleanup, unavailable providers, and identity collisions. Existing public-command
 and detached-worker tests continue to prove local behavior with real processes,
 control locks, traces, and Stop acknowledgments.
 
+## Remote Sweep (#960)
+
+The laptop's backstop uses only this clone's receipts, including receipts from
+its other worktrees and targets that are no longer in Config. It runs before
+`git-loopy remote` launches and alongside local reclamation in `git-loopy sweep`.
+There is no Azure discovery or authentication when the clone has no receipts.
+The provider uses the operator's existing Azure CLI identity, never a guest
+Azure credential.
+
+| Azure observation | Sweep action |
+| --- | --- |
+| No matching VM | Delete the uniquely named `git-loopy-<run-id>` disk image, confirm its absence, then retire the receipt. An asynchronous or failed deletion retains the receipt for another pass. |
+| One Running VM | Read the guest's `remote_control` lock proof. Only a dead Run can enter preservation and halt. |
+| One Stopped VM | Leave it to Azure's confirmed seven-day deletion delay; never resume automatically. A missing/disabled/mismatched delay retains the VM and reports `--retry-remote RUN`, without changing its policy. |
+| Unknown state, inaccessible provider/guest, or ambiguous VM/image | Retain resources and receipt; never guess. |
+
+`git-loopy sweep --dry-run` reports the same conditional plan but writes no
+receipts, pushes no work, changes no policies, and neither resumes nor halts a
+VM. A Running guest's read-only lock probe uses the execution API.
+`git-loopy sweep --retry-remote RUN [--dry-run]` targets just one receipt using
+the same exact-ID/unambiguous-prefix rules as `runs`. It does not sweep other
+remote Runs or local work. A Stopped retry must resume before liveness can be
+proved; if the resumed Run is live or unknown, it is **not** halted. The dry
+plan names this condition explicitly.
+
+### Shared preservation boundary
+
+`remote_teardown.preserve_work` is the shared guest preservation step for #871.
+It salvages registered Issue clones and working trees, then pushes immutable
+`refs/heads/git-loopy-checkpoints/issue-<n>/<sha>` refs and issue Breadcrumbs.
+Unattributed work uses one `refs/heads/git-loopy-checkpoints/run-<run-id>` ref.
+Its carrier commit has an empty tree and parents retaining every independent
+unattributed tip across the guest's workspaces. Inspect the parents/history,
+not the carrier's empty tree, to recover the work. A retry with no new work
+reuses the carrier; new work creates a successor retaining both the previous
+carrier and the current tips. Updates use compare-and-swap and read-back:
+competing updates or unconfirmed pushes refuse a halt, never overwrite work.
+It conservatively preserves all branch tips, including unresolved reserved
+branches, Checkpoint tips and work ahead of origin, plus detached HEAD work.
+Tips already merged into the guest's local default branch go into the Run ref,
+not comments calling them unfinished issue work. Origin's advertised
+default branch identifies that local base; an unprovable base fails closed.
+It never advances base, removes a workspace or deletes a branch. Already
+preserved refs and comments make retries idempotent; conflicting issue refs are refused.
+Incomplete clone inventories, unresolved merges and work changing during
+preservation refuse a halt.
+
+This dead-Run backstop does not acquire or steal an issue Lease. Its only
+tracker write is the immutable preservation Breadcrumb required by #960; it
+does not publish onto base, close an issue, change labels or claim active work.
+Malformed/unreadable receipt inventory refuses the command before any local
+or remote reclamation, rather than acting from a partial clone inventory.
+
+The execution entry point re-proves death and holds the guest's control lock
+through preservation and halt. Other live or unprovable Runs also prevent
+halting the guest. The laptop first confirms preservation, then arms and reads
+back a seven-day auto-delete policy with auto-suspend disabled (including for
+older launches that disabled auto-delete). It invokes guest Teardown again,
+which rechecks death and preservation before halting. Only Azure's observed
+Stopped state confirms the halt, including when the execution connection is
+lost. Sweep never calls the VM stop or delete API. Failures retain the receipt;
+unpreserved work never authorizes a halt.
+
+This does not deliver #871's autonomous supervisor or its bounded-failure
+policy, nor #961's Run-record export. A guest built before this module exists
+fails closed; Sweep does not install new code into an existing guest.
+The live halt/auto-delete adoption proof remains #959: the offline SDK tests
+are not evidence that the Azure platform has passed that proof.
+
+### Offline evidence
+
+`test_remote_sweep.py` exercises the pinned `azure-containerapps-sandbox`
+0.1.0b4 SDK with a synthetic credential and fake HTTP transport, including
+execution, resume, lifecycle policy, image deletion and read-back. Command
+tests use a fake provider. `test_remote_preservation.py` uses real temporary
+Git repositories and a fake GitHub boundary to prove salvage, immutable
+preservation, retry and refusal before halt. Neither suite contacts Azure.
+
 ## Azure target setup (#869)
 
 Setup does not register a remote `RunResidence`, launch a VM, or change a plain

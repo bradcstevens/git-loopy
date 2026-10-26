@@ -548,6 +548,127 @@ def test_a_rehearsal_needs_no_publication_credential_and_no_tracker(
     assert publication_input.version == "1.0.0"
 
 
+@pytest.mark.parametrize("existing_empty", [False, True], ids=["missing", "empty"])
+def test_the_rehearsal_command_accepts_a_missing_or_empty_workspace(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], existing_empty: bool
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    candidate = git(trunk, "rev-parse", "HEAD")
+    workspace = tmp_path / "private" / "candidate"
+    if existing_empty:
+        workspace.mkdir(parents=True)
+    archive = tmp_path / "source.tar"
+
+    status = main([
+        "--repository-root", str(trunk),
+        "--workspace", str(workspace),
+        "--archive-output", str(archive),
+        "--distribution-mode", SOURCE_ONLY,
+        "--stable-commit",
+    ])
+
+    output = capsys.readouterr()
+    assert status == 0, output.err
+    payload = json.loads(output.out)
+    assert payload["commit"] == candidate
+    assert payload["archive_path"] == str(archive.resolve())
+    assert archive.is_file()
+    assert git(workspace, "rev-parse", "HEAD") == candidate
+    assert git(workspace, "remote") == ""
+    assert git(trunk, "tag", "--list") == ""
+
+
+@pytest.mark.parametrize(
+    ("kind", "diagnostic"),
+    [
+        ("non-empty", "workspace is not empty"),
+        ("hidden-only", "workspace is not empty"),
+        ("file", "workspace is not a directory"),
+    ],
+)
+def test_the_rehearsal_command_refuses_an_occupied_workspace_without_changing_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str, diagnostic: str
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    workspace = tmp_path / "candidate"
+    if kind == "file":
+        existing = workspace
+    else:
+        workspace.mkdir()
+        existing = workspace / (".keep" if kind == "hidden-only" else "keep")
+    existing.write_text("leave me alone\n", encoding="utf-8")
+    archive = tmp_path / "source.tar"
+
+    status = main([
+        "--repository-root", str(trunk),
+        "--workspace", str(workspace),
+        "--archive-output", str(archive),
+        "--distribution-mode", SOURCE_ONLY,
+        "--stable-commit",
+    ])
+
+    output = capsys.readouterr()
+    assert status == 1
+    assert diagnostic in output.err
+    assert str(workspace) in output.err
+    assert output.out == ""
+    assert existing.read_text(encoding="utf-8") == "leave me alone\n"
+    if kind != "file":
+        assert list(workspace.iterdir()) == [existing]
+    assert not archive.exists()
+    assert git(trunk, "tag", "--list") == ""
+
+
+@pytest.mark.parametrize(
+    "archive_is_directory", [False, True], ids=["file", "empty-directory"]
+)
+def test_the_rehearsal_command_still_refuses_an_existing_archive_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], archive_is_directory: bool
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.3")
+    workspace = tmp_path / "candidate"
+    workspace.mkdir()
+    archive = tmp_path / "source.tar"
+    if archive_is_directory:
+        archive.mkdir()
+    else:
+        archive.write_bytes(b"existing archive")
+
+    status = main([
+        "--repository-root", str(trunk),
+        "--workspace", str(workspace),
+        "--archive-output", str(archive),
+        "--distribution-mode", SOURCE_ONLY,
+        "--stable-commit",
+    ])
+
+    output = capsys.readouterr()
+    assert status == 1
+    assert "source archive already exists" in output.err
+    assert str(archive) in output.err
+    assert output.out == ""
+    if archive_is_directory:
+        assert list(archive.iterdir()) == []
+    else:
+        assert archive.read_bytes() == b"existing archive"
+    assert git(trunk, "tag", "--list") == ""
+
+
+def test_the_rehearsal_help_distinguishes_workspace_and_archive_paths(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        main(["--help"])
+
+    assert stopped.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert (
+        "path for the throwaway candidate clone; "
+        "must be missing or an existing empty directory"
+    ) in help_text
+    assert "path for the generated source archive; must not exist" in help_text
+
+
 def test_the_rehearsal_command_prints_one_publication_input(tmp_path: Path) -> None:
     trunk, candidate = _stable_candidate_trunk(tmp_path)
     github_output = tmp_path / "github-output"

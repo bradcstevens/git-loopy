@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.41 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.43 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`GLOSSARY.md`](../GLOSSARY.md). Where this spec and the Python code disagree, the code is the
@@ -391,6 +391,34 @@ the Pin's quarantine/setup warnings and the misleading serial-required partial
 Pool warning during the hold MUST NOT repeat. Warnings for other candidates
 are unchanged. `rolling-unread-pin.json` pins this Lane-path rule; it imposes
 no new obligation on serial-only members.
+
+**Unread Pin on the serial path (contract 2.42, Rolling dispatch only).** A
+Serial-required Pin uses the same ten-minute clock, final lapse, transition
+Event and `read` vocabulary. A serial hold costs **one unit**: only its first
+unread attempt is an Iteration on the trace, ending with the **non-terminal**
+outcome `pin_unread`, never `preflight_failed`. Retries that still cannot read
+the Pin MUST NOT spend a unit or write an Iteration record. A retry that binds
+the Pin opens an ordinary Iteration, with its ordinary unit.
+If the hold spends the last allowed unit, the normal cap wind-down ends it
+without polling: a cap of one cannot fund both the hold and a later Iteration.
+
+Between attempts the Runner MUST wait on the read that failed: a Pool read
+for tracker or Readiness failure, evaluating Readiness from that same read;
+the Lease remote for a Lease failure; or the evidence feed or capability
+listing for those failures. A failed selector has no free probe: retries run
+at most once per idle poll interval through the existing routing admission
+ledger, charged only what they billed. No new backoff is introduced.
+
+After lapse the Pin loses its serial-ownership exception to the refill
+interleave, and Priority latches demand as usual. Each serial Pickup still
+promotes the live Pin, but walks on when it cannot read it, as a serial-only
+member does. It is tried only when a Pickup reaches it, and never holds again
+in this invocation. If it is the only remaining work, §3.3.1 applies without a
+Pin-specific ending. The serial "pinned issue … could not be read" warning
+collapses into the same transition-only diagnostic; the idle partial-Pool
+warning MUST NOT fire during the hold. `rolling-unread-pin.json` covers both
+paths. Serial-only members, preflight validation, Pin spending, Lease fencing,
+and Summary rows beyond the one `pin_unread` Iteration are unchanged.
 
 The pin MUST be invocation-scoped, and therefore MUST NOT be expressible as a label, an
 environment variable, or a persisted Config key. All three outlive the invocation: a label is
@@ -950,8 +978,8 @@ The additive Event schema has compatibility `schema_version` **1**; changing the
 does not implicitly change that version. Unknown event types and unknown payload fields remain
 additive and MUST be ignored by compatible consumers.
 
-**`wrapper.pin.unread` (contract 2.41)** announces an Unread Pin on the Rolling
-Lane path. It is Run-scoped: `iter` is null, with no `contribution_id` or
+**`wrapper.pin.unread` (contract 2.41; serial path added in 2.42)** announces an
+Unread Pin under Rolling dispatch. It is Run-scoped: `iter` is null, with no `contribution_id` or
 `lane_id`. Required payload: `issue`, `state`, `read`, `reason` (the failing
 read's own text), and `first_unread_at` (UTC RFC3339, unchanged throughout the
 condition). `read` is one of `tracker`, `readiness`, `lease`, `route_evidence`,
@@ -962,6 +990,28 @@ after the lapse; and `ended` when the Pin binds, is spent, or Stop ends the
 condition. Only `ended` carries `outcome`, respectively `bound`, `spent`, or
 `stopped`. Retrying the same failing read emits nothing, even if its reason
 text changes. This Event remains additive within schema compatibility 1.
+
+`wrapper.iteration.end` may carry the non-terminal `outcome: pin_unread`
+(contract 2.42) for the single charged Iteration of a serial hold (§3.2).
+It is not a Run outcome, a preflight failure, a Session outcome, or a Strike.
+Unchanged unread retries emit neither `wrapper.iteration.start` nor
+`wrapper.iteration.end`.
+
+**Unread-Pin notice (contract 2.43).** The Python attach client and Rust
+Dashboard MUST fold `wrapper.pin.unread` into the identical lines pinned by
+`unread-pin-notice.json`: the Pin, failing read and its reason, and
+`first_unread_at`. While `holding`, the notice says new work is held until
+`first_unread_at` plus ten minutes; while `lapsed`, it says the order is
+proceeding behind the Pin. Instants use UTC RFC3339 with `Z`, no zero fraction,
+and six fractional digits otherwise, independent of the viewer's zone.
+Only Events change the notice: the viewer MUST NOT infer a lapse from its
+clock. A changed read replaces the notice; `ended` (whether `bound`, `spent`,
+or `stopped`) or Run end clears it. The line-printing attach client prints
+each changed notice once and retains historical scrollback when clearing its
+current fold. The Dashboard updates or removes its live notice without
+holding the Run open. Shell and PowerShell have no attach client and waive
+this presentation fixture as out of scope. Older consumers may continue to
+ignore the additive Event.
 
 Every line shares this envelope, with keys in a stable order (envelope keys first, then payload
 keys sorted):
