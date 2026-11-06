@@ -433,6 +433,44 @@ def test_two_real_clones_sharing_one_remote_admit_exactly_one_run(
     assert mine.observe(390, now=1700).state == "absent"
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_lease_writes_over_real_git_never_run_the_clones_pre_push_hook(
+    tmp_path: Path,
+) -> None:
+    """A record is metadata, so a project's push gate never sees it (#1031).
+
+    The hook refuses everything and is reached through ``core.hooksPath``, as a
+    repository's committed hooks are. Run on the empty-tree record, a build
+    hook refused every claim and the Run bound nothing.
+    """
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "-q", "--bare", "-b", "main", str(remote)],
+        check=True,
+        capture_output=True,
+    )
+    git = _clone(tmp_path, "mine", remote)
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    ran = tmp_path / "pre-push-ran"
+    hook = hooks / "pre-push"
+    hook.write_text(f"#!/bin/sh\ntouch '{ran}'\nexit 1\n")
+    hook.chmod(0o755)
+    subprocess.run(
+        ["git", "-C", str(git.root), "config", "core.hooksPath", str(hooks)],
+        check=True,
+        capture_output=True,
+    )
+    transport = LeaseTransport(git, remote="origin", repository=REPOSITORY)
+
+    hold = transport.claim(390, run_id=OWNER, now=1000, host="mine", pid=1)
+    assert hold is not None
+    renewed = transport.renew(hold, now=1060)
+    assert renewed is not None
+    assert transport.release(renewed, now=1120) == "released"
+    assert not ran.exists()
+
+
 # --------------------------------------------------------------------------- #
 # The pure action decision every member must agree on.                          #
 # --------------------------------------------------------------------------- #

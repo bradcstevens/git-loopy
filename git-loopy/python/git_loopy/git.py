@@ -693,7 +693,7 @@ class GitClient(Protocol):
 
     def push_ref(
         self, remote: str, ref: str, sha: str | None, expected: str | None,
-        *, timeout_seconds: float = 15.0,
+        *, timeout_seconds: float = 15.0, verify: bool = True,
     ) -> bool:
         """Compare-and-swap ``ref``; ``False`` on refusal, raise on transport."""
         ...
@@ -1104,11 +1104,12 @@ class SubprocessGitClient:
         tracker-attested publication (#418); serial checkpoints remain unchanged.
 
         :meth:`push_ref` is the Lease exception (ADR-0033). A **Lease**
-        names its refspec explicitly and swaps under ``--force-with-lease``
-        precisely *because* it must not inherit any of that configuration: it
-        addresses one ref per issue, and its whole guarantee is that exactly one
+        names its refspec explicitly, swaps under ``--force-with-lease`` and
+        skips the ``pre-push`` hook precisely *because* it must not inherit any
+        of that configuration: it addresses one ref per issue, its record is
+        metadata rather than work, and its whole guarantee is that exactly one
         Run's write lands. The principle above still governs everything that
-        pushes an operator's actual work.
+        pushes an operator's actual work, hooks included.
 
         Every failure mode the loop must tolerate *non-fatally* (it warns and
         carries on, so a local-only repo keeps working) surfaces here as
@@ -1682,7 +1683,7 @@ class SubprocessGitClient:
 
     def push_ref(
         self, remote: str, ref: str, sha: str | None, expected: str | None,
-        *, timeout_seconds: float = 15.0,
+        *, timeout_seconds: float = 15.0, verify: bool = True,
     ) -> bool:
         """Compare-and-swap ``ref`` on ``remote``; ``sha=None`` deletes it.
 
@@ -1694,6 +1695,14 @@ class SubprocessGitClient:
         (ADR-0033): a Lease names its refspec explicitly and swaps under
         ``--force-with-lease`` precisely so it cannot depend on ``push.default``
         or on a branch's upstream tracking ref.
+
+        ``verify=False`` skips the clone's ``pre-push`` hook with
+        ``--no-verify``. Only the Lease transport passes it (#1031): a Lease
+        record is an empty-tree commit of Runner metadata, never content, so a
+        project's build or test gate has nothing to judge. Running that gate
+        would refuse every claim and add its duration to every heartbeat.
+        Callers that push work, such as a Checkpoint breadcrumb, keep the
+        default, so the hook still gates them.
 
         ``timeout_seconds`` bounds this attempt, not a sequence of retries.
         The caller supplies its remaining budget. Interactive credential
@@ -1716,6 +1725,7 @@ class SubprocessGitClient:
         completed = _run_completed(
             [
                 "push",
+                *(() if verify else ("--no-verify",)),
                 f"--force-with-lease={ref}:{expected or ''}",
                 "--porcelain",
                 remote,

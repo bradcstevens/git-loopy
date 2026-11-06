@@ -41,6 +41,19 @@ backlog rather than owed by #390.
   [ADR-0068](0068-execution-hosts-own-contributions-clients-own-terminals.md)), not a Lease
   warning.
 
+**Amended (2026-11-05, [#1031](https://github.com/bradcstevens/git-loopy/issues/1031)):**
+a Lease write also skips the clone's client-side `pre-push` hook (`git push --no-verify`).
+This widens the exception that Consequences records for the explicit refspec and
+`--force-with-lease`. A Lease record is an empty-tree commit of Runner metadata, never
+content, so a project's build or test gate has nothing to judge. A hook that builds each
+pushed tip refused every claim, and the Run bound nothing. Even a hook that passes would run
+on every 60-second renewal, and one slower than the 15-second write budget would turn
+renewals into timeouts. Server-side policy is unchanged: permissions, rulesets and
+`pre-receive` hooks refuse a Lease write exactly as before. The opt-out belongs to the Lease
+transport alone. A Checkpoint breadcrumb shares the same compare-and-swap push, but it
+carries work, so it keeps the hook, as every other content push does
+([ADR-0004](0004-runner-checkpoint-and-push-durability.md)).
+
 [ADR-0010](0010-local-sandbox-per-iteration.md) already recorded the gap as a non-goal:
 *"it does not solve concurrent-run worktree collisions (issues are worked sequentially within
 a run; **two simultaneous runs still collide**)."* Nothing in the repository coordinates two
