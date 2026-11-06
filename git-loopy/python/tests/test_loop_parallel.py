@@ -12435,8 +12435,10 @@ def test_a_lane_pin_read_within_the_bound_announces_only_transitions(
     lines = [line for line in log.splitlines() if "Unread Pin #43" in line]
     assert len(lines) == 2
     assert "the Pin was not read" not in log
-    assert "no route to host" in unread[0]["reason"]
-    assert "Lease for issue #43 could not be read or taken" not in log
+    assert unread[0]["reason"] == (
+        "Lease could not be taken (remote unreadable): no route to host"
+    )
+    assert "WARNING issue #43: Lease" not in log
     assert "serial-required Pool read was partial" not in log
 
 
@@ -13077,7 +13079,7 @@ def test_a_non_pin_whose_lease_probe_fails_is_still_refused_for_the_run(
         for e in events
         if e["type"] == "wrapper.pickup.skipped" and e["issue"] == 41
     ]
-    assert skips == ["Lease could not be taken (remote unreadable)"]
+    assert skips == ["Lease could not be taken (remote unreadable): no route to host"]
 
 
 def test_a_serial_pins_lease_outage_costs_one_unit(tmp_path, monkeypatch) -> None:
@@ -13110,6 +13112,67 @@ def test_a_serial_pins_lease_outage_costs_one_unit(tmp_path, monkeypatch) -> Non
     assert [
         e["outcome"] for e in events if e["type"] == "wrapper.iteration.end"
     ][0] == "pin_unread"
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert unread[0]["read"] == "lease"
+    assert unread[0]["reason"] == (
+        "Lease could not be taken (remote unreadable): no route to host"
+    )
+
+
+@pytest.mark.parametrize("serial", [False, True], ids=["lane", "serial"])
+def test_a_pin_whose_lease_write_fails_preserves_its_turn_and_reports_the_cause(
+    tmp_path, monkeypatch, serial
+) -> None:
+    _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(41, labels=["ready-for-agent", "parallel-safe"]),
+        _make_issue(
+            43, labels=["ready-for-agent"] + ([] if serial else ["parallel-safe"]),
+        ),
+    ])
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    fake_git.push_ref_errors = [
+        git_module.GitError(
+            ["git", "push"], 1,
+            "pre-push: use the approved branch namespace\n"
+            "error: failed to push some refs to 'origin'\n",
+        )
+    ]
+    probes: dict[str, Any] = {}
+
+    def after_write() -> None:
+        nonlocal probes
+        probes = _fail_lease_probes(monkeypatch, fake_git, 43, times=2)
+
+    fake_git.push_ref_interceptor = after_write
+
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=2 if serial else 1)),
+        timeout=15,
+    ))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(43, "pin")]
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [(e["state"], e.get("outcome")) for e in unread] == [
+        ("holding", None), ("ended", "bound"),
+    ]
+    assert {e["read"] for e in unread} == {"lease"}
+    assert unread[0]["reason"] == (
+        "Lease write was refused: pre-push: use the approved branch namespace"
+    )
+    assert len(probes["at"]) >= 3
+    assert probes["left"] == 0
+    if serial:
+        assert [
+            e["outcome"] for e in events if e["type"] == "wrapper.iteration.end"
+        ][0] == "pin_unread"
+        assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 2
+    log = _diag_log(tmp_path)
+    assert "Lease write was refused: pre-push: use the approved branch namespace" in log
+    assert "failed to push some refs" not in log
+    assert "WARNING issue #43: Lease" not in log
 
 
 def test_serial_readiness_retries_use_the_pool_read_without_opening_iterations(
@@ -14724,8 +14787,74 @@ def test_each_lane_holds_its_own_lease_and_one_contention_frees_no_other(
     ]
 
 
-def test_a_lane_whose_lease_remote_cannot_be_read_passes_over_and_ends(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("serial", [False, True], ids=["lane", "serial"])
+@pytest.mark.parametrize("other_failure", [None, "read", "readiness"])
+def test_unbound_run_groups_lease_writes_without_losing_other_unresolved_candidates(
+    tmp_path, monkeypatch, serial, other_failure
+) -> None:
+    labels = ["ready-for-agent"] + ([] if serial else ["parallel-safe"])
+    issues = [_make_issue(ref, labels=labels) for ref in (43, 44)]
+    if other_failure:
+        issues.insert(0, _make_issue(
+            42, labels=labels,
+            blocked_by=BlockedByRead.unprovable() if other_failure == "readiness" else None,
+        ))
+    _wire_rolling_run(tmp_path, monkeypatch, issues)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    if other_failure == "read":
+        _fail_lease_probes(monkeypatch, fake_git, 42, times=1)
+    fake_git.push_ref_errors = [
+        git_module.GitError(
+            ["git", "push"], 1,
+            "pre-push: use the approved branch namespace\n"
+            "error: failed to push some refs to 'origin'\n",
+        )
+        for _ in range(2)
+    ]
+
+    exit_code = asyncio.run(asyncio.wait_for(loop_module.run(RunConfig(
+        model="claude-opus-4.8-max", issue_source="github",
+        max_iterations=5, verbosity=0, render_reasoning=False,
+    )), timeout=15))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == []
+    assert _lane_starts(events) == []
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == [
+        "preflight_failed",
+    ]
+    assert exit_code == loop_module.exit_code_for("preflight_failed")
+    assert len(fake_git.push_ref_calls) == 2
+    log = _diag_log(tmp_path)
+    errors = [line for line in log.splitlines() if " ERROR " in line]
+    assert len(errors) == 1
+    [error] = errors
+    assert "Lease write was refused (#43, #44; example cause: " in error
+    assert error.count("pre-push: use the approved branch namespace") == 1
+    assert "core.hooksPath" in error
+    assert "failed to push some refs" not in log
+    if other_failure == "read":
+        assert "Lease read failed (remote unreadable) (#42; example cause: " in error
+        assert "no route to host" in error
+    elif other_failure == "readiness":
+        assert "Readiness could not be read (#42; readiness_unprovable)" in error
+    else:
+        assert "gh auth status" not in error
+    if other_failure:
+        assert "gh auth status" in error
+        assert "network path" in error
+        assert "blockers" in error
+    skips = [e for e in events if e["type"] == "wrapper.pickup.skipped"]
+    for ref in (43, 44):
+        assert [e["reason"] for e in skips if e["issue"] == ref] == [
+            "Lease write was refused: pre-push: use the approved branch namespace",
+        ]
+
+
+@pytest.mark.parametrize("phase", ["read", "write"])
+def test_a_lane_whose_lease_take_is_unavailable_passes_over_and_ends(
+    tmp_path, monkeypatch, phase
 ) -> None:
     """An unreadable Lease remote denies a Lane candidate, once (#390, §8.3).
 
@@ -14755,7 +14884,18 @@ def test_a_lane_whose_lease_remote_cannot_be_read_passes_over_and_ends(
         probes.append((remote, ref))
         raise git_module.GitError(["git", "ls-remote", remote, ref], 128, "no route")
 
-    monkeypatch.setattr(fake_git, "probe_remote_ref", unreadable)
+    if phase == "read":
+        monkeypatch.setattr(fake_git, "probe_remote_ref", unreadable)
+        expected_reason = "Lease could not be taken (remote unreadable): no route"
+    else:
+        fake_git.push_ref_errors = [
+            git_module.GitError(
+                ["git", "push"], 1,
+                "pre-push: use the approved branch namespace\n"
+                "error: failed to push some refs to 'origin'\n",
+            )
+        ]
+        expected_reason = "Lease write was refused: pre-push: use the approved branch namespace"
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     fake_gh = FakeGitHubClient(
@@ -14795,15 +14935,28 @@ def test_a_lane_whose_lease_remote_cannot_be_read_passes_over_and_ends(
     assert all("refusals" not in event for event in run_ends)  # #643
     assert exit_code == loop_module.exit_code_for("preflight_failed"), exit_code
     lease_probes = [probe for probe in probes if probe[1] == lease_ref(42)]
-    assert len(lease_probes) == 1, lease_probes
+    if phase == "read":
+        assert len(lease_probes) == 1, lease_probes
+    else:
+        assert len(fake_git.push_ref_calls) == 1
     skips = [
         event
         for event in _logged_events(tmp_path)
         if event["type"] == "wrapper.pickup.skipped" and event.get("issue") == 42
     ]
-    assert [event["reason"] for event in skips] == [
-        "Lease could not be taken (remote unreadable)"
-    ], skips
+    assert [event["reason"] for event in skips] == [expected_reason], skips
+    warnings = [line for line in _diag_log(tmp_path).splitlines() if " WARNING " in line]
+    assert any(expected_reason in line for line in warnings)
+    error = next(line for line in _diag_log(tmp_path).splitlines() if " ERROR " in line)
+    if phase == "write":
+        assert "Lease write was refused" in error
+        assert "pre-push: use the approved branch namespace" in error
+        assert "core.hooksPath" in error
+        assert "could not be read" not in error
+        assert "gh auth status" not in error
+    else:
+        assert "remote unreadable" in error
+        assert "no route" in error
 
 
 @pytest.mark.parametrize("priority_arrives", [False, True])

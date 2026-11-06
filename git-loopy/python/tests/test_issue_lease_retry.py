@@ -146,7 +146,7 @@ def test_only_transient_lease_write_failures_retry(
     else:
         with pytest.raises(GitError) as caught:
             transport.claim(390, run_id=OWNER, now=1000, host="laptop", pid=42)
-        assert caught.value is failure
+        assert caught.value.__cause__ is failure
         assert clock.waits == []
         assert len(git.push_ref_calls) == 1
 
@@ -160,7 +160,7 @@ def test_retry_exhaustion_preserves_the_last_error_and_bounds_backoff(
     git.push_ref_errors = failures.copy()
     with pytest.raises(GitError) as caught:
         transport.claim(390, run_id=OWNER, now=1000, host="laptop", pid=42)
-    assert caught.value is failures[3]
+    assert caught.value.__cause__ is failures[3]
     assert clock.waits == [1.0, 2.0, 4.0]
     assert len(git.push_ref_calls) == 4
     assert len(set(git.push_ref_calls)) == 1
@@ -224,7 +224,7 @@ def test_time_spent_in_git_consumes_the_retry_deadline(
     git.push_ref_interceptor = slow_failure
     with pytest.raises(GitError) as caught:
         transport.claim(390, run_id=OWNER, now=1000, host="laptop", pid=42)
-    assert caught.value is failure
+    assert caught.value.__cause__ is failure
     assert len(git.push_ref_calls) == 1
     assert clock.waits == []
 
@@ -245,7 +245,7 @@ def test_a_paused_run_does_not_write_after_its_retry_deadline(tmp_path: Path) ->
     git.push_ref_errors = [failure]
     with pytest.raises(GitError) as caught:
         transport.claim(390, run_id=OWNER, now=1000, host="laptop", pid=42)
-    assert caught.value is failure
+    assert caught.value.__cause__ is failure
     assert len(git.push_ref_calls) == 1
     assert clock.waits == [1.0]
 

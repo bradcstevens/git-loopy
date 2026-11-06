@@ -53,6 +53,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Final
 
+from git_loopy.issue_lease import LeaseFailurePhase
 from git_loopy.issue_order import LABEL_PRIORITY
 from git_loopy.sources import AfkReadyItem
 
@@ -67,6 +68,7 @@ __all__ = [
     "SerialSkip",
     "SerialPickup",
     "pick_serial",
+    "unresolved_pickup_detail",
 ]
 
 #: This candidate was taken because it was next in the §3.2 order.
@@ -105,13 +107,16 @@ class AdmissionRefusal:
     ``waiting_on_blocker`` records a proved open native dependency without
     asking a terminal caller to parse that payload. ``unresolved`` records the
     opposite fact for the same reason (#542): this candidate was not refused at
-    all, its **Readiness** read simply did not complete, so it proves nothing a
-    terminal outcome may rest on.
+    all, its **Readiness** read or **Lease** take did not complete, so it proves
+    nothing a terminal outcome may rest on. Lease phase/cause metadata keeps
+    Pin handling and grouped remedies independent of diagnostic wording.
     """
 
     reason: str
     waiting_on_blocker: bool = False
     unresolved: bool = False
+    lease_phase: LeaseFailurePhase | None = None
+    lease_cause: str | None = None
 
 
 #: Whether one candidate may be bound. A string keeps simple admission policies
@@ -138,6 +143,48 @@ class SerialSkip:
     reason: str
     waiting_on_blocker: bool = False
     unresolved: bool = False
+    lease_phase: LeaseFailurePhase | None = None
+    lease_cause: str | None = None
+
+
+def unresolved_pickup_detail(skips: Sequence[SerialSkip]) -> str:
+    """Group unresolved candidates and prescribe remedies for the failed phase."""
+    groups: list[str] = []
+    advice: list[str] = []
+    for phase, description in (
+        ("read", "Lease read failed (remote unreadable)"),
+        ("write", "Lease write was refused"),
+        (None, "Readiness could not be read"),
+    ):
+        group = [
+            skip for skip in skips
+            if skip.unresolved and skip.lease_phase == phase
+        ]
+        if not group:
+            continue
+        refs = ", ".join(f"#{skip.ref}" for skip in group)
+        cause = next((skip.lease_cause for skip in group if skip.lease_cause), None)
+        if phase is None:
+            detail = "; ".join(dict.fromkeys(skip.reason for skip in group))
+        else:
+            detail = f"example cause: {cause!r}" if cause else "no cause reported"
+        groups.append(f"{description} ({refs}; {detail})")
+    if any(skip.unresolved and skip.lease_phase != "write" for skip in skips):
+        advice.append(
+            "Check `gh auth status`, this host's network path to the tracker "
+            "and to `origin`, and whether those issues' blockers live in a "
+            "repository this token can see."
+        )
+    if any(skip.unresolved and skip.lease_phase == "write" for skip in skips):
+        advice.append(
+            "Check client-side push hooks (including `core.hooksPath`), "
+            "push permission, and rulesets on `refs/heads/git-loopy/leases/*`."
+        )
+    return (
+        f"{'; '.join(groups)}; an unresolved candidate is unknown, not refused, "
+        "so this Run will not report successful exhaustion. "
+        f"{' '.join(advice)} Then re-run."
+    )
 
 
 @dataclass(frozen=True)
@@ -259,6 +306,8 @@ def pick_serial(
                 reason=refusal.reason,
                 waiting_on_blocker=refusal.waiting_on_blocker,
                 unresolved=refusal.unresolved,
+                lease_phase=refusal.lease_phase,
+                lease_cause=refusal.lease_cause,
             )
         )
     return SerialPickup(
