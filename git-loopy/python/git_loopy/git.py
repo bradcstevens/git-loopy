@@ -100,6 +100,7 @@ from .process_cleanup import kill_and_release
 
 __all__ = [
     "GitError",
+    "fetched_main_paths",
     "Commit",
     "GitClient",
     "SubprocessGitClient",
@@ -259,6 +260,18 @@ def _run(
             [_GIT_BIN, *args], completed.returncode, _stderr_tail(completed.stderr)
         )
     return completed.stdout
+
+
+def fetched_main_paths(directory: str) -> tuple[str, ...]:
+    """List paths on a fresh origin/main, never the Agent's working tree."""
+    _run(["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"])
+    return tuple(
+        path
+        for path in _run(
+            ["ls-tree", "-r", "--name-only", "-z", "origin/main", "--", directory]
+        ).split("\0")
+        if path
+    )
 
 
 def _run_completed(

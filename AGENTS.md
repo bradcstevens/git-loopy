@@ -89,6 +89,8 @@ Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `
 
 ## Repository workflow
 
+When writing an ADR, run `uv run --project git-loopy/python --all-extras python -m git_loopy.adr_number` from the repository root for the next free number and its remote evidence.
+
 Agent skills come from
 [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills),
 the source of record. `git-loopy init` installs it at the revision this

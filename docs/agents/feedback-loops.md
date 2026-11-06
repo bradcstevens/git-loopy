@@ -39,6 +39,18 @@ blocking gate:
   by `tests/test_sdk_feed.py` inside the Python suite row. Run it when working
   in this repository and surface any finding; a finding does not change the
   pin, and a feed error is never "no upgrade available".
+- **`python -m git_loopy.adr_number`** reports the next free ADR number after
+  freshly fetching `origin/main` and listing the files every open pull request
+  adds (#965). It advances past the highest published or pending number, names
+  the highest number on `origin/main`, and lists each pull request's added ADR
+  paths. It reads no other sessions' local logs and reserves no number; run it
+  again before publishing an ADR. It reaches the network, so it can never be a
+  gate: an unreachable remote would make Integration red for a reason no change
+  here caused. Its offline half — the fresh-main listing, paginated pull-request
+  and added-file listings, the number and evidence report, and read failures
+  that exit non-zero without printing a number — is covered by
+  `tests/test_adr_number.py` inside the Python suite row. An incomplete or failed
+  read is an error, never permission to number from stale or partial data.
 - **A paired Skill change** (ADR-0064) is authored in a sibling clone of
   `bradcstevens/git-loopy-skills`, published, proved, then pinned. It is a
   working surface, not a loop: proving it reaches that clone, and an
