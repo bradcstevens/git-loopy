@@ -27,6 +27,8 @@ from .host_sleep import SuspensionClock
 from .issue_lease import (
     DEFAULT_TTL_SECONDS,
     RENEW_INTERVAL_SECONDS,
+    LeaseClaimError,
+    LeaseFailurePhase,
     LeaseHold,
     LeaseRefPort,
     LeaseTransport,
@@ -114,7 +116,20 @@ class LeaseTake:
     verdict: TakeVerdict
     hold: LeaseHold | None = None
     displaced_run_id: str | None = None
-    reason: str | None = None
+    phase: LeaseFailurePhase | None = None
+    cause: str | None = None
+
+    @property
+    def reason(self) -> str | None:
+        """One phase-specific diagnostic for Pickup, warnings and Pin notices."""
+        if self.verdict != "unavailable":
+            return None
+        message = (
+            "Lease write was refused"
+            if self.phase == "write"
+            else "Lease could not be taken (remote unreadable)"
+        )
+        return f"{message}: {self.cause}" if self.cause else message
 
     @property
     def granted(self) -> bool:
@@ -248,7 +263,7 @@ class LeaseLifecycle:
         holds it live, which is the mechanism working rather than a fault, so
         the caller moves to the next candidate silently (ADR-0033 §8.2).
 
-        ``unavailable`` is the fourth, and it is a read that did not happen.
+        ``unavailable`` is the fourth: observation or creation/push failed.
         A broken fetch must never be reported as absence — absence admits a
         claim, so inferring it would hand one issue to two Runs — and it must
         not end the Run either, because **Pickup** is unattended and a
@@ -278,9 +293,19 @@ class LeaseLifecycle:
                 pid=self._pid,
                 ttl_seconds=self._ttl_seconds,
             )
-        except GitError as exc:
+        except LeaseClaimError as exc:
+            cause = next(
+                (
+                    line.strip() for line in reversed(exc.stderr_tail.splitlines())
+                    if line.strip() and not line.strip().startswith(
+                        ("error: failed to push some refs", "failed to push some refs")
+                    )
+                ),
+                None,
+            )
+            take = LeaseTake("unavailable", cause=cause, phase=exc.phase)
             if report_failure:
-                self._warn(f"Lease for issue #{issue} could not be read or taken: {exc}")
+                self._warn(f"issue #{issue}: {take.reason}")
             if not self._ever_held and is_permanent_lease_write_refusal(exc):
                 # Not an outage: this clone may never write the Lease
                 # namespace. Latched only before the first successful write,
@@ -298,7 +323,7 @@ class LeaseLifecycle:
                     "token push access to 'refs/heads/git-loopy/leases/*' to "
                     "restore it."
                 )
-            return LeaseTake("unavailable", reason=str(exc))
+            return take
         if hold is None:
             return LeaseTake("refused")
         self._holds[issue] = hold

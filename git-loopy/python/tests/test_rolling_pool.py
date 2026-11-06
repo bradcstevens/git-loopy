@@ -1053,14 +1053,15 @@ class TestVisibilityCadence:
 
 class TestModuleStructure:
     def test_imports_are_constrained(self) -> None:
-        """rolling_pool.py may only import stdlib + ``git_loopy.sources``.
+        """The cache imports sources and pure Pickup decisions, not the Run.
 
         The cache sits on the source seam and below the scheduler. Reaching for
         ``loop``/``events``/``ui`` would invert that and make the scheduler
         untestable without a Run; reaching for ``gh`` would bypass the seam that
-        exists so the shallow/authoritative split can be substituted. The one
-        addition is ``git_loopy.issue_pin``, pure and stdlib-only, for the Pin
-        read vocabulary the cache reports in (#644).
+        exists so the shallow/authoritative split can be substituted.
+        ``git_loopy.issue_pin`` supplies the Pin-read vocabulary (#644).
+        ``git_loopy.serial_pickup`` supplies shared admission-failure records
+        and grouped diagnostics, so Serial and Lane remedies agree (#1038).
         """
         import ast
         from pathlib import Path
@@ -1068,7 +1069,7 @@ class TestModuleStructure:
         from git_loopy import rolling_pool as module
 
         tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
-        allowed = {"sources", "issue_pin"}
+        allowed = {"sources", "issue_pin", "serial_pickup"}
         offenders: list[str] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

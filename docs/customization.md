@@ -330,6 +330,33 @@ mechanism: before every push, comment, label write and issue close, a run re-rea
 its own Lease and abandons the issue if it no longer holds it. A Lease taken from a
 run that was merely slow therefore costs duplicated *effort*, never corrupted state.
 
+### When a Lease cannot be taken
+
+Pickup distinguishes two failures in Serial mode and Lanes. The skip reason,
+per-candidate warning and Unread Pin notice carry the same wording and useful cause:
+
+- **`Lease could not be taken (remote unreadable)`** means observing the Lease ref
+  failed. Check `gh auth status`, the host's network path to the tracker and `origin`,
+  and whether blockers live in repositories the token can see.
+- **`Lease write was refused`** means creating the local Lease record or pushing it
+  failed, not that the remote could not be read. Follow the quoted cause. For a push
+  refusal, check client-side push hooks (including `core.hooksPath`), push permission,
+  and rulesets affecting `refs/heads/git-loopy/leases/*`. A local record-creation
+  failure instead needs the local Git/storage problem in its cause repaired.
+
+The cause is the last nonempty line of failure output other than Git's generic
+`failed to push some refs` trailer. If no useful line was reported, the diagnostic
+still names the phase without inventing a cause. When Pickup binds nothing, the
+terminal ERROR groups unresolved candidates by phase, listing their issue numbers
+and one example cause per group; mixed failures retain both groups and their remedies.
+Other unresolved Readiness reads remain separately represented.
+
+These failures leave candidates unresolved: an unbound Pickup ends
+`preflight_failed`, never successful exhaustion. An Unread Pin keeps its existing
+hold/probe behavior, with `lease` as the notice's read category even when the failed
+phase was a write. Reporting does not change contention, fencing, retries, renewal,
+or release. Recognized permanent refusals retain the special handling below.
+
 ### When Leases are off
 
 A run resolves the repository it contends on from its `origin` URL — a local config

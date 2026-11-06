@@ -296,6 +296,7 @@ from git_loopy.serial_pickup import (
     SerialPickup,
     pick_serial,
     reason_for,
+    unresolved_pickup_detail,
 )
 from git_loopy.session import IterationSession, SandboxError, SandboxPolicy
 from git_loopy.sinks import EventSink, SinkFanout
@@ -833,15 +834,6 @@ _AUTO_RESOLUTION_FALLBACK_COMMENT = (
 
 _LEASE_HELD_ELSEWHERE = "held by another Run's live Lease"
 """**Pickup** skip reason: a rival Run answered, and its answer was no."""
-
-_LEASE_UNREADABLE = "Lease could not be taken (remote unreadable)"
-"""**Pickup** skip reason: the Lease probe failed, so nobody answered at all.
-
-Distinguished from :data:`_LEASE_HELD_ELSEWHERE` because only one of them is
-a fact about the work. Conflating them would let a Run report a Pool it never
-finished reading as one it was refused (#390, ADR-0033 §8.3).
-"""
-
 
 def _integration_worktree_path(
     common_git_dir: Path, run_id: str, issue_number: int | str
@@ -3747,10 +3739,10 @@ class _Loop:
                 and isinstance(refusal, AdmissionRefusal)
                 and refusal.unresolved
             ):
-                # A Readiness or Lease read of the Pin that did not happen is
+                # A Readiness read or Lease take that did not happen is
                 # the Pin unread, not the Pin refused, so the Iteration latched
                 # for it binds nothing rather than the next candidate (#430).
-                self._pin_lease_unread = refusal.reason == _LEASE_UNREADABLE
+                self._pin_lease_unread = refusal.lease_phase is not None
                 raise _PinUnreadAtPickup
             return refusal
 
@@ -3956,20 +3948,24 @@ class _Loop:
             # is off; admit the candidate unguarded rather than end a Run that
             # would otherwise do every bit of its work.
             return None
-        if unread_pin and take.verdict == "unavailable":
-            self._note_pin_unread("lease", take.reason or _LEASE_UNREADABLE)
         if take.verdict == "refused":
             # Not a conflict: another Run is working it, which is the mechanism
             # working (ADR-0033 §8.2). Skipped silently rather than warned.
             return "held by another Run's live Lease"
-        # An unreadable Lease remote is a read that did not happen, not this
-        # candidate refusing work (#542, ADR-0047) — the same distinction the
-        # **Readiness** branch above draws. It matters because a systemic
+        assert take.reason is not None
+        if unread_pin:
+            self._note_pin_unread("lease", take.reason)
+        # A failed Lease read or write is not this candidate refusing work
+        # (#542, ADR-0047) — the same distinction the **Readiness** branch
+        # above draws. It matters because a systemic
         # failure (network down, credentials expired) refuses *every*
         # candidate this way, and a terminal outcome that called that
         # `all_skipped` would report a fact about the Pool that nobody ever
         # established.
-        return AdmissionRefusal(reason=_LEASE_UNREADABLE, unresolved=True)
+        return AdmissionRefusal(
+            reason=take.reason, unresolved=True,
+            lease_phase=take.phase, lease_cause=take.cause,
+        )
 
     def _release_lease(self, ref: int | str) -> None:
         """Give back one issue's **Lease**, if this Run holds it.
@@ -4046,14 +4042,6 @@ class _Loop:
         """
         assert pickup.skipped
         unresolved = tuple(skip.ref for skip in pickup.skipped if skip.unresolved)
-        # Name the refusals rather than assume them. Readiness is no longer the
-        # only read that can fail to complete: since #390 activated the Lease,
-        # an unreadable Lease remote is unresolved too, and an operator sent to
-        # `gh auth status` over a Lease ref they cannot push has been sent to
-        # the wrong place entirely.
-        unresolved_reasons = tuple(
-            dict.fromkeys(skip.reason for skip in pickup.skipped if skip.unresolved)
-        )
         outcome = unbound_pool_outcome(
             candidates=len(pickup.skipped),
             waiting=sum(1 for skip in pickup.skipped if skip.waiting_on_blocker),
@@ -4062,16 +4050,10 @@ class _Loop:
         if outcome == "preflight_failed":
             self._diag.error(
                 "serial Pickup bound nothing, and %d of the %d candidate(s) in "
-                "the Pool could not be read (%s: %s); an unread candidate is "
-                "unknown, not refused, so this Run will not report the Pool as "
-                "one it could take no work from. Check `gh auth status`, this "
-                "host's network path to the tracker and to `origin`, and "
-                "whether those issues' blockers live in a repository this token "
-                "can see, then re-run.",
+                "the Pool remain unresolved: %s",
                 len(unresolved),
                 len(pickup.considered),
-                ", ".join(f"#{ref}" for ref in unresolved),
-                "; ".join(unresolved_reasons),
+                unresolved_pickup_detail(pickup.skipped),
             )
             self._finish_iteration(iter_num, outcome=outcome)
             # Reported as `preflight_failed`, routed under its own name: see
@@ -4947,13 +4929,13 @@ class _ParallelLoop:
         # the terminal classifier can honestly report all_skipped.
         self._rolling_refused: dict[int | str, str] = {}
         self._lane_setup_attempts: dict[int | str, int] = {}
-        # The subset of :attr:`_rolling_refused` a **Lease** *read* refused
+        # The subset of :attr:`_rolling_refused` a **Lease** take could not resolve
         # rather than a rival's answer. Kept apart because the two are not the
         # same fact: a rival holding the issue is the mechanism working, while
-        # a probe that failed established nothing at all — so only this set
+        # a take that failed established nothing at all — so only these entries
         # may make the Run's terminal outcome `preflight_failed` rather than
         # the `all_skipped` that would assert a refusal nobody read.
-        self._lease_unreadable: set[int | str] = set()
+        self._lease_unreadable: dict[int | str, AdmissionRefusal] = {}
         #: This Run's **Lease**s — the *same* lifecycle the embedded serial
         #: driver holds, deliberately, because a Run must not contend with
         #: itself: one object knows every issue this Run holds, whichever path
@@ -6544,11 +6526,10 @@ class _ParallelLoop:
             if not still_owed:
                 self._release_lane_lease(ref)
 
-    def _take_lane_lease(self, item: AfkReadyItem) -> tuple[str | None, str | None]:
+    def _take_lane_lease(self, item: AfkReadyItem) -> str | AdmissionRefusal | None:
         """Take ``item``'s **Lease** — Lane **Pickup**'s last step — or say why not.
 
-        Returns the **Pickup skip** reason and optional read-failure detail,
-        or two ``None`` values when this Lane may work the item.
+        Returns the **Pickup skip** refusal, or ``None`` to admit the item.
 
         Placed where the serial path places it (§2.4): the last step of
         **Pickup**, after routing has admitted the candidate and *before*
@@ -6571,22 +6552,26 @@ class _ParallelLoop:
             or item.kind != "issue"
             or not isinstance(ref, int)
         ):
-            return None, None
+            return None
         take = self._lease.take(ref, report_failure=ref != self._lane_first_pin())
         if take.granted:
             self._lane_leases.add(ref)
-            return None, None
+            return None
         if self._lease.disabled():
             # This clone may never write a Lease ref, so a Lease here protects
             # nothing and refusing the work buys nothing. Same answer as no
             # lifecycle at all — the warning has already been issued once.
-            return None, None
+            return None
         if take.verdict == "refused":
-            return _LEASE_HELD_ELSEWHERE, None
-        return _LEASE_UNREADABLE, take.reason
+            return _LEASE_HELD_ELSEWHERE
+        assert take.reason is not None
+        return AdmissionRefusal(
+            reason=take.reason, unresolved=True,
+            lease_phase=take.phase, lease_cause=take.cause,
+        )
 
-    def _lane_lease_unreadable(self, candidate: PoolCandidate) -> bool:
-        """Was ``candidate`` passed over by a **Lease** read that did not happen?
+    def _lane_lease_unreadable(self, candidate: PoolCandidate) -> AdmissionRefusal | None:
+        """Why ``candidate`` was passed over by a failed **Lease** take.
 
         The :class:`~git_loopy.rolling_pool.RollingPool`'s ``read_refused``
         seam. A candidate here is unknown rather than refused, so it ends the
@@ -6595,7 +6580,7 @@ class _ParallelLoop:
         claim this Run could take no work from a Pool it never finished
         reading.
         """
-        return candidate.ref in self._lease_unreadable
+        return self._lease_unreadable.get(candidate.ref)
 
     def _release_lane_lease(self, ref: int | str) -> None:
         """Give back one Lane's **Lease**, if *this Lane* took it.
@@ -6754,9 +6739,9 @@ class _ParallelLoop:
         # doing it. A Lane that classified first would write twice onto an
         # issue a rival Run holds a live Lease on, and buy an AI session for
         # work it is about to be refused.
-        refusal, lease_reason = self._take_lane_lease(item)
-        if refusal == _LEASE_UNREADABLE and is_pin:
-            pin_unread("lease", lease_reason or refusal)
+        refusal = self._take_lane_lease(item)
+        if isinstance(refusal, AdmissionRefusal) and is_pin:
+            pin_unread("lease", refusal.reason)
             return
         if refusal is not None:
             # Refused *candidacy* for the rest of this Run, not merely this
@@ -6766,14 +6751,15 @@ class _ParallelLoop:
             # as the rival holds it, exactly as the dynamic-route refusal
             # below describes. The serial ordered walk moves on by
             # construction (§8.2); the Lane path has to be told to.
-            self._diag.info("lane #%s passed over: %s", ref, refusal)
-            passed_over(refusal)
-            self._rolling_refused[ref] = refusal
-            if refusal != _LEASE_HELD_ELSEWHERE:
-                # A probe that failed refused nothing; it only failed to ask.
+            reason = refusal.reason if isinstance(refusal, AdmissionRefusal) else refusal
+            self._diag.info("lane #%s passed over: %s", ref, reason)
+            passed_over(reason)
+            self._rolling_refused[ref] = reason
+            if isinstance(refusal, AdmissionRefusal):
+                # A failed take proved no refusal of the candidate.
                 # Bounding the candidate is still right — see above — but the
                 # Run must not then report it as work it was *refused*.
-                self._lease_unreadable.add(ref)
+                self._lease_unreadable[ref] = refusal
             pin_refused()
             scheduler.release(reservation)
             return
