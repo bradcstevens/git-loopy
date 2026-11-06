@@ -273,7 +273,7 @@ class LeaseRefPort(Protocol):
 
     def push_ref(
         self, remote: str, ref: str, sha: str | None, expected: str | None,
-        *, timeout_seconds: float = 15.0,
+        *, timeout_seconds: float = 15.0, verify: bool = True,
     ) -> bool:
         """Compare-and-swap ``ref``; ``False`` on rejection, raise on transport."""
         ...
@@ -439,9 +439,12 @@ class LeaseTransport:
         deadline = self._clock() + min(timeout_seconds, _WRITE_BUDGET_SECONDS)
         for attempt in range(_WRITE_ATTEMPTS):
             try:
+                # A record is metadata, never content: the clone's pre-push
+                # hook has nothing to gate (#1031).
                 return self._git.push_ref(
                     self._remote, ref, sha, expected,
                     timeout_seconds=deadline - self._clock(),
+                    verify=False,
                 ), attempt + 1
             except GitError as exc:
                 if (

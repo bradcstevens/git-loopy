@@ -586,14 +586,15 @@ class FakeGitClient:
 
     def push_ref(
         self, remote: str, ref: str, sha: str | None, expected: str | None,
-        *, timeout_seconds: float = 15.0,
+        *, timeout_seconds: float = 15.0, verify: bool = True,
     ) -> bool:
         """Compare-and-swap ``ref`` on ``remote``, ``sha=None`` deleting it.
 
         Returns ``False`` when the remote's current SHA differs from
         ``expected`` — the rejection real ``--force-with-lease`` produces —
         and raises a scripted :exc:`GitError` for transport failure, so a
-        caller's retry policy can tell the two apart.
+        caller's retry policy can tell the two apart. The fake runs no hooks,
+        so ``verify`` changes nothing here.
         """
         self.push_ref_calls.append((remote, ref, sha, expected))
         self.push_ref_timeouts.append(timeout_seconds)
