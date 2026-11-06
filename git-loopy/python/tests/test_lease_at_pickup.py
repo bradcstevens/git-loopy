@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from copilot import CopilotClient
 
 from git_loopy import loop as loop_module
@@ -21,7 +22,7 @@ from git_loopy.git import GitError
 from git_loopy.issue_lease import DEFAULT_TTL_SECONDS, LeaseTransport, lease_ref
 from git_loopy.lease_lifecycle import LeaseLifecycle
 from git_loopy.persist import create_writers
-from git_loopy.serial_pickup import AdmissionRefusal
+from git_loopy.serial_pickup import AdmissionRefusal, pick_serial
 from git_loopy.sinks import SinkFanout
 from git_loopy.sources import AfkReadyItem, PoolCollection
 from git_loopy.ui import RunSummary
@@ -80,6 +81,7 @@ def _build(
     repo_root.mkdir(exist_ok=True)
     git = _CountingGit(repo_root)
     source = _CountingSource()
+    writers = create_writers(repo_root)
     lease = LeaseLifecycle(
         LeaseTransport(git, remote="origin", repository=REPOSITORY),
         run_id=OWNER,
@@ -87,8 +89,8 @@ def _build(
         pid=42,
         clock=clock if clock is not None else _Clock(),
         heartbeats=None,
+        warn=writers.diagnostics.warning,
     )
-    writers = create_writers(repo_root)
     denomination = BilledCreditsDenomination()
     loop = loop_module._Loop(
         config=RunConfig(),
@@ -320,6 +322,126 @@ def test_an_unreadable_lease_remote_is_an_unresolved_read_not_a_refusal(
     assert isinstance(refusal, AdmissionRefusal)
     assert refusal.unresolved is True
     assert refusal.waiting_on_blocker is False
+    assert refusal.reason == (
+        "Lease could not be taken (remote unreadable): could not read from remote"
+    )
+
+
+def test_pickup_reports_the_hook_refusal_not_an_unreadable_remote(
+    tmp_path: Path,
+) -> None:
+    loop, git, _, _ = _build(tmp_path)
+    git.push_ref_errors = [
+        GitError(
+            ["git", "push"], 1,
+            "pre-push: Lease branches are not allowed by this client hook\n"
+            "error: failed to push some refs to 'origin'\n",
+        )
+    ]
+
+    refusal = loop._take_lease_at_pickup(_item(390))
+
+    assert isinstance(refusal, AdmissionRefusal)
+    assert refusal.unresolved is True
+    assert refusal.reason == (
+        "Lease write was refused: "
+        "pre-push: Lease branches are not allowed by this client hook"
+    )
+    assert len(git.push_ref_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ("fatal: unable to write object\n", "Lease write was refused: fatal: unable to write object"),
+        ("error: failed to push some refs to 'origin'\n", "Lease write was refused"),
+        (" \n", "Lease write was refused"),
+    ],
+)
+def test_pickup_reports_record_creation_failure_without_inventing_a_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output: str, expected: str,
+) -> None:
+    loop, git, _, _ = _build(tmp_path)
+
+    def fail(_message: str) -> str:
+        raise GitError(["git", "commit-tree"], 1, output)
+
+    monkeypatch.setattr(git, "write_orphan_commit", fail)
+
+    pickup = pick_serial([_item(390)], admit=loop._take_lease_at_pickup)
+    [skip] = pickup.skipped
+    assert skip.unresolved
+    assert skip.reason == expected
+    assert git.push_ref_calls == []
+    loop._emit("wrapper.iteration.start", iter_num=1)
+    assert loop._finish_unworked_iteration(1, pickup)[0] == "pool_unresolved"
+    log = next((tmp_path / "repo/.git-loopy/logs").glob("*.log")).read_text()
+    assert expected in log
+    assert "gh auth status" not in log
+    if "unable to write object" not in output:
+        assert "no cause reported" in log
+
+
+@pytest.mark.parametrize("phases", [("write", "write"), ("read", "read"), ("read", "write", "write")])
+def test_unbound_pickup_groups_lease_failures_and_gives_phase_specific_advice(
+    tmp_path: Path, phases: tuple[str, ...],
+) -> None:
+    loop, git, _, _ = _build(tmp_path)
+    real_probe = git.probe_remote_ref
+    refs = list(range(390, 390 + len(phases)))
+    read_refs = {lease_ref(ref) for ref, phase in zip(refs, phases) if phase == "read"}
+
+    def probe(remote: str, ref: str) -> str | None:
+        if ref in read_refs:
+            raise GitError(["git", "ls-remote"], 128, "fatal: unable to read origin")
+        return real_probe(remote, ref)
+
+    git.probe_remote_ref = probe  # type: ignore[method-assign]
+    git.push_ref_errors = [
+        GitError(
+            ["git", "push"], 1,
+            "pre-push: use the approved branch namespace\n"
+            "error: failed to push some refs to 'origin'\n",
+        )
+        for phase in phases if phase == "write"
+    ]
+
+    pickup = pick_serial([_item(ref) for ref in refs], admit=loop._take_lease_at_pickup)
+    loop._emit("wrapper.iteration.start", iter_num=1)
+    outcome, _, _ = loop._finish_unworked_iteration(1, pickup)
+
+    assert not pickup.bound
+    assert all(skip.unresolved for skip in pickup.skipped)
+    assert outcome == "pool_unresolved"
+    log = next((tmp_path / "repo/.git-loopy/logs").glob("*.log")).read_text()
+    error = next(line for line in log.splitlines() if " ERROR " in line)
+    for phase in set(phases):
+        numbers = ", ".join(f"#{ref}" for ref, value in zip(refs, phases) if value == phase)
+        heading = "Lease write was refused" if phase == "write" else "Lease read failed (remote unreadable)"
+        assert f"{heading} ({numbers}; example cause: " in error
+    if "write" in phases:
+        assert "Lease write was refused" in error
+        assert error.count("pre-push: use the approved branch namespace") == 1
+        assert "client-side push hooks" in error
+        assert "core.hooksPath" in error
+        assert "push permission" in error
+        assert "rulesets" in error
+        assert "refs/heads/git-loopy/leases/*" in error
+    if "read" in phases:
+        assert "remote unreadable" in error
+        assert error.count("fatal: unable to read origin") == 1
+        assert "gh auth status" in error
+        assert "network path" in error
+        assert "blockers" in error and "repository" in error
+    else:
+        assert "gh auth status" not in error
+        assert "could not be read" not in error
+    assert "failed to push some refs" not in log
+    warnings = [line for line in log.splitlines() if " WARNING " in line]
+    assert len(warnings) == len(phases)
+    for ref, phase in zip(refs, phases):
+        warning = next(line for line in warnings if f"#{ref}" in line)
+        assert ("Lease write was refused" if phase == "write" else "remote unreadable") in warning
 
 
 def test_leases_being_off_admits_the_candidate_and_permits_its_writes(

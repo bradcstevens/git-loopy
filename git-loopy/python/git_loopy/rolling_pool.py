@@ -43,9 +43,8 @@ Design notes:
   later complete refresh still lists it, and blocks an empty claim while it
   remains unresolved. The one exception is :attr:`RollingPool.lane_first`, an
   unspent **Pin** that takes the first Lane (#430).
-* **stdlib + ``git_loopy.sources`` only**, plus the Pin-read vocabulary of the
-  pure :mod:`git_loopy.issue_pin`. Same constraint the sources seam carries: no
-  SDK, no Rich, no peer-of-loop imports.
+* **Pure Pickup decisions and diagnostics**, using ``git_loopy.sources``,
+  ``git_loopy.issue_pin`` and ``git_loopy.serial_pickup``: no SDK or Rich.
 """
 
 from __future__ import annotations
@@ -56,6 +55,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from git_loopy.issue_pin import PIN_READ_REFUSED, PIN_READ_UNREAD
+from git_loopy.serial_pickup import AdmissionRefusal, SerialSkip, unresolved_pickup_detail
 from git_loopy.sources import (
     AfkReadyItem,
     LABEL_PARALLEL_SAFE,
@@ -108,9 +108,9 @@ def _ignore_lane_first_unread(read: str, reason: str) -> None:
     """No Unread-Pin observer outside a Rolling Run."""
 
 
-def _never_read_refused(_candidate: PoolCandidate) -> bool:
+def _never_read_refused(_candidate: PoolCandidate) -> AdmissionRefusal | None:
     """Default for callers whose **Pickup** performs no read beyond Readiness."""
-    return False
+    return None
 
 
 @dataclass(frozen=True)
@@ -225,14 +225,14 @@ class RollingPool:
         _ignore_membership_read
     )
     on_visibility_read: Callable[[tuple[PoolCandidate, ...]], None] | None = None
-    #: Whether a survivor was passed over by a *read that did not happen*,
+    #: Why a survivor was passed over by a *take that did not happen*,
     #: rather than by an answer. Readiness supplies its own such candidates
     #: below; this is the injection point for the other reads a dispatcher
-    #: performs at **Pickup** — today the **Lease** probe (#390, ADR-0033),
+    #: performs at **Pickup** — today the **Lease** take (#390, ADR-0033),
     #: whose failure is likewise unknown rather than refused. Both feed one
     #: ``unresolved`` count so the two dispatch modes cannot drift apart on
     #: what a Pool nobody could bind work out of is entitled to report.
-    read_refused: Callable[[PoolCandidate], bool] = _never_read_refused
+    read_refused: Callable[[PoolCandidate], AdmissionRefusal | None] = _never_read_refused
     #: An established Pickup refusal that precedes Readiness (the Attempt
     #: lifecycle). Keep it in membership but do not reinterpret it as a
     #: blocked or unread candidate during terminal classification.
@@ -643,39 +643,26 @@ class RollingPool:
             for candidate in survivors
             if not self.terminal_refused(candidate) and has_unresolved_readiness(candidate)
         )
-        if unreadable:
+        unresolved: list[SerialSkip] = []
+        for position, candidate in enumerate(survivors, 1):
+            if candidate.ref in unreadable:
+                refusal = AdmissionRefusal("readiness_unprovable", unresolved=True)
+            elif not self.terminal_refused(candidate):
+                refusal = self.read_refused(candidate)
+            else:
+                refusal = None
+            if refusal is not None:
+                unresolved.append(SerialSkip(
+                    ref=candidate.ref, position=position, reason=refusal.reason,
+                    unresolved=True, lease_phase=refusal.lease_phase,
+                    lease_cause=refusal.lease_cause,
+                ))
+        if unresolved:
             self.diag.error(
-                "the readiness of %d of the %d candidate(s) left in the Pool "
-                "could not be read (%s); an unread candidate is unknown, not "
-                "refused, so this Run will not report the Pool as one it could "
-                "take no work from. Check `gh auth status`, this host's network "
-                "path to the tracker, and whether those issues' blockers live "
-                "in a repository this token can see, then re-run.",
-                len(unreadable),
+                "%d of the %d candidate(s) left in the Pool remain unresolved: %s",
+                len(unresolved),
                 len(survivors),
-                ", ".join(f"#{ref}" for ref in unreadable),
-            )
-        unread_lease = tuple(
-            candidate.ref
-            for candidate in survivors
-            if candidate.ref not in unreadable
-            and not self.terminal_refused(candidate)
-            and self.read_refused(candidate)
-        )
-        if unread_lease:
-            # Named separately from the readiness case because the operator's
-            # next move is different: this one is about the **Lease** remote,
-            # and sending them to `gh auth status` over a git ref they could
-            # not read would misdirect them (#390, ADR-0033).
-            self.diag.error(
-                "the Lease on %d of the %d candidate(s) left in the Pool could "
-                "not be read (%s); an unread Lease is unknown, not free, so "
-                "this Run will not report the Pool as one it could take no "
-                "work from. Check this host's network path to the Lease remote "
-                "and that its credentials still reach it, then re-run.",
-                len(unread_lease),
-                len(survivors),
-                ", ".join(f"#{ref}" for ref in unread_lease),
+                unresolved_pickup_detail(unresolved),
             )
         outcome = unbound_pool_outcome(
             candidates=len(survivors),
@@ -684,7 +671,7 @@ class RollingPool:
                 if not self.terminal_refused(candidate)
                 and has_proven_open_blocker(candidate)
             ),
-            unresolved=len(unreadable) + len(unread_lease),
+            unresolved=len(unresolved),
         )
         if outcome in ("all_blocked", "all_skipped"):
             self._terminal_survivors = survivors

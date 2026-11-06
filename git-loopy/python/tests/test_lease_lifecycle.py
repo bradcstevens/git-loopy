@@ -65,6 +65,7 @@ def test_taking_an_unheld_issue_records_the_lease_on_the_remote(
     take = lifecycle.take(390)
 
     assert take.verdict == "taken"
+    assert take.reason is None
     assert take.hold is not None and take.hold.run_id == OWNER
     assert git.probe_remote_ref("origin", lease_ref(390)) == take.hold.sha
     assert warnings == []
@@ -135,6 +136,54 @@ def test_asking_whether_the_remote_answers_reads_and_claims_nothing(
     assert git.probe_remote_ref("origin", lease_ref(390)) is None
     assert lifecycle.held() == ()
     assert warnings == []
+
+
+@pytest.mark.parametrize(
+    ("operation", "phase"),
+    [
+        ("probe_remote_ref", "read"),
+        ("fetch_commit_message", "read"),
+        ("write_orphan_commit", "write"),
+        ("push_ref", "write"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("output", "cause"),
+    [
+        ("first line\nuseful cause\n\n", "useful cause"),
+        ("first line\nuseful cause\nerror: failed to push some refs to 'origin'\n\n", "useful cause"),
+        ("error: failed to push some refs to 'origin'\n", None),
+        (" \n\n", None),
+    ],
+)
+def test_unavailable_take_reports_its_phase_and_last_useful_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    operation: str, phase: str, output: str, cause: str | None,
+) -> None:
+    lifecycle, warnings, git = build(tmp_path)
+    if operation == "fetch_commit_message":
+        git.seed_remote_ref("origin", lease_ref(390), "record to fetch")
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise GitError(["git", operation], 1, output)
+
+    monkeypatch.setattr(git, operation, fail)
+
+    take = lifecycle.take(390)
+
+    assert take.verdict == "unavailable"
+    assert take.phase == phase
+    assert take.cause == cause
+    assert not take.granted
+    assert not lifecycle.disabled()
+    assert lifecycle.held() == ()
+    wording = (
+        "Lease write was refused" if phase == "write"
+        else "Lease could not be taken (remote unreadable)"
+    )
+    expected = f"{wording}: {cause}" if cause else wording
+    assert take.reason == expected
+    assert warnings == [f"issue #390: {expected}"]
 
 
 def test_stealing_a_dead_runs_expired_lease_warns_and_proceeds(tmp_path: Path) -> None:
