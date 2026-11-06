@@ -1819,19 +1819,20 @@ not `config` keys.
 ### Recommended static recipe
 
 The recommended seven routes are a maintainer-selected preset calibrated
-against public leaderboard evidence, not a measured ranking. Their models,
+against public leaderboard evidence, not a measured ranking. Each is the
+fastest pair inside its Task type's Intelligence Index band. Their models,
 efforts and long-context support were verified through the SDK-pinned harness
-on 2026-10-12:
+on 2026-11-06:
 
 | Task type | Model | Reasoning effort |
 | --- | --- | --- |
-| `planning` | `claude-opus-5.5` | `medium` |
-| `review` | `claude-opus-5.5` | `medium` |
-| `implementation` | `gpt-6-astra` | `medium` |
-| `test` | `gpt-6-astra` | `medium` |
-| `docs` | `claude-sonnet-5.5` | `medium` |
-| `chore` | `claude-sonnet-5.5` | `low` |
-| `bugfix` | `claude-opus-5.5` | `medium` |
+| `planning` | `gpt-6-astra` | `medium` |
+| `review` | `claude-opus-5.5` | `high` |
+| `implementation` | `gpt-6.1-sol` | `medium` |
+| `test` | `gpt-6.1-sol` | `medium` |
+| `docs` | `gpt-6-astra` | `low` |
+| `chore` | `gpt-6.1-sol` | `low` |
+| `bugfix` | `gpt-6-astra` | `medium` |
 
 `init` offers this optional static recipe; `config routing use-recommended`
 adopts its pairs without silently rewriting existing Config. Static entries
@@ -1842,12 +1843,11 @@ the recommended pairs alone does not change that scope's tier. The built-in
 fallback stays `default` where neither Config scope supplies a tier. A global
 tier is inherited where a project omits its own; a project can opt out with
 `context_tier = "default"` without changing the global preset.
-Review is a different vendor from implementation and test (docs, planning and
-bugfix share its vendor), and every route leaves the `gpt-6.1-sol @ max` legacy
-escalation rung distinct. Static retries change pairs only with an explicitly
-configured `[escalation]` block.
+Review is a different vendor from every other route, and every route leaves the
+`gpt-6.1-sol @ max` legacy escalation rung distinct. Static retries change pairs
+only with an explicitly configured `[escalation]` block.
 
-See [ADR-0048's current preset](../../docs/adr/0048-the-recommended-routing-table-is-retuned.md#evidence-calibrated-retune-2026-10-12)
+See [ADR-0048's current preset](../../docs/adr/0048-the-recommended-routing-table-is-retuned.md#speed-first-retune-2026-11-06)
 for the reported window and prompt caps. Those limits are not a static runtime
 budget: context fill still uses live telemetry, the bounded working budget is
 unchanged, and long context may cost more. Dynamic routing continues to elect

@@ -275,20 +275,20 @@ def test_recommended_routing_is_the_locked_core() -> None:
     surfaces present. ``bugfix`` is the seventh key (#294) and is **appended**,
     so the original six keep the sequence the guided walk shipped with.
 
-    These are ADR-0048's 2026-10-12 evidence-calibrated values. Review stays
-    on Anthropic, implementation/test on OpenAI, and no row spends the ``max``
+    These are ADR-0048's 2026-11-06 speed-first values. Review stays on
+    Anthropic, every other row on OpenAI, and no row spends the ``max``
     escalation rung.
     """
     from git_loopy.config import RECOMMENDED_ROUTING
 
     assert dict(RECOMMENDED_ROUTING) == {
-        "planning": ("claude-opus-5.5", "medium"),
-        "review": ("claude-opus-5.5", "medium"),
-        "implementation": ("gpt-6-astra", "medium"),
-        "test": ("gpt-6-astra", "medium"),
-        "docs": ("claude-sonnet-5.5", "medium"),
-        "chore": ("claude-sonnet-5.5", "low"),
-        "bugfix": ("claude-opus-5.5", "medium"),
+        "planning": ("gpt-6-astra", "medium"),
+        "review": ("claude-opus-5.5", "high"),
+        "implementation": ("gpt-6.1-sol", "medium"),
+        "test": ("gpt-6.1-sol", "medium"),
+        "docs": ("gpt-6-astra", "low"),
+        "chore": ("gpt-6.1-sol", "low"),
+        "bugfix": ("gpt-6-astra", "medium"),
     }
     # Ladder order is load-bearing: the guided walk presents the core in this
     # sequence, so a plain set/dict-equality check is not enough.
@@ -346,13 +346,13 @@ def test_recommended_routing_pairs_are_valid_against_the_roster() -> None:
 @pytest.mark.parametrize(
     ("task_type", "model", "effort"),
     [
-        ("planning", "claude-opus-5.5", "medium"),
-        ("review", "claude-opus-5.5", "medium"),
-        ("implementation", "gpt-6-astra", "medium"),
-        ("test", "gpt-6-astra", "medium"),
-        ("docs", "claude-sonnet-5.5", "medium"),
-        ("chore", "claude-sonnet-5.5", "low"),
-        ("bugfix", "claude-opus-5.5", "medium"),
+        ("planning", "gpt-6-astra", "medium"),
+        ("review", "claude-opus-5.5", "high"),
+        ("implementation", "gpt-6.1-sol", "medium"),
+        ("test", "gpt-6.1-sol", "medium"),
+        ("docs", "gpt-6-astra", "low"),
+        ("chore", "gpt-6.1-sol", "low"),
+        ("bugfix", "gpt-6-astra", "medium"),
     ],
 )
 def test_recommended_routes_resolve_with_explicit_long_context(
@@ -507,12 +507,12 @@ def test_the_tracked_project_config_preserves_all_task_type_routes(
     ).run
 
     assert dict(run.routing) == {
-        "planning": ("claude-opus-5.5", "medium"),
-        "review": ("claude-opus-5.5", "medium"),
-        "implementation": ("gpt-6-astra", "medium"),
-        "test": ("gpt-6-astra", "medium"),
-        "docs": ("claude-sonnet-5.5", "medium"),
-        "chore": ("claude-sonnet-5.5", "low"),
-        "bugfix": ("claude-opus-5.5", "medium"),
+        "planning": ("gpt-6-astra", "medium"),
+        "review": ("claude-opus-5.5", "high"),
+        "implementation": ("gpt-6.1-sol", "medium"),
+        "test": ("gpt-6.1-sol", "medium"),
+        "docs": ("gpt-6-astra", "low"),
+        "chore": ("gpt-6.1-sol", "low"),
+        "bugfix": ("gpt-6-astra", "medium"),
     }
     assert warnings == []

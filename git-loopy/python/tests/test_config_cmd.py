@@ -557,9 +557,9 @@ def test_routing_use_recommended_replaces_every_canonical_route(
 
     assert rc == 0
     routing = tomllib.loads(path.read_text(encoding="utf-8"))["routing"]
-    assert routing["review"] == {"model": "claude-opus-5.5", "effort": "medium"}
-    assert routing["planning"] == {"model": "claude-opus-5.5", "effort": "medium"}
-    assert routing["docs"] == {"model": "claude-sonnet-5.5", "effort": "medium"}
+    assert routing["review"] == {"model": "claude-opus-5.5", "effort": "high"}
+    assert routing["planning"] == {"model": "gpt-6-astra", "effort": "medium"}
+    assert routing["docs"] == {"model": "gpt-6-astra", "effort": "low"}
     assert len(routing) == 7
 
 
@@ -1035,7 +1035,7 @@ def test_get_on_an_unrouted_task_type_names_the_builtin_default(
 
     assert rc == 0
     # The run-wide pair, not the RECOMMENDED_ROUTING entry for `planning`
-    # (claude-opus-5.5 @ medium) — the recommended core seeds Config, it does not
+    # (gpt-6-astra @ medium) — the recommended core seeds Config, it does not
     # resolve, and the report must not imply otherwise.
     assert out.text == "gpt-5.4 @ high (built-in default)"
     assert RECOMMENDED_ROUTING["planning"][0] not in out.text
