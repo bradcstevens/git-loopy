@@ -124,6 +124,12 @@ container = { image = "ghcr.io/rust-cross/manylinux2014-cross:aarch64", host = "
 runner = "ubuntu-22.04"
 container = { image = "messense/rust-musl-cross:aarch64-musl", host = "x86_64-unknown-linux-musl" }
 
+# Pinned cargo-dist still plans Apple silicon on `macos-14`, an image GitHub
+# retired on 2026-11-02 (#1033), so its build job could never be scheduled.
+# The target still builds natively on arm64; only the image is newer.
+[workspace.metadata.dist.github-custom-runners.aarch64-apple-darwin]
+runner = "macos-15"
+
 # cargo-dist always compiles `--profile dist`, and cargo will not invent a
 # profile it has never been told about. Without this section every one of the
 # seven build jobs dies at `error: profile 'dist' is not defined` — after the
