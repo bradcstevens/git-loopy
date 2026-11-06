@@ -3,9 +3,9 @@
 The Runner-family gate proves the *family* still agrees with itself, and the two
 release workflows prove a Release still identifies itself. Neither of them can
 see a mistake in the CI definition that hosts them, because a workflow only
-fails when GitHub tries to schedule it -- and a job whose ``runs-on`` names a
-retired runner image is never scheduled at all. It is simply skipped, so a
-release matrix can quietly stop building one of its seven artifacts while every
+fails when GitHub tries to schedule it. A retired image may produce a cancelled
+job annotated ``The configuration '<label>-...' is not supported``, without
+executing a step, so a release matrix can stop building an artifact while every
 suite in this repository stays green.
 
 That is not hypothetical: `x86_64-apple-darwin` was declared on ``macos-13``,
@@ -13,9 +13,10 @@ which GitHub has retired. The complete-set gate in ``tui-release.yml`` would
 then have refused every stable publication, and nothing here would have said
 why.
 
-`actionlint` is the loop that catches it. It knows the current GitHub-hosted
-runner-label roster, the shape of every expression context, and the shell inside
-each ``run:`` block. This guard pins that the loop is wired, is pinned to an
+`actionlint` catches unknown labels, expression-context and shell errors, but
+its runner roster can lag retirements. ``runner-canary.yml`` watches live
+availability daily; the linter is not an availability probe. This guard pins
+that the loop is wired, is pinned to an
 exact version, and is given the whole workflow directory rather than a
 hand-listed subset that a new workflow could be added outside of.
 
