@@ -3,15 +3,14 @@ name: Lint the workflows
 # The one loop that can see a mistake in this repository's CI definitions.
 #
 # Every other gate here runs *inside* a workflow, so none of them can observe a
-# fault in the workflow itself. A job whose `runs-on` names a retired runner
-# image is the sharpest case: GitHub never schedules it, so it does not fail --
-# it simply does not happen. `tui-release.yml` builds seven artifacts and
-# refuses to publish an incomplete set, which means one silently unscheduled
-# target blocks every stable Release while every suite in this repository stays
-# green. That is exactly what a retired `macos-13` label did.
+# fault in the workflow itself. A retired image may produce a cancelled job
+# annotated `The configuration '<label>-...' is not supported`, without ever
+# executing a step. `tui-release.yml` refuses to publish an incomplete artifact
+# set, so an unavailable image can block every stable Release.
 #
-# actionlint knows the current GitHub-hosted runner roster, the expression
-# contexts available to each key, and the shell inside every `run:` block. It is
+# actionlint catches unknown labels, expression-context and shell errors, but
+# its runner roster can lag retirements. runner-canary.yml watches live
+# availability daily; the linter is not an availability probe. actionlint is
 # pinned to an exact release for the same reason cargo-dist is: a linter that
 # silently changes its rule set changes what this gate means. The shape of this
 # file is pinned by git-loopy/python/tests/test_workflow_lint.py.
