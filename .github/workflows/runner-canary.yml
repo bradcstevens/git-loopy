@@ -1,0 +1,30 @@
+name: Runner canary
+
+# Exercise pins even when no pull request or Release needs their images.
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    name: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-14
+          - macos-15-intel
+          - ubuntu-22.04
+          - windows-2022
+    steps:
+      - name: Report the runner image
+        shell: bash
+        run: printf 'ImageOS=%s\nImageVersion=%s\n' "$ImageOS" "$ImageVersion"

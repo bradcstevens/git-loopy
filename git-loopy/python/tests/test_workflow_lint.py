@@ -1,23 +1,15 @@
 """Static guard: every workflow this repository ships is linted in CI.
 
-The Runner-family gate proves the *family* still agrees with itself, and the two
-release workflows prove a Release still identifies itself. Neither of them can
-see a mistake in the CI definition that hosts them, because a workflow only
-fails when GitHub tries to schedule it -- and a job whose ``runs-on`` names a
-retired runner image is never scheduled at all. It is simply skipped, so a
-release matrix can quietly stop building one of its seven artifacts while every
-suite in this repository stays green.
+actionlint catches unknown runner labels, invalid expression contexts and shell
+mistakes in ``run:`` blocks. Its label roster can lag GitHub's retirements,
+though: the Apple-silicon helper's retired ``macos-14`` job was cancelled with
+``The configuration '<label>-...' is not supported`` while actionlint passed.
+It is not a runner-availability check.
 
-That is not hypothetical: `x86_64-apple-darwin` was declared on ``macos-13``,
-which GitHub has retired. The complete-set gate in ``tui-release.yml`` would
-then have refused every stable publication, and nothing here would have said
-why.
-
-`actionlint` is the loop that catches it. It knows the current GitHub-hosted
-runner-label roster, the shape of every expression context, and the shell inside
-each ``run:`` block. This guard pins that the loop is wired, is pinned to an
-exact version, and is given the whole workflow directory rather than a
-hand-listed subset that a new workflow could be added outside of.
+The runner canary exercises the versioned pins daily to expose brownouts and
+retirements. This guard instead pins that actionlint is wired, stays at an exact
+version, and receives the whole workflow directory rather than a hand-listed
+subset that could leave a new workflow unlinted.
 
 The guard reads the *declared* CI configuration, so it needs neither a live
 runner nor credentials. It degrades to a skip on an installed-wheel run with no
