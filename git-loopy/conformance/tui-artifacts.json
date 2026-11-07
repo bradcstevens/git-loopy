@@ -45,7 +45,7 @@
       "os": "macos",
       "arch": "arm64",
       "libc": null,
-      "runner": "macos-14",
+      "runner": "macos-15",
       "build": "native",
       "container": null,
       "packages_install": null,

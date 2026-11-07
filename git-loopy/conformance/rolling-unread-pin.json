@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "contract_version": "2.41",
+  "contract_version": "2.42",
   "distributions": ["python"],
-  "description": "Lane-path Unread Pin transitions at the complete Run seam, with a shortened fixed bound. Retries spend no iteration unit.",
+  "description": "Lane and serial Unread Pin transitions at the complete Run seam, with a shortened fixed bound. A serial hold costs one pin_unread Iteration; retries spend no iteration unit.",
   "cases": [
     {
       "name": "lane-pin-recovers-within-bound",
@@ -29,6 +29,41 @@
       "expected_bindings": [[42, "priority"]],
       "expected_states": ["holding", "lapsed"],
       "outcome": null
+    },
+    {
+      "name": "serial-pin-recovers-with-one-unread-iteration",
+      "serial_pin": true,
+      "bound_seconds": 600,
+      "failed_lease_reads": 4,
+      "max_iterations": 4,
+      "expected_bindings": [[43, "pin"], [42, "priority"], [41, "order"]],
+      "expected_states": ["holding", "ended"],
+      "expected_iterations": 2,
+      "outcome": "bound"
+    },
+    {
+      "name": "serial-pin-lapse-releases-refill-then-priority-demand",
+      "serial_pin": true,
+      "priority_serial": true,
+      "bound_seconds": 0.02,
+      "failed_lease_reads": 100,
+      "max_iterations": 3,
+      "expected_bindings": [[41, "order"], [42, "priority"]],
+      "expected_states": ["holding", "lapsed"],
+      "expected_iterations": 2,
+      "outcome": null
+    },
+    {
+      "name": "lapsed-serial-pin-still-binds-before-priority",
+      "serial_pin": true,
+      "priority_serial": true,
+      "bound_seconds": 0.02,
+      "failed_lease_reads": 2,
+      "max_iterations": 4,
+      "expected_bindings": [[41, "order"], [43, "pin"], [42, "priority"]],
+      "expected_states": ["holding", "lapsed", "ended"],
+      "expected_iterations": 3,
+      "outcome": "bound"
     }
   ]
 }

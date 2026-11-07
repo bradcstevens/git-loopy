@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "contract_version": "2.41",
+  "contract_version": "2.43",
   "members": ["python", "shell", "powershell", "rust"],
   "fixtures": {
     "rolling-unread-pin.json": {
-      "python": {"kind": "claimed", "reason": "python/tests/test_loop_parallel.py drives every Lane-path case through the complete Run seam with fake gh/git, observing bindings, units, ordering and wrapper.pin.unread transitions."},
-      "shell": {"kind": "waived_out_of_scope", "reason": "Contract 2.41 is above the dormant Path baseline 2.26; the shell Orchestrator is serial-only and does not implement Rolling dispatch."},
-      "powershell": {"kind": "waived_out_of_scope", "reason": "Contract 2.41 is above the dormant Path baseline 2.26; the PowerShell Orchestrator is serial-only and does not implement Rolling dispatch."},
-      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard is an Event consumer only; it does not make Lane Pickup or Unread-Pin lapse decisions."}
+      "python": {"kind": "claimed", "reason": "python/tests/test_loop_parallel.py drives every Lane and serial case through the complete Run seam with fake gh/git, observing bindings, units, pin_unread Iterations, ordering and wrapper.pin.unread transitions."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "Contract 2.42 is above the dormant Path baseline 2.26; the shell Orchestrator is serial-only and does not implement Rolling dispatch."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "Contract 2.42 is above the dormant Path baseline 2.26; the PowerShell Orchestrator is serial-only and does not implement Rolling dispatch."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard is an Event consumer only; it does not make Pickup, serial-hold accounting or Unread-Pin lapse decisions."}
     },
     "account-control.json": {
       "python": {"kind": "claimed", "reason": "tests/test_account_conformance.py drives exit mapping and the account Event producer; test_account_run.py and test_account_control.py prove Run admission, accounting, closure and clock-controlled budgets."},
@@ -200,6 +200,12 @@
       "shell": {"kind": "claimed", "reason": "shell/tests/test-tui-install.sh drives fixture selection cases through production installer functions."},
       "powershell": {"kind": "claimed", "reason": "powershell/tests/test-tui-install.ps1 drives fixture selection cases through production installer functions."},
       "rust": {"kind": "waived_out_of_scope", "reason": "Release artifact selection belongs to installation and distribution tooling, not Dashboard-core behavior."}
+    },
+    "unread-pin-notice.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_unread_pin_notice.py folds every fixture step through UnreadPinNotice and the attach client's Renderer, and checks trace replay through attach_to_run."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "The notice is presentation owned by the Python attach client and the Rust Dashboard; the shell Orchestrator has no attach client."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "The notice is presentation owned by the Python attach client and the Rust Dashboard; the PowerShell Orchestrator has no attach client."},
+      "rust": {"kind": "claimed", "reason": "tui/tests/unread_pin_notice.rs folds every fixture step through DashboardSession and draws its current notice on both Dashboard and drill-in screens."}
     },
     "unbound-run-notice.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_unbound_run_notice.py drives git_loopy.unbound_run_notice.unbound_run_notice with fixture Event streams."},

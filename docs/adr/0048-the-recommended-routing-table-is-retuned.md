@@ -15,7 +15,64 @@ contract.
 is retuned. Three of its seven rows changed model, five changed effort, and one property that
 ADR-0035 held for the run-wide default only now holds for the whole table.
 
+## Speed-first retune: 2026-11-06
+
+Supersedes the values of the 2026-10-12 evidence-calibrated retune below. Every rule this record
+carries forward from ADR-0035 stands, including the MUST in §14 of the Wrapper contract.
+
+| `task-type` key | model | effort |
+| --- | --- | --- |
+| `planning` | `gpt-6-astra` | `medium` |
+| `review` | `claude-opus-5.5` | `high` |
+| `implementation` | `gpt-6.1-sol` | `medium` |
+| `test` | `gpt-6.1-sol` | `medium` |
+| `docs` | `gpt-6-astra` | `low` |
+| `chore` | `gpt-6.1-sol` | `low` |
+| `bugfix` | `gpt-6-astra` | `medium` |
+
+The maintainer made speed the first priority and each Task type's Intelligence Index the second.
+The routes come from a `/model-scorecard` build that ranks time to first answer token first and
+task-fit success (the Intelligence Index inside the Task type's band, times its benchmarks)
+second, so each row is the fastest pair inside its band. Artificial Analysis's leaderboard was
+captured and browser-verified on 2026-11-06, including its time-per-task and first-answer-token
+columns; the SDK-pinned CLI `1.0.98` supplied availability, efforts and tiers. This is public
+leaderboard evidence, not a routing measurement: no Calibration ran and no
+`routing.measured.toml` was written.
+
+- **Bands still bound intelligence.** A pair outside its Task type's band never outranks one
+  inside it, so speed chooses only among pairs strong enough for the work. Planning and bugfix
+  take `gpt-6-astra @ medium` (Intelligence Index 51.6, 7.0 s to first answer token);
+  `claude-opus-5.5 @ medium` now scores 48.2, below both bands.
+- **Implementation and test move to `gpt-6.1-sol @ medium`** (46.3, 6.6 s), inside their bands
+  and faster than `gpt-6-astra @ medium`.
+- **Docs and chores leave Claude Sonnet 5.5**, whose `medium` and `low` now score 30.8 and 25.6,
+  below both bands. Docs takes `gpt-6-astra @ low` (43.3, 4.0 s) and chores `gpt-6.1-sol @ low`
+  (34.8, 2.8 s).
+- **Review rises to `claude-opus-5.5 @ high`** (51.8, 36.9 s). It must stay inside the 51–56 band
+  and off implementation's vendor; the only other such pair is Claude Sonnet 5.5 at `max`, which
+  the no-`max` rule excludes and which takes 281.6 s.
+- **The checkable rules still hold.** No routed pair holds `max`, no model is
+  reasoning-incapable, `review` is not `gpt-5.6-sol`, and every pair differs from the
+  `gpt-6.1-sol @ max` escalation rung, which stays the run-wide default pair (ADR-0056).
+  Implementation, test and chore share that rung's model, so escalating them to it changes only
+  their effort.
+- **Every model offers `long_context`**, which the maintainer's presets still select run-wide.
+  CLI `1.0.98` reports these prompt caps:
+
+| Model | Default-tier prompt cap | Long-tier prompt cap |
+| --- | --- | --- |
+| `gpt-6-astra` | 272,000 | 1,050,000 |
+| `gpt-6.1-sol` | 272,000 | 922,000 |
+| `claude-opus-5.5` | 200,000 | 1,000,000 |
+
+**Review trigger:** a roster change touching `gpt-6-astra`, `gpt-6.1-sol` or `claude-opus-5.5`,
+or a leaderboard change that moves a routed pair out of its band or changes the fastest in-band
+pair.
+
 ## Evidence-calibrated retune: 2026-10-12
+
+> **Superseded** by the [2026-11-06 speed-first retune](#speed-first-retune-2026-11-06).
+> Kept as the record of the 2026-10-12 decision, which other records link to.
 
 Supersedes the values of the 2026-10-09 quality-first retune below. Every rule this record
 carries forward from ADR-0035 stands, including the MUST in §14 of the Wrapper contract.
@@ -165,6 +222,9 @@ which is why it is written down where the values are.
 > the same vendor. The maintainer accepted that cost when adopting their own routes as the
 > recommended table.
 
+> **Amended by the 2026-11-06 retune:** the property holds for every row again. `review` is
+> Anthropic and the six other rows are OpenAI.
+
 **`test` sits at its model's ceiling.** `gemini-3.6-flash` offers `minimal`, `low`, `medium`,
 `high` and nothing above, so this row cannot be raised without also changing its model, and an
 operator who overrides it to `xhigh` gets a hard reject. Its floor is `minimal`, not `none` —
@@ -219,6 +279,10 @@ touching Sonnet 5 no longer reaches this table.
   `gpt-6-astra @ medium` in both the tracked project Config and their global Config. The three
   agree again; `test_config.py` pins the recommended core and the tracked Config's routes
   separately, so a later operator edit can still diverge deliberately.
+- On 2026-11-06 the maintainer retuned `RECOMMENDED_ROUTING` speed-first (see the speed-first
+  retune above) and adopted the same routes in the tracked project Config and their global
+  Config, so the three agree again. The run-level pair (`claude-opus-5.5 @ high` in both Config
+  scopes) and the built-in default pair (`gpt-6.1-sol @ max`, ADR-0056) are unchanged.
 - Escalation is live for every Task type, including `planning`.
 - `gemini-3.6-flash` enters the routed set as the first Google model on it, so the roster's
   `minimal` floor and `high` ceiling are now load-bearing for a shipped route rather than

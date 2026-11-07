@@ -103,6 +103,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; see SubprocessLabelClient
 
 __all__ = [
     "GhError",
+    "open_pr_added_files",
     "Repo",
     "Comment",
     "Issue",
@@ -961,6 +962,60 @@ def _parse_json(raw: str, cmd: Sequence[str]) -> object:
             0,
             f"gh produced unparseable JSON: {exc.msg} (stdout head: {head!r})",
         ) from exc
+
+
+def _paginated_array(query: str) -> list[dict]:
+    """Read every REST page, refusing malformed pages or rows."""
+    cmd = ["api", query, "--paginate", "--slurp"]
+    pages = _parse_json(_run(cmd), [_GH_BIN, *cmd])
+    if not isinstance(pages, list) or not pages or any(
+        not isinstance(page, list) for page in pages
+    ):
+        raise GhError([_GH_BIN, *cmd], 0, "expected an array of REST pages")
+    rows: list[dict] = []
+    for page in pages:
+        for row in page:
+            if not isinstance(row, dict):
+                raise GhError([_GH_BIN, *cmd], 0, "expected a REST object")
+            rows.append(row)
+    return rows
+
+
+def open_pr_added_files() -> dict[int, tuple[str, ...]]:
+    """Return added paths for every open PR, including draft and non-main PRs."""
+    query = "repos/{owner}/{repo}/pulls?state=open&per_page=100"
+    result: dict[int, tuple[str, ...]] = {}
+    for row in _paginated_array(query):
+        number = row.get("number")
+        if type(number) is not int or number <= 0:
+            raise GhError(["gh", "api", query], 0, "missing or invalid PR number")
+        files_query = f"repos/{{owner}}/{{repo}}/pulls/{number}/files?per_page=100"
+        paths: list[str] = []
+        files = _paginated_array(files_query)
+        # GitHub returns at most 3000 files, even when pagination succeeds.
+        if len(files) >= 3000:
+            raise GhError(
+                ["gh", "api", files_query],
+                0,
+                f"PR #{number} file listing is incomplete at the 3000-file API limit",
+            )
+        for file in files:
+            path, status = file.get("filename"), file.get("status")
+            if (
+                not isinstance(path, str)
+                or not path
+                or status not in (
+                    "added", "removed", "modified", "renamed",
+                    "copied", "changed", "unchanged",
+                )
+            ):
+                raise GhError(
+                    ["gh", "api", files_query], 0, "malformed PR file entry"
+                )
+            if status == "added":
+                paths.append(path)
+        result[number] = tuple(paths)
+    return result
 
 
 def _parse_issue(data: object, cmd: Sequence[str], *, carrier: str = "view") -> Issue:

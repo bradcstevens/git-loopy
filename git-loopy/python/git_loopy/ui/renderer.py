@@ -35,7 +35,7 @@ wins over the verbosity ladder — ``--no-reasoning -vv`` hides reasoning.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from rich.console import Console
@@ -91,6 +91,7 @@ from git_loopy.events import (
 )
 
 from git_loopy.usage import BillingSample, is_run_scoped_usage
+from git_loopy.unread_pin_notice import UnreadPinNotice
 
 from .console import STYLES
 from .local_time import viewer_local
@@ -142,6 +143,7 @@ class Renderer:
     _issue_source: str | None = None
     _streamed_reasoning: bool = False
     _streamed_message: bool = False
+    _unread_pin: UnreadPinNotice = field(default_factory=UnreadPinNotice, init=False)
 
     def render(self, event: dict[str, Any]) -> None:
         """Dispatch ``event`` to its per-type handler.
@@ -157,6 +159,13 @@ class Renderer:
         # so a tool call / panel / final message never glues onto a streamed
         # reasoning or message chunk.
         self._close_open_line()
+        previous_notice = self._unread_pin.lines
+        self._unread_pin.observe(event)
+        if self._unread_pin.lines is not None and self._unread_pin.lines != previous_notice:
+            # A line printer retains history; clearing the fold never erases
+            # scrollback. Text keeps a failing read's reason out of Rich markup.
+            for line in self._unread_pin.lines:
+                self.console.print(Text(line), soft_wrap=True)
         handler = _HANDLERS.get(et)
         if handler is None:
             if self.verbosity >= 3:

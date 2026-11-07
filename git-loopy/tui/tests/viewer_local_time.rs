@@ -462,6 +462,7 @@ fn an_unresolved_viewing_zone_is_announced_rather_than_shown_as_local() {
             ..Diagnostics::default()
         },
         notice: None,
+        unread_pin_notice: None,
     };
     let mut terminal =
         Terminal::new(TestBackend::new(200, 40)).expect("a headless terminal is constructed");

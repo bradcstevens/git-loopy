@@ -48,3 +48,45 @@ asked for the same human decision.
   enters triage like any other.
 - The cost of a decision-blocked issue falls from three Iterations per Run, repeated without end,
   to one Iteration in total.
+
+> **Amendment (2026-11-06, [#1045](https://github.com/bradcstevens/git-loopy/issues/1045)): an
+> already-delivered issue takes the same path.**
+>
+> An issue can stay open and agent-ready after its work has landed. Typically its closing pull
+> request merged and then something reopened the issue. **Readiness** admits it, because under
+> ADR-0069 a merged pull request never holds a candidate. Its Agent found nothing to change and
+> was not allowed to close or relabel the issue, so it ended silently. That ending was
+> `no_progress`, read as evidence against the Routed pair. Each attempt charged a Strike, and the
+> issue was retried up to three times per Run and again in every Run. Two such issues,
+> bradcstevens/ignite-2026-gift-occasion-demo#119 and
+> bradcstevens/ignite-2026-gift-occasion-demo#140, cost about 180 AI Credits over three Runs.
+>
+> An Agent whose issue is **Already delivered** now takes decision 1's path. The issue is already
+> delivered when every acceptance criterion holds on the current base and no failure named since
+> the delivery still fails, such as the reason the issue was reopened. If one does still fail,
+> that failure is the work. The Agent searches for an open decision issue asking to close its
+> issue, or else opens one, labelled `needs-triage` only. Its title is
+> `Close #N? Already delivered by owner/repo#M`, or `Close #N? Its acceptance criteria hold at
+> <sha>` when the Agent finds no delivering change. Its body gives the evidence and a human's two
+> outcomes: close the issue as completed, or comment on it with what remains. Either way, the
+> human then closes the decision issue. The Agent records the decision issue as its issue's native
+> blocker, comments on its issue, and emits `<promise>NO MORE TASKS</promise>`. The ending is then
+> `no_more_tasks` rather than `no_progress`, and the issue is **Blocked** after one Iteration.
+>
+> Considered and not taken:
+> - **An empty `Closes #N` commit for the Run to publish.** An Agent alone would close an issue a
+>   human may have reopened on purpose, since nothing reviews a closure before PRD #913. Each one
+>   would also run the whole Integration gate.
+> - **A Readiness refusal.** It reverses ADR-0069. A deliberate reopen also comes after the merge,
+>   so only the actor who reopened the issue would tell the two apart.
+> - **A Runner relabel.** It stays deferred, for the reason above.
+> - **NO MORE TASKS alone.** It would still cost three Iterations per Run.
+> - **A Pickup notice of merged closing pull requests.** Deferred: it needs a new Event field, and
+>   the decision issue already reaches triage.
+>
+> An automation that reopens a delivered issue belongs to its repository, and git-loopy adds no rule
+> about it.
+>
+> Consequence: decision 1 remains the one case where in-Run Agents open tracker issues, now with two
+> triggers. #929, which narrows when Agents may file issues, must keep both triggers or name them as
+> exceptions.

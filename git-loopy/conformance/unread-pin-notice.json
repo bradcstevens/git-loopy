@@ -1,0 +1,113 @@
+{
+  "fixture_schema_version": 1,
+  "contract_version": "2.43",
+  "description": "The Unread-Pin notice (#997). Each step folds one Event and pins the current notice, not accumulated scrollback. Instants are UTC RFC3339 with Z, omitting a zero fraction and otherwise using six fractional digits. Only Events change the notice; wall-clock passage never infers a lapse. Line printers print changed notices once; ended and Run end clear the current notice without erasing historical output.",
+  "cases": [
+    {
+      "id": "holding",
+      "steps": [
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "holding", "read": "tracker", "reason": "tracker unavailable", "first_unread_at": "2026-10-23T23:55:00.000Z"},
+          "notice": [
+            "Unread Pin #42 since 2026-10-23T23:55:00Z.",
+            "Failing read: tracker — tracker unavailable",
+            "New work is held until 2026-10-24T00:05:00Z."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "changed_read_while_holding_then_bound",
+      "steps": [
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "holding", "read": "tracker", "reason": "tracker unavailable", "first_unread_at": "2026-10-23T23:55:00Z"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00Z.", "Failing read: tracker — tracker unavailable", "New work is held until 2026-10-24T00:05:00Z."]
+        },
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "holding", "read": "readiness", "reason": "blockers unreadable", "first_unread_at": "2026-10-23T23:55:00Z"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00Z.", "Failing read: readiness — blockers unreadable", "New work is held until 2026-10-24T00:05:00Z."]
+        },
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "ended", "read": "readiness", "reason": "blockers unreadable", "first_unread_at": "2026-10-23T23:55:00Z", "outcome": "bound"},
+          "notice": null
+        }
+      ]
+    },
+    {
+      "id": "holding_lapses_then_changed_read_and_spent",
+      "steps": [
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "holding", "read": "lease", "reason": "lease store unreadable", "first_unread_at": "2026-10-23T23:55:00.123456Z"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00.123456Z.", "Failing read: lease — lease store unreadable", "New work is held until 2026-10-24T00:05:00.123456Z."]
+        },
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "lapsed", "read": "lease", "reason": "lease store unreadable", "first_unread_at": "2026-10-23T23:55:00.123456Z"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00.123456Z.", "Failing read: lease — lease store unreadable", "The order is proceeding behind the Pin."]
+        },
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "lapsed", "read": "route_evidence", "reason": "assessment evidence unreadable", "first_unread_at": "2026-10-23T23:55:00.123456Z"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00.123456Z.", "Failing read: route_evidence — assessment evidence unreadable", "The order is proceeding behind the Pin."]
+        },
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "ended", "read": "route_evidence", "reason": "assessment evidence unreadable", "first_unread_at": "2026-10-23T23:55:00.123456Z", "outcome": "spent"},
+          "notice": null
+        }
+      ]
+    },
+    {
+      "id": "lapsed_without_holding_then_stopped",
+      "steps": [
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "lapsed", "read": "route_capabilities", "reason": "model list unreadable", "first_unread_at": "2026-10-23T23:55:00Z"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00Z.", "Failing read: route_capabilities — model list unreadable", "The order is proceeding behind the Pin."]
+        },
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "ended", "read": "route_capabilities", "reason": "model list unreadable", "first_unread_at": "2026-10-23T23:55:00Z", "outcome": "stopped"},
+          "notice": null
+        }
+      ]
+    },
+    {
+      "id": "run_end_without_ended",
+      "steps": [
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "holding", "read": "route_selector", "reason": "selector failed [retry]", "first_unread_at": "2026-10-23T23:55:00Z"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00Z.", "Failing read: route_selector — selector failed [retry]", "New work is held until 2026-10-24T00:05:00Z."]
+        },
+        {
+          "event": {"type": "wrapper.run.end", "outcome": "stopped"},
+          "notice": null
+        }
+      ]
+    },
+    {
+      "id": "unrelated_and_future_events_do_not_infer_lapse",
+      "steps": [
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "holding", "read": "base_revision", "reason": "base unavailable", "first_unread_at": "2026-10-23T23:55:00Z", "future_field": true},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00Z.", "Failing read: base_revision — base unavailable", "New work is held until 2026-10-24T00:05:00Z."]
+        },
+        {
+          "event": {"type": "future.event", "ts": "2026-10-24T01:00:00Z"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00Z.", "Failing read: base_revision — base unavailable", "New work is held until 2026-10-24T00:05:00Z."]
+        },
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "future_state", "read": "worktree", "reason": "future reason", "first_unread_at": "2026-10-23T23:55:00Z"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00Z.", "Failing read: base_revision — base unavailable", "New work is held until 2026-10-24T00:05:00Z."]
+        },
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "holding", "read": "worktree", "reason": "worktree unreadable", "first_unread_at": "not an instant"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00Z.", "Failing read: base_revision — base unavailable", "New work is held until 2026-10-24T00:05:00Z."]
+        },
+        {
+          "event": {"type": "wrapper.pin.unread", "issue": 42, "state": "lapsed", "read": "worktree", "reason": "worktree unreadable", "first_unread_at": "2026-10-23T23:55:00Z"},
+          "notice": ["Unread Pin #42 since 2026-10-23T23:55:00Z.", "Failing read: worktree — worktree unreadable", "The order is proceeding behind the Pin."]
+        },
+        {
+          "event": {"type": "wrapper.run.end", "outcome": "stopped"},
+          "notice": null
+        }
+      ]
+    }
+  ]
+}

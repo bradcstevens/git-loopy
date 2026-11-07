@@ -363,7 +363,7 @@ async def test_review_shortcut_preserves_prefilled_custom_routing() -> None:
 
 
 async def test_route_override_prefills_the_recommended_effort() -> None:
-    app = _app(choices=(_choice("claude-opus-5.5", ("low", "medium", "high")),))
+    app = _app(choices=(_choice("gpt-6-astra", ("low", "medium", "high")),))
     async with app.run_test() as pilot:
         await pilot.press("enter", "enter", "enter")  # scope, model, effort
         await pilot.press("down", "down", "enter")  # custom routing

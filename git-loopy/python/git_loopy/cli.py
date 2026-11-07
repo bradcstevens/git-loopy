@@ -1234,6 +1234,10 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Report exactly what this sweep would remove without changing it.",
     )
+    sweep.add_argument(
+        "--retry-remote", metavar="RUN",
+        help="Retry preservation for exactly one remote Run; may resume a Stopped VM.",
+    )
 
     _add_command(
         sub,
@@ -1669,7 +1673,9 @@ def _run_sweep(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"git-loopy: sweep requires a git repository: {exc}", file=sys.stderr)
         return 1
-    return sweepcmd.run_sweep(repo_root=repo_root, dry_run=bool(args.dry_run))
+    return sweepcmd.run_sweep(
+        repo_root=repo_root, dry_run=bool(args.dry_run), retry_remote=args.retry_remote,
+    )
 
 
 def _run_remote_setup(args: argparse.Namespace) -> int:

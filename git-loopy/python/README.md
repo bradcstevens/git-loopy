@@ -1332,8 +1332,18 @@ with no estimate. Closing the launching client does not stop the Run.
 Use `runs`, `attach <run-id>` and `stop <run-id>` from the launching clone just
 as for a local Run. The client uses its existing Azure CLI login and the
 Container Apps execution API; no guest login or credential copy is needed.
-Automatic remote teardown remains separate delivery work (#871). Preserve
-salvage and reclaim the VM and disk after the Run; client Detach deletes neither.
+Automatic remote teardown remains separate delivery work (#871). Remote Sweep
+runs before a remote launch and in `git-loopy sweep` (`--dry-run` plans without
+mutating). It preserves a proven-dead Run's work before halting its VM, leaves
+Stopped VMs to Azure's seven-day deletion delay, and reclaims the per-launch
+disk image and receipt only after the VM is gone. Client Detach deletes neither.
+`git-loopy sweep --retry-remote <run-id>` explicitly resumes **one** Stopped VM
+and retries preservation; no automatic pass resumes it. Live or unprovable
+Runs and failed preservations are retained. Guests predating the preservation
+module fail closed rather than being upgraded or deleted by Sweep.
+A Stopped VM with no confirmed seven-day deletion delay is reported with its
+explicit retry command; Sweep neither silently abandons it nor arms deletion
+without preservation.
 See the [remote launch reference](../../docs/run-residence.md#detached-azure-launch-870)
 for image prerequisites, corporate package feeds, credential handling and
 unconfirmed-launch recovery.
@@ -1618,15 +1628,22 @@ spent, an issue that is still open rejoins the selection order like any other,
 so a pinned issue that makes no progress does not head every later Iteration.
 The shell and PowerShell Orchestrators follow the same rule.
 
-Under Rolling dispatch, an unread `parallel-safe` Pin holds new Lane and serial
+Under Rolling dispatch, an unread Pin holds new Lane and serial
 work for at most ten minutes from its first failed Pickup read. All failing
 reads share one monotonic clock, including Lease, Dynamic-route and Lane setup
 failures. After that, ordinary order proceeds behind it, Priority first. The Pin
 stays live and is retried after a complete refresh still lists it; it binds first
-when readable, but a later setup failure never starts another hold. Lane retries
+when readable, but a later setup failure never starts another hold. A serial
+Pickup still promotes a lapsed Pin, but walks on if it cannot read it. Priority
+can latch serial demand again, subject to the ordinary refill interleave.
+A serial hold costs one Iteration, ending `pin_unread` (non-terminal); retries
+wait on the failed read without opening Iterations or spending more units.
+Selector retries run at most once per idle poll interval through the routing
+ledger. A retry that binds the Pin opens an ordinary Iteration. Lane retries
 spend no iteration unit. `wrapper.pin.unread` records each `holding`, `lapsed`
-and `ended` transition once, with the failing read and reason. Serial-only
-dispatch and the Pin's preflight validation are unchanged.
+and `ended` transition once, with the failing read and reason; the attach
+client and the Dashboard show the Unread-Pin notice from those Events, clearing
+it on `ended`. Serial-only dispatch and the Pin's preflight validation are unchanged.
 
 ---
 
@@ -1802,19 +1819,20 @@ not `config` keys.
 ### Recommended static recipe
 
 The recommended seven routes are a maintainer-selected preset calibrated
-against public leaderboard evidence, not a measured ranking. Their models,
+against public leaderboard evidence, not a measured ranking. Each is the
+fastest pair inside its Task type's Intelligence Index band. Their models,
 efforts and long-context support were verified through the SDK-pinned harness
-on 2026-10-12:
+on 2026-11-06:
 
 | Task type | Model | Reasoning effort |
 | --- | --- | --- |
-| `planning` | `claude-opus-5.5` | `medium` |
-| `review` | `claude-opus-5.5` | `medium` |
-| `implementation` | `gpt-6-astra` | `medium` |
-| `test` | `gpt-6-astra` | `medium` |
-| `docs` | `claude-sonnet-5.5` | `medium` |
-| `chore` | `claude-sonnet-5.5` | `low` |
-| `bugfix` | `claude-opus-5.5` | `medium` |
+| `planning` | `gpt-6-astra` | `medium` |
+| `review` | `claude-opus-5.5` | `high` |
+| `implementation` | `gpt-6.1-sol` | `medium` |
+| `test` | `gpt-6.1-sol` | `medium` |
+| `docs` | `gpt-6-astra` | `low` |
+| `chore` | `gpt-6.1-sol` | `low` |
+| `bugfix` | `gpt-6-astra` | `medium` |
 
 `init` offers this optional static recipe; `config routing use-recommended`
 adopts its pairs without silently rewriting existing Config. Static entries
@@ -1825,12 +1843,11 @@ the recommended pairs alone does not change that scope's tier. The built-in
 fallback stays `default` where neither Config scope supplies a tier. A global
 tier is inherited where a project omits its own; a project can opt out with
 `context_tier = "default"` without changing the global preset.
-Review is a different vendor from implementation and test (docs, planning and
-bugfix share its vendor), and every route leaves the `gpt-6.1-sol @ max` legacy
-escalation rung distinct. Static retries change pairs only with an explicitly
-configured `[escalation]` block.
+Review is a different vendor from every other route, and every route leaves the
+`gpt-6.1-sol @ max` legacy escalation rung distinct. Static retries change pairs
+only with an explicitly configured `[escalation]` block.
 
-See [ADR-0048's current preset](../../docs/adr/0048-the-recommended-routing-table-is-retuned.md#evidence-calibrated-retune-2026-10-12)
+See [ADR-0048's current preset](../../docs/adr/0048-the-recommended-routing-table-is-retuned.md#speed-first-retune-2026-11-06)
 for the reported window and prompt caps. Those limits are not a static runtime
 budget: context fill still uses live telemetry, the bounded working budget is
 unchanged, and long context may cost more. Dynamic routing continues to elect

@@ -288,6 +288,8 @@ pub enum EventPayload {
     IterationEnd(Box<IterationEnd>),
     /// `wrapper.run.end`
     RunEnd(RunEnd),
+    /// `wrapper.pin.unread`, presentation only; never an issue Status.
+    PinUnread(PinUnread),
     /// `wrapper.stop.requested`
     StopRequested(StopRequested),
     /// `wrapper.account.state`, a Run fact, never an issue Status.
@@ -308,6 +310,16 @@ pub enum EventPayload {
     RefillTurn(RefillTurn),
     /// Any other Event type in the supported schema.
     Other,
+}
+
+/// The failing read of an invocation-scoped Pin (contract 2.41).
+#[derive(Clone, Debug, Deserialize)]
+pub struct PinUnread {
+    pub issue: i64,
+    pub state: String,
+    pub read: String,
+    pub reason: String,
+    pub first_unread_at: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1387,6 +1399,10 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.strike" => EventPayload::Strike(decode_or_default(value)),
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),
+        "wrapper.pin.unread" => match serde_json::from_value(value.clone()) {
+            Ok(unread) => EventPayload::PinUnread(unread),
+            Err(_) => EventPayload::Other,
+        },
         "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
         "wrapper.account.state" => EventPayload::AccountState(decode_or_default(value)),
         "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),

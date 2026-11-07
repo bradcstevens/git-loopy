@@ -1814,6 +1814,9 @@ _ALLOWED_UI_IMPORTS: frozenset[str] = frozenset(
         # Deep and pure (stdlib only); summary.py folds its per-Iteration
         # Consumption onto it. Not a shell/CLI/persist coupling.
         "git_loopy.usage",
+        # Pure Event-to-notice fold shared with the attach client's rendering
+        # contract (#997); no tracker, filesystem, or ambient clock access.
+        "git_loopy.unread_pin_notice",
         "git_loopy.contribution_identity",
         # git_loopy.viewer_zone — the one ambient-environment seam the UI is
         # allowed (#597, ADR-0058). Showing a person a wall clock requires

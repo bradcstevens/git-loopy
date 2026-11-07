@@ -12,18 +12,21 @@ the identical plan and performs none of it.
 from __future__ import annotations
 
 import sys
+import os
 from collections.abc import Callable
 from pathlib import Path
 
 from git_loopy.gh import GhError, SubprocessGitHubClient
 from git_loopy.git import GitError, SubprocessGitClient
 from git_loopy.sweep import resolve_base_ref, sweep
+from git_loopy.run_discovery import RunTargetError
 
 
 def run_sweep(
     *,
     repo_root: Path,
     dry_run: bool,
+    retry_remote: str | None = None,
     output: Callable[[str], None] = print,
 ) -> int:
     """Sweep ``repo_root`` and name every removal, in the order it happened.
@@ -31,17 +34,26 @@ def run_sweep(
     Args:
         repo_root: The clone to sweep.
         dry_run: Plan the sweep without performing any part of it.
+        retry_remote: Target only this remote Run, permitting an explicit resume.
         output: Where each line goes; injectable so tests read the report
             rather than captured stdout.
 
     Returns:
-        ``0``, including for a clean repository; ``1`` when git or ``gh`` failed
-        outright, which is the one case that is not a removal and so does not go
-        through ``output``.
+        ``0``, including for a clean repository; ``1`` on a local failure or
+        unconfirmed remote reclamation. Remote failures retain their receipts.
     """
     git = SubprocessGitClient(repo_root)
     github = SubprocessGitHubClient()
     try:
+        from git_loopy.azure_remote import AzureRemoteProvider
+        from git_loopy.remote_sweep import sweep_remote
+
+        remote_ok = sweep_remote(
+            git=git, provider=AzureRemoteProvider({}, os.environ),
+            dry_run=dry_run, retry=retry_remote, output=output,
+        )
+        if retry_remote is not None:
+            return 0 if remote_ok else 1
         report = sweep(
             git=git,
             github=github,
@@ -49,7 +61,7 @@ def run_sweep(
             base_branch=resolve_base_ref(git),
             dry_run=dry_run,
         )
-    except (GitError, GhError, OSError) as exc:
+    except (GitError, GhError, OSError, RunTargetError) as exc:
         print(f"git-loopy: sweep failed: {exc}", file=sys.stderr)
         return 1
     reclaim_verb = "Would reclaim" if dry_run else "Reclaimed"
@@ -62,4 +74,4 @@ def run_sweep(
         output(f"{reclaim_verb} directory: {directory}")
     for stem in report.runs:
         output(f"{reclaim_verb} Run logs: {stem}")
-    return 0
+    return 0 if remote_ok else 1

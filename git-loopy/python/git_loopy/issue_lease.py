@@ -29,6 +29,7 @@ _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _LEASE_REF_PREFIX = "refs/heads/git-loopy/leases/issue-"
 _WRITE_ATTEMPTS = 4
 _WRITE_BUDGET_SECONDS = 15.0
+LeaseFailurePhase = Literal["read", "write"]
 _PERMANENT_WRITE_FAILURE = re.compile(
     r"authentication failed|permission denied|access denied|repository not found|"
     r"certificate|host key verification failed|protected branch|"
@@ -100,6 +101,14 @@ def is_permanent_lease_write_refusal(error: GitError) -> bool:
         and _WRITE_REFUSAL.search(error.stderr_tail)
         and not is_stale_lease_rejection(None, error.stderr_tail)
     )
+
+
+class LeaseClaimError(GitError):
+    """A failed take, retaining the Git failure and the phase that failed."""
+
+    def __init__(self, phase: LeaseFailurePhase, error: GitError) -> None:
+        super().__init__(error.command, error.returncode, error.stderr_tail)
+        self.phase = phase
 
 
 def lease_ref(issue: int) -> str:
@@ -505,25 +514,33 @@ class LeaseTransport:
 
         A rejected swap is **not** retried: it is another Run's answer, not a
         transient fault, so the caller moves to the next candidate instead.
+        A failed observation or write raises :class:`LeaseClaimError` with its
+        phase and the original Git error as its cause; retry policy is unchanged.
         """
-        observation = self.observe(issue, now=now)
+        try:
+            observation = self.observe(issue, now=now)
+        except GitError as exc:
+            raise LeaseClaimError("read", exc) from exc
         verdict = decide_lease_action(
             "claim", state=observation.state, owner=observation.owner, run_id=run_id
         )
         if verdict == "refuse":
             return None
-        return self._write(
-            issue=issue,
-            run_id=run_id,
-            claimed_at=now,
-            heartbeat_at=now,
-            host=host,
-            pid=pid,
-            ttl_seconds=ttl_seconds,
-            expected=observation.sha,
-            stolen=verdict == "steal",
-            displaced_run_id=observation.owner,
-        )
+        try:
+            return self._write(
+                issue=issue,
+                run_id=run_id,
+                claimed_at=now,
+                heartbeat_at=now,
+                host=host,
+                pid=pid,
+                ttl_seconds=ttl_seconds,
+                expected=observation.sha,
+                stolen=verdict == "steal",
+                displaced_run_id=observation.owner,
+            )
+        except GitError as exc:
+            raise LeaseClaimError("write", exc) from exc
 
     def _write(
         self,

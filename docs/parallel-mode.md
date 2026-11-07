@@ -403,6 +403,32 @@ interleaving, not a fallback, and is reported as neither.
 - Per-Lane records in `.git-loopy/logs/<iso>-<run_id>.jsonl` are attributed to
   their contribution, so a Lane being refilled never reattributes earlier work.
 
+## A pinned issue that cannot be read
+
+`git-loopy run --issue N` pins one issue. Under Parallel mode, a Pin whose
+Pickup read fails or comes back incomplete is an **Unread Pin**: the Run holds
+new Lanes and serial work for it rather than start work ahead of the issue you
+named.
+
+- **The hold lapses after ten minutes.** The clock starts at the first unread
+  Pickup and is shared by every failing read (tracker, Readiness, Lease,
+  Dynamic route, Lane setup). It is fixed: no Config key, flag or environment
+  variable changes it. The lapse is final for the invocation.
+- **The Pin stays live.** After the lapse the ordinary order proceeds behind it,
+  Priority first, and the Pin is neither spent nor refused. It binds first as
+  soon as a read shows it.
+- **A serial hold costs one unit.** A Serial-required Pin's first unread attempt
+  is one Iteration reported as `pin_unread`; retries wait on the read that
+  failed and spend nothing. Lane retries spend no unit.
+- **The Run announces it.** `wrapper.pin.unread` records each `holding`,
+  `lapsed` and `ended` transition once. The attach client and the Dashboard
+  show an Unread-Pin notice naming the Pin and the failing read: while holding,
+  that new work is held until ten minutes after the first unread; after the
+  lapse, that the order is proceeding behind the Pin. `ended` clears it.
+
+Serial-only members are unchanged: they walk past an unread Pin from the first
+read that failed.
+
 ## Related reading
 
 - [Wrapper contract §12](wrapper-contract.md#12-event-schema-phase-1-must) — the

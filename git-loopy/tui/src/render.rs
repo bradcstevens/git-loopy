@@ -171,21 +171,24 @@ pub fn draw_frame(frame: &mut Frame, dashboard: &DashboardFrame) {
         Screen::DrillIn => draw_drill_in(frame, dashboard),
     }
     if let Some(notice) = &dashboard.notice {
-        draw_notice(frame, dashboard, notice);
+        draw_notice(frame, dashboard, notice, " no workable issues ");
+    }
+    if let Some(notice) = &dashboard.unread_pin_notice {
+        draw_notice(frame, dashboard, notice, " Unread Pin ");
     }
 }
 
-/// The widest an Unbound-Run notice is drawn, so it reads as a message box.
+/// The widest a notice is drawn, so it reads as a message box.
 const NOTICE_MAX_COLUMNS: u16 = 96;
 
-/// Why an **Unbound Run** ended, drawn over the screen (#642).
+/// An **Unbound-Run notice** or live **Unread-Pin notice**, drawn over the screen.
 ///
 /// Drawn over the bands rather than as a band of its own, so no pointer target
 /// moves: a drag handle hit-tested against [`dashboard_bands`] is exactly where
-/// it was. On the Dashboard it sits over the Queue, which an Unbound Run leaves
-/// empty; on a drill-in it sits at the foot of the screen, so the Log the
+/// it was. On the Dashboard it sits over the Queue; on a drill-in it sits at
+/// the foot of the screen, so the Log the
 /// operator opened stays readable above it.
-fn draw_notice(frame: &mut Frame, dashboard: &DashboardFrame, notice: &[String]) {
+fn draw_notice(frame: &mut Frame, dashboard: &DashboardFrame, notice: &[String], title: &str) {
     let glyphs = Glyphs::for_terminal(&dashboard.capabilities);
     let area = frame.area();
     let width = area.width.saturating_sub(4).clamp(1, NOTICE_MAX_COLUMNS);
@@ -216,7 +219,7 @@ fn draw_notice(frame: &mut Frame, dashboard: &DashboardFrame, notice: &[String])
             .wrap(Wrap { trim: true })
             .block(
                 glyphs
-                    .block(" no workable issues ")
+                    .block(title)
                     .title_style(Style::default().add_modifier(Modifier::BOLD)),
             ),
         popup,

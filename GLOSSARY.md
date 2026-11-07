@@ -489,7 +489,18 @@ and leaves the candidate admissible again. A pull-request candidate is never Awa
 _Avoid_: **Blocked** (that names an open `blocked_by` dependency, and a closing pull request is
 not one); **Pool exclusion** (nothing about how the issue was authored is wrong, and it stays in
 the Pool); **Unresolved readiness** (a pull-request state that could not be read proves no wait);
-in review, has a PR.
+**Already delivered** (its pull request has merged, and the issue is open anyway); in review, has
+a PR.
+
+**Already delivered**:
+A candidate whose acceptance criteria already hold on the base, so a session has nothing to change.
+Typically its closing pull request merged and something then reopened the issue. It is not a
+**Readiness** fact, because a merged pull request never holds a candidate; only its **Agent** finds
+it, in session. The Agent opens the closure as a decision for a human and records that decision
+issue as the candidate's blocker, so the candidate is **Blocked** from then on, and its session
+ends declaring no more tasks (ADR-0100).
+_Avoid_: done, completed (both name a closed issue); **Awaiting merge** (an open pull request is
+still to deliver it).
 
 **Unresolved readiness**:
 A candidate whose **Readiness** could not be read and that proved no wait. Its `blockedBy`

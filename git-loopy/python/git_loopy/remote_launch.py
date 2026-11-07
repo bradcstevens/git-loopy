@@ -268,6 +268,8 @@ def run_remote_command(arguments: list[str]) -> int:
     from git_loopy.azure_remote import AzureRemoteProvider
     from git_loopy.remote_setup import RemoteSetupError
     from git_loopy.run_residence import launch_run, register_residence
+    from git_loopy.git import SubprocessGitClient
+    from git_loopy.remote_sweep import sweep_remote
 
     parser = cli.build_parser()
     parser.prog = "git-loopy remote"
@@ -281,6 +283,7 @@ def run_remote_command(arguments: list[str]) -> int:
         root = cli.resolve_repo_root()
         tables = settings.load_configs(root, os.environ)
         provider = AzureRemoteProvider(tables.project, os.environ)
+        sweep_remote(git=SubprocessGitClient(root), provider=provider, dry_run=False)
         with register_residence(RemoteResidence(provider, os.environ)):
             return launch_run(RunLaunch(root, tuple(arguments)), residence="remote")
     except ImportError:

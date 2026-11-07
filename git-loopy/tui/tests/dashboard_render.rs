@@ -173,6 +173,7 @@ fn render_screen_lines(
         capabilities,
         diagnostics: Default::default(),
         notice: None,
+        unread_pin_notice: None,
     };
     let mut terminal =
         Terminal::new(TestBackend::new(columns, rows)).expect("a headless terminal is constructed");

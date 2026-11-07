@@ -334,6 +334,12 @@ uv run --project git-loopy/python --all-extras \
   --stable-commit --candidate-commit "$commit"
 ```
 
+For the Rehearsal, `--workspace` accepts either a missing path or an existing
+empty directory, such as one created with `mktemp -d`, just as `git clone` does.
+A non-empty directory (including one containing only hidden entries) or a file
+is refused with a diagnostic explaining why. `--archive-output` still names a
+new source archive file: that path must not already exist.
+
 `release-promotion.yml` enters `git_loopy.release_promotion` for every untagged
 stable commit, which runs exactly that rehearsal before any tag exists. A
 refusal ends the step with no tag created and nothing pushed. A rehearsal needs

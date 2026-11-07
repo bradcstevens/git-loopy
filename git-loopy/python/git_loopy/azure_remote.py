@@ -16,6 +16,7 @@ from git_loopy.remote_launch import RemoteLaunchError, RemotePlan
 from git_loopy.remote_setup import AzureTarget
 from git_loopy.remote_control import RemoteSnapshot
 from git_loopy.remote_runs import RemoteRunReceipt, record_remote_run
+from git_loopy.remote_sweep import RemoteSweepResult
 from git_loopy.run_discovery import RunTargetError
 
 if TYPE_CHECKING:
@@ -41,6 +42,16 @@ class AzureRemoteProvider:
         self._credential = credential
         self._transport = transport
         self._image_builder = image_builder
+
+    def sweep(
+        self, receipt: RemoteRunReceipt, *, dry_run: bool, retry: bool = False,
+    ) -> RemoteSweepResult:
+        from git_loopy.azure_sweep import sweep_receipt
+
+        return sweep_receipt(
+            receipt, dry_run=dry_run, retry=retry,
+            credential=self._credential, transport=self._transport,
+        )
 
     def inspect(
         self, receipt: RemoteRunReceipt, *, offset: int = 0, request_id: str | None = None,

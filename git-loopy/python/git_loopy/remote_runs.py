@@ -74,3 +74,11 @@ def remote_run_receipts(git: GitClient) -> tuple[RemoteRunReceipt, ...]:
         raise RunTargetError(
             "Cannot read this clone's remote Run receipts; refusing a partial listing."
         ) from None
+
+
+def retire_remote_run(git: GitClient, receipt: RemoteRunReceipt) -> None:
+    """Remove only the receipt the caller proved spent, never a changed record."""
+    current = remote_run_receipts(git)
+    if receipt not in current:
+        raise RunTargetError("Remote Run receipt changed during Sweep; retaining it.")
+    (git.common_git_dir() / "git-loopy" / "remote-runs" / f"{receipt.run_id}.json").unlink()

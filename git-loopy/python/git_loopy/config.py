@@ -243,19 +243,21 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {
 #: ==================  ====================  ========
 #: task-type key       Model                 Effort
 #: ==================  ====================  ========
-#: ``planning``        ``claude-opus-5.5``   ``medium``
-#: ``review``          ``claude-opus-5.5``   ``medium``
-#: ``implementation``  ``gpt-6-astra``       ``medium``
-#: ``test``            ``gpt-6-astra``       ``medium``
-#: ``docs``            ``claude-sonnet-5.5`` ``medium``
-#: ``chore``           ``claude-sonnet-5.5`` ``low``
-#: ``bugfix``          ``claude-opus-5.5``   ``medium``
+#: ``planning``        ``gpt-6-astra``       ``medium``
+#: ``review``          ``claude-opus-5.5``   ``high``
+#: ``implementation``  ``gpt-6.1-sol``       ``medium``
+#: ``test``            ``gpt-6.1-sol``       ``medium``
+#: ``docs``            ``gpt-6-astra``       ``low``
+#: ``chore``           ``gpt-6.1-sol``       ``low``
+#: ``bugfix``          ``gpt-6-astra``       ``medium``
 #: ==================  ====================  ========
 #:
-#: **Provenance.** The maintainer's evidence-calibrated retune of
-#: **2026-10-12**, recorded in ADR-0048, supersedes the 2026-10-09
-#: quality-first values. Availability, efforts and tiers were verified against
-#: the SDK-pinned harness (CLI 1.0.92-4); model quality rests on public
+#: **Provenance.** The maintainer's speed-first retune of **2026-11-06**,
+#: recorded in ADR-0048, supersedes the 2026-10-12 evidence-calibrated values.
+#: Each row is the fastest pair inside its Task type's Intelligence Index band,
+#: scored by ``/model-scorecard`` with time to first answer token ranked first
+#: and task-fit success second. Availability, efforts and tiers were verified
+#: against the SDK-pinned harness (CLI 1.0.98); model quality rests on public
 #: leaderboard evidence, not a routing measurement. Every chosen model supports
 #: the authored preset's ``long_context`` tier.
 #:
@@ -272,20 +274,20 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {
 #:   ``supported_efforts`` filter, and ``tests/test_config.py``'s uniform
 #:   gates-clean assertion.
 #: * **Review stays cross-vendor from the code-writing rows.** ``review`` is
-#:   Anthropic while ``implementation`` and ``test`` are OpenAI, and ``review``
-#:   is never ``gpt-5.6-sol`` (ADR-0035's exclusion from a write-capable review
-#:   Lane). Since the 2026-10-12 retune ``docs``, ``planning`` and ``bugfix``
-#:   share review's vendor, a cost ADR-0048 records. No vendor map or
-#:   cross-entry mechanism enforces either property.
+#:   Anthropic while every other row is OpenAI, and ``review`` is never
+#:   ``gpt-5.6-sol`` (ADR-0035's exclusion from a write-capable review Lane).
+#:   The 2026-11-06 retune restores the property for ``docs``, ``planning`` and
+#:   ``bugfix``, which the 2026-10-12 retune had given review's vendor. No vendor
+#:   map or cross-entry mechanism enforces either property.
 RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
-        "planning": ("claude-opus-5.5", "medium"),
-        "review": ("claude-opus-5.5", "medium"),
-        "implementation": ("gpt-6-astra", "medium"),
-        "test": ("gpt-6-astra", "medium"),
-        "docs": ("claude-sonnet-5.5", "medium"),
-        "chore": ("claude-sonnet-5.5", "low"),
-        "bugfix": ("claude-opus-5.5", "medium"),
+        "planning": ("gpt-6-astra", "medium"),
+        "review": ("claude-opus-5.5", "high"),
+        "implementation": ("gpt-6.1-sol", "medium"),
+        "test": ("gpt-6.1-sol", "medium"),
+        "docs": ("gpt-6-astra", "low"),
+        "chore": ("gpt-6.1-sol", "low"),
+        "bugfix": ("gpt-6-astra", "medium"),
     }
 )
 

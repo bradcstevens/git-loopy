@@ -7809,27 +7809,66 @@ def test_an_unread_pin_does_not_end_the_run_on_the_rest_of_the_pool(
     assert _bindings(_logged_events(tmp_path))[0] == (44, "pin")
 
 
-def test_the_cap_ends_a_run_whose_pin_the_tracker_keeps_refusing(
+def test_a_serial_pin_lapses_instead_of_draining_the_cap(
     tmp_path, monkeypatch
 ) -> None:
-    """Retrying an unreadable Pin spends the cap, so the Run still ends (#430).
-
-    Every read of the Pin after preflight fails. Its Iteration binds nothing
-    and spends the only unit; the Run then ends ``iteration_cap`` rather than
-    poll for a Pin that never answers.
-    """
+    """One hold costs one unit; after its bound the remaining unit works a Lane."""
     _wire_unreadable_pin(tmp_path, monkeypatch, nth=2, persistent=True)
+    monkeypatch.setattr(loop_module, "_PIN_UNREAD_HOLD_SECONDS", 0.05)
 
     asyncio.run(
         asyncio.wait_for(
-            loop_module.run(_pinned_config(44, max_iterations=1)), timeout=30
+            loop_module.run(_pinned_config(44, max_iterations=2)), timeout=30
         )
     )
 
     events = _logged_events(tmp_path)
-    assert _bindings(events) == []
+    assert _bindings(events) == [(42, "order")]
+    assert [
+        e["outcome"] for e in events if e["type"] == "wrapper.iteration.end"
+    ] == ["pin_unread"]
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [(e["state"], e["read"]) for e in unread] == [
+        ("holding", "tracker"), ("lapsed", "tracker"),
+    ]
+    assert events.index(unread[-1]) < next(
+        i for i, e in enumerate(events) if e["type"] == "wrapper.contribution.start"
+    )
     run_ends = [e["outcome"] for e in events if e["type"] == "wrapper.run.end"]
     assert run_ends == ["iteration_cap"]
+
+
+def test_a_serial_hold_that_spends_the_last_unit_does_not_poll(tmp_path, monkeypatch) -> None:
+    class Tracker(FakeGitHubClient):
+        views = 0
+
+        def issue_view(self, number: int) -> gh_module.Issue:
+            if number == 44:
+                self.views += 1
+                assert self.views <= 3, "no retry can start work after the cap"
+                if self.views == 3:
+                    raise gh_module.GhError(["gh", "issue", "view"], 1, "offline")
+            return super().issue_view(number)
+
+    _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+        _make_issue(44, labels=["ready-for-agent"]),
+    ], gh_cls=Tracker)
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(44, max_iterations=1)), timeout=15,
+    ))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == []
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.iteration.end"] == [
+        "pin_unread",
+    ]
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == [
+        "iteration_cap",
+    ]
+    assert [(e["state"], e.get("outcome")) for e in events if e["type"] == "wrapper.pin.unread"] == [
+        ("holding", None), ("ended", "stopped"),
+    ]
 
 
 def test_a_pin_whose_lease_read_fails_keeps_its_serial_iteration(
@@ -7939,7 +7978,7 @@ def test_a_pin_whose_iteration_read_nothing_keeps_serial_ownership(
 ) -> None:
     """A Pin Iteration whose whole Pool read failed hands no turn to Lanes (#430).
 
-    Its only listing gave out, so the Iteration ends ``preflight_failed``
+    Its only listing gave out, so the Iteration ends ``pin_unread``
     without having been offered the Pin; the refill turn after it would
     otherwise give the Run's other unit to a Lane.
     """
@@ -12396,8 +12435,10 @@ def test_a_lane_pin_read_within_the_bound_announces_only_transitions(
     lines = [line for line in log.splitlines() if "Unread Pin #43" in line]
     assert len(lines) == 2
     assert "the Pin was not read" not in log
-    assert "no route to host" in unread[0]["reason"]
-    assert "Lease for issue #43 could not be read or taken" not in log
+    assert unread[0]["reason"] == (
+        "Lease could not be taken (remote unreadable): no route to host"
+    )
+    assert "WARNING issue #43: Lease" not in log
     assert "serial-required Pool read was partial" not in log
 
 
@@ -12500,29 +12541,128 @@ def test_a_lapsed_pin_read_again_binds_before_priority_serial(
     )["outcome"] == "bound"
 
 
-def test_a_lane_pin_read_as_blocked_after_a_hold_is_spent(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("serial", [False, True], ids=["lane", "serial"])
+def test_a_partial_read_does_not_restart_the_pins_first_unread_clock(
+    tmp_path, monkeypatch, serial
 ) -> None:
-    fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    now = 0.0
+    partial = False
+
+    class Tracker(FakeGitHubClient):
+        def issue_list(self, label: str, state: str = "open") -> gh_module.IssueListPage:
+            nonlocal now, partial
+            page = super().issue_list(label, state)
+            unread = [
+                e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pin.unread"
+            ]
+            if unread and not any(e["state"] == "lapsed" for e in unread):
+                now = 0.9 if not partial else 1.0
+                if not partial:
+                    partial = True
+                    return dataclass_replace(
+                        page, issues=tuple(i for i in page.issues if i.number != 43),
+                        complete=False,
+                    )
+            return page
+
+    _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(41, labels=_PARALLEL_SAFE),
+        _make_issue(43, labels=["ready-for-agent", *([] if serial else ["parallel-safe"])]),
+    ], gh_cls=Tracker)
+    monkeypatch.setattr(loop_module, "_pin_unread_clock", lambda: now)
+    monkeypatch.setattr(loop_module, "_PIN_UNREAD_HOLD_SECONDS", 1.0)
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
     real_probe = fake_git.probe_remote_ref
 
-    def probe(remote: str, ref: str) -> str | None:
-        if ref == lease_ref(43):
-            fake_gh.seed_issue(_make_issue(
-                43, labels=_PARALLEL_SAFE, blocked_by=_OPEN_BLOCKER,
-            ))
+    def probe(remote, ref):
+        if ref == lease_ref(43) and not any(
+            e["type"] == "wrapper.pin.unread" and e["state"] == "lapsed"
+            for e in _logged_events(tmp_path)
+        ):
             raise git_module.GitError(["git", "ls-remote"], 128, "offline")
         return real_probe(remote, ref)
 
     monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
     asyncio.run(asyncio.wait_for(
-        loop_module.run(_pinned_config(43, max_iterations=2)), timeout=15
+        loop_module.run(_pinned_config(43, max_iterations=3)), timeout=5,
     ))
     events = _logged_events(tmp_path)
-    assert [(e["state"], e.get("outcome")) for e in events if e["type"] == "wrapper.pin.unread"] == [
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    lapse = next(e for e in unread if e["state"] == "lapsed")
+    assert partial and now == 1.0
+    assert unread[0]["state"] == "holding"
+    assert len({e["first_unread_at"] for e in unread}) == 1
+    assert events.index(lapse) < next(
+        i for i, e in enumerate(events) if e["type"] == "wrapper.pickup.bound"
+    )
+    assert (43, "pin") in _bindings(events)
+    assert unread[-1]["outcome"] == "bound"
+    assert not any(e["state"] == "holding" for e in unread[unread.index(lapse):])
+
+
+@pytest.mark.parametrize("serial", [False, True], ids=["lane", "serial"])
+@pytest.mark.parametrize(
+    "refusal", ["blocked", "awaiting_merge", "leased", "task_type", "stale"],
+)
+def test_a_pin_read_and_refused_after_a_hold_is_spent(
+    tmp_path, monkeypatch, serial, refusal
+) -> None:
+    labels = ["ready-for-agent", *([] if serial else ["parallel-safe"])]
+    pin = _make_issue(43, labels=labels)
+    fake_gh = _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(41, labels=_PARALLEL_SAFE),
+        _make_issue(42, labels=_PARALLEL_SAFE),
+        pin,
+    ], pull_request_states_by_id={"PR_90": "open"})
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    real_probe = fake_git.probe_remote_ref
+    failed = False
+
+    def probe(remote: str, ref: str) -> str | None:
+        nonlocal failed
+        if ref == lease_ref(43) and not failed:
+            failed = True
+            if refusal == "blocked":
+                fake_gh.seed_issue(dataclass_replace(pin, blocked_by=_OPEN_BLOCKER))
+            elif refusal == "awaiting_merge":
+                fake_gh.seed_issue(dataclass_replace(
+                    pin, closing_references=gh_module.ClosingReferences(
+                        complete=True,
+                        nodes=(gh_module.ClosingReference(node_id="PR_90", ref="x/y#90"),),
+                    ),
+                ))
+            elif refusal == "leased":
+                _rival_lease(fake_git, 43, repository="x/y")
+            elif refusal == "task_type":
+                fake_gh.seed_issue(dataclass_replace(
+                    pin, labels=[*labels, "task-type:bogus"],
+                ))
+            else:
+                fake_gh.seed_issue(dataclass_replace(pin, state="CLOSED"))
+            raise git_module.GitError(["git", "ls-remote"], 128, "offline")
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=3 if serial else 2)),
+        timeout=15,
+    ))
+    events = _logged_events(tmp_path)
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [(e["state"], e.get("outcome")) for e in unread] == [
         ("holding", None), ("ended", "spent"),
     ]
     assert _bindings(events) == [(41, "order"), (42, "order")]
+    assert events.index(unread[-1]) < next(
+        i for i, e in enumerate(events) if e["type"] == "wrapper.pickup.bound"
+    )
+    assert not any(
+        e["type"] == "wrapper.strike" and e.get("issue") == 43 for e in events
+    )
 
 
 @pytest.mark.parametrize("end", ["stopped", "spent"])
@@ -12562,6 +12702,56 @@ def test_a_lane_pin_announces_the_end_of_an_unread_hold(
         )
     else:
         assert _bindings(events) == [(41, "order"), (42, "order")]
+
+
+@pytest.mark.parametrize("serial", [False, True], ids=["lane", "serial"])
+def test_a_lapsed_pin_cannot_bind_under_another_runs_lease(
+    tmp_path, monkeypatch, serial
+) -> None:
+    _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(41, labels=_PARALLEL_SAFE),
+        _make_issue(43, labels=["ready-for-agent", *([] if serial else ["parallel-safe"])]),
+    ])
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(loop_module, "_PIN_UNREAD_HOLD_SECONDS", 1.0)
+
+    def clock():
+        return 1.0 if any(
+            e["type"] == "wrapper.pin.unread" for e in _logged_events(tmp_path)
+        ) else 0.0
+
+    monkeypatch.setattr(loop_module, "_pin_unread_clock", clock)
+    real_probe = fake_git.probe_remote_ref
+    rival = False
+
+    def probe(remote, ref):
+        nonlocal rival
+        if ref == lease_ref(43) and not rival:
+            if not any(
+                e["type"] == "wrapper.pin.unread" and e["state"] == "lapsed"
+                for e in _logged_events(tmp_path)
+            ):
+                raise git_module.GitError(["git", "ls-remote"], 128, "offline")
+            rival = True
+            _rival_lease(fake_git, 43, repository="x/y")
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=0)), timeout=15,
+    ))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(41, "order")]
+    assert [(e["state"], e.get("outcome")) for e in events if e["type"] == "wrapper.pin.unread"] == [
+        ("holding", None), ("lapsed", None), ("ended", "spent"),
+    ]
+    assert any(
+        e["type"] == "wrapper.pickup.skipped" and e["issue"] == 43
+        and e["reason"] == "held by another Run's live Lease"
+        for e in events
+    )
 
 
 @pytest.mark.parametrize("failure", ["tracker", "readiness", "membership"])
@@ -12630,7 +12820,9 @@ def test_rolling_unread_pin_fixture_at_the_complete_run_seam(
                 "ready-for-agent", "priority",
                 *([] if case.get("priority_serial") else ["parallel-safe"]),
             ]),
-            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=[
+                "ready-for-agent", *([] if case.get("serial_pin") else ["parallel-safe"]),
+            ]),
         ],
     )
     monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
@@ -12650,11 +12842,37 @@ def test_rolling_unread_pin_fixture_at_the_complete_run_seam(
     assert unread[-1].get("outcome") == case["outcome"]
     assert _bindings(events) == [tuple(binding) for binding in case["expected_bindings"]]
     assert len({e["first_unread_at"] for e in unread}) == 1
-    if not case.get("priority_serial"):
+    contract = json.loads(
+        (Path(__file__).parents[2] / "conformance/event-schema.json").read_text()
+    )["payload_contracts"]["wrapper.pin.unread"]
+    for event in unread:
+        assert set(contract["required_when_present"]) <= event.keys()
+        assert event["state"] in contract["state_values"]
+        assert event["read"] in contract["read_values"]
+        assert event["read"] == "lease" and "no route to host" in event["reason"]
+        assert event["issue"] == 43 and event["iter"] is None
+        assert not {"lane_id", "contribution_id"} & event.keys()
+        assert event["first_unread_at"].endswith("Z")
+        assert datetime.fromisoformat(event["first_unread_at"]).utcoffset() == timedelta(0)
+        assert ("outcome" in event) == (event["state"] == "ended")
+        if event["state"] == "ended":
+            assert event["outcome"] in contract["outcome_on_ended_only"]
+    if case.get("serial_pin"):
+        ends = [e for e in events if e["type"] == "wrapper.iteration.end"]
+        assert len(ends) == case["expected_iterations"]
+        assert [e["outcome"] for e in ends].count("pin_unread") == 1
+        if case.get("priority_serial"):
+            lapse = next(e for e in unread if e["state"] == "lapsed")
+            priority = next(
+                e for e in events if e["type"] == "wrapper.serial.requested"
+                and e["issue"] == 42
+            )
+            assert events.index(lapse) < events.index(priority)
+    elif not case.get("priority_serial"):
         assert not any(e["type"] == "wrapper.iteration.start" for e in events)
     if "lapsed" in case["expected_states"]:
         assert events.index(next(e for e in unread if e["state"] == "lapsed")) < (
-            events.index(_first_work(events))
+            next(i for i, e in enumerate(events) if e["type"] == "wrapper.pickup.bound")
         )
 
 
@@ -12861,7 +13079,7 @@ def test_a_non_pin_whose_lease_probe_fails_is_still_refused_for_the_run(
         for e in events
         if e["type"] == "wrapper.pickup.skipped" and e["issue"] == 41
     ]
-    assert skips == ["Lease could not be taken (remote unreadable)"]
+    assert skips == ["Lease could not be taken (remote unreadable): no route to host"]
 
 
 def test_a_serial_pins_lease_outage_costs_one_unit(tmp_path, monkeypatch) -> None:
@@ -12891,6 +13109,303 @@ def test_a_serial_pins_lease_outage_costs_one_unit(tmp_path, monkeypatch) -> Non
     assert _bindings(events) == [(44, "pin")]
     iterations = [e for e in events if e["type"] == "wrapper.iteration.start"]
     assert len(iterations) == 2
+    assert [
+        e["outcome"] for e in events if e["type"] == "wrapper.iteration.end"
+    ][0] == "pin_unread"
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert unread[0]["read"] == "lease"
+    assert unread[0]["reason"] == (
+        "Lease could not be taken (remote unreadable): no route to host"
+    )
+
+
+@pytest.mark.parametrize("serial", [False, True], ids=["lane", "serial"])
+def test_a_pin_whose_lease_write_fails_preserves_its_turn_and_reports_the_cause(
+    tmp_path, monkeypatch, serial
+) -> None:
+    _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(41, labels=["ready-for-agent", "parallel-safe"]),
+        _make_issue(
+            43, labels=["ready-for-agent"] + ([] if serial else ["parallel-safe"]),
+        ),
+    ])
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    fake_git.push_ref_errors = [
+        git_module.GitError(
+            ["git", "push"], 1,
+            "pre-push: use the approved branch namespace\n"
+            "error: failed to push some refs to 'origin'\n",
+        )
+    ]
+    probes: dict[str, Any] = {}
+
+    def after_write() -> None:
+        nonlocal probes
+        probes = _fail_lease_probes(monkeypatch, fake_git, 43, times=2)
+
+    fake_git.push_ref_interceptor = after_write
+
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(43, max_iterations=2 if serial else 1)),
+        timeout=15,
+    ))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(43, "pin")]
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [(e["state"], e.get("outcome")) for e in unread] == [
+        ("holding", None), ("ended", "bound"),
+    ]
+    assert {e["read"] for e in unread} == {"lease"}
+    assert unread[0]["reason"] == (
+        "Lease write was refused: pre-push: use the approved branch namespace"
+    )
+    assert len(probes["at"]) >= 3
+    assert probes["left"] == 0
+    if serial:
+        assert [
+            e["outcome"] for e in events if e["type"] == "wrapper.iteration.end"
+        ][0] == "pin_unread"
+        assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 2
+    log = _diag_log(tmp_path)
+    assert "Lease write was refused: pre-push: use the approved branch namespace" in log
+    assert "failed to push some refs" not in log
+    assert "WARNING issue #43: Lease" not in log
+
+
+def test_serial_readiness_retries_use_the_pool_read_without_opening_iterations(
+    tmp_path, monkeypatch
+) -> None:
+    class Tracker(FakeGitHubClient):
+        reads: list[float] = []
+
+        def issue_view(self, number: int) -> gh_module.Issue:
+            issue = super().issue_view(number)
+            if number == 44:
+                self.reads.append(time.monotonic())
+                if 2 < len(self.reads) <= 6:
+                    return dataclass_replace(issue, blocked_by=BlockedByRead.unprovable())
+            return issue
+
+    tracker = _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+        _make_issue(44, labels=["ready-for-agent"]),
+    ], gh_cls=Tracker)
+    interval = 0.02
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", interval)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(44, max_iterations=2)), timeout=15,
+    ))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(44, "pin")]
+    assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 2
+    assert [
+        e["outcome"] for e in events if e["type"] == "wrapper.iteration.end"
+    ][0] == "pin_unread"
+    unread = [e for e in events if e["type"] == "wrapper.pin.unread"]
+    assert [(e["state"], e["read"], e.get("outcome")) for e in unread] == [
+        ("holding", "readiness", None), ("ended", "readiness", "bound"),
+    ]
+    assert isinstance(tracker, Tracker)
+    assert all(
+        later - earlier >= interval * 0.99
+        for earlier, later in itertools.pairwise(tracker.reads[2:7])
+    )
+    log = _diag_log(tmp_path)
+    assert len([line for line in log.splitlines() if "Unread Pin #44" in line]) == 2
+    assert "serial-required Pool read was partial" not in log
+
+
+@pytest.mark.parametrize("serial", [False, True], ids=["lane", "serial"])
+@pytest.mark.parametrize("pinned", [False, True], ids=["ordinary", "pin"])
+def test_a_lapsed_pin_alone_follows_the_ordinary_unreadable_candidate(
+    tmp_path, monkeypatch, serial, pinned
+) -> None:
+    class Tracker(FakeGitHubClient):
+        views = 0
+        retries_after_lapse = 0
+
+        def issue_view(self, number: int) -> gh_module.Issue:
+            issue = super().issue_view(number)
+            self.views += 1
+            if not serial and (not pinned or any(
+                e["type"] == "wrapper.pin.unread" and e["state"] == "lapsed"
+                for e in _logged_events(tmp_path)
+            )):
+                self.retries_after_lapse += 1
+                if self.retries_after_lapse > 4:
+                    return issue
+            if self.views > (1 if pinned else 0):
+                return dataclass_replace(issue, blocked_by=BlockedByRead.unprovable())
+            return issue
+
+    _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(44, labels=["ready-for-agent", *([] if serial else ["parallel-safe"])]),
+    ], gh_cls=Tracker)
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(loop_module, "_PIN_UNREAD_HOLD_SECONDS", 0.03)
+    rc = asyncio.run(asyncio.wait_for(
+        loop_module.run(dataclass_replace(
+            _pinned_config(44, max_iterations=0), issue_pin=44 if pinned else None,
+        )), timeout=15,
+    ))
+    events = _logged_events(tmp_path)
+    if not serial:
+        assert rc == 0
+        assert _bindings(events) == [(44, "pin" if pinned else "order")]
+        assert not any(e["type"] == "wrapper.iteration.start" for e in events)
+        assert [
+            e["outcome"] for e in events if e["type"] == "wrapper.run.end"
+        ] == ["empty_pool"]
+        assert [(e["state"], e.get("outcome")) for e in events if e["type"] == "wrapper.pin.unread"] == (
+            [("holding", None), ("lapsed", None), ("ended", "bound")] if pinned else []
+        )
+        return
+    assert rc == 1
+    assert _bindings(events) == []
+    iteration_outcomes = [
+        e["outcome"] for e in events if e["type"] == "wrapper.iteration.end"
+    ]
+    assert iteration_outcomes == (
+        ["pin_unread", "preflight_failed"] if pinned and serial else ["preflight_failed"]
+    )
+    assert [
+        e["outcome"] for e in events if e["type"] == "wrapper.run.end"
+    ] == ["preflight_failed"]
+    assert [(e["state"], e["read"]) for e in events if e["type"] == "wrapper.pin.unread"] == (
+        [("holding", "readiness"), ("lapsed", "readiness")] if pinned else []
+    )
+
+
+@pytest.mark.parametrize("end", ["stopped", "spent"])
+def test_a_serial_pin_announces_the_end_of_its_hold(tmp_path, monkeypatch, end) -> None:
+    tracker = _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+        _make_issue(44, labels=["ready-for-agent"]),
+    ])
+    built = _capture_parallel_loops(monkeypatch)
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    real_probe = fake_git.probe_remote_ref
+    attempts = 0
+
+    def probe(remote, ref):
+        nonlocal attempts
+        if ref == lease_ref(44):
+            attempts += 1
+            if attempts == 2:
+                if end == "stopped":
+                    built[0].request_stop_drain()
+                else:
+                    tracker.seed_issue(dataclass_replace(
+                        _make_issue(44, labels=["ready-for-agent"]), state="CLOSED",
+                    ))
+            raise git_module.GitError(["git", "ls-remote"], 128, "offline")
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_pinned_config(44, max_iterations=2)), timeout=15,
+    ))
+    events = _logged_events(tmp_path)
+    assert [(e["state"], e.get("outcome")) for e in events if e["type"] == "wrapper.pin.unread"] == [
+        ("holding", None), ("ended", end),
+    ]
+    assert _bindings(events) == ([] if end == "stopped" else [(42, "order")])
+    if end == "stopped":
+        assert [
+            e["outcome"] for e in events if e["type"] == "wrapper.run.end"
+        ] == ["operator_stop"]
+
+
+@pytest.mark.parametrize("read", ["route_evidence", "route_capabilities", "route_selector"])
+def test_serial_route_reads_wait_without_repeating_pickup_or_spending_units(
+    tmp_path, monkeypatch, read
+) -> None:
+    _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+        _make_issue(44, labels=["ready-for-agent"]),
+    ])
+    interval = 0.02
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", interval)
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    real_probe = fake_git.probe_remote_ref
+    pickups = 0
+
+    def probe(remote, ref):
+        nonlocal pickups
+        if ref == lease_ref(44):
+            pickups += 1
+        return real_probe(remote, ref)
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", probe)
+    attempts: list[float] = []
+    probe_counts: list[int] = []
+    elect = _elects_lane_model("claude-opus-5")
+
+    def failing() -> bool:
+        if pickups and len(attempts) < 4:
+            attempts.append(time.monotonic())
+            probe_counts.append(pickups)
+            return True
+        return False
+
+    def answer(request):
+        if read == "route_selector" and failing():
+            raise RuntimeError("selector endpoint returned 502")
+        return elect(request)
+
+    spied = _dynamic_lane_ports(monkeypatch, answer=answer)
+    real_fetch = dynamic_route._stdlib_fetch
+    real_capabilities = loop_module._fetch_harness_evidence
+
+    async def fetch(*args, **kwargs):
+        if read == "route_evidence" and failing():
+            raise OSError("evidence endpoint returned 502")
+        return await real_fetch(*args, **kwargs)
+
+    async def capabilities(**kwargs):
+        if read == "route_capabilities" and failing():
+            kwargs["warn"]("capability listing failed")
+            return None
+        return await real_capabilities(**kwargs)
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", fetch)
+    monkeypatch.setattr(loop_module, "_fetch_harness_evidence", capabilities)
+    asyncio.run(asyncio.wait_for(
+        loop_module.run(_dynamic_parallel_config(issue_pin=44, max_iterations=2)),
+        timeout=15,
+    ))
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == [(44, "pin")]
+    assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 2
+    assert [(e["state"], e["read"]) for e in events if e["type"] == "wrapper.pin.unread"] == [
+        ("holding", read), ("ended", read),
+    ]
+    if read != "route_selector":
+        # Failed feed/listing polls do not re-take the Pin's Lease.
+        assert len(set(probe_counts[1:])) == 1
+        assert len(spied["assessments"]) == 1
+    else:
+        assert len(spied["assessments"]) == 5
+        route = next(
+            e for e in events if e.get("issue") == 44
+            and "selector_attempts" in e and e.get("routing_credits") == "0.25"
+        )
+        assert route["selector_attempts"] == 5
+        assert route["routing_credits"] == "0.25"
+    assert all(
+        later - earlier >= interval * 0.99
+        for earlier, later in itertools.pairwise(attempts)
+    )
 
 
 def test_a_failed_preparation_read_of_a_parallel_safe_pin_keeps_its_lane(
@@ -12999,31 +13514,54 @@ def test_a_lane_pin_names_each_dynamic_read_that_failed(
     }[read]
 
 
-def test_a_lane_pin_refused_for_exhausted_allowance_ends_its_hold(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("serial", [False, True], ids=["lane", "serial"])
+@pytest.mark.parametrize(
+    "refusal", ["quota_exhausted", "deadline_exhausted", "no_runnable_candidate"],
+)
+def test_a_dynamic_route_refusal_spends_an_unread_pin(
+    tmp_path, monkeypatch, serial, refusal
 ) -> None:
-    _fake_gh, fake_git = _wire_parallel_safe_pin(tmp_path, monkeypatch)
+    _wire_rolling_run(tmp_path, monkeypatch, [
+        _make_issue(43, labels=[
+            "ready-for-agent", "task-type:implementation",
+            *([] if serial else ["parallel-safe"]),
+        ]),
+    ])
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
     _fail_lease_probes(monkeypatch, fake_git, 43, times=1)
-    _no_preparation_ahead(monkeypatch)
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
     )
     monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
-    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    elect = _elects_lane_model("claude-opus-5")
+
+    async def answer(request):
+        if refusal == "deadline_exhausted":
+            await asyncio.sleep(10)
+        return elect(request)
+
+    _dynamic_lane_ports(
+        monkeypatch, answer=answer,
+        capabilities_available=lambda: refusal != "no_runnable_candidate",
+    )
     asyncio.run(asyncio.wait_for(
         loop_module.run(_dynamic_parallel_config(
-            issue_pin=43, max_iterations=0, routing_credit_allowance=Decimal("0"),
+            issue_pin=43, max_iterations=0,
+            routing_credit_allowance=Decimal("0" if refusal == "quota_exhausted" else "10"),
+            routing_deadline_seconds=1 if refusal == "deadline_exhausted" else 30,
         )),
         timeout=15,
     ))
     events = _logged_events(tmp_path)
-    assert spied["assessments"] == []
     assert [(e["state"], e.get("outcome")) for e in events if e["type"] == "wrapper.pin.unread"] == [
         ("holding", None), ("ended", "spent"),
     ]
+    assert _bindings(events) == []
     assert any(
         e["type"] == "wrapper.pickup.skipped" and e["issue"] == 43
-        and "quota_exhausted" in e["reason"]
+        and refusal in e["reason"]
         for e in events
     )
 
@@ -14249,8 +14787,74 @@ def test_each_lane_holds_its_own_lease_and_one_contention_frees_no_other(
     ]
 
 
-def test_a_lane_whose_lease_remote_cannot_be_read_passes_over_and_ends(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("serial", [False, True], ids=["lane", "serial"])
+@pytest.mark.parametrize("other_failure", [None, "read", "readiness"])
+def test_unbound_run_groups_lease_writes_without_losing_other_unresolved_candidates(
+    tmp_path, monkeypatch, serial, other_failure
+) -> None:
+    labels = ["ready-for-agent"] + ([] if serial else ["parallel-safe"])
+    issues = [_make_issue(ref, labels=labels) for ref in (43, 44)]
+    if other_failure:
+        issues.insert(0, _make_issue(
+            42, labels=labels,
+            blocked_by=BlockedByRead.unprovable() if other_failure == "readiness" else None,
+        ))
+    _wire_rolling_run(tmp_path, monkeypatch, issues)
+    fake_git = loop_module._make_git_client()
+    fake_git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    if other_failure == "read":
+        _fail_lease_probes(monkeypatch, fake_git, 42, times=1)
+    fake_git.push_ref_errors = [
+        git_module.GitError(
+            ["git", "push"], 1,
+            "pre-push: use the approved branch namespace\n"
+            "error: failed to push some refs to 'origin'\n",
+        )
+        for _ in range(2)
+    ]
+
+    exit_code = asyncio.run(asyncio.wait_for(loop_module.run(RunConfig(
+        model="claude-opus-4.8-max", issue_source="github",
+        max_iterations=5, verbosity=0, render_reasoning=False,
+    )), timeout=15))
+
+    events = _logged_events(tmp_path)
+    assert _bindings(events) == []
+    assert _lane_starts(events) == []
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == [
+        "preflight_failed",
+    ]
+    assert exit_code == loop_module.exit_code_for("preflight_failed")
+    assert len(fake_git.push_ref_calls) == 2
+    log = _diag_log(tmp_path)
+    errors = [line for line in log.splitlines() if " ERROR " in line]
+    assert len(errors) == 1
+    [error] = errors
+    assert "Lease write was refused (#43, #44; example cause: " in error
+    assert error.count("pre-push: use the approved branch namespace") == 1
+    assert "core.hooksPath" in error
+    assert "failed to push some refs" not in log
+    if other_failure == "read":
+        assert "Lease read failed (remote unreadable) (#42; example cause: " in error
+        assert "no route to host" in error
+    elif other_failure == "readiness":
+        assert "Readiness could not be read (#42; readiness_unprovable)" in error
+    else:
+        assert "gh auth status" not in error
+    if other_failure:
+        assert "gh auth status" in error
+        assert "network path" in error
+        assert "blockers" in error
+    skips = [e for e in events if e["type"] == "wrapper.pickup.skipped"]
+    for ref in (43, 44):
+        assert [e["reason"] for e in skips if e["issue"] == ref] == [
+            "Lease write was refused: pre-push: use the approved branch namespace",
+        ]
+
+
+@pytest.mark.parametrize("phase", ["read", "write"])
+def test_a_lane_whose_lease_take_is_unavailable_passes_over_and_ends(
+    tmp_path, monkeypatch, phase
 ) -> None:
     """An unreadable Lease remote denies a Lane candidate, once (#390, §8.3).
 
@@ -14280,7 +14884,18 @@ def test_a_lane_whose_lease_remote_cannot_be_read_passes_over_and_ends(
         probes.append((remote, ref))
         raise git_module.GitError(["git", "ls-remote", remote, ref], 128, "no route")
 
-    monkeypatch.setattr(fake_git, "probe_remote_ref", unreadable)
+    if phase == "read":
+        monkeypatch.setattr(fake_git, "probe_remote_ref", unreadable)
+        expected_reason = "Lease could not be taken (remote unreadable): no route"
+    else:
+        fake_git.push_ref_errors = [
+            git_module.GitError(
+                ["git", "push"], 1,
+                "pre-push: use the approved branch namespace\n"
+                "error: failed to push some refs to 'origin'\n",
+            )
+        ]
+        expected_reason = "Lease write was refused: pre-push: use the approved branch namespace"
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
     fake_gh = FakeGitHubClient(
@@ -14320,15 +14935,28 @@ def test_a_lane_whose_lease_remote_cannot_be_read_passes_over_and_ends(
     assert all("refusals" not in event for event in run_ends)  # #643
     assert exit_code == loop_module.exit_code_for("preflight_failed"), exit_code
     lease_probes = [probe for probe in probes if probe[1] == lease_ref(42)]
-    assert len(lease_probes) == 1, lease_probes
+    if phase == "read":
+        assert len(lease_probes) == 1, lease_probes
+    else:
+        assert len(fake_git.push_ref_calls) == 1
     skips = [
         event
         for event in _logged_events(tmp_path)
         if event["type"] == "wrapper.pickup.skipped" and event.get("issue") == 42
     ]
-    assert [event["reason"] for event in skips] == [
-        "Lease could not be taken (remote unreadable)"
-    ], skips
+    assert [event["reason"] for event in skips] == [expected_reason], skips
+    warnings = [line for line in _diag_log(tmp_path).splitlines() if " WARNING " in line]
+    assert any(expected_reason in line for line in warnings)
+    error = next(line for line in _diag_log(tmp_path).splitlines() if " ERROR " in line)
+    if phase == "write":
+        assert "Lease write was refused" in error
+        assert "pre-push: use the approved branch namespace" in error
+        assert "core.hooksPath" in error
+        assert "could not be read" not in error
+        assert "gh auth status" not in error
+    else:
+        assert "remote unreadable" in error
+        assert "no route" in error
 
 
 @pytest.mark.parametrize("priority_arrives", [False, True])

@@ -33,38 +33,7 @@ it contains.
 | Shell Orchestrator suites | `for t in git-loopy/shell/tests/test-*.sh; do bash "$t" \|\| exit 1; done` | Any change under `git-loopy/shell/` or to a Conformance fixture |
 | PowerShell Orchestrator suites | `for t in git-loopy/powershell/tests/test-*.ps1; do pwsh -NoLogo -NoProfile -File "$t" \|\| exit 1; done` | Any change under `git-loopy/powershell/` or to a Conformance fixture |
 
-For a docstring-or-prose or additive-test change, run targeted Python tests instead
-of the full Python suite only when publishing through a pull request (CI runs the
-full suite on every pull request with no path filters) or delivering a Lane
-contribution in Parallel mode (Integration runs the whole table); a serial Run
-pushes straight to the default branch and still runs the full suite. To qualify as
-docstring-or-prose, compare each changed Python file against the merge-base
-yourself: both versions must parse to the same `ast.dump` after removing module,
-class and function docstrings, and every other changed file must be Markdown.
-An additive-test change qualifies when, against the merge-base, it only adds
-test modules and their owned data files under `git-loopy/python/tests/` plus
-Markdown changes, edits or deletes no existing Python file, adds no `conftest.py`,
-and changes no dependency or lockfile.
-Run each changed module's own `tests/test_<module>*.py`, every test file that names
-a changed file (find them with
-`git grep -l -F <basename> -- git-loopy/python/tests` for each changed file),
-and the tracked-tree guards `tests/test_no_*.py` and `tests/test_glossary_*.py`;
-Markdown-only changes run this same set too, and additive-test changes run their
-new tests plus this set. Import-time side effects or leaked global state from new
-tests are an accepted residual risk caught by CI or Integration rather than
-locally. Record the targeted tests run and the full-suite backstop (CI or
-Integration). The known flakes are
-`test_release_installation.py::test_reclaims_setup_children_not_just_their_parent[cancelled-init]`
-(a pseudo-terminal "Operation not permitted" error under host load),
-`test_release_smoke.py::test_a_run_still_in_flight_at_the_deadline_is_never_passed`
-(its fixture deadline expires under host load), and
-`test_attach_command.py::test_a_dashboard_fault_restores_the_terminal`
-(a deadline or teardown timeout under host load; #734 fixes it, so remove this
-entry when #734 lands). When a listed test fails in a full run, rerun it alone:
-if it passes, report the flake and treat that failure as green without rerunning
-the full suite; an unlisted failure or one that also fails alone is a real
-failure. Record each encountered known flake and its result when rerun alone;
-change this list only through normal review.
+Use `uv run --project git-loopy/python --all-extras python git-loopy/python/targeted_tests.py` to select targeted tests; eligibility, run options and full-suite backstop rules live in [Feedback-loop rules](docs/agents/feedback-loops.md#targeted-python-tests).
 
 For maintainer rationale on whether a command should become a gate row, see [Feedback-loop exclusions](docs/agents/feedback-loops.md).
 
@@ -73,6 +42,22 @@ because Integration runs them in a throwaway private worktree on whatever host t
 operator has. Never hard-code a host-specific executable path here.
 
 ## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (managed via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+All five canonical triage roles use their default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Repository workflow
+
+When writing an ADR, run `uv run --project git-loopy/python --all-extras python -m git_loopy.adr_number` from the repository root for the next free number and its remote evidence.
 
 Agent skills come from
 [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills),
@@ -104,34 +89,9 @@ When changing a Skill or Agent profile, follow [Skills repository guidance](docs
 
 ### Chain hook
 
-`.github/hooks/git-loopy-chain.json` registers two hooks for `/next`, both
-through the repository-relative resolver `.github/hooks/git-loopy-chain.sh`.
-`subagentStop` runs `chain.sh complete`, closing the finished chain hop in the
-per-clone `.git-loopy/` ledger. `agentStop` runs `reenter`
-(`.github/hooks/git-loopy-agent-stop.py`), which holds the parent agent open
-with "Run /next now" while a completed hop is still unrouted, and gives up on a
-hop after three unconfirmed requests.
+For `/next` hook mechanics and setup ownership, see [Chain hooks](docs/agents/chain-hooks.md).
 
-The resolver finds the `/next` script at
-`${COPILOT_HOME:-$HOME/.copilot}/skills/next/scripts/chain.sh`. If it is
-missing, the resolver reports `no chain.sh found` on stderr and exits `0`,
-rather than failing an agent that has nothing to do with the chain.
-`.github/hooks/git-loopy-hook-log.sh` appends every invocation, including that
-stand-down, to `.git-loopy/hook-invocations.jsonl`, so a chain that closes
-nothing still leaves a record. Copilot runs repository hooks only in trusted
-folders. All four files are written by `/setup-git-loopy-skills`; the
-`agentStop` helper is a copy of the one bundled with that Skill, so re-run it
-rather than editing the copy.
-
-### Issue tracker
-
-Issues live in this repo's GitHub Issues (managed via the `gh` CLI). See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-All five canonical triage roles use their default label strings (`needs-triage`,
-`needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See
-`docs/agents/triage-labels.md`.
+### Planning documents and Task types
 
 Issues whose titles begin with `PRD:` or `Spec:` (case-insensitive), and issues
 labelled `wayfinder:map`, are planning documents, not executable tickets. Never
@@ -154,8 +114,8 @@ labels (ADR-0066); an issue with no such label changes no version. Never invent 
 milestone — `gh api repos/{owner}/{repo}/milestones --jq '.[].title'` lists the
 ones that exist. See `docs/releases/README.md#release-target-and-promotion`.
 
-### Domain docs
+### Glossary former names
 
-Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. Older
-ADRs and release notes still use the glossary's former name: read it as
-`GLOSSARY.md` and never recreate it. See `docs/agents/domain.md`.
+Older ADRs and release notes still use `CONTEXT.md` / `CONTEXT-MAP.md`, renamed
+in #790 to `GLOSSARY.md` / `GLOSSARY-MAP.md`. Read those former names as the
+current ones and never recreate the retired files.

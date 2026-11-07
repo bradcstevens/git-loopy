@@ -19,7 +19,7 @@ A small allowlist of files legitimately names the old files because it records
 history or narrates the rename: the ADRs and release notes (immutable history), a
 mined capture of tracker text, two glossary tests that quote ADR-0019 and ADR-0038
 verbatim, and the two documents that explain the rename --
-``docs/agents/domain.md`` to Agents, and ``docs/skill-catalog-source.md`` to
+``AGENTS.md`` to Agents, and ``docs/skill-catalog-source.md`` to
 operators whose repositories have not migrated.
 """
 
@@ -54,7 +54,7 @@ _EXEMPT_FILES: frozenset[str] = frozenset(
         "git-loopy/python/tests/test_glossary_calibration_terms.py",
         "git-loopy/python/tests/test_glossary_collapsed_activity_band.py",
         # narrate the rename: to Agents, and to operators of unmigrated repositories
-        "docs/agents/domain.md",
+        "AGENTS.md",
         "docs/skill-catalog-source.md",
     }
 )
@@ -154,6 +154,21 @@ def test_no_retired_glossary_names_in_tracked_files() -> None:
         "the Run prompt's fallback to them. Name the glossary by its current file. "
         "Offending lines:\n  " + "\n  ".join(failures)
     )
+
+
+def test_former_glossary_names_are_explained_in_repository_workflow() -> None:
+    """Agents can interpret historical names without relying on generated docs."""
+    repo_root = _find_repo_root()
+    if repo_root is None:
+        pytest.skip("repo root not found (installed-wheel run) -- nothing to check")
+
+    agents = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+    workflow = re.search(
+        r"^## Repository workflow\n(.*?)(?=^## |\Z)", agents, re.M | re.S
+    )
+    assert workflow is not None, "AGENTS.md must retain the hand-owned workflow"
+    for name in (*_RETIRED_FILES, "GLOSSARY.md", "#790"):
+        assert name in workflow[1], f"Repository workflow must explain {name}"
 
 
 def test_forbidden_pattern_flags_retired_names_but_not_current_ones() -> None:
