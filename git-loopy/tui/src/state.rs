@@ -8,6 +8,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde_json::Value;
+
 use crate::activity::ActivityAgents;
 use crate::drain::SerialDrainTracker;
 use crate::event::{
@@ -15,8 +17,9 @@ use crate::event::{
     EventPayload, ExecutionHostDeclaration, InsightCapabilities, IssueRef, IterationEnd,
     IterationIssue, IterationSummary, LaneSlot, Pickup, PrAdvanced, ReleaseAdvanced,
     RoutingDelivery, RoutingDeliveryStatus, RoutingPrepared, RoutingResolved, StopRequested,
-    SubagentLifecycle, ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE,
-    ROUTE_PREPARATION_STATIC, ROUTE_PREPARATION_UNAVAILABLE, ROUTE_REVALIDATED,
+    SubagentLifecycle, ToolCall, ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED,
+    ROUTE_PREPARATION_REUSABLE, ROUTE_PREPARATION_STATIC, ROUTE_PREPARATION_UNAVAILABLE,
+    ROUTE_REVALIDATED,
 };
 use crate::timestamp::Timestamp;
 
@@ -55,6 +58,19 @@ pub(crate) struct WindDown {
 
 /// The Log-line kind for a key structured Event (a commit, a tool call).
 const LOG_EVENT: &str = "event";
+
+/// The Log-line kind for an Agent's own message, as the Python core names it.
+const LOG_MESSAGE: &str = "message";
+
+/// The Log-line kind for an Agent's reasoning, opened by [`THINKING_MARKER`].
+const LOG_REASONING: &str = "reasoning";
+
+/// The line that opens a reasoning block, matching the Python core.
+const THINKING_MARKER: &str = "✻ Thinking:";
+
+/// The cap on one rendered tool-argument value, matching the Python core, so
+/// a tool line stays one tidy row.
+const COMPACT_VALUE_CHARS: usize = 60;
 
 /// The short-SHA width the Log line prints, matching the Python core.
 const SHORT_SHA_LENGTH: usize = 10;
@@ -957,6 +973,13 @@ impl DashboardState {
             EventPayload::AgentOutput(output) => {
                 self.append_log_block(&output.kind, &output.text, now)
             }
+            EventPayload::AssistantMessage(_)
+            | EventPayload::AssistantReasoning(_)
+            | EventPayload::ToolCall(_) => {
+                for (kind, text) in agent_event_blocks(&event.payload) {
+                    self.append_log_block(kind, &text, now);
+                }
+            }
             EventPayload::UsageContextWindow(sample) => {
                 if sample.current_tokens.is_some_and(|tokens| tokens >= 0) {
                     self.capabilities.context_window = Some(true);
@@ -1174,6 +1197,13 @@ impl DashboardState {
         match &event.payload {
             EventPayload::AgentOutput(output) => {
                 self.append_lane_log(lane, &output.kind, &output.text, now)
+            }
+            EventPayload::AssistantMessage(_)
+            | EventPayload::AssistantReasoning(_)
+            | EventPayload::ToolCall(_) => {
+                for (kind, text) in agent_event_blocks(&event.payload) {
+                    self.append_lane_log(lane, kind, &text, now);
+                }
             }
             EventPayload::SubagentLifecycle(lifecycle) => self.append_lane_log(
                 lane,
@@ -1864,6 +1894,119 @@ fn commit_log_text(commit: &CommitRecorded) -> String {
         text.push_str(subject.split('\n').next().unwrap_or(subject));
     }
     text
+}
+
+/// The Log blocks one structured Agent Event contributes, as `(kind, text)`
+/// in order, matching the Python core (#1043). A message is one block, a
+/// reasoning block opens with [`THINKING_MARKER`], and a tool call is one
+/// `event` line. Any other payload contributes nothing.
+fn agent_event_blocks(payload: &EventPayload) -> Vec<(&'static str, String)> {
+    match payload {
+        EventPayload::AssistantMessage(message) => vec![(LOG_MESSAGE, message.content.clone())],
+        EventPayload::AssistantReasoning(reasoning) if !reasoning.content.is_empty() => vec![
+            (LOG_REASONING, THINKING_MARKER.to_string()),
+            (LOG_REASONING, reasoning.content.clone()),
+        ],
+        EventPayload::ToolCall(call) => vec![(LOG_EVENT, tool_call_text(call))],
+        _ => Vec::new(),
+    }
+}
+
+/// A tool call as one Log `event` line: `◇ skill <name>` for the skill tool,
+/// else `» <tool>  k=v …`, as the Python core's line printer writes it.
+fn tool_call_text(call: &ToolCall) -> String {
+    if call.tool_name == "skill" {
+        let skill = call
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.get("skill"))
+            .and_then(Value::as_str)
+            .filter(|skill| !skill.is_empty())
+            .unwrap_or("(unknown)");
+        return format!("◇ skill {skill}");
+    }
+    let arguments = match &call.arguments {
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(key, value)| format!("{key}={}", compact_value(value)))
+            .collect::<Vec<_>>()
+            .join(" "),
+        Some(other) => compact_value(other),
+        None => String::new(),
+    };
+    if arguments.is_empty() {
+        format!("» {}", call.tool_name)
+    } else {
+        format!("» {}  {arguments}", call.tool_name)
+    }
+}
+
+/// One argument value on one line, capped at [`COMPACT_VALUE_CHARS`]
+/// characters.
+fn compact_value(value: &Value) -> String {
+    let text = python_str(value).replace('\n', " ");
+    if text.chars().count() <= COMPACT_VALUE_CHARS {
+        return text;
+    }
+    let kept: String = text.chars().take(COMPACT_VALUE_CHARS - 3).collect();
+    format!("{kept}...")
+}
+
+/// Python's `str()` of a JSON-decoded value, so a non-string argument reads
+/// as it does in the Python core's tool lines (`True`, `None`, `[1, 50]`).
+fn python_str(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => python_repr(other),
+    }
+}
+
+fn python_repr(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => python_string_repr(text),
+        Value::Array(items) => format!(
+            "[{}]",
+            items.iter().map(python_repr).collect::<Vec<_>>().join(", ")
+        ),
+        Value::Object(map) => format!(
+            "{{{}}}",
+            map.iter()
+                .map(|(key, value)| format!("{}: {}", python_string_repr(key), python_repr(value)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// Python's `repr()` of a string: single-quoted, unless the text holds a
+/// single quote and no double quote.
+fn python_string_repr(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut repr = String::with_capacity(text.len() + 2);
+    repr.push(quote);
+    for character in text.chars() {
+        match character {
+            '\\' => repr.push_str("\\\\"),
+            '\n' => repr.push_str("\\n"),
+            '\r' => repr.push_str("\\r"),
+            '\t' => repr.push_str("\\t"),
+            other if other == quote => {
+                repr.push('\\');
+                repr.push(other);
+            }
+            other => repr.push(other),
+        }
+    }
+    repr.push(quote);
+    repr
 }
 
 fn subagent_lifecycle_text(kind: &str, lifecycle: &SubagentLifecycle) -> String {

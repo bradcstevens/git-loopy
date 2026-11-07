@@ -2887,3 +2887,97 @@ fn a_run_start_carrying_the_host_yield_disclosure_still_reads() {
         serde_json::json!({"current": 2, "limit": 3})
     );
 }
+
+// --------------------------------------------------------------------------
+// Structured Agent Events reach the issue Log (#1043)
+//
+// The Python Runner records the Agent's own words as `assistant.message`,
+// `assistant.reasoning` and `tool.call`, never `agent.output`. Expected lines
+// are what the Python core's `LiveRunState` renders for the same Events.
+// --------------------------------------------------------------------------
+
+fn log_kinds_and_texts(projected: &Value) -> Vec<(String, String)> {
+    projected["drill_in"]["log"]["lines"]
+        .as_array()
+        .expect("the drill-in Log is a list")
+        .iter()
+        .map(|line| {
+            (
+                line["kind"].as_str().unwrap_or_default().to_string(),
+                line["text"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn owned(lines: &[(&str, &str)]) -> Vec<(String, String)> {
+    lines
+        .iter()
+        .map(|(kind, text)| (kind.to_string(), text.to_string()))
+        .collect()
+}
+
+#[test]
+fn a_serial_iterations_agent_events_reach_the_active_issue_log() {
+    let projected = reduce_jsonl(
+        &[
+            r#"{"ts":"2026-05-16T00:00:01.000Z","run_id":"r1","iter":1,"type":"wrapper.iteration.start"}"#,
+            r#"{"ts":"2026-05-16T00:00:01.000Z","run_id":"r1","iter":1,"type":"wrapper.issue.activated","issue":42,"activated_at":"2026-05-16T00:00:01.000Z","binding_source":"pickup"}"#,
+            r#"{"ts":"2026-05-16T00:00:02.000Z","run_id":"r1","iter":1,"type":"assistant.reasoning","content":""}"#,
+            r#"{"ts":"2026-05-16T00:00:03.000Z","run_id":"r1","iter":1,"type":"assistant.reasoning","content":"Plan\nthen act"}"#,
+            r#"{"ts":"2026-05-16T00:00:04.000Z","run_id":"r1","iter":1,"type":"tool.call","tool_name":"view","arguments":{"path":"src/app.rs","view_range":[1,50]}}"#,
+            r#"{"ts":"2026-05-16T00:00:05.000Z","run_id":"r1","iter":1,"type":"assistant.message","content":"Done."}"#,
+        ],
+        IssueRef::number(42),
+    );
+
+    // An empty reasoning block opens no marker.
+    assert_eq!(
+        log_kinds_and_texts(&projected),
+        owned(&[
+            ("reasoning", "✻ Thinking:"),
+            ("reasoning", "Plan"),
+            ("reasoning", "then act"),
+            ("event", "» view  path=src/app.rs view_range=[1, 50]"),
+            ("message", "Done."),
+        ])
+    );
+}
+
+#[test]
+fn contribution_stamped_agent_events_reach_the_issue_their_triple_names() {
+    let projected = reduce_jsonl(
+        &[
+            r#"{"ts":"2026-05-16T00:00:01.000Z","run_id":"r1","iter":null,"type":"wrapper.contribution.start","contribution_id":"c-1","issue":42,"lane_id":"lane-1"}"#,
+            r#"{"ts":"2026-05-16T00:00:02.000Z","run_id":"r1","iter":null,"type":"assistant.message","contribution_id":"c-1","issue":42,"lane_id":"lane-1","content":"Working on it"}"#,
+            r#"{"ts":"2026-05-16T00:00:03.000Z","run_id":"r1","iter":null,"type":"tool.call","contribution_id":"c-1","issue":42,"lane_id":"lane-1","tool_name":"skill","arguments":{"skill":"tdd"}}"#,
+        ],
+        IssueRef::number(42),
+    );
+
+    assert_eq!(
+        log_kinds_and_texts(&projected),
+        owned(&[("message", "Working on it"), ("event", "◇ skill tdd")])
+    );
+}
+
+#[test]
+fn a_tool_lines_arguments_read_as_the_python_core_writes_them() {
+    let projected = reduce_jsonl(
+        &[
+            r#"{"ts":"2026-05-16T00:00:01.000Z","run_id":"r1","iter":1,"type":"tool.call","lane_issue":7,"tool_name":"grep","arguments":{"-n":true,"head_limit":null,"paths":["src","tests"],"options":{"mode":"it's"},"command":"echo a\necho b"}}"#,
+            r#"{"ts":"2026-05-16T00:00:02.000Z","run_id":"r1","iter":1,"type":"tool.call","lane_issue":7,"tool_name":"skill","arguments":{}}"#,
+            r#"{"ts":"2026-05-16T00:00:03.000Z","run_id":"r1","iter":1,"type":"tool.call","lane_issue":7,"tool_name":"report_intent"}"#,
+        ],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        log_texts(&projected),
+        [
+            r#"» grep  -n=True head_limit=None paths=['src', 'tests'] options={'mode': "it's"} command=echo a echo b"#,
+            "◇ skill (unknown)",
+            "» report_intent",
+        ]
+    );
+}

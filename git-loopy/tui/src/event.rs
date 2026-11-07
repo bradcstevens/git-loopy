@@ -270,6 +270,12 @@ pub enum EventPayload {
     RoutingPrepared(Box<RoutingPrepared>),
     /// `agent.output`
     AgentOutput(AgentOutput),
+    /// `assistant.message`: one whole message block an Agent session wrote.
+    AssistantMessage(AgentText),
+    /// `assistant.reasoning`: one whole reasoning block an Agent session wrote.
+    AssistantReasoning(AgentText),
+    /// `tool.call`: one tool invocation an Agent session made.
+    ToolCall(ToolCall),
     /// `usage.context_window`
     UsageContextWindow(ContextWindowSample),
     /// Additive Subagent lifecycle observations (ADR-0022).
@@ -813,6 +819,52 @@ pub struct AgentOutput {
 
 fn unclassified() -> String {
     "unclassified".to_string()
+}
+
+/// The text of one structured Agent Event: an `assistant.message` or
+/// `assistant.reasoning` block, the form an Orchestrator with SDK Events
+/// records the Agent's own words in.
+#[derive(Clone, Debug, Default)]
+pub struct AgentText {
+    /// The whole block; empty when the Event carried no text.
+    pub content: String,
+}
+
+/// One `tool.call` as recorded. The Runner may already have replaced the
+/// arguments with a `<truncated: N chars>` string.
+#[derive(Clone, Debug, Default)]
+pub struct ToolCall {
+    /// The tool's name; empty when the Event named none.
+    pub tool_name: String,
+    /// The arguments as recorded, absent when the Event carried none.
+    pub arguments: Option<Value>,
+}
+
+/// Read a structured Agent Event's text by field rather than as a whole
+/// struct, so a malformed sibling field cannot discard the text. A non-text
+/// `content` contributes nothing, as in the Python core.
+fn decode_agent_text(value: &Value) -> AgentText {
+    AgentText {
+        content: value
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+fn decode_tool_call(value: &Value) -> ToolCall {
+    ToolCall {
+        tool_name: value
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        arguments: value
+            .get("arguments")
+            .filter(|arguments| !arguments.is_null())
+            .cloned(),
+    }
 }
 
 /// One truthful Context-fill sample.
@@ -1380,6 +1432,9 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
             Err(_) => EventPayload::Other,
         },
         "agent.output" => EventPayload::AgentOutput(decode_or_default(value)),
+        "assistant.message" => EventPayload::AssistantMessage(decode_agent_text(value)),
+        "assistant.reasoning" => EventPayload::AssistantReasoning(decode_agent_text(value)),
+        "tool.call" => EventPayload::ToolCall(decode_tool_call(value)),
         "usage.context_window" => EventPayload::UsageContextWindow(decode_or_default(value)),
         "subagent.started" | "subagent.completed" | "subagent.failed" => {
             EventPayload::SubagentLifecycle(decode_or_default(value))
