@@ -1966,7 +1966,7 @@ def test_the_build_matrix_carries_the_provisioning_each_target_needs() -> None:
         target.triple: (target.runner, target.container, target.packages_install)
         for target in metadata.targets
     } == {
-        "aarch64-apple-darwin": ("macos-14", None, None),
+        "aarch64-apple-darwin": ("macos-15", None, None),
         "x86_64-apple-darwin": ("macos-15-intel", None, None),
         "x86_64-pc-windows-msvc": ("windows-2022", None, None),
         "aarch64-unknown-linux-gnu": (
