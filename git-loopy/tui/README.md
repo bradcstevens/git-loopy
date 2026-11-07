@@ -400,8 +400,8 @@ from pinned cargo-dist `0.32.0`:
 
 | Target | Runner | Built |
 | --- | --- | --- |
-| `aarch64-apple-darwin` | `macos-14` | natively |
-| `x86_64-apple-darwin` | `macos-13` | natively |
+| `aarch64-apple-darwin` | `macos-15` | natively |
+| `x86_64-apple-darwin` | `macos-15-intel` | natively |
 | `x86_64-pc-windows-msvc` | `windows-2022` | natively |
 | `x86_64-unknown-linux-gnu` | `ubuntu-22.04` | natively |
 | `x86_64-unknown-linux-musl` | `ubuntu-22.04` | natively (statically linked, so it runs on the glibc runner that produced it) |
