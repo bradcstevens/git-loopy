@@ -1536,6 +1536,33 @@ reuse or open a decision issue and record it as a native blocker, keeping the
 blocked issue out of later Pickups until that decision is closed
 ([ADR-0100](../../docs/adr/0100-a-decision-blocked-agent-opens-the-decision-as-its-blocker.md)).
 
+An **Already delivered** issue takes that same decision-blocker path: every
+acceptance criterion holds on the current base and no failure named since
+delivery still fails, including the reason for a reopen. If anything still
+fails, that failure is the work; the Agent does it as usual or follows the
+existing blocker rules if it cannot be done from here. A merged closing pull
+request alone is not enough, and Readiness still admits an open issue after
+its closing pull request merges (ADR-0069).
+
+The Agent first searches open issues for a decision already asking to close
+its issue and reuses it; otherwise it opens exactly one, labelled `needs-triage`
+only, never `ready-for-agent` or a `task-type:*` label, and never works on it.
+The title is `Close #N? Already delivered by <owner/repo#M>`, naming the merged
+pull request or commit that delivered the work, or
+`Close #N? Its acceptance criteria hold at <short SHA>` if no delivering change
+can be found. The body links to the issue and records the checked base SHA,
+each acceptance criterion and how it was checked, the delivering change
+(or that none could be found), and the reopen's stated reason with its current
+state. It gives the human two outcomes: accept by closing the issue as
+completed, then closing the decision issue; or reject by commenting on the
+issue with what remains, then closing the decision issue so Pickup resumes.
+
+The Agent records that decision issue as a native dependency on its issue,
+comments on its issue naming it, emits `<promise>NO MORE TASKS</promise>` and
+stops, without a commit, push, closure or relabel. The ending is `no_more_tasks`,
+not evidence against the Routed pair and not grounds for escalation; Readiness
+holds the issue as **Blocked** after one Iteration, in this Run and later Runs.
+
 ---
 
 ## Env-var surface
