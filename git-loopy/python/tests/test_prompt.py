@@ -209,6 +209,55 @@ def test_decision_blocker_instructions_in_both_prompt_copies(
     assert clause in decision_rule
 
 
+@pytest.mark.parametrize("copy", ["project", "packaged"])
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "every acceptance criterion holds on the current base",
+        "no failure named since the delivery still fails",
+        "such as the reason given when the issue was reopened",
+        "Otherwise, whatever still fails is the work",
+        "do it as usual, or follow the existing blocker rules if it cannot be done from here",
+        "first search open issues for one already asking to close your issue",
+        "Reuse it if found; otherwise open exactly one decision issue",
+        "`Close #N? Already delivered by <owner/repo#M>`",
+        "naming the merged pull request or commit that delivered the work",
+        "If no delivering change can be found",
+        "`Close #N? Its acceptance criteria hold at <short SHA>`",
+        "a link to your issue",
+        "the base SHA checked",
+        "each acceptance criterion and how it was checked",
+        "the delivering change (or that none could be found)",
+        "the reopen's stated reason with its current state",
+        "To accept, close your issue as completed, then close the decision issue",
+        "To reject, comment on your issue with what remains, then close the decision issue",
+        "so your issue is picked up again",
+        "Label the new decision issue `needs-triage` only",
+        "never `ready-for-agent` or any `task-type:*` label",
+        "never work on it",
+        "Record the decision issue as a native dependency on your own issue",
+        "comment on your own issue naming the decision issue",
+        "then output `<promise>NO MORE TASKS</promise>` and stop",
+        "Make no commit, and do not push, close or relabel anything",
+    ],
+)
+def test_already_delivered_instructions_in_both_prompt_copies(
+    copy: str, clause: str
+) -> None:
+    """Already delivered asks a human about closure, never silently ends (#1045)."""
+    path = (
+        Path(__file__).resolve().parents[2] / "PROMPT.md"
+        if copy == "project"
+        else loop_module._packaged_prompt_path()
+    )
+    final_rules = path.read_text(encoding="utf-8").split("# FINAL RULES\n", 1)[1]
+    assert "When your issue is already delivered," in final_rules
+    already_delivered_rule = final_rules.split(
+        "When your issue is already delivered,", 1
+    )[1].split("\n\n  If the blocker", 1)[0]
+    assert clause in already_delivered_rule
+
+
 def test_domain_guidance_reads_only_the_glossary_entry_points() -> None:
     prompt = _packaged_prompt_text()
     section = prompt.split("# DOMAIN AWARENESS", 1)[1].split("\n# ", 1)[0]
