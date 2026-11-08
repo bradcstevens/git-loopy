@@ -7,6 +7,11 @@ the Rust helper is a Python-path artifact, not part of a dormant Rust path. `--w
 leaves it unchanged, because the web board needs nothing from it. In 1.0.0 the helper
 changes only to render the Python Run's new Statuses and Events.
 
+**Amended by [ADR-0107](0107-the-web-client-renders-on-the-server-and-ships-no-client-build.md):**
+the stack is Starlette on Uvicorn with Jinja2 templates, and nothing is built for the client.
+The browser's live stream carries rendered panes, not Events, and a reconnecting page is
+re-rendered whole, so no replay cursor reaches a browser.
+
 Decided by [Decide the web frontend's launch parameter and lifecycle](https://github.com/bradcstevens/git-loopy/issues/664).
 Builds on [ADR-0058](0058-init-precedes-the-run-and-clients-do-not-own-its-lifetime.md)
 (clients observe, only Stop controls the Run),

@@ -2106,6 +2106,27 @@ from the same rules as Pickup, Ready shows exactly the issues a Run would admit.
 _Avoid_: state label, Status (that is an issue's lifecycle within one Run), Blocked
 unqualified when the column is meant.
 
+### Web client (accepted design)
+
+These terms complete the vocabulary of
+[ADR-0107](docs/adr/0107-the-web-client-renders-on-the-server-and-ships-no-client-build.md),
+within the lifecycle of
+[ADR-0081](docs/adr/0081-the-web-board-is-a-foreground-loopback-client-of-the-clone.md). The
+existing **Dashboard**, **Log** and **Attach** entries above describe the terminal client and
+keep their meanings. Once the Web client ships, a Run's **Dashboard** is that Run's screen in
+either client. This decision record does not establish delivery acceptance.
+
+**Web client**:
+The foreground **Run** client that `git-loopy web`, or `--web` on a Run launch, starts for one
+clone, showing browsers the **Board**, the clone's Runs, each Run's **Dashboard** and the
+completion figures. A browser tab is not a Run client; the Web client is.
+_Avoid_: web board (the **Board** is one of its screens), web frontend, web UI, web server.
+
+**Card drawer**:
+The panel a **Board** card opens: one issue's details and dependencies, its attempts and
+**Review verdicts**, its activity, and its **Log** from the Run that holds it.
+_Avoid_: issue page, detail view, modal.
+
 ### Task-graph closure (accepted design)
 
 These terms complete the vocabulary of
