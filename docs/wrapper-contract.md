@@ -919,11 +919,15 @@ captures the candidates behind either claim; a failed read has no such record.
 **Session-interface admission (contract 2.44).** A protocol handshake refusal
 before the first Agent is work-admission failure even if discovery has already
 opened an Iteration. A Run that owns one headless server and must reclaim it
-after a failed turn MUST reconcile that turn normally before refusing further
+after transport loss or unacknowledged session cleanup MUST reconcile that turn
+normally before refusing further
 work as `preflight_failed`; it MUST NOT restart a second server or leave an
 Iteration or Run without its terminal Event. An already reached Iteration cap
 or Strike limit keeps its normal outcome. This adds no Session outcome or
-Ending and changes no progress/Strike rule (ADR-0103, #1005).
+Ending and changes no progress/Strike rule (ADR-0103, #1005). A session timeout
+or error whose abort and detach are acknowledged, with the transport still
+intact, MUST keep the server available for the next fresh session and retain
+ordinary Iteration and Strike reconciliation.
 
 ### 10.1 An operator Stop is a decided outcome (contract 2.3, MUST)
 

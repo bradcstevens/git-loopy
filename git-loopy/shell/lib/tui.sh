@@ -25,8 +25,8 @@ fi
 declare -r GIT_LOOPY_TUI_CLONE_RELATIVE_PATH=".git-loopy/bin/git-loopy-tui"
 declare -r GIT_LOOPY_TUI_COMMAND_NAME="git-loopy-tui"
 # A fixed descriptor rather than `exec {var}>`: dynamic descriptor allocation
-# arrived in Bash 4.1 and this port supports 4.0. Nothing else in the port opens
-# a descriptor above 2, so a constant is unambiguous and greppable.
+# arrived in Bash 4.1 and this port supports 4.0. Descriptor 8 is distinct from
+# the headless adapter's 6/7.
 declare -r _GIT_LOOPY_TUI_FD=8
 
 GIT_LOOPY_TUI_HELPER_PATH=""

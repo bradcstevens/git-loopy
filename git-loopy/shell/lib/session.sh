@@ -14,12 +14,18 @@ _GIT_LOOPY_SESSION_FRAME=""
 _GIT_LOOPY_SESSION_RESULT=""
 _GIT_LOOPY_SESSION_RESPONSE_ID=""
 _GIT_LOOPY_SESSION_STATE=""
+_GIT_LOOPY_SESSION_TRANSPORT_FAILED=0
 declare -A _GIT_LOOPY_SESSION_PENDING=()
 declare -A _GIT_LOOPY_SESSION_TOOLS=()
 
 _git_loopy_session_error() {
   printf 'git-loopy: headless adapter: %s\n' "$*" >&2
   return 1
+}
+
+_git_loopy_session_transport_error() {
+  _GIT_LOOPY_SESSION_TRANSPORT_FAILED=1
+  _git_loopy_session_error "$@"
 }
 
 git_loopy_session_validate_deny_tools() {
@@ -51,20 +57,21 @@ _git_loopy_session_deadline() {
 }
 
 _git_loopy_session_read() {
-  local LC_ALL=C mode="$1" count="$2" target="$3" chunk buffer="" status
+  local LC_ALL=C mode="$1" count="$2" target="$3" chunk buffer="" status delimiter=$'\n'
+  [[ "$mode" != body ]] || delimiter=""
   while :; do
     ((SECONDS < _GIT_LOOPY_SESSION_DEADLINE)) || return 124
     kill -0 "$_GIT_LOOPY_SESSION_PID" 2>/dev/null ||
-      { _git_loopy_session_error "server exited"; return 1; }
+      { _git_loopy_session_transport_error "server exited"; return 1; }
     status=0
     IFS= read -r -t 1 -u "$_GIT_LOOPY_SESSION_READ" \
-      "$mode" "$((count - ${#buffer}))" chunk || status=$?
+      -d "$delimiter" -n "$((count - ${#buffer}))" chunk || status=$?
     buffer+="$chunk"
     if ((status == 0)); then
       printf -v "$target" '%s' "$buffer"
       return 0
     elif ((status <= 128)); then
-      _git_loopy_session_error "transport EOF"
+      _git_loopy_session_transport_error "transport EOF"
       return 1
     fi
   done
@@ -73,29 +80,29 @@ _git_loopy_session_read() {
 _git_loopy_session_frame() {
   local LC_ALL=C line length="" count=0
   while :; do
-    _git_loopy_session_read -n 8192 line || return $?
+    _git_loopy_session_read line 8192 line || return $?
     [[ "$line" == *$'\r' ]] ||
-      { _git_loopy_session_error "malformed frame header"; return 1; }
+      { _git_loopy_session_transport_error "malformed frame header"; return 1; }
     line="${line%$'\r'}"
     [[ -n "$line" ]] || break
     count=$((count + 1))
-    ((count <= 16)) || { _git_loopy_session_error "too many headers"; return 1; }
+    ((count <= 16)) || { _git_loopy_session_transport_error "too many headers"; return 1; }
     case "$line" in
       Content-Length:*)
         [[ -z "$length" && "$line" =~ ^Content-Length:\ ([0-9]{1,8})$ ]] ||
-          { _git_loopy_session_error "invalid Content-Length"; return 1; }
+          { _git_loopy_session_transport_error "invalid Content-Length"; return 1; }
         length=$((10#${BASH_REMATCH[1]}))
         ;;
       Content-Type:*) ;;
-      *) _git_loopy_session_error "unsupported frame header"; return 1 ;;
+      *) _git_loopy_session_transport_error "unsupported frame header"; return 1 ;;
     esac
   done
   [[ -n "$length" ]] && ((length > 0 && length <= 16777216)) ||
-    { _git_loopy_session_error "missing or oversized Content-Length"; return 1; }
-  _git_loopy_session_read -N "$length" _GIT_LOOPY_SESSION_FRAME || return $?
+    { _git_loopy_session_transport_error "missing or oversized Content-Length"; return 1; }
+  _git_loopy_session_read body "$length" _GIT_LOOPY_SESSION_FRAME || return $?
   jq -e 'type == "object" and .jsonrpc == "2.0"' \
     <<<"$_GIT_LOOPY_SESSION_FRAME" >/dev/null ||
-    { _git_loopy_session_error "invalid JSON-RPC envelope"; return 1; }
+    { _git_loopy_session_transport_error "invalid JSON-RPC envelope"; return 1; }
 }
 
 _git_loopy_session_write() {
@@ -115,7 +122,7 @@ _git_loopy_session_write() {
   done
   wait "$_GIT_LOOPY_SESSION_WRITER" || status=$?
   _GIT_LOOPY_SESSION_WRITER=""
-  ((status == 0)) || { _git_loopy_session_error "transport write failed"; return 1; }
+  ((status == 0)) || { _git_loopy_session_transport_error "transport write failed"; return 1; }
 }
 
 _git_loopy_session_request() {
@@ -134,7 +141,7 @@ _git_loopy_session_permission() {
     and (.requestId | type == "string" and length > 0)
     and (.permissionRequest | type == "object")
     and (.permissionRequest.kind | type == "string" and length > 0)' <<<"$data" >/dev/null ||
-    { _git_loopy_session_error "permission not owned by the adapter or malformed"; return 1; }
+    { _git_loopy_session_transport_error "permission not owned by the adapter or malformed"; return 1; }
   request_id="$(jq -r '.requestId' <<<"$data")"
   request="$(jq -c '.permissionRequest' <<<"$data")"
   kind="$(jq -r '.kind' <<<"$request")"
@@ -180,7 +187,7 @@ _git_loopy_session_permission() {
 _git_loopy_session_event() {
   local params="$1" type data content agent_id
   [[ "$(jq -r '.sessionId' <<<"$params")" == "$_GIT_LOOPY_SESSION_ID" ]] ||
-    { _git_loopy_session_error "event for an unowned session"; return 1; }
+    { _git_loopy_session_transport_error "event for an unowned session"; return 1; }
   type="$(jq -r '.event.type' <<<"$params")"
   data="$(jq -c '.event.data' <<<"$params")"
   agent_id="$(jq -r '.event.agentId // empty' <<<"$params")"
@@ -215,26 +222,29 @@ _git_loopy_session_pump() {
   method="$(jq -r '.method // empty' <<<"$message")"
   if [[ -n "$method" ]]; then
     if jq -e 'has("id")' <<<"$message" >/dev/null; then
-      _git_loopy_session_error "unsupported server request: $method"
+      _git_loopy_session_transport_error "unsupported server request: $method"
       return 1
     fi
     params="$(jq -c '.params' <<<"$message")"
     case "$method" in
       session.event) _git_loopy_session_event "$params" || return $? ;;
       session.lifecycle) ;;
-      *) _git_loopy_session_error "unsupported notification: $method"; return 1 ;;
+      *) _git_loopy_session_transport_error "unsupported notification: $method"; return 1 ;;
     esac
     _GIT_LOOPY_SESSION_RESPONSE_ID=""
     return 0
   fi
   id="$(jq -r '.id // empty' <<<"$message")"
   [[ "$id" =~ ^[0-9]+$ && -n "${_GIT_LOOPY_SESSION_PENDING[$id]:-}" ]] ||
-    { _git_loopy_session_error "uncorrelated response"; return 1; }
-  if jq -e 'has("error") or (has("result") | not)' <<<"$message" >/dev/null; then
-    _git_loopy_session_error "RPC ${_GIT_LOOPY_SESSION_PENDING[$id]} failed: $message"
+    { _git_loopy_session_transport_error "uncorrelated response"; return 1; }
+  method="${_GIT_LOOPY_SESSION_PENDING[$id]}"
+  unset '_GIT_LOOPY_SESSION_PENDING[$id]'
+  if jq -e 'has("error")' <<<"$message" >/dev/null; then
+    _git_loopy_session_error "RPC $method failed: $message"
     return 1
   fi
-  unset '_GIT_LOOPY_SESSION_PENDING[$id]'
+  jq -e 'has("result")' <<<"$message" >/dev/null ||
+    { _git_loopy_session_transport_error "response has no result"; return 1; }
   _GIT_LOOPY_SESSION_RESPONSE_ID="$id"
   _GIT_LOOPY_SESSION_RESULT="$(jq -c '.result' <<<"$message")"
 }
@@ -265,8 +275,11 @@ git_loopy_session_start() {
   set -m
   coproc GIT_LOOPY_HEADLESS { exec "${launch[@]}"; }
   _GIT_LOOPY_SESSION_PID="$GIT_LOOPY_HEADLESS_PID"
-  exec {_GIT_LOOPY_SESSION_READ}<&"${GIT_LOOPY_HEADLESS[0]}"
-  exec {_GIT_LOOPY_SESSION_WRITE}>&"${GIT_LOOPY_HEADLESS[1]}"
+  # Bash 4.0 needs fixed descriptors: 6/7 are distinct from the TUI's 8.
+  exec 6<&"${GIT_LOOPY_HEADLESS[0]}"
+  exec 7>&"${GIT_LOOPY_HEADLESS[1]}"
+  _GIT_LOOPY_SESSION_READ=6
+  _GIT_LOOPY_SESSION_WRITE=7
   ((monitor == 1)) || set +m
   _git_loopy_session_deadline 30
   _git_loopy_session_rpc connect '{}' || {
@@ -312,14 +325,14 @@ git_loopy_session_stop() {
   sleep 0.1
   kill -KILL -- "-$_GIT_LOOPY_SESSION_PID" 2>/dev/null || true
   wait "$_GIT_LOOPY_SESSION_PID" 2>/dev/null || true
-  [[ -z "$_GIT_LOOPY_SESSION_READ" ]] || exec {_GIT_LOOPY_SESSION_READ}<&-
-  [[ -z "$_GIT_LOOPY_SESSION_WRITE" ]] || exec {_GIT_LOOPY_SESSION_WRITE}>&-
+  [[ -z "$_GIT_LOOPY_SESSION_READ" ]] || exec 6<&-
+  [[ -z "$_GIT_LOOPY_SESSION_WRITE" ]] || exec 7>&-
   _GIT_LOOPY_SESSION_PID=""
 }
 
 git_loopy_session_turn() {
   _GIT_LOOPY_SESSION_ITERATION="$1"
-  local prompt="$2" config status=0 tool disabled_json exclude_skill=false
+  local prompt="$2" config status=0 reclaim=0 tool disabled_json exclude_skill=false
   local -a disabled_skills=(
     ${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]+"${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"}
   )
@@ -353,7 +366,7 @@ git_loopy_session_turn() {
   if ((status == 0)); then
     if ! jq -e --arg sid "$_GIT_LOOPY_SESSION_ID" '.sessionId == $sid' \
       <<<"$_GIT_LOOPY_SESSION_RESULT" >/dev/null; then
-      _git_loopy_session_error "server returned a different session identity"
+      _git_loopy_session_transport_error "server returned a different session identity"
       status=1
     fi
   fi
@@ -374,12 +387,15 @@ git_loopy_session_turn() {
     _git_loopy_session_deadline 2
     if ((status != 0)); then
       _git_loopy_session_rpc session.abort \
-        "$(jq -cn --arg sid "$_GIT_LOOPY_SESSION_ID" '{sessionId:$sid}')" ||
+        "$(jq -cn --arg sid "$_GIT_LOOPY_SESSION_ID" '{sessionId:$sid}')" || {
         printf 'git-loopy: headless session abort failed; reclaiming server.\n' >&2
+        reclaim=1
+      }
     fi
     _git_loopy_session_rpc session.detach \
       "$(jq -cn --arg sid "$_GIT_LOOPY_SESSION_ID" '{sessionId:$sid}')" || {
       printf 'git-loopy: headless session detach failed; reclaiming server.\n' >&2
+      reclaim=1
       ((status != 0)) || status=1
     }
   fi
@@ -390,7 +406,7 @@ git_loopy_session_turn() {
     _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC="$(<"$_GIT_LOOPY_SESSION_STATE/active-monotonic")"
     _git_loopy_remember_issue_start
   fi
-  if ((status != 0)); then
+  if ((reclaim != 0 || _GIT_LOOPY_SESSION_TRANSPORT_FAILED != 0)); then
     git_loopy_session_stop
   else
     rm -rf "$_GIT_LOOPY_SESSION_STATE"

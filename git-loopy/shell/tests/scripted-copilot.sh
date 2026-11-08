@@ -16,14 +16,16 @@ if [[ -n "${FAKE_COPILOT_PIDS:-}" ]]; then
 fi
 
 frame() {
+  local payload="$1"
+  [[ "${FAKE_COPILOT_MULTILINE:-0}" != 1 ]] || payload="$(jq . <<<"$payload")"
   if [[ "${FAKE_COPILOT_MODE:-}" == fragmented ]]; then
     printf 'Content-Len'
     sleep 0.02
-    printf 'gth: %s\r\n\r\n%s' "${#1}" "${1:0:7}"
+    printf 'gth: %s\r\n\r\n%s' "${#payload}" "${payload:0:7}"
     sleep 0.02
-    printf '%s' "${1:7}"
+    printf '%s' "${payload:7}"
   else
-    printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+    printf 'Content-Length: %s\r\n\r\n%s' "${#payload}" "$payload"
   fi
 }
 reply() {
@@ -43,6 +45,10 @@ work() {
   calls=$((calls + 1))
   printf '%s' "$calls" >"$FAKE_COPILOT_CALLS"
   jq -rj '.params.prompt' <<<"$work_message" >"$FAKE_COPILOT_PROMPT"
+  if [[ "${FAKE_COPILOT_MODE:-}" == session-error ]]; then
+    event session.error '{"message":"work failed"}'
+    return
+  fi
   if [[ "${FAKE_COPILOT_MODE:-}" == subagent-idle ]]; then
     event assistant.message '{"content":"child output is not root output"}' child-1
     event session.idle '{}' child-1
@@ -84,7 +90,7 @@ while IFS= read -r header; do
   length="${BASH_REMATCH[1]}"
   IFS= read -r blank
   [[ "$blank" == $'\r' ]] || exit 93
-  IFS= read -r -N "$length" message || exit 94
+  IFS= read -r -d '' -n "$length" message || exit 94
   [[ -z "${FAKE_COPILOT_REQUESTS:-}" ]] ||
     printf '%s\n' "$message" >>"$FAKE_COPILOT_REQUESTS"
   id="$(jq -c '.id' <<<"$message")"

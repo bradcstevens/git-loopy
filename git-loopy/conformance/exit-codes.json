@@ -29,7 +29,7 @@
     },
     {
       "id": "preflight-failure-is-aborted",
-      "note": "Includes session-interface work-admission refusal: a handshake failure before an Agent starts, or refusal of further work after the Run's sole server is reclaimed and the failed turn is reconciled. Already reached cap/Strike outcomes keep precedence; no additional Strike or Ending is invented (contract 2.44, #1005).",
+      "note": "Includes session-interface work-admission refusal: a handshake failure before an Agent starts, or refusal of further work after transport loss or unacknowledged session cleanup requires reclaiming the Run's sole server and the failed turn is reconciled. An acknowledged session abort and detach on an intact transport keeps the server for subsequent Iterations. Already reached cap/Strike outcomes keep precedence; no additional Strike or Ending is invented (contract 2.44, #1005).",
       "reason": "preflight_failed",
       "exit_code": 1
     },

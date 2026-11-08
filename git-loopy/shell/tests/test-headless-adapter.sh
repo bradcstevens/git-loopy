@@ -154,7 +154,48 @@ grep -q 'exceeded the 2s send timeout' "$temp_dir/stderr" || fail "timeout diagn
 unset FAKE_COPILOT_MODE
 assert_reclaimed
 
-for failure in hang crash; do
+export FAKE_COPILOT_MODE=hang
+: >"$FAKE_COPILOT_REQUESTS"
+: >"$FAKE_COPILOT_CONFIG"
+status=0
+run 3 --send-timeout-seconds 1 --max-nmt-strikes 2 || status=$?
+[[ "$status" == 1 ]] || fail "repeated session timeouts did not reach the Strike ceiling"
+jq -se 'length == 2 and ([.[].sessionId] | unique | length) == 2' \
+  "$FAKE_COPILOT_CONFIG" >/dev/null || fail "acknowledged teardown blocked the next fresh session"
+jq -se 'map(.method) ==
+  ["connect","session.create","session.send","session.abort","session.detach",
+   "session.create","session.send","session.abort","session.detach"]' \
+  "$FAKE_COPILOT_REQUESTS" >/dev/null || fail "session timeouts restarted or reclaimed the healthy server"
+jq -se '
+  ([.[] | select(.type == "wrapper.iteration.end") | .iter] == [1,2])
+  and ([.[] | select(.type == "wrapper.strike") | .strikes] == [1,2])
+  and .[-1].type == "wrapper.run.end"
+  and .[-1].outcome == "stuck"
+  and .[-1].iterations_run == 2
+' "$temp_dir/stdout" >/dev/null || fail "session timeouts changed normal Strike accounting"
+unset FAKE_COPILOT_MODE
+assert_reclaimed
+
+export FAKE_COPILOT_MODE=session-error
+: >"$FAKE_COPILOT_REQUESTS"
+: >"$FAKE_COPILOT_CONFIG"
+run 2 || fail "acknowledged session errors refused later work"
+jq -se 'length == 2 and ([.[].sessionId] | unique | length) == 2' \
+  "$FAKE_COPILOT_CONFIG" >/dev/null || fail "session errors prevented fresh sessions"
+jq -se 'map(.method) ==
+  ["connect","session.create","session.send","session.abort","session.detach",
+   "session.create","session.send","session.abort","session.detach"]' \
+  "$FAKE_COPILOT_REQUESTS" >/dev/null || fail "session errors reclaimed the healthy server"
+jq -se '
+  ([.[] | select(.type == "wrapper.strike") | .strikes] == [1,2])
+  and .[-1].type == "wrapper.run.end"
+  and .[-1].outcome == "iteration_cap"
+  and .[-1].iterations_run == 2
+' "$temp_dir/stdout" >/dev/null || fail "session errors changed Iteration reconciliation"
+unset FAKE_COPILOT_MODE
+assert_reclaimed
+
+for failure in crash; do
   : >"$FAKE_COPILOT_REQUESTS"
   if [[ "$failure" == hang ]]; then
     export FAKE_COPILOT_MODE=hang
@@ -203,6 +244,7 @@ done
 unset FAKE_COPILOT_MODE
 
 export FAKE_COPILOT_MODE=fragmented
+export FAKE_COPILOT_MULTILINE=1
 export FAKE_COPILOT_OUTPUT_FILE="$temp_dir/unicode"
 printf 'caf\303\251 \360\237\232\200\n' >"$FAKE_COPILOT_OUTPUT_FILE"
 cp "$FAKE_COPILOT_OUTPUT_FILE" "$temp_dir/repo/git-loopy/PROMPT.md"
@@ -212,7 +254,7 @@ grep -Fq "$(<"$FAKE_COPILOT_OUTPUT_FILE")" "$FAKE_COPILOT_PROMPT" ||
 jq -se --rawfile text "$FAKE_COPILOT_OUTPUT_FILE" \
   'any(.[]; .type == "agent.output" and .text == ($text | rtrimstr("\n")))' \
   "$temp_dir/stdout" >/dev/null || fail "inbound multibyte payload changed"
-unset FAKE_COPILOT_MODE FAKE_COPILOT_OUTPUT_FILE
+unset FAKE_COPILOT_MODE FAKE_COPILOT_OUTPUT_FILE FAKE_COPILOT_MULTILINE
 assert_reclaimed
 
 : >"$FAKE_COPILOT_REQUESTS"
