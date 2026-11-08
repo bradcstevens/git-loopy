@@ -2,6 +2,11 @@
 
 **Status:** accepted design; implementation acceptance is tracked by the delivery issues.
 
+**Amended by [ADR-0108](0108-every-transition-a-run-makes-gets-an-event.md):**
+"every transition a board shows gets an Event" covers the transitions a Run makes. A dead
+Run's Lease expiring, a human's tracker edit and an Agent's tracker write that blocks nothing
+are read from the tracker and the Lease refs instead.
+
 Decided by [Decide which Hermes capabilities 1.0.0 carries, surface by
 surface](https://github.com/bradcstevens/git-loopy/issues/654).
 
