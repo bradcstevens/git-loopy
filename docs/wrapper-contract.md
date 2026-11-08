@@ -3387,8 +3387,9 @@ issue; their frozen baselines and carried waivers do not change. The cases and
 `distributions` stay unchanged: a path that resumes and advances its Contract
 support to include 2.35 owes a claim or waiver again.
 
-Until then, the dormant ports still launch Agents with `copilot --yolo -p`,
-without Sandbox preflight, fail-closed enforcement or bypass denial. An operator
+Until then, the dormant PowerShell port still launches Agents with `copilot --yolo -p`;
+the dormant shell port uses headless sessions (#1005). Neither provides Sandbox
+preflight, fail-closed enforcement or bypass denial. An operator
 who needs a Sandbox uses the Python Runner. The TUI helper opens no Agent and
 resolves no policy; its Sandbox disclosure consumption remains pinned by
 `event-schema.json`.

@@ -81,8 +81,9 @@ Contract support 2.26, so their register rows are `waived_out_of_scope` with no
 tracking issue. Neither manifest's frozen Release, Contract support nor carried
 `owed_waivers` changes. The fixture's cases and `distributions` stay unchanged;
 a path that resumes owes a claim or waiver once its Contract support includes
-2.35. Until then, both ports still launch Agents with `copilot --yolo -p`,
-without Sandbox preflight, fail-closed enforcement or bypass denial. An operator
+2.35. Until then, PowerShell still launches Agents with `copilot --yolo -p`;
+shell uses headless sessions (#1005). Neither provides Sandbox preflight,
+fail-closed enforcement or bypass denial. An operator
 who needs a Sandbox uses the Python Runner.
 
 No published helper exists at or below this baseline. A default dormant

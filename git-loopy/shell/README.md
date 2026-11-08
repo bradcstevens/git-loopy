@@ -63,8 +63,10 @@ Every refusal records `tool.permission_denied` with `request_id`, `tool_call_id`
 `tool_name`, and its reason. Managed requests requiring a human are refused too.
 
 The adapter's deadline covers session creation and work, not just the wait for a
-reply. An overrun sends `session.abort`, attempts a bounded detach, and reclaims
-the server and its descendants. A successful Iteration detaches its session;
+reply. An overrun sends `session.abort` and attempts a bounded detach. An
+acknowledged abort and detach keeps the server for the next fresh session;
+transport failure or unacknowledged cleanup reclaims the server and its
+descendants. A successful Iteration detaches its session;
 Wind-down, exit, and INT/TERM/HUP reclaim the server tree. Protocol/transport errors
 are reported as failed turns, never successful work. Git and tracker
 reconciliation still decide progress. Once a failed turn reclaims the Run's only
