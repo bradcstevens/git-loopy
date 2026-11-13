@@ -1365,7 +1365,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.12"
-    assert _EVENT_SCHEMA["contract_version"] == "2.41"
+    assert _EVENT_SCHEMA["contract_version"] == "2.44"
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.run.end"]["refusals_optional"] == [
         "refusals",
     ]
@@ -2651,9 +2651,10 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     # Dashboard projection or Event schema changes. 1.27 adds the Run-level
     # account state (contract 2.40, #676).
     assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.27"
-    assert (
-        _DASHBOARD_INSIGHTS["wrapper_contract_version"]
-        == _EVENT_SCHEMA["contract_version"]
+    # A producer-only transport advance need not advance the Dashboard seam.
+    # The provenance test below pins both revisions to their recorded changes.
+    assert _version_tuple(_DASHBOARD_INSIGHTS["wrapper_contract_version"]) <= (
+        _version_tuple(_EVENT_SCHEMA["contract_version"])
     )
     assert (
         _DASHBOARD_INSIGHTS["event_schema_version"]
@@ -4801,7 +4802,8 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
     Its sentence about
     ``event-schema.json`` and ``dashboard-insights.json`` must name the same
     later advances the contract names, or a bump leaves the notes disagreeing,
-    and the latest advance named must be the version those fixtures declare.
+    and     the latest common advance named must be the Dashboard fixture's version.
+    The headless transport's Event-only advance is recorded separately.
     """
     clause = (
         "have since advanced to 2.11 with the Run-start issue source, "
@@ -4831,8 +4833,12 @@ def test_routing_provenance_names_the_same_later_advances_as_the_contract() -> N
     assert policy_advances == written_advances
     declared = _declared_fixture_contract_versions()
     latest = max(policy_advances, key=_version_tuple)
-    assert declared["event-schema.json"] == latest
     assert declared["dashboard-insights.json"] == latest
+    transport_note = _ROUTING_RESOLUTION["static_route_notes"]["session_interface_provenance"]
+    assert transport_note in written
+    match = re.search(r"only `event-schema.json` advances to (2\.\d+) for", transport_note)
+    assert match is not None
+    assert declared["event-schema.json"] == match[1]
 
 
 @pytest.mark.parametrize(("fixture", "expected"), [

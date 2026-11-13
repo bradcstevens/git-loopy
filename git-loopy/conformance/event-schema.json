@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.41",
+  "contract_version": "2.44",
   "event_schema_version": "1.12",
   "python_event_types": {
     "WRAPPER_ACCOUNT_STATE": "wrapper.account.state",
@@ -2240,6 +2240,11 @@
     }
   ],
   "serialization_cases": [
+    {
+      "id": "headless-permission-denied",
+      "event": {"ts": "2026-05-16T00:00:00.000Z", "run_id": "headless-run", "iter": 1, "type": "tool.permission_denied", "request_id": "deny-1", "tool_call_id": "call-1", "tool_name": "forbidden", "reason": "tool_in_deny_list"},
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"headless-run\", \"iter\": 1, \"type\": \"tool.permission_denied\", \"reason\": \"tool_in_deny_list\", \"request_id\": \"deny-1\", \"tool_call_id\": \"call-1\", \"tool_name\": \"forbidden\"}\n"
+    },
     {
       "id": "pin-unread-holding",
       "event": {"ts": "2026-05-16T00:00:00.000Z", "run_id": "pin-run", "iter": null, "type": "wrapper.pin.unread", "issue": 43, "state": "holding", "read": "lease", "reason": "remote unreadable", "first_unread_at": "2026-05-16T00:00:00.000Z"},

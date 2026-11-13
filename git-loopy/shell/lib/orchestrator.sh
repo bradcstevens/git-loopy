@@ -22,6 +22,8 @@ source "$_git_loopy_orchestrator_dir/events.sh"
 source "$_git_loopy_orchestrator_dir/tui.sh"
 # shellcheck disable=SC1091
 source "$_git_loopy_orchestrator_dir/issue-lease.sh"
+# shellcheck disable=SC1091
+source "$_git_loopy_orchestrator_dir/session.sh"
 
 declare -a GIT_LOOPY_DENY_TOOLS_RESOLVED=()
 declare -a GIT_LOOPY_DENY_SKILLS_RESOLVED=()
@@ -1199,6 +1201,7 @@ git_loopy_preflight() {
   }
 
   git_loopy_assert_skill_policy_supported "$repo_root" || return 1
+  git_loopy_session_validate_deny_tools || return 1
 
   if [[ ! -f "$repo_root/docs/agents/issue-tracker.md" ]]; then
     printf '%s\n' \
@@ -2787,137 +2790,6 @@ _git_loopy_stream_agent_output() {
   done
 }
 
-git_loopy_run_bounded_turn() {
-  # Run one already-assembled agent turn ("$@") with stdout converted into
-  # unclassified Events while the same text remains visible on stderr, bounded by a
-  # wall-clock send timeout. The bound is enforced by a built-in background
-  # watchdog rather than timeout(1)/gtimeout, so the shell port needs no extra
-  # dependency and runs unchanged on Linux, macOS, and WSL. Returns the turn's
-  # real exit status; a turn that overruns the bound is terminated and reported
-  # as exit 124 (GNU timeout's convention) — a failed, non-progress turn that
-  # lands no agent commit, so §6 Strike accounting counts it accordingly.
-  local timeout_seconds="$1"
-  local iteration=""
-  if [[ "${2:-}" =~ ^[1-9][0-9]*$ ]]; then
-    iteration="$2"
-    shift 2
-  else
-    shift
-  fi
-
-  # Whole-second poll budget: the integer part (forced to base 10 so a
-  # zero-padded value like "08" is never mis-parsed as octal) plus one second
-  # only when the fractional part carries a non-zero digit. Rounding up never
-  # bounds a turn shorter than configured; whole-second polling keeps this
-  # Bash 4-compatible (no `wait -n`) and free of float arithmetic.
-  local int_part="${timeout_seconds%%.*}"
-  local frac_part=""
-  [[ "$timeout_seconds" == *.* ]] && frac_part="${timeout_seconds#*.}"
-  [[ "$int_part" =~ ^[0-9]+$ ]] || int_part=0
-  local budget=$((10#$int_part))
-  [[ "$frac_part" == *[1-9]* ]] && budget=$((budget + 1))
-  ((budget > 0)) || budget=1
-
-  local flag_dir
-  flag_dir="$(mktemp -d)" || return 1
-  local timed_out_flag="$flag_dir/timed_out"
-  local output_pid=""
-  if [[ -n "$iteration" && -n "$_GIT_LOOPY_PICKUP_REF" ]]; then
-    # Seed the turn's binding state from the serial **Pickup** (#394). The
-    # marker scanner below runs in a subshell over this directory, so this is
-    # what makes a Working marker naming another issue land on the
-    # already-bound branch — a disagreement to record rather than a rebind —
-    # and what makes the parent's read-back after the turn find the Pickup's
-    # instant rather than nothing.
-    printf '%s' "$_GIT_LOOPY_PICKUP_REF" >"$flag_dir/active-ref" || return 1
-    printf '%s' "$_GIT_LOOPY_PICKUP_AT" >"$flag_dir/active-at" || return 1
-    printf '%s' "$_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC" \
-      >"$flag_dir/active-monotonic" || return 1
-  fi
-  # One spawn, one disposition: whatever SIGPIPE this Orchestrator was handed,
-  # the turn below starts from the default. Applied here rather than at the
-  # agent-turn caller because this is the single place a turn is spawned, so
-  # every bounded turn crosses the boundary the same way.
-  local -a turn=()
-  if _git_loopy_sigpipe_shim; then
-    turn=("${_GIT_LOOPY_SIGPIPE_SHIM[@]}")
-  fi
-  turn+=("$@")
-  if [[ -n "$iteration" ]]; then
-    local output_fifo="$flag_dir/agent-output"
-    mkfifo "$output_fifo" || {
-      rm -rf "$flag_dir"
-      return 1
-    }
-    _git_loopy_stream_agent_output "$iteration" "$flag_dir" <"$output_fifo" &
-    output_pid=$!
-    "${turn[@]}" >"$output_fifo" &
-  else
-    "${turn[@]}" 1>&2 &
-  fi
-  local turn_pid=$!
-
-  # Watchdog: poll the turn's liveness once a second until the budget is spent.
-  # If the turn is still running then, mark the timeout and escalate SIGTERM ->
-  # SIGKILL so even an agent that ignores SIGTERM is reclaimed and the parent's
-  # `wait` below can never hang the Iteration. The parent only signals this
-  # watchdog after its `wait` returns (the turn is already gone by then), so the
-  # escalation always runs to completion.
-  local grace_seconds=5
-  (
-    remaining="$budget"
-    while ((remaining > 0)) && kill -0 "$turn_pid" 2>/dev/null; do
-      sleep 1
-      remaining=$((remaining - 1))
-    done
-    if kill -0 "$turn_pid" 2>/dev/null; then
-      : >"$timed_out_flag"
-      kill -TERM "$turn_pid" 2>/dev/null || true
-      grace="$grace_seconds"
-      while ((grace > 0)) && kill -0 "$turn_pid" 2>/dev/null; do
-        sleep 1
-        grace=$((grace - 1))
-      done
-      kill -KILL "$turn_pid" 2>/dev/null || true
-    fi
-  ) &
-  local watchdog_pid=$!
-
-  local status=0
-  wait "$turn_pid" 2>/dev/null || status=$?
-  local output_status=0
-  if [[ -n "$output_pid" ]]; then
-    wait "$output_pid" 2>/dev/null || output_status=$?
-  fi
-
-  # The turn is gone (on its own, or via the watchdog's SIGTERM/SIGKILL). Retire
-  # the watchdog so it never lingers into the next turn, then reap it.
-  kill -TERM "$watchdog_pid" 2>/dev/null || true
-  wait "$watchdog_pid" 2>/dev/null || true
-
-  local result="$status"
-  if [[ -e "$timed_out_flag" ]]; then
-    printf 'git-loopy: copilot turn exceeded the %ss send timeout; terminated.\n' \
-      "$timeout_seconds" >&2
-    result=124
-  elif ((output_status != 0)); then
-    printf 'git-loopy: could not record the complete copilot output stream.\n' >&2
-    result="$output_status"
-  fi
-  if [[ -n "$iteration" ]]; then
-    _GIT_LOOPY_ACTIVE_REF=""
-    [[ -f "$flag_dir/active-ref" ]] &&
-      _GIT_LOOPY_ACTIVE_REF="$(<"$flag_dir/active-ref")"
-    if [[ -n "$_GIT_LOOPY_ACTIVE_REF" ]]; then
-      _GIT_LOOPY_ACTIVE_STARTED_AT="$(<"$flag_dir/active-at")"
-      _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC="$(<"$flag_dir/active-monotonic")"
-      _git_loopy_remember_issue_start
-    fi
-  fi
-  rm -rf "$flag_dir"
-  return "$result"
-}
-
 # Whether SIGPIPE was already ignored when this shell started. Recorded once, at
 # source time, because it is the only moment the answer is unambiguous: the live
 # interface installs and clears an ignore of its own around each guarded write,
@@ -3004,31 +2876,7 @@ _git_loopy_sigpipe_shim() {
 }
 
 git_loopy_run_agent_turn() {
-  local iteration="$1"
-  local prompt="$2"
-  local -a argv=(copilot --yolo -p "$prompt" --model "$GIT_LOOPY_MODEL" --no-color)
-  if [[ -n "$GIT_LOOPY_REASONING_EFFORT" ]]; then
-    argv+=(--reasoning-effort "$GIT_LOOPY_REASONING_EFFORT")
-  fi
-  local tool
-  for tool in ${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]+"${GIT_LOOPY_DENY_TOOLS_RESOLVED[@]}"}; do
-    argv+=(--deny-tool "$tool")
-  done
-  local skill
-  for skill in ${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]+"${GIT_LOOPY_DENY_SKILLS_RESOLVED[@]}"}; do
-    argv+=(--deny-tool "skill($skill)")
-  done
-  # Stream the agent's own output to stderr so stdout stays the JSONL Event
-  # stream, and bound the turn by the resolved send timeout. The helper preserves
-  # Copilot's real exit status (contract §4), or terminates and fails a turn that
-  # overruns the bound so a hung agent never hangs the Iteration.
-  local -a launch=()
-  if _git_loopy_sigpipe_shim; then
-    launch=("${_GIT_LOOPY_SIGPIPE_SHIM[@]}")
-  fi
-  launch+=("${argv[@]}")
-  git_loopy_run_bounded_turn \
-    "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" "$iteration" "${launch[@]}"
+  git_loopy_session_turn "$@"
 }
 
 _GIT_LOOPY_AUTO_CLOSURES=0
@@ -3662,6 +3510,11 @@ git_loopy_run_discovery() {
       outcome="iteration_cap"
       break
     fi
+    if git_loopy_session_unavailable; then
+      printf 'git-loopy: the headless server is unavailable; refusing further Iterations in this Run.\n' >&2
+      outcome="preflight_failed"
+      break
+    fi
     iteration="$next_iteration"
 
     _GIT_LOOPY_ITERATION_STARTED_AT="$(git_loopy_iso_timestamp)" || return 1
@@ -3802,8 +3655,8 @@ git_loopy_run_discovery() {
     # Assemble the same minimum context as the Python reference (last-5
     # commits + the bound issue's block + the resolved shared prompt) and
     # run exactly one streamed Copilot turn. The agent's own output goes to
-    # stderr so stdout stays the JSONL Event stream; the turn's real exit
-    # status is preserved and a non-zero turn warns without failing the Run.
+    # stderr so stdout stays the JSONL Event stream. A failed turn is reconciled
+    # before a lost server can refuse admission of the next Iteration.
     local prompt
     prompt="$(git_loopy_build_prompt "$GIT_LOOPY_PICKUP_JSON")" || return 1
 
@@ -3811,9 +3664,19 @@ git_loopy_run_discovery() {
     pre_sha="$(git_loopy_head_sha "$GIT_LOOPY_REPO_ROOT")" || return 1
 
     local agent_status=0
+    if ! git_loopy_session_start; then
+      git_loopy_build_iteration_rollup 0 0 0 "$strikes" "preflight_failed" ||
+        return 1
+      git_loopy_emit_event \
+        "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
+        "$iteration" "$GIT_LOOPY_ITERATION_ROLLUP_JSON" || return 1
+      iterations_run="$iteration"
+      outcome="preflight_failed"
+      break
+    fi
     git_loopy_run_agent_turn "$iteration" "$prompt" || agent_status=$?
     if ((agent_status != 0)); then
-      printf 'git-loopy: copilot turn exited with status %s; continuing.\n' \
+      printf 'git-loopy: copilot turn exited with status %s; reconciling this Iteration.\n' \
         "$agent_status" >&2
     fi
 
@@ -3943,6 +3806,7 @@ git_loopy_run_discovery() {
         '{cause: $cause, stage: "drain", draining: 0}')" || return 1
   fi
 
+  git_loopy_session_stop
   local run_end_payload
   run_end_payload="$(
     jq -cn \
@@ -4008,6 +3872,7 @@ git_loopy_main() {
   # or an early `return 1` — reaps the child exactly once. It deliberately cannot
   # change `run_status`: a presentation failure is not a Run failure.
   git_loopy_tui_finish
+  git_loopy_session_stop
   git_loopy_monotonic_clock_stop
   return "$run_status"
 }
