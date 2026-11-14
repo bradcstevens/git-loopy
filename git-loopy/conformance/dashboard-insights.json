@@ -23288,6 +23288,819 @@
           }
         }
       ]
+    },
+    {
+      "id": "rolling-lane-agent-events-reach-the-issue-log",
+      "description": "A rolling-dispatch Lane as the Python Runner writes it (#1043): every Event its Agent session records carries lane_issue, never the contribution triple. The Agent's assistant.message, assistant.reasoning and tool.call Events reach the drilled-in issue's Log and its Activity window as the Textual reducer renders them: message and reasoning one line per line of content, a ✻ Thinking: marker before reasoning, and a tool call as one » event line (◇ for the skill tool) whose argument values are capped at 60 characters. tool.result adds no line. The closing message is what explains the no_progress ending.",
+      "inputs": {
+        "model": "claude-opus-4.8-max",
+        "reasoning_effort": "max",
+        "max_strikes": 3,
+        "local_utc_offset_minutes": -360,
+        "drill_in_issue": 119
+      },
+      "events": [
+        {
+          "ts": "2026-05-16T00:00:00.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.run.start",
+          "release_version": "0.9.0",
+          "schema_version": 1,
+          "insight_capabilities": {
+            "agent_output": true,
+            "structured_agent_events": true,
+            "token_usage": true,
+            "context_window": true,
+            "skill_consultation": true,
+            "cost": true,
+            "rate_card": true,
+            "routing": true,
+            "subagents": true
+          },
+          "parallel_capabilities": {
+            "parallel_mode": true,
+            "rolling_dispatch": true,
+            "integration_backlog": true,
+            "adaptive_lane_limit": true,
+            "contribution_events": true
+          },
+          "max_nmt_strikes": 3
+        },
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pool.refreshed",
+          "issues": [
+            119
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:02.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.pickup.bound",
+          "issue": 119,
+          "reason": "order",
+          "position": 1,
+          "considered": 1
+        },
+        {
+          "ts": "2026-05-16T00:00:03.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0001",
+          "issue": 119,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:03.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.issue.activated",
+          "activated_at": "2026-05-16T00:00:03.000Z",
+          "binding_source": "lane_pickup",
+          "issue": 119,
+          "lane_issue": 119
+        },
+        {
+          "ts": "2026-05-16T00:00:05.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "assistant.message",
+          "lane_issue": 119,
+          "content": "<working issue=119>\n",
+          "message_id": "m-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:05.100Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "tool.call",
+          "lane_issue": 119,
+          "arguments": "<truncated: 214 chars>",
+          "tool_call_id": "t-1",
+          "tool_name": "bash"
+        },
+        {
+          "ts": "2026-05-16T00:00:05.200Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "tool.call",
+          "lane_issue": 119,
+          "arguments": {
+            "path": "/work/example.issue-clones/01HXR0000000000000000000DD/issue-119/docs/agents/domain.md"
+          },
+          "tool_call_id": "t-2",
+          "tool_name": "view"
+        },
+        {
+          "ts": "2026-05-16T00:00:06.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "tool.result",
+          "lane_issue": 119,
+          "result_size_chars": 1944,
+          "success": true,
+          "tool_call_id": "t-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:10.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "assistant.reasoning",
+          "lane_issue": 119,
+          "content": "**Checking the merged pull request**\n\nThe acceptance criteria already hold on main.",
+          "reasoning_id": "r-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:11.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "tool.call",
+          "lane_issue": 119,
+          "arguments": {
+            "skill": "code-review"
+          },
+          "tool_call_id": "t-3",
+          "tool_name": "skill"
+        },
+        {
+          "ts": "2026-05-16T00:00:12.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "tool.call",
+          "lane_issue": 119,
+          "arguments": {
+            "command": "gh issue comment 119 --body-file evidence.md",
+            "description": "Record the evidence"
+          },
+          "tool_call_id": "t-4",
+          "tool_name": "bash"
+        },
+        {
+          "ts": "2026-05-16T00:00:15.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": 1,
+          "type": "assistant.message",
+          "lane_issue": 119,
+          "content": "#119 is already complete in merged PR #173.\n\nRecorded the evidence on the issue; no commit was needed.",
+          "message_id": "m-2"
+        },
+        {
+          "ts": "2026-05-16T00:00:16.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.strike",
+          "issue": 119,
+          "strikes": 1,
+          "max_strikes": 3,
+          "outcome": "warn",
+          "ending": "no_progress"
+        },
+        {
+          "ts": "2026-05-16T00:00:16.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.work_finished",
+          "contribution_id": "c-0001",
+          "issue": 119,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:18.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "contribution_id": "c-0001",
+          "issue": 119,
+          "lane_id": "lane-1",
+          "published": false,
+          "reason": "unchanged_branch",
+          "issues": [
+            {
+              "issue": 119,
+              "status": "no-progress"
+            }
+          ],
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 1200,
+            "tokens_out": 40,
+            "observed_tokens": 1240,
+            "cost_usd": 0.12,
+            "commits": 0,
+            "closures": 0,
+            "closure_outcome": "no_progress",
+            "recovery_attempts": 0,
+            "agent_seconds": 12.0,
+            "lifecycle_seconds": 15.0,
+            "peak_context_window": 28000,
+            "strike_reaction": "+1"
+          },
+          "ending": "no_progress"
+        }
+      ],
+      "snapshots": [
+        {
+          "after_event_count": 12,
+          "render_at_utc": "2026-05-16T00:00:12.500Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DD",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 12.5,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "run_release_version": "0.9.0",
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null,
+                  "serial_drain": null
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 119,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:03-06:00",
+                    "active_seconds": 9.5,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": [
+                  {
+                    "kind": "lane",
+                    "lane": "lane-1",
+                    "issue": 119,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": true,
+                    "lines": [
+                      {
+                        "at": "2026-05-15T18:00:02-06:00",
+                        "kind": "event",
+                        "text": "Pickup: bound #119 (order, position 1 of 1)"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:05-06:00",
+                        "kind": "message",
+                        "text": "<working issue=119>"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:05-06:00",
+                        "kind": "message",
+                        "text": ""
+                      },
+                      {
+                        "at": "2026-05-15T18:00:05.100000-06:00",
+                        "kind": "event",
+                        "text": "» bash  <truncated: 214 chars>"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:05.200000-06:00",
+                        "kind": "event",
+                        "text": "» view  path=/work/example.issue-clones/01HXR0000000000000000000DD/iss..."
+                      },
+                      {
+                        "at": "2026-05-15T18:00:10-06:00",
+                        "kind": "reasoning",
+                        "text": "✻ Thinking:"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:10-06:00",
+                        "kind": "reasoning",
+                        "text": "**Checking the merged pull request**"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:10-06:00",
+                        "kind": "reasoning",
+                        "text": ""
+                      },
+                      {
+                        "at": "2026-05-15T18:00:10-06:00",
+                        "kind": "reasoning",
+                        "text": "The acceptance criteria already hold on main."
+                      },
+                      {
+                        "at": "2026-05-15T18:00:11-06:00",
+                        "kind": "event",
+                        "text": "◇ skill code-review"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:12-06:00",
+                        "kind": "event",
+                        "text": "» bash  command=gh issue comment 119 --body-file evidence.md description=Record the evidence"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "summary": {
+                "rows": []
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 119,
+                "status": "active",
+                "started_at": "2026-05-15T18:00:03-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 9.5,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 119,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #119 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05-06:00",
+                    "kind": "message",
+                    "text": "<working issue=119>"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05-06:00",
+                    "kind": "message",
+                    "text": ""
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05.100000-06:00",
+                    "kind": "event",
+                    "text": "» bash  <truncated: 214 chars>"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05.200000-06:00",
+                    "kind": "event",
+                    "text": "» view  path=/work/example.issue-clones/01HXR0000000000000000000DD/iss..."
+                  },
+                  {
+                    "at": "2026-05-15T18:00:10-06:00",
+                    "kind": "reasoning",
+                    "text": "✻ Thinking:"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:10-06:00",
+                    "kind": "reasoning",
+                    "text": "**Checking the merged pull request**"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:10-06:00",
+                    "kind": "reasoning",
+                    "text": ""
+                  },
+                  {
+                    "at": "2026-05-15T18:00:10-06:00",
+                    "kind": "reasoning",
+                    "text": "The acceptance criteria already hold on main."
+                  },
+                  {
+                    "at": "2026-05-15T18:00:11-06:00",
+                    "kind": "event",
+                    "text": "◇ skill code-review"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:12-06:00",
+                    "kind": "event",
+                    "text": "» bash  command=gh issue comment 119 --body-file evidence.md description=Record the evidence"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 16,
+          "render_at_utc": "2026-05-16T00:00:18.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000DD",
+                "model": "claude-opus-4.8-max",
+                "reasoning_effort": "max",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 18.0,
+                "status": "running",
+                "strikes": {
+                  "current": 1,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "run_release_version": "0.9.0",
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false,
+                  "integration_observed": false,
+                  "integration_wip": null,
+                  "integration_high_water": null,
+                  "parked_count": null,
+                  "refill_turn": null,
+                  "serial_drain": null
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 119,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:03-06:00",
+                    "active_seconds": 13.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": 1200,
+                    "tokens_out": 40,
+                    "credits": null,
+                    "premium_requests": null,
+                    "ending": "no_progress"
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "subagents": 0,
+                "windows": [
+                  {
+                    "kind": "lane",
+                    "lane": "lane-1",
+                    "issue": 119,
+                    "task_type": null,
+                    "route": null,
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": 0,
+                    "live": false,
+                    "lines": [
+                      {
+                        "at": "2026-05-15T18:00:02-06:00",
+                        "kind": "event",
+                        "text": "Pickup: bound #119 (order, position 1 of 1)"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:05-06:00",
+                        "kind": "message",
+                        "text": "<working issue=119>"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:05-06:00",
+                        "kind": "message",
+                        "text": ""
+                      },
+                      {
+                        "at": "2026-05-15T18:00:05.100000-06:00",
+                        "kind": "event",
+                        "text": "» bash  <truncated: 214 chars>"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:05.200000-06:00",
+                        "kind": "event",
+                        "text": "» view  path=/work/example.issue-clones/01HXR0000000000000000000DD/iss..."
+                      },
+                      {
+                        "at": "2026-05-15T18:00:10-06:00",
+                        "kind": "reasoning",
+                        "text": "✻ Thinking:"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:10-06:00",
+                        "kind": "reasoning",
+                        "text": "**Checking the merged pull request**"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:10-06:00",
+                        "kind": "reasoning",
+                        "text": ""
+                      },
+                      {
+                        "at": "2026-05-15T18:00:10-06:00",
+                        "kind": "reasoning",
+                        "text": "The acceptance criteria already hold on main."
+                      },
+                      {
+                        "at": "2026-05-15T18:00:11-06:00",
+                        "kind": "event",
+                        "text": "◇ skill code-review"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:12-06:00",
+                        "kind": "event",
+                        "text": "» bash  command=gh issue comment 119 --body-file evidence.md description=Record the evidence"
+                      },
+                      {
+                        "at": "2026-05-15T18:00:15-06:00",
+                        "kind": "message",
+                        "text": "#119 is already complete in merged PR #173."
+                      },
+                      {
+                        "at": "2026-05-15T18:00:15-06:00",
+                        "kind": "message",
+                        "text": ""
+                      },
+                      {
+                        "at": "2026-05-15T18:00:15-06:00",
+                        "kind": "message",
+                        "text": "Recorded the evidence on the issue; no commit was needed."
+                      }
+                    ]
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "unchanged_branch",
+                    "duration_seconds": 15.0,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 40,
+                    "observed_tokens": 1240,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 119,
+                "status": "no-progress",
+                "started_at": "2026-05-15T18:00:03-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 13.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0001",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "unchanged_branch",
+                    "duration_seconds": 15.0,
+                    "status": "no-progress",
+                    "drift": null,
+                    "active_seconds": 12.0,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 1200,
+                      "tokens_out": 40,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null,
+                    "ending": "no_progress"
+                  }
+                ]
+              },
+              "log": {
+                "issue": 119,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:02-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #119 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05-06:00",
+                    "kind": "message",
+                    "text": "<working issue=119>"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05-06:00",
+                    "kind": "message",
+                    "text": ""
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05.100000-06:00",
+                    "kind": "event",
+                    "text": "» bash  <truncated: 214 chars>"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:05.200000-06:00",
+                    "kind": "event",
+                    "text": "» view  path=/work/example.issue-clones/01HXR0000000000000000000DD/iss..."
+                  },
+                  {
+                    "at": "2026-05-15T18:00:10-06:00",
+                    "kind": "reasoning",
+                    "text": "✻ Thinking:"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:10-06:00",
+                    "kind": "reasoning",
+                    "text": "**Checking the merged pull request**"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:10-06:00",
+                    "kind": "reasoning",
+                    "text": ""
+                  },
+                  {
+                    "at": "2026-05-15T18:00:10-06:00",
+                    "kind": "reasoning",
+                    "text": "The acceptance criteria already hold on main."
+                  },
+                  {
+                    "at": "2026-05-15T18:00:11-06:00",
+                    "kind": "event",
+                    "text": "◇ skill code-review"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:12-06:00",
+                    "kind": "event",
+                    "text": "» bash  command=gh issue comment 119 --body-file evidence.md description=Record the evidence"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:15-06:00",
+                    "kind": "message",
+                    "text": "#119 is already complete in merged PR #173."
+                  },
+                  {
+                    "at": "2026-05-15T18:00:15-06:00",
+                    "kind": "message",
+                    "text": ""
+                  },
+                  {
+                    "at": "2026-05-15T18:00:15-06:00",
+                    "kind": "message",
+                    "text": "Recorded the evidence on the issue; no commit was needed."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
     }
   ]
 }
