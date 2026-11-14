@@ -493,7 +493,9 @@ the Pool); **Unresolved readiness** (a pull-request state that could not be read
 a PR.
 
 **Already delivered**:
-A candidate whose acceptance criteria already hold on the base, so a session has nothing to change.
+A candidate whose acceptance criteria already hold on the current base and no failure named since
+delivery still fails, so a session has nothing to change. If something still fails, including the
+reason for a reopen, that failure is the work, not Already delivered.
 Typically its closing pull request merged and something then reopened the issue. It is not a
 **Readiness** fact, because a merged pull request never holds a candidate; only its **Agent** finds
 it, in session. The Agent opens the closure as a decision for a human and records that decision
