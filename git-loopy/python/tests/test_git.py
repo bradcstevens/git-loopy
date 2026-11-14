@@ -1745,6 +1745,44 @@ def test_push_ref_can_replay_a_write_after_its_acknowledgement_was_lost(
     assert client.probe_remote_ref("origin", LEASE_REF) is None
 
 
+def _refuse_every_push(work: Path) -> Path:
+    """Point ``core.hooksPath`` at a ``pre-push`` hook that refuses everything.
+
+    Returns the marker the hook leaves, so a test can tell "the hook refused"
+    from "the hook never ran".
+    """
+    hooks = work.parent / "hooks"
+    hooks.mkdir()
+    ran = work.parent / "pre-push-ran"
+    hook = hooks / "pre-push"
+    hook.write_text(f"#!/bin/sh\ntouch '{ran}'\nexit 1\n")
+    hook.chmod(0o755)
+    subprocess.run(
+        ["git", "-C", str(work), "config", "core.hooksPath", str(hooks)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return ran
+
+
+def test_push_ref_runs_the_pre_push_hook_unless_a_lease_opts_out(tmp_path: Path) -> None:
+    """A Checkpoint breadcrumb is work and keeps the hook; a Lease skips it (#1031)."""
+    client, _ = _bare_remote(tmp_path)
+    ran = _refuse_every_push(client.root)
+    work = client.head_sha()
+    with pytest.raises(GitError):
+        client.push_ref(
+            "origin", f"refs/heads/git-loopy-checkpoints/issue-390/{work}", work, None
+        )
+    assert ran.exists()
+
+    ran.unlink()
+    record = client.write_orphan_commit("held")
+    assert client.push_ref("origin", LEASE_REF, record, None, verify=False) is True
+    assert not ran.exists()
+
+
 def test_push_ref_raises_rather_than_reporting_a_lost_race_on_transport_failure(
     tmp_path: Path,
 ) -> None:

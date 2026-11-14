@@ -317,6 +317,12 @@ run. Do it only if you must reclaim an issue sooner than its TTL, and only when 
 know the owning run is gone — deleting a *live* run's Lease is how you get two agents
 on one issue, which is the failure the Lease exists to prevent.
 
+A run writes Lease refs with `git push --no-verify`, so your repository's `pre-push`
+hook never runs on them. The record is an empty-tree commit, which a build or test
+hook would refuse, and every 60-second renewal would otherwise pay for the hook. Your
+hook still gates every push of actual work, and server-side rules still apply to Lease
+refs.
+
 - **`GIT_LOOPY_LEASE_TTL_SECONDS`** sets how long a Lease survives without renewal.
   Default `300`. Raise it if your network or your host regularly stalls a run for
   minutes at a time; the cost of a longer TTL is only that a genuinely crashed run's
